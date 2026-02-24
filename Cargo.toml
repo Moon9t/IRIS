@@ -1,0 +1,28 @@
+[package]
+name = "iris"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "IRIS: Intermediate Representation for Intelligent Systems — an ML compiler DSL"
+license = "MIT"
+
+[[bin]]
+name = "iris"
+path = "src/main.rs"
+
+[lib]
+name = "iris"
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+debug = true
