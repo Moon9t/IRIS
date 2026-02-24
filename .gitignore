@@ -1,0 +1,14 @@
+# Ignore Claude, Python, and text files
+.claude/
+*.py
+*.txt
+*.md
+!README.md
+# Ignore build and target directories
+/target/
+# Ignore other common files
+*.log
+*.bak
+*.swp
+.DS_Store
+Thumbs.db
