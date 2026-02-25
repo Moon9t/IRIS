@@ -15,7 +15,7 @@ use crate::ir::types::{DType, IrType};
 use crate::ir::value::ValueId;
 
 /// A runtime value produced or consumed by the interpreter.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum IrValue {
     F32(f32),
     F64(f64),
@@ -34,6 +34,26 @@ pub enum IrValue {
     Str(String),
     /// A fixed-length array of values.
     Array(Vec<IrValue>),
+    /// A closure value: function name + captured values.
+    Closure {
+        fn_name: String,
+        captured: Vec<IrValue>,
+        ty: IrType,
+    },
+    /// An option value: Some(v) or None.
+    OptionVal(Option<Box<IrValue>>),
+    /// A result value: Ok(v) or Err(e).
+    ResultVal(std::result::Result<Box<IrValue>, Box<IrValue>>),
+    /// A channel value: a shared FIFO queue.
+    Chan(std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<IrValue>>>),
+    /// An atomic/mutex value: a shared mutable cell.
+    Atomic(std::rc::Rc<std::cell::RefCell<IrValue>>),
+    /// Unit (void) value for side-effecting calls with no return.
+    Unit,
+    /// A dual number for forward-mode automatic differentiation.
+    Grad { value: f64, tangent: f64 },
+    /// A sparse representation: stores (index, value) pairs.
+    Sparse(Vec<(usize, IrValue)>),
 }
 
 impl fmt::Display for IrValue {
@@ -86,6 +106,44 @@ impl fmt::Display for IrValue {
                 }
                 write!(f, "]")
             }
+            IrValue::Closure { fn_name, .. } => write!(f, "<closure:{}>", fn_name),
+            IrValue::OptionVal(Some(v)) => write!(f, "some({})", v),
+            IrValue::OptionVal(None) => write!(f, "none"),
+            IrValue::ResultVal(Ok(v)) => write!(f, "ok({})", v),
+            IrValue::ResultVal(Err(e)) => write!(f, "err({})", e),
+            IrValue::Chan(_) => write!(f, "<channel>"),
+            IrValue::Atomic(cell) => write!(f, "atomic({})", cell.borrow()),
+            IrValue::Unit => write!(f, "()"),
+            IrValue::Grad { value, tangent } => write!(f, "grad({}, {})", value, tangent),
+            IrValue::Sparse(pairs) => write!(f, "sparse({} nonzeros)", pairs.len()),
+        }
+    }
+}
+
+impl PartialEq for IrValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (IrValue::F32(a), IrValue::F32(b)) => a == b,
+            (IrValue::F64(a), IrValue::F64(b)) => a == b,
+            (IrValue::I32(a), IrValue::I32(b)) => a == b,
+            (IrValue::I64(a), IrValue::I64(b)) => a == b,
+            (IrValue::Bool(a), IrValue::Bool(b)) => a == b,
+            (IrValue::Tensor(da, sa), IrValue::Tensor(db, sb)) => da == db && sa == sb,
+            (IrValue::Struct(a), IrValue::Struct(b)) => a == b,
+            (IrValue::Enum(a), IrValue::Enum(b)) => a == b,
+            (IrValue::Tuple(a), IrValue::Tuple(b)) => a == b,
+            (IrValue::Str(a), IrValue::Str(b)) => a == b,
+            (IrValue::Array(a), IrValue::Array(b)) => a == b,
+            (IrValue::Closure { fn_name: a, .. }, IrValue::Closure { fn_name: b, .. }) => a == b,
+            (IrValue::OptionVal(a), IrValue::OptionVal(b)) => a == b,
+            (IrValue::ResultVal(a), IrValue::ResultVal(b)) => a == b,
+            // Channels and atomics use pointer equality.
+            (IrValue::Chan(a), IrValue::Chan(b)) => std::rc::Rc::ptr_eq(a, b),
+            (IrValue::Atomic(a), IrValue::Atomic(b)) => std::rc::Rc::ptr_eq(a, b),
+            (IrValue::Unit, IrValue::Unit) => true,
+            (IrValue::Grad { value: av, tangent: at }, IrValue::Grad { value: bv, tangent: bt }) => av == bv && at == bt,
+            (IrValue::Sparse(a), IrValue::Sparse(b)) => a.len() == b.len(),
+            _ => false,
         }
     }
 }
@@ -586,6 +644,346 @@ impl<'m> Interpreter<'m> {
                         println!("{}", v);
                     }
 
+                    IrInstr::ParFor { start, end, body_fn, args, .. } => {
+                        // Sequential simulation of par for.
+                        let s = match self.get(*start)? {
+                            IrValue::I64(n) => n,
+                            other => return Err(InterpError::TypeError {
+                                detail: format!("ParFor start must be i64, got {:?}", other),
+                            }),
+                        };
+                        let e = match self.get(*end)? {
+                            IrValue::I64(n) => n,
+                            other => return Err(InterpError::TypeError {
+                                detail: format!("ParFor end must be i64, got {:?}", other),
+                            }),
+                        };
+                        let callee = self.module
+                            .and_then(|m| m.function_by_name(body_fn))
+                            .ok_or_else(|| InterpError::Unsupported {
+                                detail: format!("undefined par_for function: {}", body_fn),
+                            })?
+                            .clone();
+                        // Resolve captured args once.
+                        let mut cap_vals: Vec<IrValue> = Vec::new();
+                        for a in args {
+                            cap_vals.push(self.get(*a)?);
+                        }
+                        for i in s..e {
+                            let mut call_args = vec![IrValue::I64(i)];
+                            call_args.extend(cap_vals.iter().cloned());
+                            let mut sub = Interpreter::new(self.module);
+                            sub.run(&callee, &call_args)?;
+                        }
+                    }
+
+                    IrInstr::ChanNew { result, .. } => {
+                        let q = std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new()));
+                        self.values.insert(*result, IrValue::Chan(q));
+                    }
+
+                    IrInstr::ChanSend { chan, value } => {
+                        let ch = self.get(*chan)?;
+                        let v = self.get(*value)?;
+                        match ch {
+                            IrValue::Chan(q) => q.borrow_mut().push_back(v),
+                            other => return Err(InterpError::TypeError {
+                                detail: format!("ChanSend on non-channel: {:?}", other),
+                            }),
+                        }
+                    }
+
+                    IrInstr::ChanRecv { result, chan, .. } => {
+                        let ch = self.get(*chan)?;
+                        match ch {
+                            IrValue::Chan(q) => {
+                                let v = q.borrow_mut().pop_front().ok_or_else(|| InterpError::Unsupported {
+                                    detail: "recv on empty channel".into(),
+                                })?;
+                                self.values.insert(*result, v);
+                            }
+                            other => return Err(InterpError::TypeError {
+                                detail: format!("ChanRecv on non-channel: {:?}", other),
+                            }),
+                        }
+                    }
+
+                    IrInstr::Spawn { body_fn, args } => {
+                        // Simulate spawn sequentially.
+                        let callee = self.module
+                            .and_then(|m| m.function_by_name(body_fn))
+                            .ok_or_else(|| InterpError::Unsupported {
+                                detail: format!("undefined spawn function: {}", body_fn),
+                            })?
+                            .clone();
+                        let mut call_args = Vec::new();
+                        for a in args {
+                            call_args.push(self.get(*a)?);
+                        }
+                        let mut sub = Interpreter::new(self.module);
+                        sub.run(&callee, &call_args)?;
+                    }
+
+                    IrInstr::AtomicNew { result, value, result_ty } => {
+                        let v = self.get(*value)?;
+                        let cell = std::rc::Rc::new(std::cell::RefCell::new(v));
+                        let _ = result_ty;
+                        self.values.insert(*result, IrValue::Atomic(cell));
+                    }
+
+                    IrInstr::AtomicLoad { result, atomic, .. } => {
+                        let v = self.get(*atomic)?;
+                        match v {
+                            IrValue::Atomic(cell) => {
+                                self.values.insert(*result, cell.borrow().clone());
+                            }
+                            other => return Err(InterpError::TypeError {
+                                detail: format!("AtomicLoad on non-atomic: {:?}", other),
+                            }),
+                        }
+                    }
+
+                    IrInstr::AtomicStore { atomic, value } => {
+                        let v = self.get(*value)?;
+                        let a = self.get(*atomic)?;
+                        match a {
+                            IrValue::Atomic(cell) => { *cell.borrow_mut() = v; }
+                            other => return Err(InterpError::TypeError {
+                                detail: format!("AtomicStore on non-atomic: {:?}", other),
+                            }),
+                        }
+                    }
+
+                    IrInstr::AtomicAdd { result, atomic, value, .. } => {
+                        let v = self.get(*value)?;
+                        let a = self.get(*atomic)?;
+                        match a {
+                            IrValue::Atomic(cell) => {
+                                let old = cell.borrow().clone();
+                                let new_val = match (old.clone(), v) {
+                                    (IrValue::I64(a), IrValue::I64(b)) => IrValue::I64(a + b),
+                                    (IrValue::I32(a), IrValue::I32(b)) => IrValue::I32(a + b),
+                                    (IrValue::F32(a), IrValue::F32(b)) => IrValue::F32(a + b),
+                                    (IrValue::F64(a), IrValue::F64(b)) => IrValue::F64(a + b),
+                                    _ => return Err(InterpError::TypeError {
+                                        detail: "AtomicAdd on non-numeric".into(),
+                                    }),
+                                };
+                                *cell.borrow_mut() = new_val.clone();
+                                self.values.insert(*result, new_val);
+                            }
+                            other => return Err(InterpError::TypeError {
+                                detail: format!("AtomicAdd on non-atomic: {:?}", other),
+                            }),
+                        }
+                    }
+
+                    IrInstr::MutexNew { result, value, result_ty } => {
+                        let v = self.get(*value)?;
+                        let cell = std::rc::Rc::new(std::cell::RefCell::new(v));
+                        let _ = result_ty;
+                        self.values.insert(*result, IrValue::Atomic(cell));
+                    }
+
+                    IrInstr::MutexLock { result, mutex, .. } => {
+                        let v = self.get(*mutex)?;
+                        match v {
+                            IrValue::Atomic(cell) => {
+                                self.values.insert(*result, cell.borrow().clone());
+                            }
+                            other => return Err(InterpError::TypeError {
+                                detail: format!("MutexLock on non-mutex: {:?}", other),
+                            }),
+                        }
+                    }
+
+                    IrInstr::MutexUnlock { .. } => {
+                        // No-op in single-threaded interpreter.
+                    }
+
+                    IrInstr::Sparsify { result, operand, .. } => {
+                        // Convert an Array to sparse (index, value) pairs of non-zero elements.
+                        let v = self.get(*operand)?;
+                        let pairs = match v {
+                            IrValue::Array(elems) => elems.iter().enumerate()
+                                .filter(|(_, e)| match e {
+                                    IrValue::I64(0) | IrValue::I32(0) => false,
+                                    IrValue::F32(f) => *f != 0.0,
+                                    IrValue::F64(f) => *f != 0.0,
+                                    _ => true,
+                                })
+                                .map(|(i, e)| (i, e.clone()))
+                                .collect(),
+                            other => vec![(0, other)],
+                        };
+                        self.values.insert(*result, IrValue::Sparse(pairs));
+                    }
+
+                    IrInstr::Densify { result, operand, .. } => {
+                        // Convert sparse back to an i64 count of non-zero elements (simplified).
+                        let v = self.get(*operand)?;
+                        let count = match v {
+                            IrValue::Sparse(pairs) => pairs.len() as i64,
+                            IrValue::Array(elems) => elems.len() as i64,
+                            _ => 0,
+                        };
+                        self.values.insert(*result, IrValue::I64(count));
+                    }
+
+                    IrInstr::Barrier => {
+                        // No-op in single-threaded interpreter.
+                    }
+
+                    IrInstr::MakeGrad { result, value, tangent, .. } => {
+                        let v = self.get(*value)?;
+                        let t = self.get(*tangent)?;
+                        let vf = match v { IrValue::F64(x) => x, IrValue::F32(x) => x as f64, IrValue::I64(x) => x as f64, IrValue::I32(x) => x as f64, other => return Err(InterpError::TypeError { detail: format!("MakeGrad value must be numeric, got {:?}", other) }) };
+                        let tf = match t { IrValue::F64(x) => x, IrValue::F32(x) => x as f64, IrValue::I64(x) => x as f64, IrValue::I32(x) => x as f64, other => return Err(InterpError::TypeError { detail: format!("MakeGrad tangent must be numeric, got {:?}", other) }) };
+                        self.values.insert(*result, IrValue::Grad { value: vf, tangent: tf });
+                    }
+
+                    IrInstr::GradValue { result, operand, .. } => {
+                        let v = self.get(*operand)?;
+                        match v {
+                            IrValue::Grad { value, .. } => { self.values.insert(*result, IrValue::F64(value)); }
+                            other => return Err(InterpError::TypeError { detail: format!("GradValue on non-grad: {:?}", other) }),
+                        }
+                    }
+
+                    IrInstr::GradTangent { result, operand, .. } => {
+                        let v = self.get(*operand)?;
+                        match v {
+                            IrValue::Grad { tangent, .. } => { self.values.insert(*result, IrValue::F64(tangent)); }
+                            other => return Err(InterpError::TypeError { detail: format!("GradTangent on non-grad: {:?}", other) }),
+                        }
+                    }
+
+                    IrInstr::MakeSome { result, value, .. } => {
+                        let v = self.get(*value)?;
+                        self.values.insert(*result, IrValue::OptionVal(Some(Box::new(v))));
+                    }
+
+                    IrInstr::MakeNone { result, .. } => {
+                        self.values.insert(*result, IrValue::OptionVal(None));
+                    }
+
+                    IrInstr::IsSome { result, operand } => {
+                        let v = self.get(*operand)?;
+                        let b = matches!(v, IrValue::OptionVal(Some(_)));
+                        self.values.insert(*result, IrValue::Bool(b));
+                    }
+
+                    IrInstr::OptionUnwrap { result, operand, .. } => {
+                        match self.get(*operand)? {
+                            IrValue::OptionVal(Some(inner)) => {
+                                self.values.insert(*result, *inner);
+                            }
+                            IrValue::OptionVal(None) => {
+                                return Err(InterpError::Unsupported {
+                                    detail: "unwrap called on none".into(),
+                                });
+                            }
+                            other => {
+                                return Err(InterpError::TypeError {
+                                    detail: format!("OptionUnwrap on non-option: {:?}", other),
+                                });
+                            }
+                        }
+                    }
+
+                    IrInstr::MakeOk { result, value, .. } => {
+                        let v = self.get(*value)?;
+                        self.values.insert(*result, IrValue::ResultVal(Ok(Box::new(v))));
+                    }
+
+                    IrInstr::MakeErr { result, value, .. } => {
+                        let v = self.get(*value)?;
+                        self.values.insert(*result, IrValue::ResultVal(Err(Box::new(v))));
+                    }
+
+                    IrInstr::IsOk { result, operand } => {
+                        let v = self.get(*operand)?;
+                        let b = matches!(v, IrValue::ResultVal(Ok(_)));
+                        self.values.insert(*result, IrValue::Bool(b));
+                    }
+
+                    IrInstr::ResultUnwrap { result, operand, .. } => {
+                        match self.get(*operand)? {
+                            IrValue::ResultVal(Ok(inner)) => {
+                                self.values.insert(*result, *inner);
+                            }
+                            IrValue::ResultVal(Err(_)) => {
+                                return Err(InterpError::Unsupported {
+                                    detail: "result_unwrap called on err".into(),
+                                });
+                            }
+                            other => {
+                                return Err(InterpError::TypeError {
+                                    detail: format!("ResultUnwrap on non-result: {:?}", other),
+                                });
+                            }
+                        }
+                    }
+
+                    IrInstr::ResultUnwrapErr { result, operand, .. } => {
+                        match self.get(*operand)? {
+                            IrValue::ResultVal(Err(inner)) => {
+                                self.values.insert(*result, *inner);
+                            }
+                            IrValue::ResultVal(Ok(_)) => {
+                                return Err(InterpError::Unsupported {
+                                    detail: "result_unwrap_err called on ok".into(),
+                                });
+                            }
+                            other => {
+                                return Err(InterpError::TypeError {
+                                    detail: format!("ResultUnwrapErr on non-result: {:?}", other),
+                                });
+                            }
+                        }
+                    }
+
+                    IrInstr::MakeClosure { result, fn_name, captures, result_ty } => {
+                        let captured_vals: Vec<IrValue> = captures
+                            .iter()
+                            .map(|v| self.get(*v))
+                            .collect::<Result<_, _>>()?;
+                        self.values.insert(
+                            *result,
+                            IrValue::Closure {
+                                fn_name: fn_name.clone(),
+                                captured: captured_vals,
+                                ty: result_ty.clone(),
+                            },
+                        );
+                    }
+
+                    IrInstr::CallClosure { result, closure, args, result_ty } => {
+                        let closure_val = self.get(*closure)?;
+                        let (fn_name, captured) = match closure_val {
+                            IrValue::Closure { fn_name, captured, .. } => (fn_name, captured),
+                            other => return Err(InterpError::TypeError {
+                                detail: format!("CallClosure on non-closure: {:?}", other),
+                            }),
+                        };
+                        let callee = self.module
+                            .and_then(|m| m.function_by_name(&fn_name))
+                            .ok_or_else(|| InterpError::Unsupported {
+                                detail: format!("undefined closure function: {}", fn_name),
+                            })?
+                            .clone();
+                        let mut call_args: Vec<IrValue> = captured;
+                        for a in args {
+                            call_args.push(self.get(*a)?);
+                        }
+                        let mut sub = Interpreter::new(self.module);
+                        let ret = sub.run(&callee, &call_args)?;
+                        if let Some(r) = result {
+                            self.values.insert(*r, ret.into_iter().next().unwrap_or(IrValue::Unit));
+                        }
+                        let _ = result_ty;
+                    }
+
                     IrInstr::Br { target, args } => {
                         self.bind_block_params(func, *target, args)?;
                         current = *target;
@@ -896,6 +1294,20 @@ fn eval_binop(op: BinOp, lv: &IrValue, rv: &IrValue) -> Result<IrValue, InterpEr
         // Bool
         (BinOp::CmpEq, Bool(a), Bool(b)) => Ok(Bool(a == b)),
         (BinOp::CmpNe, Bool(a), Bool(b)) => Ok(Bool(a != b)),
+        // Grad (dual number) arithmetic -- forward-mode AD with chain rule
+        (BinOp::Add, Grad { value: av, tangent: at }, Grad { value: bv, tangent: bt }) =>
+            Ok(Grad { value: av + bv, tangent: at + bt }),
+        (BinOp::Sub, Grad { value: av, tangent: at }, Grad { value: bv, tangent: bt }) =>
+            Ok(Grad { value: av - bv, tangent: at - bt }),
+        (BinOp::Mul, Grad { value: av, tangent: at }, Grad { value: bv, tangent: bt }) =>
+            Ok(Grad { value: av * bv, tangent: av * bt + at * bv }),
+        (BinOp::Div, Grad { value: av, tangent: at }, Grad { value: bv, tangent: bt }) =>
+            Ok(Grad { value: av / bv, tangent: (at * bv - av * bt) / (bv * bv) }),
+        // Grad vs scalar: promote scalar to Grad with zero tangent
+        (BinOp::Add, Grad { value: av, tangent: at }, F64(b)) =>
+            Ok(Grad { value: av + b, tangent: *at }),
+        (BinOp::Mul, Grad { value: av, tangent: at }, F64(b)) =>
+            Ok(Grad { value: av * b, tangent: at * b }),
         _ => Err(InterpError::TypeError {
             detail: format!("unsupported binop {:?} on {:?} and {:?}", op, lv, rv),
         }),

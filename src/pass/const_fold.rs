@@ -436,5 +436,43 @@ fn apply_reps(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
         IrInstr::Print { operand } => {
             replace(operand);
         }
+        IrInstr::MakeClosure { captures, .. } => {
+            for v in captures {
+                replace(v);
+            }
+        }
+        IrInstr::CallClosure { closure, args, .. } => {
+            replace(closure);
+            for v in args {
+                replace(v);
+            }
+        }
+        IrInstr::ParFor { start, end, args, .. } => { replace(start); replace(end); for v in args { replace(v); } }
+        IrInstr::ChanNew { .. } => {}
+        IrInstr::ChanSend { chan, value } => { replace(chan); replace(value); }
+        IrInstr::ChanRecv { chan, .. } => { replace(chan); }
+        IrInstr::Spawn { args, .. } => { for v in args { replace(v); } }
+        IrInstr::AtomicNew { value, .. } => { replace(value); }
+        IrInstr::AtomicLoad { atomic, .. } => { replace(atomic); }
+        IrInstr::AtomicStore { atomic, value } => { replace(atomic); replace(value); }
+        IrInstr::AtomicAdd { atomic, value, .. } => { replace(atomic); replace(value); }
+        IrInstr::MutexNew { value, .. } => { replace(value); }
+        IrInstr::MutexLock { mutex, .. } => { replace(mutex); }
+        IrInstr::MutexUnlock { mutex } => { replace(mutex); }
+        IrInstr::MakeSome { value, .. } => { replace(value); }
+        IrInstr::MakeNone { .. } => {}
+        IrInstr::IsSome { operand, .. } => { replace(operand); }
+        IrInstr::OptionUnwrap { operand, .. } => { replace(operand); }
+        IrInstr::MakeOk { value, .. } => { replace(value); }
+        IrInstr::MakeErr { value, .. } => { replace(value); }
+        IrInstr::IsOk { operand, .. } => { replace(operand); }
+        IrInstr::ResultUnwrap { operand, .. } => { replace(operand); }
+        IrInstr::ResultUnwrapErr { operand, .. } => { replace(operand); }
+        IrInstr::Barrier => {}
+        IrInstr::Sparsify { operand, .. } => { replace(operand); }
+        IrInstr::Densify { operand, .. } => { replace(operand); }
+        IrInstr::MakeGrad { value, tangent, .. } => { replace(value); replace(tangent); }
+        IrInstr::GradValue { operand, .. } => { replace(operand); }
+        IrInstr::GradTangent { operand, .. } => { replace(operand); }
     }
 }

@@ -343,6 +343,94 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
             write!(out, "array_store {}[{}] = {}", array, index, value)?;
         }
 
+        IrInstr::ParFor { var: _, start, end, body_fn, args } => {
+            write!(out, "par_for @{}({}, {})", body_fn, start, end)?;
+            if !args.is_empty() {
+                write!(out, " captures({})", args.iter().map(|v| format!("{}", v)).collect::<Vec<_>>().join(", "))?;
+            }
+        }
+
+        IrInstr::ChanNew { result, elem_ty } => {
+            write!(out, "{} = chan_new : chan<{}>", result, elem_ty)?;
+        }
+
+        IrInstr::ChanSend { chan, value } => {
+            write!(out, "chan_send {}, {}", chan, value)?;
+        }
+
+        IrInstr::ChanRecv { result, chan, elem_ty } => {
+            write!(out, "{} = chan_recv {} : {}", result, chan, elem_ty)?;
+        }
+
+        IrInstr::Spawn { body_fn, args } => {
+            let arg_strs: Vec<String> = args.iter().map(|v| format!("{}", v)).collect();
+            write!(out, "spawn @{}({})", body_fn, arg_strs.join(", "))?;
+        }
+
+        IrInstr::AtomicNew { result, value, result_ty } => {
+            write!(out, "{} = atomic_new {} : {}", result, value, result_ty)?;
+        }
+
+        IrInstr::AtomicLoad { result, atomic, result_ty } => {
+            write!(out, "{} = atomic_load {} : {}", result, atomic, result_ty)?;
+        }
+
+        IrInstr::AtomicStore { atomic, value } => {
+            write!(out, "atomic_store {}, {}", atomic, value)?;
+        }
+
+        IrInstr::AtomicAdd { result, atomic, value, result_ty } => {
+            write!(out, "{} = atomic_add {}, {} : {}", result, atomic, value, result_ty)?;
+        }
+
+        IrInstr::MutexNew { result, value, result_ty } => {
+            write!(out, "{} = mutex_new {} : {}", result, value, result_ty)?;
+        }
+
+        IrInstr::MutexLock { result, mutex, result_ty } => {
+            write!(out, "{} = mutex_lock {} : {}", result, mutex, result_ty)?;
+        }
+
+        IrInstr::MutexUnlock { mutex } => {
+            write!(out, "mutex_unlock {}", mutex)?;
+        }
+
+        IrInstr::MakeSome { result, value, result_ty } => {
+            write!(out, "{} = make_some {} : {}", result, value, result_ty)?;
+        }
+
+        IrInstr::MakeNone { result, result_ty } => {
+            write!(out, "{} = make_none : {}", result, result_ty)?;
+        }
+
+        IrInstr::IsSome { result, operand } => {
+            write!(out, "{} = is_some {}", result, operand)?;
+        }
+
+        IrInstr::OptionUnwrap { result, operand, result_ty } => {
+            write!(out, "{} = option_unwrap {} : {}", result, operand, result_ty)?;
+        }
+
+        IrInstr::MakeOk { result, value, result_ty } => {
+            write!(out, "{} = make_ok {} : {}", result, value, result_ty)?;
+        }
+
+        IrInstr::MakeErr { result, value, result_ty } => {
+            write!(out, "{} = make_err {} : {}", result, value, result_ty)?;
+        }
+
+        IrInstr::IsOk { result, operand } => {
+            write!(out, "{} = is_ok {}", result, operand)?;
+        }
+
+        IrInstr::ResultUnwrap { result, operand, result_ty } => {
+            write!(out, "{} = result_unwrap {} : {}", result, operand, result_ty)?;
+        }
+
+        IrInstr::ResultUnwrapErr { result, operand, result_ty } => {
+            write!(out, "{} = result_unwrap_err {} : {}", result, operand, result_ty)?;
+        }
+
         IrInstr::ConstStr { result, value } => {
             write!(out, "{} = const.str \"{}\"", result, value)?;
         }
@@ -355,8 +443,46 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
             write!(out, "{} = str_concat {}, {}", result, lhs, rhs)?;
         }
 
+        IrInstr::MakeGrad { result, value, tangent, .. } => {
+            write!(out, "{} = make_grad {}, {}", result, value, tangent)?;
+        }
+
+        IrInstr::GradValue { result, operand, .. } => {
+            write!(out, "{} = grad_value {}", result, operand)?;
+        }
+
+        IrInstr::GradTangent { result, operand, .. } => {
+            write!(out, "{} = grad_tangent {}", result, operand)?;
+        }
+
+        IrInstr::Sparsify { result, operand, .. } => {
+            write!(out, "{} = sparsify {}", result, operand)?;
+        }
+
+        IrInstr::Densify { result, operand, .. } => {
+            write!(out, "{} = densify {}", result, operand)?;
+        }
+
+        IrInstr::Barrier => {
+            write!(out, "barrier")?;
+        }
+
         IrInstr::Print { operand } => {
             write!(out, "print {}", operand)?;
+        }
+
+        IrInstr::MakeClosure { result, fn_name, captures, .. } => {
+            let caps: Vec<String> = captures.iter().map(|v| format!("{}", v)).collect();
+            write!(out, "{} = make_closure @{} [{}]", result, fn_name, caps.join(", "))?;
+        }
+
+        IrInstr::CallClosure { result, closure, args, .. } => {
+            let arg_strs: Vec<String> = args.iter().map(|v| format!("{}", v)).collect();
+            if let Some(r) = result {
+                write!(out, "{} = call_closure {}({})", r, closure, arg_strs.join(", "))?;
+            } else {
+                write!(out, "call_closure {}({})", closure, arg_strs.join(", "))?;
+            }
         }
     }
     Ok(())

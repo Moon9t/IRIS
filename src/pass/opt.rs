@@ -52,6 +52,13 @@ fn is_side_effecting(instr: &IrInstr) -> bool {
             | IrInstr::SwitchVariant { .. }
             | IrInstr::Print { .. }
             | IrInstr::ArrayStore { .. }
+            | IrInstr::ChanSend { .. }
+            | IrInstr::Spawn { .. }
+            | IrInstr::ParFor { .. }
+            | IrInstr::AtomicStore { .. }
+            | IrInstr::AtomicAdd { .. }
+            | IrInstr::MutexUnlock { .. }
+            | IrInstr::Barrier
     )
 }
 
@@ -122,8 +129,12 @@ impl Pass for CsePass {
     fn run(&mut self, module: &mut IrModule) -> Result<(), PassError> {
         for func in &mut module.functions {
             let mut replacements: HashMap<ValueId, ValueId> = HashMap::new();
-            let mut known: HashMap<CseKey, ValueId> = HashMap::new();
             for block in &mut func.blocks {
+                // `known` is scoped per-block: cross-block CSE would require
+                // dominance analysis; without it, a value defined in one branch
+                // (e.g. else2) could incorrectly substitute uses in another
+                // block (e.g. merge) that isn't dominated by that branch.
+                let mut known: HashMap<CseKey, ValueId> = HashMap::new();
                 cse_block(block, &mut known, &mut replacements);
             }
             // Remove stale type/def entries for eliminated values.
@@ -337,6 +348,44 @@ fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
         IrInstr::Print { operand } => {
             replace(operand);
         }
+        IrInstr::MakeClosure { captures, .. } => {
+            for v in captures {
+                replace(v);
+            }
+        }
+        IrInstr::CallClosure { closure, args, .. } => {
+            replace(closure);
+            for v in args {
+                replace(v);
+            }
+        }
+        IrInstr::ParFor { start, end, args, .. } => { replace(start); replace(end); for v in args { replace(v); } }
+        IrInstr::ChanNew { .. } => {}
+        IrInstr::ChanSend { chan, value } => { replace(chan); replace(value); }
+        IrInstr::ChanRecv { chan, .. } => { replace(chan); }
+        IrInstr::Spawn { args, .. } => { for v in args { replace(v); } }
+        IrInstr::AtomicNew { value, .. } => { replace(value); }
+        IrInstr::AtomicLoad { atomic, .. } => { replace(atomic); }
+        IrInstr::AtomicStore { atomic, value } => { replace(atomic); replace(value); }
+        IrInstr::AtomicAdd { atomic, value, .. } => { replace(atomic); replace(value); }
+        IrInstr::MutexNew { value, .. } => { replace(value); }
+        IrInstr::MutexLock { mutex, .. } => { replace(mutex); }
+        IrInstr::MutexUnlock { mutex } => { replace(mutex); }
+        IrInstr::MakeSome { value, .. } => { replace(value); }
+        IrInstr::MakeNone { .. } => {}
+        IrInstr::IsSome { operand, .. } => { replace(operand); }
+        IrInstr::OptionUnwrap { operand, .. } => { replace(operand); }
+        IrInstr::MakeOk { value, .. } => { replace(value); }
+        IrInstr::MakeErr { value, .. } => { replace(value); }
+        IrInstr::IsOk { operand, .. } => { replace(operand); }
+        IrInstr::ResultUnwrap { operand, .. } => { replace(operand); }
+        IrInstr::ResultUnwrapErr { operand, .. } => { replace(operand); }
+        IrInstr::Barrier => {}
+        IrInstr::Sparsify { operand, .. } => { replace(operand); }
+        IrInstr::Densify { operand, .. } => { replace(operand); }
+        IrInstr::MakeGrad { value, tangent, .. } => { replace(value); replace(tangent); }
+        IrInstr::GradValue { operand, .. } => { replace(operand); }
+        IrInstr::GradTangent { operand, .. } => { replace(operand); }
     }
 }
 

@@ -55,6 +55,14 @@ pub enum Token {
     For,
     /// `in` keyword in range loops
     In,
+    /// `spawn` keyword for concurrent task creation
+    Spawn,
+    /// `par` keyword for parallel for-loop
+    Par,
+    /// `async` keyword for async function definitions
+    Async,
+    /// `await` keyword for awaiting async expressions
+    Await,
     // Model DSL keywords
     Model,
     Layer,
@@ -126,6 +134,9 @@ pub enum Token {
     /// `|` single pipe (for lambda parameter delimiters)
     Pipe,
 
+    /// `?` try / error-propagation operator
+    Question,
+
     Eof,
 }
 
@@ -148,6 +159,10 @@ impl std::fmt::Display for Token {
             Token::Choice => write!(f, "choice"),
             Token::For => write!(f, "for"),
             Token::In => write!(f, "in"),
+            Token::Spawn => write!(f, "spawn"),
+            Token::Par => write!(f, "par"),
+            Token::Async => write!(f, "async"),
+            Token::Await => write!(f, "await"),
             Token::Model => write!(f, "model"),
             Token::Layer => write!(f, "layer"),
             Token::Input => write!(f, "input"),
@@ -194,6 +209,7 @@ impl std::fmt::Display for Token {
             Token::AmpAmp => write!(f, "&&"),
             Token::PipePipe => write!(f, "||"),
             Token::Pipe => write!(f, "|"),
+            Token::Question => write!(f, "?"),
             Token::Eof => write!(f, "<eof>"),
         }
     }
@@ -360,6 +376,7 @@ impl<'src> Lexer<'src> {
             b'!' => Some(Token::Bang),
             b'.' => Some(Token::Dot),
             b'|' => Some(Token::Pipe),
+            b'?' => Some(Token::Question),
             _ => None,
         };
         if let Some(tok) = maybe_punct {
@@ -506,6 +523,10 @@ impl<'src> Lexer<'src> {
             "for" => Token::For,
             "in" => Token::In,
             "to" => Token::To,
+            "spawn" => Token::Spawn,
+            "par" => Token::Par,
+            "async" => Token::Async,
+            "await" => Token::Await,
             "model" => Token::Model,
             "layer" => Token::Layer,
             "input" => Token::Input,

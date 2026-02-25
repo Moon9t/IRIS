@@ -100,6 +100,20 @@ pub enum IrType {
     Str,
     /// A fixed-length array of a single element type.
     Array { elem: Box<IrType>, len: usize },
+    /// Option type: `option<T>` — either Some(T) or None.
+    Option(Box<IrType>),
+    /// Result type: `result<T, E>` — either Ok(T) or Err(E).
+    ResultType(Box<IrType>, Box<IrType>),
+    /// Channel type: `chan<T>` — a FIFO communication channel.
+    Chan(Box<IrType>),
+    /// Atomic type: `atomic<T>` — an atomically-accessible value.
+    Atomic(Box<IrType>),
+    /// Mutex type: `mutex<T>` — a mutex-protected value.
+    Mutex(Box<IrType>),
+    /// Grad type: `grad<T>` — a dual number for forward-mode automatic differentiation.
+    Grad(Box<IrType>),
+    /// Sparse type: `sparse<T>` — a sparse representation of a tensor or array.
+    Sparse(Box<IrType>),
 }
 
 impl std::fmt::Display for IrType {
@@ -132,6 +146,13 @@ impl std::fmt::Display for IrType {
             }
             IrType::Str => f.write_str("str"),
             IrType::Array { elem, len } => write!(f, "[{}; {}]", elem, len),
+            IrType::Option(inner) => write!(f, "option<{}>", inner),
+            IrType::ResultType(ok, err) => write!(f, "result<{},{}>", ok, err),
+            IrType::Chan(elem) => write!(f, "chan<{}>", elem),
+            IrType::Atomic(inner) => write!(f, "atomic<{}>", inner),
+            IrType::Mutex(inner) => write!(f, "mutex<{}>", inner),
+            IrType::Grad(inner) => write!(f, "grad<{}>", inner),
+            IrType::Sparse(inner) => write!(f, "sparse<{}>", inner),
         }
     }
 }

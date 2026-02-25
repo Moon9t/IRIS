@@ -268,6 +268,95 @@ pub enum IrInstr {
         value: ValueId,
     },
 
+    // ---- Option operations ----
+    /// Wrap a value in Some.
+    MakeSome { result: ValueId, value: ValueId, result_ty: IrType },
+    /// Create a None value.
+    MakeNone { result: ValueId, result_ty: IrType },
+    /// Test if an option is Some. Yields bool.
+    IsSome { result: ValueId, operand: ValueId },
+    /// Unwrap a Some value, panicking at runtime on None.
+    OptionUnwrap { result: ValueId, operand: ValueId, result_ty: IrType },
+
+    // ---- Result operations ----
+    /// Wrap a value in Ok.
+    MakeOk { result: ValueId, value: ValueId, result_ty: IrType },
+    /// Wrap a value in Err.
+    MakeErr { result: ValueId, value: ValueId, result_ty: IrType },
+    /// Test if a result is Ok. Yields bool.
+    IsOk { result: ValueId, operand: ValueId },
+    /// Unwrap the Ok value of a result.
+    ResultUnwrap { result: ValueId, operand: ValueId, result_ty: IrType },
+    /// Unwrap the Err value of a result.
+    ResultUnwrapErr { result: ValueId, operand: ValueId, result_ty: IrType },
+
+    // ---- Channel operations ----
+    /// Create a new channel.
+    ChanNew { result: ValueId, elem_ty: IrType },
+    /// Send a value on a channel (side-effecting, no result).
+    ChanSend { chan: ValueId, value: ValueId },
+    /// Receive a value from a channel.
+    ChanRecv { result: ValueId, chan: ValueId, elem_ty: IrType },
+    /// Spawn a concurrent task (body is a lifted function name).
+    Spawn { body_fn: String, args: Vec<ValueId> },
+
+    /// Parallel for-loop over a range (sequential simulation).
+    ParFor {
+        var: ValueId,   // loop variable (result placeholder)
+        start: ValueId,
+        end: ValueId,
+        body_fn: String,
+        /// Captured outer-scope values passed as extra params to body_fn.
+        args: Vec<ValueId>,
+    },
+
+    // ---- Atomic / Mutex operations ----
+    /// Create a new atomic value.
+    AtomicNew { result: ValueId, value: ValueId, result_ty: IrType },
+    /// Load from an atomic value.
+    AtomicLoad { result: ValueId, atomic: ValueId, result_ty: IrType },
+    /// Store into an atomic value (side-effecting, no result).
+    AtomicStore { atomic: ValueId, value: ValueId },
+    /// Atomically add a value and return the new value.
+    AtomicAdd { result: ValueId, atomic: ValueId, value: ValueId, result_ty: IrType },
+    /// Create a new mutex-protected value.
+    MutexNew { result: ValueId, value: ValueId, result_ty: IrType },
+    /// Lock a mutex and return the inner value.
+    MutexLock { result: ValueId, mutex: ValueId, result_ty: IrType },
+    /// Unlock a mutex (side-effecting, no result).
+    MutexUnlock { mutex: ValueId },
+
+    // ---- Concurrency barrier ----
+    /// A synchronization barrier (no-op in interpreter, marks sync point in parallel code).
+    Barrier,
+
+    // ---- Grad (dual number) operations ----
+    /// Create a dual number with given value and tangent.
+    MakeGrad {
+        result: ValueId,
+        value: ValueId,
+        tangent: ValueId,
+        ty: IrType,
+    },
+    /// Extract the primal value from a dual number.
+    GradValue {
+        result: ValueId,
+        operand: ValueId,
+        ty: IrType,
+    },
+    /// Extract the tangent (gradient) from a dual number.
+    GradTangent {
+        result: ValueId,
+        operand: ValueId,
+        ty: IrType,
+    },
+
+    // ---- Sparse tensor operations ----
+    /// Convert a dense array/tensor to sparse representation.
+    Sparsify { result: ValueId, operand: ValueId, ty: IrType },
+    /// Convert a sparse representation back to dense.
+    Densify { result: ValueId, operand: ValueId, ty: IrType },
+
     // ---- String operations ----
     /// A compile-time string constant.
     ConstStr { result: ValueId, value: String },
@@ -308,6 +397,33 @@ impl IrInstr {
             IrInstr::AllocArray { result, .. } => Some(*result),
             IrInstr::ArrayLoad { result, .. } => Some(*result),
             IrInstr::ArrayStore { .. } => None,
+            IrInstr::ParFor { .. } => None,
+            IrInstr::ChanNew { result, .. } => Some(*result),
+            IrInstr::ChanSend { .. } => None,
+            IrInstr::ChanRecv { result, .. } => Some(*result),
+            IrInstr::Spawn { .. } => None,
+            IrInstr::AtomicNew { result, .. } => Some(*result),
+            IrInstr::AtomicLoad { result, .. } => Some(*result),
+            IrInstr::AtomicStore { .. } => None,
+            IrInstr::AtomicAdd { result, .. } => Some(*result),
+            IrInstr::MutexNew { result, .. } => Some(*result),
+            IrInstr::MutexLock { result, .. } => Some(*result),
+            IrInstr::MutexUnlock { .. } => None,
+            IrInstr::MakeSome { result, .. } => Some(*result),
+            IrInstr::MakeNone { result, .. } => Some(*result),
+            IrInstr::IsSome { result, .. } => Some(*result),
+            IrInstr::OptionUnwrap { result, .. } => Some(*result),
+            IrInstr::MakeOk { result, .. } => Some(*result),
+            IrInstr::MakeErr { result, .. } => Some(*result),
+            IrInstr::IsOk { result, .. } => Some(*result),
+            IrInstr::ResultUnwrap { result, .. } => Some(*result),
+            IrInstr::ResultUnwrapErr { result, .. } => Some(*result),
+            IrInstr::Barrier => None,
+            IrInstr::Sparsify { result, .. } => Some(*result),
+            IrInstr::Densify { result, .. } => Some(*result),
+            IrInstr::MakeGrad { result, .. } => Some(*result),
+            IrInstr::GradValue { result, .. } => Some(*result),
+            IrInstr::GradTangent { result, .. } => Some(*result),
             IrInstr::ConstStr { result, .. } => Some(*result),
             IrInstr::StrLen { result, .. } => Some(*result),
             IrInstr::StrConcat { result, .. } => Some(*result),
@@ -382,6 +498,37 @@ impl IrInstr {
             IrInstr::AllocArray { init, .. } => init.clone(),
             IrInstr::ArrayLoad { array, index, .. } => vec![*array, *index],
             IrInstr::ArrayStore { array, index, value } => vec![*array, *index, *value],
+            IrInstr::ParFor { start, end, args, .. } => {
+                let mut ops = vec![*start, *end];
+                ops.extend_from_slice(args);
+                ops
+            }
+            IrInstr::ChanNew { .. } => vec![],
+            IrInstr::ChanSend { chan, value } => vec![*chan, *value],
+            IrInstr::ChanRecv { chan, .. } => vec![*chan],
+            IrInstr::Spawn { args, .. } => args.clone(),
+            IrInstr::AtomicNew { value, .. } => vec![*value],
+            IrInstr::AtomicLoad { atomic, .. } => vec![*atomic],
+            IrInstr::AtomicStore { atomic, value } => vec![*atomic, *value],
+            IrInstr::AtomicAdd { atomic, value, .. } => vec![*atomic, *value],
+            IrInstr::MutexNew { value, .. } => vec![*value],
+            IrInstr::MutexLock { mutex, .. } => vec![*mutex],
+            IrInstr::MutexUnlock { mutex } => vec![*mutex],
+            IrInstr::MakeSome { value, .. } => vec![*value],
+            IrInstr::MakeNone { .. } => vec![],
+            IrInstr::IsSome { operand, .. } => vec![*operand],
+            IrInstr::OptionUnwrap { operand, .. } => vec![*operand],
+            IrInstr::MakeOk { value, .. } => vec![*value],
+            IrInstr::MakeErr { value, .. } => vec![*value],
+            IrInstr::IsOk { operand, .. } => vec![*operand],
+            IrInstr::ResultUnwrap { operand, .. } => vec![*operand],
+            IrInstr::ResultUnwrapErr { operand, .. } => vec![*operand],
+            IrInstr::Barrier => vec![],
+            IrInstr::Sparsify { operand, .. } => vec![*operand],
+            IrInstr::Densify { operand, .. } => vec![*operand],
+            IrInstr::MakeGrad { value, tangent, .. } => vec![*value, *tangent],
+            IrInstr::GradValue { operand, .. } => vec![*operand],
+            IrInstr::GradTangent { operand, .. } => vec![*operand],
             IrInstr::ConstStr { .. } => vec![],
             IrInstr::StrLen { operand, .. } => vec![*operand],
             IrInstr::StrConcat { lhs, rhs, .. } => vec![*lhs, *rhs],

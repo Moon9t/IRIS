@@ -24,7 +24,7 @@ use crate::ir::types::{DType, Dim, IrType, Shape};
 use crate::ir::value::ValueId;
 use crate::parser::ast::{
     AstBinOp, AstBlock, AstDim, AstExpr, AstFunction, AstModule, AstScalarKind, AstStmt, AstType,
-    AstUnaryOp, AstWhenArm, Ident,
+    AstUnaryOp, AstWhenArm, AstWhenPattern, Ident,
 };
 use crate::parser::lexer::Span;
 
@@ -101,6 +101,9 @@ struct Lowerer<'m> {
     lambda_counter: std::rc::Rc<std::cell::Cell<u32>>,
     /// Lambda functions to be added to the module after this function is lowered.
     lifted_fns: std::rc::Rc<std::cell::RefCell<Vec<crate::ir::function::IrFunction>>>,
+    /// Tracks the concrete element type of channels (channel ValueId → elem IrType).
+    /// Populated when `send(ch, val)` is first called; used by `recv(ch)` to avoid Infer.
+    chan_elem_types: HashMap<ValueId, IrType>,
 }
 
 impl<'m> Lowerer<'m> {
@@ -130,6 +133,7 @@ impl<'m> Lowerer<'m> {
             fn_sigs,
             lambda_counter,
             lifted_fns,
+            chan_elem_types: HashMap::new(),
         }
     }
 
@@ -146,7 +150,19 @@ impl<'m> Lowerer<'m> {
 
     fn lower_expr(&mut self, expr: &AstExpr) -> Result<(ValueId, IrType), LowerError> {
         match expr {
-            AstExpr::Ident(ident) => self.lookup(ident),
+            AstExpr::Ident(ident) => {
+                // Special built-in identifiers
+                if ident.name == "none" {
+                    let result_ty = IrType::Option(Box::new(IrType::Infer));
+                    let result = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::MakeNone { result, result_ty: result_ty.clone() },
+                        Some(result_ty.clone()),
+                    );
+                    return Ok((result, result_ty));
+                }
+                self.lookup(ident)
+            }
 
             AstExpr::FloatLit { value, .. } => {
                 let result = self.builder.fresh_value();
@@ -407,8 +423,25 @@ impl<'m> Lowerer<'m> {
                         return Ok((result, result_ty));
                     }
                 }
-                // Normal struct field access.
+                // Normal struct field access — also handles grad<T>.value / grad<T>.grad
                 let (base_val, base_ty) = self.lower_expr(base)?;
+                // grad<T> pseudo-fields: .value → GradValue, .grad / .tangent → GradTangent
+                if let IrType::Grad(inner) = &base_ty {
+                    let inner_ty = *inner.clone();
+                    let result = self.builder.fresh_value();
+                    let (instr, ret_ty) = if field == "value" {
+                        (IrInstr::GradValue { result, operand: base_val, ty: inner_ty.clone() }, inner_ty)
+                    } else if field == "grad" || field == "tangent" {
+                        (IrInstr::GradTangent { result, operand: base_val, ty: inner_ty.clone() }, inner_ty)
+                    } else {
+                        return Err(LowerError::Unsupported {
+                            detail: format!("grad<T> has no field '{}'; use .value or .grad", field),
+                            span: *span,
+                        });
+                    };
+                    self.builder.push_instr(instr, Some(ret_ty.clone()));
+                    return Ok((result, ret_ty));
+                }
                 let struct_fields = match &base_ty {
                     IrType::Struct { fields, .. } => fields.clone(),
                     _ => {
@@ -555,6 +588,81 @@ impl<'m> Lowerer<'m> {
                 let _ = span;
                 Ok((result, to_ty))
             }
+
+            // await expr: just lower the inner expression (async is a no-op at IR level)
+            AstExpr::Await { expr, .. } => {
+                self.lower_expr(expr)
+            }
+
+            AstExpr::Try { expr, span } => {
+                let (val, res_ty) = self.lower_expr(expr)?;
+
+                // Extract Ok/Err inner types from the result type.
+                let (ok_ty, err_ty) = if let IrType::ResultType(ok, err) = &res_ty {
+                    ((**ok).clone(), (**err).clone())
+                } else {
+                    (IrType::Infer, IrType::Infer)
+                };
+
+                // Emit IsOk test.
+                let is_ok_result = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::IsOk { result: is_ok_result, operand: val },
+                    Some(IrType::Scalar(DType::Bool)),
+                );
+
+                let ok_bb = self.builder.create_block(Some("try_ok"));
+                let err_bb = self.builder.create_block(Some("try_err"));
+                let cont_bb = self.builder.create_block(Some("try_cont"));
+
+                self.builder.push_instr(
+                    IrInstr::CondBr {
+                        cond: is_ok_result,
+                        then_block: ok_bb,
+                        then_args: vec![],
+                        else_block: err_bb,
+                        else_args: vec![],
+                    },
+                    None,
+                );
+
+                // Ok branch: unwrap and continue.
+                self.builder.set_current_block(ok_bb);
+                let ok_unwrapped = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ResultUnwrap { result: ok_unwrapped, operand: val, result_ty: ok_ty.clone() },
+                    Some(ok_ty.clone()),
+                );
+                self.builder.push_instr(
+                    IrInstr::Br { target: cont_bb, args: vec![ok_unwrapped] },
+                    None,
+                );
+
+                // Err branch: early return.
+                self.builder.set_current_block(err_bb);
+                let err_unwrapped = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ResultUnwrapErr { result: err_unwrapped, operand: val, result_ty: err_ty.clone() },
+                    Some(err_ty.clone()),
+                );
+                // Wrap the error in a result and return early.
+                let err_result = self.builder.fresh_value();
+                let err_ret_ty = IrType::ResultType(Box::new(IrType::Infer), Box::new(err_ty.clone()));
+                self.builder.push_instr(
+                    IrInstr::MakeErr { result: err_result, value: err_unwrapped, result_ty: err_ret_ty.clone() },
+                    Some(err_ret_ty.clone()),
+                );
+                self.builder.push_instr(
+                    IrInstr::Return { values: vec![err_result] },
+                    None,
+                );
+
+                // Continuation block: receives the Ok value.
+                self.builder.set_current_block(cont_bb);
+                let ok_result = self.builder.add_block_param(cont_bb, Some("try_result"), ok_ty.clone());
+                let _ = span;
+                Ok((ok_result, ok_ty))
+            }
         }
     }
 
@@ -672,6 +780,324 @@ impl<'m> Lowerer<'m> {
         args: &[AstExpr],
         span: Span,
     ) -> Result<(ValueId, IrType), LowerError> {
+        // Built-in: channel() → ChanNew
+        if callee.name == "channel" {
+            let elem_ty = IrType::Infer;
+            let chan_ty = IrType::Chan(Box::new(elem_ty.clone()));
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::ChanNew { result, elem_ty },
+                Some(chan_ty.clone()),
+            );
+            return Ok((result, chan_ty));
+        }
+
+        // Built-in: send(ch, v) → ChanSend (returns unit, use dummy i64 0)
+        if callee.name == "send" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported {
+                    detail: "send() requires exactly 2 arguments (channel, value)".into(),
+                    span,
+                });
+            }
+            let (chan_val, _) = self.lower_expr(&args[0])?;
+            let (val, val_ty) = self.lower_expr(&args[1])?;
+            // Record the concrete element type so recv() can use it.
+            self.chan_elem_types.entry(chan_val).or_insert_with(|| val_ty.clone());
+            self.builder.push_instr(
+                IrInstr::ChanSend { chan: chan_val, value: val },
+                None,
+            );
+            // Return a dummy i64 0 as the "unit" value.
+            let dummy = self.builder.fresh_value();
+            let dummy_ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(
+                IrInstr::ConstInt { result: dummy, value: 0, ty: dummy_ty.clone() },
+                Some(dummy_ty.clone()),
+            );
+            return Ok((dummy, dummy_ty));
+        }
+
+        // Built-in: recv(ch) → ChanRecv
+        if callee.name == "recv" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "recv() requires exactly 1 argument (channel)".into(),
+                    span,
+                });
+            }
+            let (chan_val, chan_ty) = self.lower_expr(&args[0])?;
+            // Prefer the concrete element type recorded when send() was called.
+            let elem_ty = self.chan_elem_types.get(&chan_val).cloned()
+                .unwrap_or_else(|| {
+                    if let IrType::Chan(elem) = chan_ty { *elem } else { IrType::Infer }
+                });
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::ChanRecv { result, chan: chan_val, elem_ty: elem_ty.clone() },
+                Some(elem_ty.clone()),
+            );
+            return Ok((result, elem_ty));
+        }
+
+        // Built-in: atomic_new(v) → AtomicNew
+        if callee.name == "atomic_new" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "atomic_new() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (val, inner_ty) = self.lower_expr(&args[0])?;
+            let result_ty = IrType::Atomic(Box::new(inner_ty));
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::AtomicNew { result, value: val, result_ty: result_ty.clone() },
+                Some(result_ty.clone()),
+            );
+            return Ok((result, result_ty));
+        }
+
+        // Built-in: atomic_load(a) → AtomicLoad
+        if callee.name == "atomic_load" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "atomic_load() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (val, atomic_ty) = self.lower_expr(&args[0])?;
+            let inner_ty = if let IrType::Atomic(inner) = atomic_ty { *inner } else { IrType::Infer };
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::AtomicLoad { result, atomic: val, result_ty: inner_ty.clone() },
+                Some(inner_ty.clone()),
+            );
+            return Ok((result, inner_ty));
+        }
+
+        // Built-in: atomic_store(a, v) → AtomicStore
+        if callee.name == "atomic_store" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported {
+                    detail: "atomic_store() requires exactly 2 arguments".into(),
+                    span,
+                });
+            }
+            let (a, _) = self.lower_expr(&args[0])?;
+            let (v, _) = self.lower_expr(&args[1])?;
+            self.builder.push_instr(IrInstr::AtomicStore { atomic: a, value: v }, None);
+            let dummy = self.builder.fresh_value();
+            let dummy_ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::ConstInt { result: dummy, value: 0, ty: dummy_ty.clone() }, Some(dummy_ty.clone()));
+            return Ok((dummy, dummy_ty));
+        }
+
+        // Built-in: mutex_new(v) → MutexNew
+        if callee.name == "mutex_new" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "mutex_new() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (val, inner_ty) = self.lower_expr(&args[0])?;
+            let result_ty = IrType::Mutex(Box::new(inner_ty));
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::MutexNew { result, value: val, result_ty: result_ty.clone() },
+                Some(result_ty.clone()),
+            );
+            return Ok((result, result_ty));
+        }
+
+        // Built-in: mutex_lock(m) → MutexLock
+        if callee.name == "mutex_lock" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "mutex_lock() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (val, mutex_ty) = self.lower_expr(&args[0])?;
+            let inner_ty = if let IrType::Mutex(inner) = mutex_ty { *inner } else { IrType::Infer };
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::MutexLock { result, mutex: val, result_ty: inner_ty.clone() },
+                Some(inner_ty.clone()),
+            );
+            return Ok((result, inner_ty));
+        }
+
+        // Built-in: barrier() → Barrier (sync point, no-op in interpreter)
+        if callee.name == "barrier" {
+            self.builder.push_instr(IrInstr::Barrier, None);
+            let dummy = self.builder.fresh_value();
+            let dummy_ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(
+                IrInstr::ConstInt { result: dummy, value: 0, ty: dummy_ty.clone() },
+                Some(dummy_ty.clone()),
+            );
+            return Ok((dummy, dummy_ty));
+        }
+
+        // Built-in: mutex_unlock(m) → MutexUnlock (no-op in interpreter, returns unit)
+        if callee.name == "mutex_unlock" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "mutex_unlock() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (val, _) = self.lower_expr(&args[0])?;
+            self.builder.push_instr(IrInstr::MutexUnlock { mutex: val }, None);
+            let dummy = self.builder.fresh_value();
+            let dummy_ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(
+                IrInstr::ConstInt { result: dummy, value: 0, ty: dummy_ty.clone() },
+                Some(dummy_ty.clone()),
+            );
+            return Ok((dummy, dummy_ty));
+        }
+
+        // Built-in: atomic_add(a, v) → AtomicAdd (returns new value)
+        if callee.name == "atomic_add" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported {
+                    detail: "atomic_add() requires exactly 2 arguments".into(),
+                    span,
+                });
+            }
+            let (a, atomic_ty) = self.lower_expr(&args[0])?;
+            let (v, _) = self.lower_expr(&args[1])?;
+            let inner_ty = if let IrType::Atomic(inner) = atomic_ty { *inner } else { IrType::Scalar(DType::I64) };
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::AtomicAdd { result, atomic: a, value: v, result_ty: inner_ty.clone() },
+                Some(inner_ty.clone()),
+            );
+            return Ok((result, inner_ty));
+        }
+
+        // Built-in: some(v) → MakeSome
+        if callee.name == "some" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "some() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (val, inner_ty) = self.lower_expr(&args[0])?;
+            let result_ty = IrType::Option(Box::new(inner_ty));
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::MakeSome { result, value: val, result_ty: result_ty.clone() },
+                Some(result_ty.clone()),
+            );
+            return Ok((result, result_ty));
+        }
+
+        // Built-in: none() → MakeNone (also handled as identifier)
+        if callee.name == "none" {
+            let result_ty = IrType::Option(Box::new(IrType::Infer));
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::MakeNone { result, result_ty: result_ty.clone() },
+                Some(result_ty.clone()),
+            );
+            return Ok((result, result_ty));
+        }
+
+        // Built-in: is_some(v) → IsSome
+        if callee.name == "is_some" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "is_some() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (val, _) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::Bool);
+            self.builder.push_instr(
+                IrInstr::IsSome { result, operand: val },
+                Some(ty.clone()),
+            );
+            return Ok((result, ty));
+        }
+
+        // Built-in: unwrap(v) → OptionUnwrap
+        if callee.name == "unwrap" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "unwrap() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (val, opt_ty) = self.lower_expr(&args[0])?;
+            let inner_ty = if let IrType::Option(inner) = opt_ty { *inner } else { IrType::Infer };
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::OptionUnwrap { result, operand: val, result_ty: inner_ty.clone() },
+                Some(inner_ty.clone()),
+            );
+            return Ok((result, inner_ty));
+        }
+
+        // Built-in: ok(v) → MakeOk
+        if callee.name == "ok" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "ok() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (val, inner_ty) = self.lower_expr(&args[0])?;
+            let result_ty = IrType::ResultType(Box::new(inner_ty), Box::new(IrType::Infer));
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::MakeOk { result, value: val, result_ty: result_ty.clone() },
+                Some(result_ty.clone()),
+            );
+            return Ok((result, result_ty));
+        }
+
+        // Built-in: err(v) → MakeErr
+        if callee.name == "err" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "err() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (val, inner_ty) = self.lower_expr(&args[0])?;
+            let result_ty = IrType::ResultType(Box::new(IrType::Infer), Box::new(inner_ty));
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::MakeErr { result, value: val, result_ty: result_ty.clone() },
+                Some(result_ty.clone()),
+            );
+            return Ok((result, result_ty));
+        }
+
+        // Built-in: is_ok(v) → IsOk
+        if callee.name == "is_ok" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "is_ok() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (val, _) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::Bool);
+            self.builder.push_instr(
+                IrInstr::IsOk { result, operand: val },
+                Some(ty.clone()),
+            );
+            return Ok((result, ty));
+        }
+
         // Built-in intrinsic: einsum("notation", inputs...)
         if callee.name == "einsum" {
             return self.lower_einsum(args, span);
@@ -755,6 +1181,66 @@ impl<'m> Lowerer<'m> {
                 Some(ty.clone()),
             );
             return Ok((dummy, ty));
+        }
+
+        // Built-in: grad(v) → MakeGrad(value=v, tangent=1.0)
+        if callee.name == "grad" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "grad() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (val, inner_ty) = self.lower_expr(&args[0])?;
+            let result_ty = IrType::Grad(Box::new(inner_ty));
+            // tangent = 1.0 (seeding the derivative)
+            let one = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::ConstFloat { result: one, value: 1.0, ty: IrType::Scalar(DType::F64) },
+                Some(IrType::Scalar(DType::F64)),
+            );
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::MakeGrad { result, value: val, tangent: one, ty: result_ty.clone() },
+                Some(result_ty.clone()),
+            );
+            return Ok((result, result_ty));
+        }
+
+        // Built-in: sparsify(arr) → Sparsify (convert dense array to sparse representation)
+        if callee.name == "sparsify" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "sparsify() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (val, inner_ty) = self.lower_expr(&args[0])?;
+            let result_ty = IrType::Sparse(Box::new(inner_ty));
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::Sparsify { result, operand: val, ty: result_ty.clone() },
+                Some(result_ty.clone()),
+            );
+            return Ok((result, result_ty));
+        }
+
+        // Built-in: densify(sparse) → Densify (convert sparse back; returns nnz count as i64)
+        if callee.name == "densify" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "densify() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (val, _) = self.lower_expr(&args[0])?;
+            let result_ty = IrType::Scalar(DType::I64);
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::Densify { result, operand: val, ty: result_ty.clone() },
+                Some(result_ty.clone()),
+            );
+            return Ok((result, result_ty));
         }
 
         // General function call — look up the callee's return type from
@@ -1034,6 +1520,21 @@ impl<'m> Lowerer<'m> {
         // 1. Evaluate the scrutinee.
         let (scrut_val, scrut_ty) = self.lower_expr(scrutinee)?;
 
+        // Check if this is an option or result pattern match.
+        let is_option_when = arms.iter().any(|a| {
+            matches!(a.pattern, AstWhenPattern::OptionSome { .. } | AstWhenPattern::OptionNone)
+        });
+        let is_result_when = arms.iter().any(|a| {
+            matches!(a.pattern, AstWhenPattern::ResultOk { .. } | AstWhenPattern::ResultErr { .. })
+        });
+
+        if is_option_when {
+            return self.lower_option_when(scrut_val, &scrut_ty, arms, span);
+        }
+        if is_result_when {
+            return self.lower_result_when(scrut_val, &scrut_ty, arms, span);
+        }
+
         // 2. Verify it is an enum type and extract variants.
         let (enum_name, variants) = match &scrut_ty {
             IrType::Enum { name, variants } => (name.clone(), variants.clone()),
@@ -1106,6 +1607,205 @@ impl<'m> Lowerer<'m> {
             .add_block_param(merge_bb, Some("when_result"), result_ty.clone());
         self.builder.set_current_block(merge_bb);
 
+        Ok((result, result_ty))
+    }
+
+    /// Lowers `when opt_val { some(x) => body, none => body }` for option types.
+    fn lower_option_when(
+        &mut self,
+        scrut_val: ValueId,
+        scrut_ty: &IrType,
+        arms: &[AstWhenArm],
+        span: Span,
+    ) -> Result<(ValueId, IrType), LowerError> {
+        // Extract inner type from option type.
+        let inner_ty = if let IrType::Option(inner) = scrut_ty {
+            (**inner).clone()
+        } else {
+            IrType::Infer
+        };
+        // Find the some and none arms.
+        let some_arm = arms.iter().find(|a| matches!(a.pattern, AstWhenPattern::OptionSome { .. }));
+        let none_arm = arms.iter().find(|a| matches!(a.pattern, AstWhenPattern::OptionNone));
+
+        if some_arm.is_none() && none_arm.is_none() {
+            return Err(LowerError::Unsupported {
+                detail: "option when expression needs some/none arms".into(),
+                span,
+            });
+        }
+
+        // Emit IsSome test.
+        let is_some_result = self.builder.fresh_value();
+        self.builder.push_instr(
+            IrInstr::IsSome { result: is_some_result, operand: scrut_val },
+            Some(IrType::Scalar(DType::Bool)),
+        );
+
+        let some_bb = self.builder.create_block(Some("option_some"));
+        let none_bb = self.builder.create_block(Some("option_none"));
+        let merge_bb = self.builder.create_block(Some("option_merge"));
+
+        self.builder.push_instr(
+            IrInstr::CondBr {
+                cond: is_some_result,
+                then_block: some_bb,
+                then_args: vec![],
+                else_block: none_bb,
+                else_args: vec![],
+            },
+            None,
+        );
+
+        let outer_scope = self.scope.clone();
+        let mut result_ty: Option<IrType> = None;
+
+        // Some branch.
+        self.builder.set_current_block(some_bb);
+        self.scope = outer_scope.clone();
+        let some_val = if let Some(arm) = some_arm {
+            // Bind the inner value if a name was given.
+            if let AstWhenPattern::OptionSome { binding: Some(ref bind_name) } = arm.pattern {
+                // Unwrap the option to get the inner value.
+                let unwrapped = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::OptionUnwrap { result: unwrapped, operand: scrut_val, result_ty: inner_ty.clone() },
+                    Some(inner_ty.clone()),
+                );
+                self.scope.insert(bind_name.clone(), (unwrapped, inner_ty.clone()));
+            }
+            let (v, ty) = self.lower_expr(&arm.body)?;
+            result_ty = Some(ty);
+            v
+        } else {
+            // No some arm: produce a dummy value (should not happen in well-formed code).
+            let r = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::ConstInt { result: r, value: 0, ty: IrType::Scalar(DType::I64) }, Some(IrType::Scalar(DType::I64)));
+            result_ty = Some(IrType::Scalar(DType::I64));
+            r
+        };
+        self.builder.push_instr(IrInstr::Br { target: merge_bb, args: vec![some_val] }, None);
+
+        // None branch.
+        self.builder.set_current_block(none_bb);
+        self.scope = outer_scope.clone();
+        let none_val = if let Some(arm) = none_arm {
+            let (v, ty) = self.lower_expr(&arm.body)?;
+            if result_ty.is_none() { result_ty = Some(ty); }
+            v
+        } else {
+            let r = self.builder.fresh_value();
+            let rt = result_ty.clone().unwrap_or(IrType::Scalar(DType::I64));
+            self.builder.push_instr(IrInstr::ConstInt { result: r, value: 0, ty: rt.clone() }, Some(rt));
+            r
+        };
+        self.builder.push_instr(IrInstr::Br { target: merge_bb, args: vec![none_val] }, None);
+
+        self.scope = outer_scope;
+        let result_ty = result_ty.unwrap();
+        let result = self.builder.add_block_param(merge_bb, Some("option_result"), result_ty.clone());
+        self.builder.set_current_block(merge_bb);
+        Ok((result, result_ty))
+    }
+
+    /// Lowers `when res_val { ok(x) => body, err(e) => body }` for result types.
+    fn lower_result_when(
+        &mut self,
+        scrut_val: ValueId,
+        scrut_ty: &IrType,
+        arms: &[AstWhenArm],
+        span: Span,
+    ) -> Result<(ValueId, IrType), LowerError> {
+        let (ok_inner_ty, err_inner_ty) = if let IrType::ResultType(ok, err) = scrut_ty {
+            ((**ok).clone(), (**err).clone())
+        } else {
+            (IrType::Infer, IrType::Infer)
+        };
+        let ok_arm = arms.iter().find(|a| matches!(a.pattern, AstWhenPattern::ResultOk { .. }));
+        let err_arm = arms.iter().find(|a| matches!(a.pattern, AstWhenPattern::ResultErr { .. }));
+
+        if ok_arm.is_none() && err_arm.is_none() {
+            return Err(LowerError::Unsupported {
+                detail: "result when expression needs ok/err arms".into(),
+                span,
+            });
+        }
+
+        // Emit IsOk test.
+        let is_ok_result = self.builder.fresh_value();
+        self.builder.push_instr(
+            IrInstr::IsOk { result: is_ok_result, operand: scrut_val },
+            Some(IrType::Scalar(DType::Bool)),
+        );
+
+        let ok_bb = self.builder.create_block(Some("result_ok"));
+        let err_bb = self.builder.create_block(Some("result_err"));
+        let merge_bb = self.builder.create_block(Some("result_merge"));
+
+        self.builder.push_instr(
+            IrInstr::CondBr {
+                cond: is_ok_result,
+                then_block: ok_bb,
+                then_args: vec![],
+                else_block: err_bb,
+                else_args: vec![],
+            },
+            None,
+        );
+
+        let outer_scope = self.scope.clone();
+        let mut result_ty: Option<IrType> = None;
+
+        // Ok branch.
+        self.builder.set_current_block(ok_bb);
+        self.scope = outer_scope.clone();
+        let ok_val = if let Some(arm) = ok_arm {
+            if let AstWhenPattern::ResultOk { binding: Some(ref bind_name) } = arm.pattern {
+                let unwrapped = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ResultUnwrap { result: unwrapped, operand: scrut_val, result_ty: ok_inner_ty.clone() },
+                    Some(ok_inner_ty.clone()),
+                );
+                self.scope.insert(bind_name.clone(), (unwrapped, ok_inner_ty.clone()));
+            }
+            let (v, ty) = self.lower_expr(&arm.body)?;
+            result_ty = Some(ty);
+            v
+        } else {
+            let r = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::ConstInt { result: r, value: 0, ty: IrType::Scalar(DType::I64) }, Some(IrType::Scalar(DType::I64)));
+            result_ty = Some(IrType::Scalar(DType::I64));
+            r
+        };
+        self.builder.push_instr(IrInstr::Br { target: merge_bb, args: vec![ok_val] }, None);
+
+        // Err branch.
+        self.builder.set_current_block(err_bb);
+        self.scope = outer_scope.clone();
+        let err_val = if let Some(arm) = err_arm {
+            if let AstWhenPattern::ResultErr { binding: Some(ref bind_name) } = arm.pattern {
+                let unwrapped = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ResultUnwrapErr { result: unwrapped, operand: scrut_val, result_ty: err_inner_ty.clone() },
+                    Some(err_inner_ty.clone()),
+                );
+                self.scope.insert(bind_name.clone(), (unwrapped, err_inner_ty.clone()));
+            }
+            let (v, ty) = self.lower_expr(&arm.body)?;
+            if result_ty.is_none() { result_ty = Some(ty); }
+            v
+        } else {
+            let r = self.builder.fresh_value();
+            let rt = result_ty.clone().unwrap_or(IrType::Scalar(DType::I64));
+            self.builder.push_instr(IrInstr::ConstInt { result: r, value: 0, ty: rt.clone() }, Some(rt));
+            r
+        };
+        self.builder.push_instr(IrInstr::Br { target: merge_bb, args: vec![err_val] }, None);
+
+        self.scope = outer_scope;
+        let result_ty = result_ty.unwrap();
+        let result = self.builder.add_block_param(merge_bb, Some("result_result"), result_ty.clone());
+        self.builder.set_current_block(merge_bb);
         Ok((result, result_ty))
     }
 
@@ -1629,6 +2329,132 @@ impl<'m> Lowerer<'m> {
                 self.builder.set_current_block(unreachable_bb);
                 Ok(())
             }
+
+            AstStmt::Spawn { body, span } => {
+                // Lambda-lift the spawn body into a function __spawn_N().
+                let counter = self.lambda_counter.get();
+                self.lambda_counter.set(counter + 1);
+                let fn_name = format!("__spawn_{}", counter);
+
+                // Collect captures (all in-scope variables).
+                let captures: Vec<(String, ValueId, IrType)> = self
+                    .scope
+                    .iter()
+                    .map(|(name, (vid, ty))| (name.clone(), *vid, ty.clone()))
+                    .collect();
+
+                let mut lifted_params: Vec<crate::ir::function::Param> = captures
+                    .iter()
+                    .map(|(name, _, ty)| crate::ir::function::Param { name: name.clone(), ty: ty.clone() })
+                    .collect();
+
+                // Build the lifted function with a synthetic AstBlock.
+                let ast_block = AstBlock {
+                    stmts: body.clone(),
+                    tail: None,
+                    span: *span,
+                };
+                let temp_builder = IrFunctionBuilder::new(&fn_name, lifted_params.clone(), IrType::Scalar(DType::I64));
+                let mut spawn_lowerer = Lowerer::new_with_lambda_state(
+                    temp_builder,
+                    self.module,
+                    self.fn_sigs,
+                    self.lambda_counter.clone(),
+                    self.lifted_fns.clone(),
+                );
+                let entry = spawn_lowerer.builder.create_block(Some("entry"));
+                spawn_lowerer.builder.set_current_block(entry);
+                // Track outer_val → inner_val mapping to propagate chan_elem_types back.
+                let mut capture_val_map: Vec<(ValueId, ValueId)> = Vec::new();
+                for (name, outer_val, ty) in &captures {
+                    let inner_val = spawn_lowerer.builder.add_block_param(entry, Some(name), ty.clone());
+                    spawn_lowerer.scope.insert(name.clone(), (inner_val, ty.clone()));
+                    capture_val_map.push((*outer_val, inner_val));
+                }
+                // Pre-populate spawn_lowerer's chan_elem_types from parent (inner val → elem ty).
+                for (outer_val, inner_val) in &capture_val_map {
+                    if let Some(elem_ty) = self.chan_elem_types.get(outer_val) {
+                        spawn_lowerer.chan_elem_types.insert(*inner_val, elem_ty.clone());
+                    }
+                }
+                spawn_lowerer.lower_block(&ast_block)?;
+                // Propagate any new chan_elem_types discovered in spawn back to parent.
+                for (outer_val, inner_val) in &capture_val_map {
+                    if let Some(elem_ty) = spawn_lowerer.chan_elem_types.get(inner_val) {
+                        self.chan_elem_types.entry(*outer_val).or_insert_with(|| elem_ty.clone());
+                    }
+                }
+                // Emit a return of 0 if not already terminated.
+                let dummy_ret = spawn_lowerer.builder.fresh_value();
+                spawn_lowerer.builder.push_instr(IrInstr::ConstInt { result: dummy_ret, value: 0, ty: IrType::Scalar(DType::I64) }, Some(IrType::Scalar(DType::I64)));
+                spawn_lowerer.builder.push_instr(IrInstr::Return { values: vec![dummy_ret] }, None);
+                spawn_lowerer.builder.seal_unterminated_blocks();
+                let ir_func = spawn_lowerer.builder.build();
+                self.lifted_fns.borrow_mut().push(ir_func);
+
+                let capture_vals: Vec<ValueId> = captures.iter().map(|(_, v, _)| *v).collect();
+                self.builder.push_instr(IrInstr::Spawn { body_fn: fn_name, args: capture_vals }, None);
+                let _ = span;
+                Ok(())
+            }
+
+            AstStmt::ParFor { var, start, end, body, span } => {
+                // Lambda-lift body into __par_body_N(var: i64, captures...) { body }.
+                let counter = self.lambda_counter.get();
+                self.lambda_counter.set(counter + 1);
+                let fn_name = format!("__par_body_{}", counter);
+
+                // Collect outer-scope captures (all in-scope variables except the loop var).
+                let captures: Vec<(String, ValueId, IrType)> = self
+                    .scope
+                    .iter()
+                    .filter(|(name, _)| *name != &var.name)
+                    .map(|(name, (vid, ty))| (name.clone(), *vid, ty.clone()))
+                    .collect();
+
+                // Build params: loop var first, then captures.
+                let mut params = vec![crate::ir::function::Param { name: var.name.clone(), ty: IrType::Scalar(DType::I64) }];
+                for (name, _, ty) in &captures {
+                    params.push(crate::ir::function::Param { name: name.clone(), ty: ty.clone() });
+                }
+
+                let temp_builder = IrFunctionBuilder::new(&fn_name, params, IrType::Scalar(DType::I64));
+                let mut body_lowerer = Lowerer::new_with_lambda_state(
+                    temp_builder,
+                    self.module,
+                    self.fn_sigs,
+                    self.lambda_counter.clone(),
+                    self.lifted_fns.clone(),
+                );
+                let entry = body_lowerer.builder.create_block(Some("entry"));
+                body_lowerer.builder.set_current_block(entry);
+                // Add loop var as first block param.
+                let var_val = body_lowerer.builder.add_block_param(entry, Some(&var.name), IrType::Scalar(DType::I64));
+                body_lowerer.scope.insert(var.name.clone(), (var_val, IrType::Scalar(DType::I64)));
+                // Add capture params.
+                for (name, _, ty) in &captures {
+                    let inner_val = body_lowerer.builder.add_block_param(entry, Some(name), ty.clone());
+                    body_lowerer.scope.insert(name.clone(), (inner_val, ty.clone()));
+                }
+                body_lowerer.lower_block(body)?;
+                let dummy_ret = body_lowerer.builder.fresh_value();
+                body_lowerer.builder.push_instr(IrInstr::ConstInt { result: dummy_ret, value: 0, ty: IrType::Scalar(DType::I64) }, Some(IrType::Scalar(DType::I64)));
+                body_lowerer.builder.push_instr(IrInstr::Return { values: vec![dummy_ret] }, None);
+                body_lowerer.builder.seal_unterminated_blocks();
+                let ir_func = body_lowerer.builder.build();
+                self.lifted_fns.borrow_mut().push(ir_func);
+
+                let (start_val, _) = self.lower_expr(start)?;
+                let (end_val, _) = self.lower_expr(end)?;
+                let var_id = self.builder.fresh_value();
+                let capture_vals: Vec<ValueId> = captures.iter().map(|(_, v, _)| *v).collect();
+                self.builder.push_instr(
+                    IrInstr::ParFor { var: var_id, start: start_val, end: end_val, body_fn: fn_name, args: capture_vals },
+                    None,
+                );
+                let _ = span;
+                Ok(())
+            }
         }
     }
 }
@@ -1684,9 +2510,10 @@ fn lower_function(
     lowerer.builder.seal_unterminated_blocks();
 
     let ir_func = lowerer.builder.build();
-    let lifted = std::rc::Rc::try_unwrap(lifted_fns)
-        .unwrap_or_else(|rc| std::rc::Rc::new(std::cell::RefCell::new(rc.borrow().clone())))
-        .into_inner();
+    let lifted = match std::rc::Rc::try_unwrap(lifted_fns) {
+        Ok(cell) => cell.into_inner(),
+        Err(rc) => rc.borrow().clone(),
+    };
     Ok((ir_func, lifted))
 }
 
@@ -1719,6 +2546,15 @@ pub fn lower_type(ty: &AstType) -> IrType {
             elem: Box::new(lower_type(elem)),
             len: *len,
         },
+        AstType::Option(inner, _) => IrType::Option(Box::new(lower_type(inner))),
+        AstType::Result(ok_ty, err_ty, _) => {
+            IrType::ResultType(Box::new(lower_type(ok_ty)), Box::new(lower_type(err_ty)))
+        }
+        AstType::Chan(elem, _) => IrType::Chan(Box::new(lower_type(elem))),
+        AstType::Atomic(inner, _) => IrType::Atomic(Box::new(lower_type(inner))),
+        AstType::Mutex(inner, _) => IrType::Mutex(Box::new(lower_type(inner))),
+        AstType::Grad(inner, _) => IrType::Grad(Box::new(lower_type(inner))),
+        AstType::Sparse(inner, _) => IrType::Sparse(Box::new(lower_type(inner))),
     }
 }
 
@@ -1758,6 +2594,16 @@ pub fn lower_type_with_structs(ty: &AstType, module: &IrModule) -> IrType {
                 .map(|e| lower_type_with_structs(e, module))
                 .collect(),
         ),
+        AstType::Option(inner, _) => {
+            IrType::Option(Box::new(lower_type_with_structs(inner, module)))
+        }
+        AstType::Result(ok_ty, err_ty, _) => IrType::ResultType(
+            Box::new(lower_type_with_structs(ok_ty, module)),
+            Box::new(lower_type_with_structs(err_ty, module)),
+        ),
+        AstType::Chan(elem, _) => IrType::Chan(Box::new(lower_type_with_structs(elem, module))),
+        AstType::Atomic(inner, _) => IrType::Atomic(Box::new(lower_type_with_structs(inner, module))),
+        AstType::Mutex(inner, _) => IrType::Mutex(Box::new(lower_type_with_structs(inner, module))),
         other => lower_type(other),
     }
 }

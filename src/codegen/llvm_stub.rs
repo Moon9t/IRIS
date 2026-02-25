@@ -562,6 +562,78 @@ fn emit_llvm_instr(
             )?;
         }
 
+        IrInstr::ParFor { body_fn, start, end, .. } => {
+            writeln!(out, "  call void @iris_par_for(ptr @{}, i64 {}, i64 {})", body_fn, val(*start), val(*end))?;
+        }
+
+        // Channel ops: emit as opaque runtime calls.
+        IrInstr::ChanNew { result, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_chan_new()", result.0)?;
+        }
+        IrInstr::ChanSend { chan, value } => {
+            writeln!(out, "  call void @iris_chan_send(ptr {}, ptr {})", val(*chan), val(*value))?;
+        }
+        IrInstr::ChanRecv { result, chan, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_chan_recv(ptr {})", result.0, val(*chan))?;
+        }
+        IrInstr::Spawn { body_fn, .. } => {
+            writeln!(out, "  call void @iris_spawn_fn(ptr @{})", body_fn)?;
+        }
+
+        // Atomic / Mutex ops: emit as opaque runtime calls.
+        IrInstr::AtomicNew { result, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_atomic_new()", result.0)?;
+        }
+        IrInstr::AtomicLoad { result, atomic, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_atomic_load(ptr {})", result.0, val(*atomic))?;
+        }
+        IrInstr::AtomicStore { atomic, value } => {
+            writeln!(out, "  call void @iris_atomic_store(ptr {}, ptr {})", val(*atomic), val(*value))?;
+        }
+        IrInstr::AtomicAdd { result, atomic, value, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_atomic_add(ptr {}, ptr {})", result.0, val(*atomic), val(*value))?;
+        }
+        IrInstr::MutexNew { result, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_mutex_new()", result.0)?;
+        }
+        IrInstr::MutexLock { result, mutex, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_mutex_lock(ptr {})", result.0, val(*mutex))?;
+        }
+        IrInstr::MutexUnlock { mutex } => {
+            writeln!(out, "  call void @iris_mutex_unlock(ptr {})", val(*mutex))?;
+        }
+
+        // Option ops: emit as opaque runtime calls.
+        IrInstr::MakeSome { result, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_make_some()", result.0)?;
+        }
+        IrInstr::MakeNone { result, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_make_none()", result.0)?;
+        }
+        IrInstr::IsSome { result, operand } => {
+            writeln!(out, "  %v{} = call i1 @iris_is_some(ptr {})", result.0, val(*operand))?;
+        }
+        IrInstr::OptionUnwrap { result, operand, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_option_unwrap(ptr {})", result.0, val(*operand))?;
+        }
+
+        // Result ops: emit as opaque runtime calls.
+        IrInstr::MakeOk { result, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_make_ok()", result.0)?;
+        }
+        IrInstr::MakeErr { result, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_make_err()", result.0)?;
+        }
+        IrInstr::IsOk { result, operand } => {
+            writeln!(out, "  %v{} = call i1 @iris_is_ok(ptr {})", result.0, val(*operand))?;
+        }
+        IrInstr::ResultUnwrap { result, operand, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_result_unwrap(ptr {})", result.0, val(*operand))?;
+        }
+        IrInstr::ResultUnwrapErr { result, operand, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_result_unwrap_err(ptr {})", result.0, val(*operand))?;
+        }
+
         // String ops: emit as opaque runtime calls.
         IrInstr::ConstStr { result, .. } => {
             writeln!(out, "  %v{} = call ptr @iris_const_str()", result.0)?;
@@ -586,8 +658,46 @@ fn emit_llvm_instr(
             )?;
         }
 
+        IrInstr::MakeGrad { result, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_make_grad()", result.0)?;
+        }
+
+        IrInstr::GradValue { result, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_grad_value()", result.0)?;
+        }
+
+        IrInstr::GradTangent { result, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_grad_tangent()", result.0)?;
+        }
+
+        IrInstr::Sparsify { result, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_sparsify()", result.0)?;
+        }
+
+        IrInstr::Densify { result, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_densify()", result.0)?;
+        }
+
+        IrInstr::Barrier => {
+            // barrier is a no-op in LLVM stub
+            writeln!(out, "  ; barrier")?;
+        }
+
         IrInstr::Print { operand } => {
             writeln!(out, "  call void @iris_print(ptr {})", val(*operand))?;
+        }
+
+        IrInstr::MakeClosure { result, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_make_closure()", result.0)?;
+        }
+
+        IrInstr::CallClosure { result, closure, args, .. } => {
+            let args_str: Vec<String> = args.iter().map(|a| format!("ptr {}", val(*a))).collect();
+            if let Some(r) = result {
+                writeln!(out, "  %v{} = call ptr @iris_call_closure(ptr {}, {})", r.0, val(*closure), args_str.join(", "))?;
+            } else {
+                writeln!(out, "  call void @iris_call_closure_void(ptr {}, {})", val(*closure), args_str.join(", "))?;
+            }
         }
     }
     Ok(())
@@ -643,6 +753,8 @@ fn llvm_type_name(ty: &IrType) -> Result<String, CodegenError> {
         IrType::Tuple(_) => Ok("ptr".to_owned()),
         IrType::Str => Ok("ptr".to_owned()),
         IrType::Array { .. } => Ok("ptr".to_owned()),
+        IrType::Option(_) | IrType::ResultType(_, _) => Ok("ptr".to_owned()),
+        IrType::Chan(_) | IrType::Atomic(_) | IrType::Mutex(_) | IrType::Grad(_) | IrType::Sparse(_) => Ok("ptr".to_owned()),
         IrType::Fn { .. } | IrType::Infer => Err(CodegenError::Unsupported {
             backend: "llvm".into(),
             detail: format!("cannot lower type {} to LLVM", ty),

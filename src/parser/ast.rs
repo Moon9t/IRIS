@@ -40,6 +40,20 @@ pub enum AstType {
     Tuple(Vec<AstType>, Span),
     /// A fixed-length array type, e.g. `[i64; 5]`.
     Array { elem: Box<AstType>, len: usize, span: Span },
+    /// `option<T>` optional type.
+    Option(Box<AstType>, Span),
+    /// `result<T, E>` result type.
+    Result(Box<AstType>, Box<AstType>, Span),
+    /// `chan<T>` channel type.
+    Chan(Box<AstType>, Span),
+    /// `atomic<T>` atomic type.
+    Atomic(Box<AstType>, Span),
+    /// `mutex<T>` mutex type.
+    Mutex(Box<AstType>, Span),
+    /// `grad<T>` dual number type for automatic differentiation.
+    Grad(Box<AstType>, Span),
+    /// `sparse<T>` sparse tensor/array type.
+    Sparse(Box<AstType>, Span),
 }
 
 impl AstType {
@@ -50,6 +64,13 @@ impl AstType {
             AstType::Named(_, s) => *s,
             AstType::Tuple(_, s) => *s,
             AstType::Array { span, .. } => *span,
+            AstType::Option(_, s) => *s,
+            AstType::Result(_, _, s) => *s,
+            AstType::Chan(_, s) => *s,
+            AstType::Atomic(_, s) => *s,
+            AstType::Mutex(_, s) => *s,
+            AstType::Grad(_, s) => *s,
+            AstType::Sparse(_, s) => *s,
         }
     }
 }
@@ -69,6 +90,7 @@ pub struct AstFunction {
     pub return_ty: AstType,
     pub body: AstBlock,
     pub span: Span,
+    pub is_async: bool,
 }
 
 /// A block of statements with an optional tail expression (the block's value).
@@ -129,6 +151,19 @@ pub enum AstStmt {
     /// `return [expr]` early return from function.
     Return {
         value: Option<Box<AstExpr>>,
+        span: Span,
+    },
+    /// `spawn { body }` — launch a concurrent task (single-threaded simulation).
+    Spawn {
+        body: Vec<AstStmt>,
+        span: Span,
+    },
+    /// `par for <var> in <start>..<end> { body }` — parallel range iteration.
+    ParFor {
+        var: Ident,
+        start: Box<AstExpr>,
+        end: Box<AstExpr>,
+        body: AstBlock,
         span: Span,
     },
 }
@@ -259,6 +294,16 @@ pub enum AstExpr {
         body: Box<AstExpr>,
         span: Span,
     },
+    /// `await expr` -- awaits an async expression (lowered as regular call).
+    Await {
+        expr: Box<AstExpr>,
+        span: Span,
+    },
+    /// `expr?` early-return on error propagation.
+    Try {
+        expr: Box<AstExpr>,
+        span: Span,
+    },
 }
 
 impl AstExpr {
@@ -283,6 +328,8 @@ impl AstExpr {
             AstExpr::TupleIndex { span, .. } => *span,
             AstExpr::ArrayLit { span, .. } => *span,
             AstExpr::Lambda { span, .. } => *span,
+            AstExpr::Await { span, .. } => *span,
+            AstExpr::Try { span, .. } => *span,
         }
     }
 }
@@ -311,13 +358,30 @@ pub struct AstEnumDef {
     pub span: Span,
 }
 
-/// A single arm in a `when` expression: `EnumName.Variant => expr`.
+/// The pattern in a `when` arm.
+#[derive(Debug, Clone)]
+pub enum AstWhenPattern {
+    /// `EnumName.Variant` — enum variant pattern.
+    EnumVariant { enum_name: String, variant_name: String },
+    /// `some(binding)` — option Some pattern with an optional bound name.
+    OptionSome { binding: Option<String> },
+    /// `none` — option None pattern.
+    OptionNone,
+    /// `ok(binding)` — result Ok pattern.
+    ResultOk { binding: Option<String> },
+    /// `err(binding)` — result Err pattern.
+    ResultErr { binding: Option<String> },
+}
+
+/// A single arm in a `when` expression.
 #[derive(Debug, Clone)]
 pub struct AstWhenArm {
-    pub enum_name: String,
-    pub variant_name: String,
+    pub pattern: AstWhenPattern,
     pub body: Box<AstExpr>,
     pub span: Span,
+    // Legacy fields kept for backward compatibility during transition.
+    pub enum_name: String,
+    pub variant_name: String,
 }
 
 // ---------------------------------------------------------------------------
