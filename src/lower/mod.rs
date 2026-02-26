@@ -32,6 +32,17 @@ use crate::parser::lexer::Span;
 pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError> {
     let mut module = IrModule::new(module_name);
 
+    // 0. Register type aliases so structs/functions can reference them.
+    for alias in &ast.type_aliases {
+        let ir_ty = lower_type(&alias.ty);
+        module
+            .add_type_alias(alias.name.clone(), ir_ty)
+            .map_err(|_| LowerError::DuplicateFunction {
+                name: alias.name.clone(),
+                span: alias.span,
+            })?;
+    }
+
     // 1. Register enum definitions so functions can reference them.
     for e in &ast.enums {
         let variants: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
@@ -59,16 +70,63 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
     }
 
     // 3. Pre-collect function return types so call sites get concrete types.
+    // Generic functions (with type_params) are excluded from fn_sigs; they're
+    // monomorphized on demand during lower_call.
     let mut fn_sigs: HashMap<String, IrType> = HashMap::new();
+    let mut generic_fn_map: HashMap<String, crate::parser::ast::AstFunction> = HashMap::new();
     for func in &ast.functions {
-        let ret_ty = lower_type_with_structs(&func.return_ty, &module);
-        fn_sigs.insert(func.name.name.clone(), ret_ty);
+        if func.type_params.is_empty() {
+            let ret_ty = lower_type_with_structs(&func.return_ty, &module);
+            fn_sigs.insert(func.name.name.clone(), ret_ty);
+        } else {
+            generic_fn_map.insert(func.name.name.clone(), func.clone());
+        }
     }
+    let generic_fns = std::rc::Rc::new(generic_fn_map);
 
-    // 4. Lower all function definitions.
+    // 3b. Collect global const declarations as named expressions.
+    let const_defs_map: HashMap<String, AstExpr> = ast.consts.iter()
+        .map(|c| (c.name.name.clone(), c.value.clone()))
+        .collect();
+    let const_defs = std::rc::Rc::new(const_defs_map);
+
+    // 3c. Process impl blocks — register mangled method names in fn_sigs and build
+    // the trait dispatch table (method_name → [(dispatch_type, mangled_fn_name)]).
+    let mut trait_dispatch_map: HashMap<String, Vec<(IrType, String)>> = HashMap::new();
+    let mut impl_fns: Vec<crate::parser::ast::AstFunction> = Vec::new();
+    for impl_def in &ast.impls {
+        let dispatch_ty = type_name_to_ir_type(&impl_def.type_name, &module);
+        for method in &impl_def.methods {
+            let mangled = format!("{}__{}__{}", impl_def.trait_name, impl_def.type_name, method.name.name);
+            let ret_ty = lower_type_with_structs(&method.return_ty, &module);
+            fn_sigs.insert(mangled.clone(), ret_ty);
+            trait_dispatch_map
+                .entry(method.name.name.clone())
+                .or_default()
+                .push((dispatch_ty.clone(), mangled.clone()));
+            // Build a renamed copy of the method for lowering.
+            let mut renamed = method.clone();
+            renamed.name.name = mangled;
+            impl_fns.push(renamed);
+        }
+    }
+    let trait_dispatch = std::rc::Rc::new(trait_dispatch_map);
+
+    // Shared monomorphization state across all top-level function lowerings.
+    let mono_cache = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new()));
+    let mono_sigs = std::rc::Rc::new(std::cell::RefCell::new(HashMap::new()));
+
+    // 4. Lower all non-generic function definitions (including impl methods).
     let mut all_lifted: Vec<crate::ir::function::IrFunction> = Vec::new();
-    for func in &ast.functions {
-        let (ir_func, lifted) = lower_function(func, &module, &fn_sigs)?;
+    for func in ast.functions.iter().chain(impl_fns.iter()) {
+        if !func.type_params.is_empty() {
+            continue; // generic: lowered on demand at call sites
+        }
+        let (ir_func, lifted) = lower_function_with_generics(
+            func, &module, &fn_sigs, &const_defs,
+            generic_fns.clone(), mono_cache.clone(), mono_sigs.clone(),
+            trait_dispatch.clone(),
+        )?;
         module
             .add_function(ir_func)
             .map_err(|_| LowerError::DuplicateFunction {
@@ -104,26 +162,53 @@ struct Lowerer<'m> {
     /// Tracks the concrete element type of channels (channel ValueId → elem IrType).
     /// Populated when `send(ch, val)` is first called; used by `recv(ch)` to avoid Infer.
     chan_elem_types: HashMap<ValueId, IrType>,
+    /// Active type-parameter substitutions for monomorphized generic functions.
+    /// Maps type param name (e.g. "T") → concrete IrType.
+    type_param_subs: HashMap<String, IrType>,
+    /// Generic function AST templates: function name → AstFunction.
+    generic_fns: std::rc::Rc<HashMap<String, crate::parser::ast::AstFunction>>,
+    /// Tracks already-monomorphized specializations (mangled names) to avoid duplication.
+    mono_cache: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
+    /// Return types of monomorphized specializations (mangled name → IrType).
+    mono_sigs: std::rc::Rc<std::cell::RefCell<HashMap<String, IrType>>>,
+    /// Global constants available for inlining.
+    const_defs: std::rc::Rc<HashMap<String, crate::parser::ast::AstExpr>>,
+    /// Trait method dispatch table: method_name → [(dispatch_type, mangled_fn_name)].
+    /// The dispatch_type is the IrType of the first argument used to select the impl.
+    trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
 }
 
 impl<'m> Lowerer<'m> {
-    fn new(
-        builder: IrFunctionBuilder,
-        module: &'m IrModule,
-        fn_sigs: &'m HashMap<String, IrType>,
-    ) -> Self {
-        Self::new_with_lambda_state(builder, module, fn_sigs,
-            std::rc::Rc::new(std::cell::Cell::new(0)),
-            std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
-        )
-    }
-
     fn new_with_lambda_state(
         builder: IrFunctionBuilder,
         module: &'m IrModule,
         fn_sigs: &'m HashMap<String, IrType>,
         lambda_counter: std::rc::Rc<std::cell::Cell<u32>>,
         lifted_fns: std::rc::Rc<std::cell::RefCell<Vec<crate::ir::function::IrFunction>>>,
+    ) -> Self {
+        Self::new_generic(builder, module, fn_sigs, lambda_counter, lifted_fns,
+            HashMap::new(),
+            std::rc::Rc::new(HashMap::new()),
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new())),
+            std::rc::Rc::new(std::cell::RefCell::new(HashMap::new())),
+            std::rc::Rc::new(HashMap::new()),
+            std::rc::Rc::new(HashMap::new()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_generic(
+        builder: IrFunctionBuilder,
+        module: &'m IrModule,
+        fn_sigs: &'m HashMap<String, IrType>,
+        lambda_counter: std::rc::Rc<std::cell::Cell<u32>>,
+        lifted_fns: std::rc::Rc<std::cell::RefCell<Vec<crate::ir::function::IrFunction>>>,
+        type_param_subs: HashMap<String, IrType>,
+        generic_fns: std::rc::Rc<HashMap<String, crate::parser::ast::AstFunction>>,
+        mono_cache: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
+        mono_sigs: std::rc::Rc<std::cell::RefCell<HashMap<String, IrType>>>,
+        const_defs: std::rc::Rc<HashMap<String, crate::parser::ast::AstExpr>>,
+        trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
     ) -> Self {
         Self {
             builder,
@@ -134,7 +219,23 @@ impl<'m> Lowerer<'m> {
             lambda_counter,
             lifted_fns,
             chan_elem_types: HashMap::new(),
+            type_param_subs,
+            generic_fns,
+            mono_cache,
+            mono_sigs,
+            const_defs,
+            trait_dispatch,
         }
+    }
+
+    /// Resolves an AstType, applying type-parameter substitutions first.
+    fn resolve_ty(&self, ty: &AstType) -> IrType {
+        if let AstType::Named(name, _) = ty {
+            if let Some(concrete) = self.type_param_subs.get(name) {
+                return concrete.clone();
+            }
+        }
+        lower_type_with_structs(ty, self.module)
     }
 
     /// Looks up a variable and returns its `ValueId` and type.
@@ -701,7 +802,7 @@ impl<'m> Lowerer<'m> {
         for p in params {
             lifted_params.push(Param {
                 name: p.name.name.clone(),
-                ty: lower_type_with_structs(&p.ty, self.module),
+                ty: self.resolve_ty(&p.ty),
             });
         }
 
@@ -730,7 +831,7 @@ impl<'m> Lowerer<'m> {
             lambda_lowerer.scope.insert(name.clone(), (val, ty.clone()));
         }
         for p in params {
-            let ty = lower_type_with_structs(&p.ty, self.module);
+            let ty = self.resolve_ty(&p.ty);
             let val = lambda_lowerer
                 .builder
                 .add_block_param(entry, Some(&p.name.name), ty.clone());
@@ -1160,6 +1261,96 @@ impl<'m> Lowerer<'m> {
             return Ok((result, IrType::Str));
         }
 
+        // Built-in: to_str(v) → ValueToStr
+        if callee.name == "to_str" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "to_str() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (operand, _) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::ValueToStr { result, operand },
+                Some(IrType::Str),
+            );
+            return Ok((result, IrType::Str));
+        }
+
+        // Built-in: format("...", args...) — split on "{}" and concat with args
+        if callee.name == "format" {
+            if args.is_empty() {
+                return Err(LowerError::Unsupported {
+                    detail: "format() requires at least 1 argument (the format string)".into(),
+                    span,
+                });
+            }
+            // First arg must be a string literal.
+            let fmt_str = match &args[0] {
+                AstExpr::StringLit { value, .. } => value.clone(),
+                _ => return Err(LowerError::Unsupported {
+                    detail: "format() first argument must be a string literal".into(),
+                    span,
+                }),
+            };
+            // Split the format string on "{}" to get pieces.
+            let pieces: Vec<&str> = fmt_str.split("{}").collect();
+            let n_holes = pieces.len().saturating_sub(1);
+            if n_holes != args.len() - 1 {
+                return Err(LowerError::Unsupported {
+                    detail: format!(
+                        "format() has {} holes but {} arguments",
+                        n_holes,
+                        args.len() - 1
+                    ),
+                    span,
+                });
+            }
+            // Lower each argument (skip index 0, the format string).
+            let mut arg_vals: Vec<ValueId> = Vec::new();
+            for arg in &args[1..] {
+                let (v, _) = self.lower_expr(arg)?;
+                // Convert to string representation.
+                let s = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ValueToStr { result: s, operand: v },
+                    Some(IrType::Str),
+                );
+                arg_vals.push(s);
+            }
+            // Build the concatenated string: piece[0] + arg[0] + piece[1] + arg[1] + ...
+            // Start with the first piece as a ConstStr.
+            let mut acc = {
+                let r = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ConstStr { result: r, value: pieces[0].to_owned() },
+                    Some(IrType::Str),
+                );
+                r
+            };
+            for i in 0..n_holes {
+                // Concat with the argument.
+                let after_arg = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::StrConcat { result: after_arg, lhs: acc, rhs: arg_vals[i] },
+                    Some(IrType::Str),
+                );
+                // Concat with the next piece.
+                let next_piece = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ConstStr { result: next_piece, value: pieces[i + 1].to_owned() },
+                    Some(IrType::Str),
+                );
+                acc = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::StrConcat { result: acc, lhs: after_arg, rhs: next_piece },
+                    Some(IrType::Str),
+                );
+            }
+            return Ok((acc, IrType::Str));
+        }
+
         // Built-in: print(v) → Print (returns unit, we return a dummy i64 zero for now)
         if callee.name == "print" {
             if args.len() != 1 {
@@ -1174,6 +1365,407 @@ impl<'m> Lowerer<'m> {
                 None,
             );
             // Return a dummy i64 zero as the "unit" value.
+            let dummy = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(
+                IrInstr::ConstInt { result: dummy, value: 0, ty: ty.clone() },
+                Some(ty.clone()),
+            );
+            return Ok((dummy, ty));
+        }
+
+        // Built-in: read_line() → ReadLine
+        if callee.name == "read_line" {
+            if !args.is_empty() {
+                return Err(LowerError::Unsupported {
+                    detail: "read_line() takes no arguments".into(),
+                    span,
+                });
+            }
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::ReadLine { result }, Some(IrType::Str));
+            return Ok((result, IrType::Str));
+        }
+
+        // Built-in: read_i64() → ReadI64
+        if callee.name == "read_i64" {
+            if !args.is_empty() {
+                return Err(LowerError::Unsupported {
+                    detail: "read_i64() takes no arguments".into(),
+                    span,
+                });
+            }
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::ReadI64 { result }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+
+        // Built-in: read_f64() → ReadF64
+        if callee.name == "read_f64" {
+            if !args.is_empty() {
+                return Err(LowerError::Unsupported {
+                    detail: "read_f64() takes no arguments".into(),
+                    span,
+                });
+            }
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::F64);
+            self.builder.push_instr(IrInstr::ReadF64 { result }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+
+        // Built-in: parse_i64(s) → ParseI64 → option<i64>
+        if callee.name == "parse_i64" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "parse_i64() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (operand, _) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Option(Box::new(IrType::Scalar(DType::I64)));
+            self.builder.push_instr(IrInstr::ParseI64 { result, operand }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+
+        // Built-in: parse_f64(s) → ParseF64 → option<f64>
+        if callee.name == "parse_f64" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "parse_f64() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (operand, _) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Option(Box::new(IrType::Scalar(DType::F64)));
+            self.builder.push_instr(IrInstr::ParseF64 { result, operand }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+
+        // Built-in: str_index(s, i) → StrIndex → i64
+        if callee.name == "str_index" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported {
+                    detail: "str_index() requires 2 arguments: (str, i64)".into(),
+                    span,
+                });
+            }
+            let (string, _) = self.lower_expr(&args[0])?;
+            let (index, _) = self.lower_expr(&args[1])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::StrIndex { result, string, index }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+
+        // Built-in: slice(s, start, end) → StrSlice → str
+        if callee.name == "slice" {
+            if args.len() != 3 {
+                return Err(LowerError::Unsupported {
+                    detail: "slice() requires 3 arguments: (str, i64, i64)".into(),
+                    span,
+                });
+            }
+            let (string, _) = self.lower_expr(&args[0])?;
+            let (start, _) = self.lower_expr(&args[1])?;
+            let (end, _) = self.lower_expr(&args[2])?;
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::StrSlice { result, string, start, end }, Some(IrType::Str));
+            return Ok((result, IrType::Str));
+        }
+
+        // Built-in: find(s, sub) → StrFind → option<i64>
+        if callee.name == "find" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported {
+                    detail: "find() requires 2 arguments: (str, str)".into(),
+                    span,
+                });
+            }
+            let (haystack, _) = self.lower_expr(&args[0])?;
+            let (needle, _) = self.lower_expr(&args[1])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Option(Box::new(IrType::Scalar(DType::I64)));
+            self.builder.push_instr(IrInstr::StrFind { result, haystack, needle }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+
+        // Built-in: str_replace(s, old, new) → StrReplace → str
+        if callee.name == "str_replace" {
+            if args.len() != 3 {
+                return Err(LowerError::Unsupported {
+                    detail: "str_replace() requires 3 arguments: (str, str, str)".into(),
+                    span,
+                });
+            }
+            let (string, _) = self.lower_expr(&args[0])?;
+            let (from, _) = self.lower_expr(&args[1])?;
+            let (to, _) = self.lower_expr(&args[2])?;
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::StrReplace { result, string, from, to }, Some(IrType::Str));
+            return Ok((result, IrType::Str));
+        }
+
+        // Built-in: list(elem_ty) → ListNew — create an empty list
+        // We infer the element type from the first push, or default to i64.
+        // Usage: list() creates list<i64> by default; type annotation determines actual type.
+        if callee.name == "list" {
+            if !args.is_empty() {
+                return Err(LowerError::Unsupported {
+                    detail: "list() takes no arguments — it creates an empty dynamic list".into(),
+                    span,
+                });
+            }
+            let elem_ty = IrType::Scalar(DType::I64); // default; type inference may refine
+            let result = self.builder.fresh_value();
+            let list_ty = IrType::List(Box::new(elem_ty.clone()));
+            self.builder.push_instr(IrInstr::ListNew { result, elem_ty }, Some(list_ty.clone()));
+            return Ok((result, list_ty));
+        }
+
+        // Built-in: push(lst, val) → ListPush — append to list
+        if callee.name == "push" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported {
+                    detail: "push() requires 2 arguments: (list, value)".into(),
+                    span,
+                });
+            }
+            let (list, _) = self.lower_expr(&args[0])?;
+            let (value, _) = self.lower_expr(&args[1])?;
+            self.builder.push_instr(IrInstr::ListPush { list, value }, None);
+            let dummy = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::ConstInt { result: dummy, value: 0, ty: ty.clone() }, Some(ty.clone()));
+            return Ok((dummy, ty));
+        }
+
+        // Built-in: list_len(lst) → ListLen → i64
+        if callee.name == "list_len" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "list_len() requires 1 argument".into(),
+                    span,
+                });
+            }
+            let (list, _) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::ListLen { result, list }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+
+        // Built-in: list_get(lst, i) → ListGet → elem
+        if callee.name == "list_get" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported {
+                    detail: "list_get() requires 2 arguments: (list, index)".into(),
+                    span,
+                });
+            }
+            let (list, list_ty) = self.lower_expr(&args[0])?;
+            let (index, _) = self.lower_expr(&args[1])?;
+            let elem_ty = if let IrType::List(inner) = &list_ty { *inner.clone() } else { IrType::Scalar(DType::I64) };
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::ListGet { result, list, index, elem_ty: elem_ty.clone() }, Some(elem_ty.clone()));
+            return Ok((result, elem_ty));
+        }
+
+        // Built-in: list_set(lst, i, val) → ListSet
+        if callee.name == "list_set" {
+            if args.len() != 3 {
+                return Err(LowerError::Unsupported {
+                    detail: "list_set() requires 3 arguments: (list, index, value)".into(),
+                    span,
+                });
+            }
+            let (list, _) = self.lower_expr(&args[0])?;
+            let (index, _) = self.lower_expr(&args[1])?;
+            let (value, _) = self.lower_expr(&args[2])?;
+            self.builder.push_instr(IrInstr::ListSet { list, index, value }, None);
+            let dummy = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::ConstInt { result: dummy, value: 0, ty: ty.clone() }, Some(ty.clone()));
+            return Ok((dummy, ty));
+        }
+
+        // Built-in: list_pop(lst) → ListPop → elem
+        if callee.name == "list_pop" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "list_pop() requires 1 argument".into(),
+                    span,
+                });
+            }
+            let (list, list_ty) = self.lower_expr(&args[0])?;
+            let elem_ty = if let IrType::List(inner) = &list_ty { *inner.clone() } else { IrType::Scalar(DType::I64) };
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::ListPop { result, list, elem_ty: elem_ty.clone() }, Some(elem_ty.clone()));
+            return Ok((result, elem_ty));
+        }
+
+        // Built-in: map() → MapNew — create an empty hash map (keys: str, values: i64 default)
+        if callee.name == "map" {
+            if !args.is_empty() {
+                return Err(LowerError::Unsupported {
+                    detail: "map() takes no arguments — it creates an empty hash map".into(),
+                    span,
+                });
+            }
+            let key_ty = IrType::Str;
+            let val_ty = IrType::Scalar(DType::I64);
+            let result = self.builder.fresh_value();
+            let map_ty = IrType::Map(Box::new(key_ty.clone()), Box::new(val_ty.clone()));
+            self.builder.push_instr(IrInstr::MapNew { result, key_ty, val_ty }, Some(map_ty.clone()));
+            return Ok((result, map_ty));
+        }
+
+        // Built-in: map_set(m, k, v) → MapSet
+        if callee.name == "map_set" {
+            if args.len() != 3 {
+                return Err(LowerError::Unsupported {
+                    detail: "map_set() requires 3 arguments: (map, key, value)".into(),
+                    span,
+                });
+            }
+            let (map, _) = self.lower_expr(&args[0])?;
+            let (key, _) = self.lower_expr(&args[1])?;
+            let (value, _) = self.lower_expr(&args[2])?;
+            self.builder.push_instr(IrInstr::MapSet { map, key, value }, None);
+            let dummy = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::ConstInt { result: dummy, value: 0, ty: ty.clone() }, Some(ty.clone()));
+            return Ok((dummy, ty));
+        }
+
+        // Built-in: map_get(m, k) → MapGet → option<val_ty>
+        if callee.name == "map_get" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported {
+                    detail: "map_get() requires 2 arguments: (map, key)".into(),
+                    span,
+                });
+            }
+            let (map, map_ty) = self.lower_expr(&args[0])?;
+            let (key, _) = self.lower_expr(&args[1])?;
+            let val_ty = if let IrType::Map(_, v) = &map_ty { *v.clone() } else { IrType::Scalar(DType::I64) };
+            let opt_ty = IrType::Option(Box::new(val_ty.clone()));
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::MapGet { result, map, key, val_ty }, Some(opt_ty.clone()));
+            return Ok((result, opt_ty));
+        }
+
+        // Built-in: map_contains(m, k) → MapContains → bool
+        if callee.name == "map_contains" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported {
+                    detail: "map_contains() requires 2 arguments: (map, key)".into(),
+                    span,
+                });
+            }
+            let (map, _) = self.lower_expr(&args[0])?;
+            let (key, _) = self.lower_expr(&args[1])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::Bool);
+            self.builder.push_instr(IrInstr::MapContains { result, map, key }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+
+        // Built-in: map_remove(m, k) → MapRemove
+        if callee.name == "map_remove" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported {
+                    detail: "map_remove() requires 2 arguments: (map, key)".into(),
+                    span,
+                });
+            }
+            let (map, _) = self.lower_expr(&args[0])?;
+            let (key, _) = self.lower_expr(&args[1])?;
+            self.builder.push_instr(IrInstr::MapRemove { map, key }, None);
+            let dummy = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::ConstInt { result: dummy, value: 0, ty: ty.clone() }, Some(ty.clone()));
+            return Ok((dummy, ty));
+        }
+
+        // Built-in: map_len(m) → MapLen → i64
+        if callee.name == "map_len" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "map_len() requires 1 argument".into(),
+                    span,
+                });
+            }
+            let (map, _) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::MapLen { result, map }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+
+        // Built-in: panic(msg) → Panic (terminator; does not return)
+        if callee.name == "panic" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "panic() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (msg, _) = self.lower_expr(&args[0])?;
+            self.builder.push_instr(IrInstr::Panic { msg }, None);
+            // Return a dummy value so the type-checker is happy.
+            let dummy = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(
+                IrInstr::ConstInt { result: dummy, value: 0, ty: ty.clone() },
+                Some(ty.clone()),
+            );
+            return Ok((dummy, ty));
+        }
+
+        // Built-in: assert(cond) — lowers to: if cond { continue } else { panic("assertion failed") }
+        if callee.name == "assert" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "assert() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (cond, _) = self.lower_expr(&args[0])?;
+            let then_block  = self.builder.create_block(Some("assert_ok"));
+            let panic_block = self.builder.create_block(Some("assert_fail"));
+            let merge_block = self.builder.create_block(Some("assert_merge"));
+            // CondBr: if cond → then_block, else → panic_block
+            self.builder.push_instr(
+                IrInstr::CondBr {
+                    cond,
+                    then_block,
+                    then_args: vec![],
+                    else_block: panic_block,
+                    else_args: vec![],
+                },
+                None,
+            );
+            // panic_block: emit panic message + unreachable return (ValidatePass needs a terminator)
+            self.builder.set_current_block(panic_block);
+            let msg_val = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::ConstStr { result: msg_val, value: "assertion failed".into() },
+                Some(IrType::Str),
+            );
+            self.builder.push_instr(IrInstr::Panic { msg: msg_val }, None);
+            self.builder.push_instr(IrInstr::Return { values: vec![] }, None);
+            // then_block: jump to merge
+            self.builder.set_current_block(then_block);
+            self.builder.push_instr(
+                IrInstr::Br { target: merge_block, args: vec![] },
+                None,
+            );
+            // merge_block: continue with dummy zero
+            self.builder.set_current_block(merge_block);
             let dummy = self.builder.fresh_value();
             let ty = IrType::Scalar(DType::I64);
             self.builder.push_instr(
@@ -1243,12 +1835,315 @@ impl<'m> Lowerer<'m> {
             return Ok((result, result_ty));
         }
 
+        // Built-in string predicates: contains(s, sub), starts_with(s, p), ends_with(s, p)
+        {
+            let str_pred: Option<fn(ValueId, ValueId, ValueId) -> IrInstr> = match callee.name.as_str() {
+                "contains"    => Some(|result, haystack, needle| IrInstr::StrContains { result, haystack, needle }),
+                "starts_with" => Some(|result, haystack, prefix| IrInstr::StrStartsWith { result, haystack, prefix }),
+                "ends_with"   => Some(|result, haystack, suffix| IrInstr::StrEndsWith { result, haystack, suffix }),
+                _ => None,
+            };
+            if let Some(mk) = str_pred {
+                if args.len() != 2 {
+                    return Err(LowerError::Unsupported {
+                        detail: format!("{}() requires exactly 2 arguments", callee.name),
+                        span,
+                    });
+                }
+                let (haystack, _) = self.lower_expr(&args[0])?;
+                let (second, _) = self.lower_expr(&args[1])?;
+                let result = self.builder.fresh_value();
+                let ret_ty = IrType::Scalar(DType::Bool);
+                self.builder.push_instr(mk(result, haystack, second), Some(ret_ty.clone()));
+                return Ok((result, ret_ty));
+            }
+        }
+
+        // Built-in string transforms: to_upper(s), to_lower(s), trim(s)
+        {
+            let str_xform: Option<fn(ValueId, ValueId) -> IrInstr> = match callee.name.as_str() {
+                "to_upper" => Some(|result, operand| IrInstr::StrToUpper { result, operand }),
+                "to_lower" => Some(|result, operand| IrInstr::StrToLower { result, operand }),
+                "trim"     => Some(|result, operand| IrInstr::StrTrim { result, operand }),
+                _ => None,
+            };
+            if let Some(mk) = str_xform {
+                if args.len() != 1 {
+                    return Err(LowerError::Unsupported {
+                        detail: format!("{}() requires exactly 1 argument", callee.name),
+                        span,
+                    });
+                }
+                let (operand, _) = self.lower_expr(&args[0])?;
+                let result = self.builder.fresh_value();
+                let ret_ty = IrType::Str;
+                self.builder.push_instr(mk(result, operand), Some(ret_ty.clone()));
+                return Ok((result, ret_ty));
+            }
+        }
+
+        // Built-in: repeat(s, n) → StrRepeat
+        if callee.name == "repeat" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported {
+                    detail: "repeat() requires exactly 2 arguments".into(),
+                    span,
+                });
+            }
+            let (operand, _) = self.lower_expr(&args[0])?;
+            let (count, _) = self.lower_expr(&args[1])?;
+            let result = self.builder.fresh_value();
+            let ret_ty = IrType::Str;
+            self.builder.push_instr(
+                IrInstr::StrRepeat { result, operand, count },
+                Some(ret_ty.clone()),
+            );
+            return Ok((result, ret_ty));
+        }
+
+        // Built-in bitwise binary: band(a,b), bor(a,b), bxor(a,b), shl(a,b), shr(a,b)
+        {
+            let bitbin: Option<BinOp> = match callee.name.as_str() {
+                "band" => Some(BinOp::BitAnd),
+                "bor"  => Some(BinOp::BitOr),
+                "bxor" => Some(BinOp::BitXor),
+                "shl"  => Some(BinOp::Shl),
+                "shr"  => Some(BinOp::Shr),
+                _ => None,
+            };
+            if let Some(op) = bitbin {
+                if args.len() != 2 {
+                    return Err(LowerError::Unsupported {
+                        detail: format!("{}() requires exactly 2 arguments", callee.name),
+                        span,
+                    });
+                }
+                let (lhs, lhs_ty) = self.lower_expr(&args[0])?;
+                let (rhs, _) = self.lower_expr(&args[1])?;
+                let result = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::BinOp { result, op, lhs, rhs, ty: lhs_ty.clone() },
+                    Some(lhs_ty.clone()),
+                );
+                return Ok((result, lhs_ty));
+            }
+        }
+
+        // Built-in bitwise unary: bitnot(x)
+        if callee.name == "bitnot" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "bitnot() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (operand, op_ty) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::UnaryOp { result, op: ScalarUnaryOp::BitNot, operand, ty: op_ty.clone() },
+                Some(op_ty.clone()),
+            );
+            return Ok((result, op_ty));
+        }
+
+        // Built-in math unary: sqrt, abs, floor, ceil, sin, cos, tan, exp, log, log2, round, sign
+        {
+            let math_unary: Option<ScalarUnaryOp> = match callee.name.as_str() {
+                "sqrt"  => Some(ScalarUnaryOp::Sqrt),
+                "abs"   => Some(ScalarUnaryOp::Abs),
+                "floor" => Some(ScalarUnaryOp::Floor),
+                "ceil"  => Some(ScalarUnaryOp::Ceil),
+                "sin"   => Some(ScalarUnaryOp::Sin),
+                "cos"   => Some(ScalarUnaryOp::Cos),
+                "tan"   => Some(ScalarUnaryOp::Tan),
+                "exp"   => Some(ScalarUnaryOp::Exp),
+                "log"   => Some(ScalarUnaryOp::Log),
+                "log2"  => Some(ScalarUnaryOp::Log2),
+                "round" => Some(ScalarUnaryOp::Round),
+                "sign"  => Some(ScalarUnaryOp::Sign),
+                _ => None,
+            };
+            if let Some(op) = math_unary {
+                if args.len() != 1 {
+                    return Err(LowerError::Unsupported {
+                        detail: format!("{}() requires exactly 1 argument", callee.name),
+                        span,
+                    });
+                }
+                let (operand, op_ty) = self.lower_expr(&args[0])?;
+                let result = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::UnaryOp { result, op, operand, ty: op_ty.clone() },
+                    Some(op_ty.clone()),
+                );
+                return Ok((result, op_ty));
+            }
+        }
+
+        // clamp(x, lo, hi) → min(max(x, lo), hi)
+        if callee.name == "clamp" {
+            if args.len() != 3 {
+                return Err(LowerError::Unsupported {
+                    detail: "clamp() requires exactly 3 arguments".into(),
+                    span,
+                });
+            }
+            let (x,  x_ty) = self.lower_expr(&args[0])?;
+            let (lo, _)    = self.lower_expr(&args[1])?;
+            let (hi, _)    = self.lower_expr(&args[2])?;
+            let inner = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::BinOp { result: inner, op: BinOp::Max, lhs: x, rhs: lo, ty: x_ty.clone() },
+                Some(x_ty.clone()),
+            );
+            let outer = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::BinOp { result: outer, op: BinOp::Min, lhs: inner, rhs: hi, ty: x_ty.clone() },
+                Some(x_ty.clone()),
+            );
+            return Ok((outer, x_ty));
+        }
+
+        // Built-in math binary: pow(base, exp), min(a, b), max(a, b)
+        {
+            let math_bin: Option<BinOp> = match callee.name.as_str() {
+                "pow" => Some(BinOp::Pow),
+                "min" => Some(BinOp::Min),
+                "max" => Some(BinOp::Max),
+                _ => None,
+            };
+            if let Some(op) = math_bin {
+                if args.len() != 2 {
+                    return Err(LowerError::Unsupported {
+                        detail: format!("{}() requires exactly 2 arguments", callee.name),
+                        span,
+                    });
+                }
+                let (lhs, lhs_ty) = self.lower_expr(&args[0])?;
+                let (rhs, _) = self.lower_expr(&args[1])?;
+                let result = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::BinOp { result, op, lhs, rhs, ty: lhs_ty.clone() },
+                    Some(lhs_ty.clone()),
+                );
+                return Ok((result, lhs_ty));
+            }
+        }
+
+        // Generic function call — monomorphize on demand.
+        if let Some(generic_fn) = self.generic_fns.get(&callee.name).cloned() {
+            // Lower each argument and collect concrete types.
+            let mut arg_vals = Vec::with_capacity(args.len());
+            let mut arg_tys = Vec::with_capacity(args.len());
+            for arg in args {
+                let (v, ty) = self.lower_expr(arg)?;
+                arg_vals.push(v);
+                arg_tys.push(ty);
+            }
+
+            // Build type substitution by matching type_params against arg types.
+            let mut subs: HashMap<String, IrType> = HashMap::new();
+            for (tp_name, arg_ty) in generic_fn.type_params.iter().zip(arg_tys.iter()) {
+                subs.insert(tp_name.clone(), arg_ty.clone());
+            }
+
+            // Resolve the concrete return type.
+            let resolve = |ty: &AstType| -> IrType {
+                if let AstType::Named(n, _) = ty {
+                    if let Some(c) = subs.get(n) { return c.clone(); }
+                }
+                lower_type_with_structs(ty, self.module)
+            };
+            let concrete_ret = resolve(&generic_fn.return_ty);
+
+            // Generate mangled name: e.g. `max_val__i64` for T=i64.
+            let mangle = subs.iter()
+                .map(|(_, ty)| format!("{}", ty).replace(['<', '>', ',', ' '], "_"))
+                .collect::<Vec<_>>()
+                .join("_");
+            let mangled = format!("{}__{}", callee.name, mangle);
+
+            // Register the return type for the mangled name.
+            self.mono_sigs.borrow_mut().insert(mangled.clone(), concrete_ret.clone());
+
+            // Monomorphize if not already done.
+            if !self.mono_cache.borrow().contains(&mangled) {
+                self.mono_cache.borrow_mut().insert(mangled.clone());
+
+                // Build a renamed copy of the generic function.
+                let mut mono_fn = generic_fn.clone();
+                mono_fn.name.name = mangled.clone();
+                mono_fn.type_params = Vec::new(); // no longer generic
+
+                // Lower the specialized function.
+                let fn_sigs_ref = self.fn_sigs;
+                let (ir_func, extra_lifted) = lower_function_with_generics_and_subs(
+                    &mono_fn, self.module, fn_sigs_ref,
+                    &self.const_defs,
+                    self.generic_fns.clone(),
+                    self.mono_cache.clone(),
+                    self.mono_sigs.clone(),
+                    subs,
+                    self.trait_dispatch.clone(),
+                ).map_err(|e| e)?;
+
+                self.lifted_fns.borrow_mut().push(ir_func);
+                self.lifted_fns.borrow_mut().extend(extra_lifted);
+            }
+
+            // Emit the call to the specialized function.
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::Call {
+                    result: Some(result),
+                    callee: mangled,
+                    args: arg_vals,
+                    result_ty: Some(concrete_ret.clone()),
+                },
+                Some(concrete_ret.clone()),
+            );
+            return Ok((result, concrete_ret));
+        }
+
+        // Trait method dispatch — static dispatch based on first arg's concrete type.
+        if let Some(impls) = self.trait_dispatch.get(&callee.name).cloned() {
+            if !args.is_empty() {
+                let (first_val, first_ty) = self.lower_expr(&args[0])?;
+                let type_key = ir_type_dispatch_name(&first_ty);
+                if let Some((_, mangled)) = impls.iter().find(|(dispatch_ty, _)| {
+                    ir_type_dispatch_name(dispatch_ty) == type_key
+                }) {
+                    let mangled = mangled.clone();
+                    let ret_ty = self.fn_sigs.get(&mangled)
+                        .cloned()
+                        .unwrap_or(IrType::Infer);
+                    let mut arg_vals = vec![first_val];
+                    for arg in &args[1..] {
+                        let (v, _) = self.lower_expr(arg)?;
+                        arg_vals.push(v);
+                    }
+                    let result = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::Call {
+                            result: Some(result),
+                            callee: mangled,
+                            args: arg_vals,
+                            result_ty: Some(ret_ty.clone()),
+                        },
+                        Some(ret_ty.clone()),
+                    );
+                    return Ok((result, ret_ty));
+                }
+            }
+        }
+
         // General function call — look up the callee's return type from
         // pre-collected signatures so the result has a concrete type.
         let ret_ty = self
             .fn_sigs
             .get(&callee.name)
             .cloned()
+            .or_else(|| self.mono_sigs.borrow().get(&callee.name).cloned())
             .unwrap_or(IrType::Infer);
 
         let mut arg_vals = Vec::with_capacity(args.len());
@@ -1658,12 +2553,11 @@ impl<'m> Lowerer<'m> {
         );
 
         let outer_scope = self.scope.clone();
-        let mut result_ty: Option<IrType> = None;
 
         // Some branch.
         self.builder.set_current_block(some_bb);
         self.scope = outer_scope.clone();
-        let some_val = if let Some(arm) = some_arm {
+        let (some_val, mut result_ty): (ValueId, Option<IrType>) = if let Some(arm) = some_arm {
             // Bind the inner value if a name was given.
             if let AstWhenPattern::OptionSome { binding: Some(ref bind_name) } = arm.pattern {
                 // Unwrap the option to get the inner value.
@@ -1675,14 +2569,12 @@ impl<'m> Lowerer<'m> {
                 self.scope.insert(bind_name.clone(), (unwrapped, inner_ty.clone()));
             }
             let (v, ty) = self.lower_expr(&arm.body)?;
-            result_ty = Some(ty);
-            v
+            (v, Some(ty))
         } else {
             // No some arm: produce a dummy value (should not happen in well-formed code).
             let r = self.builder.fresh_value();
             self.builder.push_instr(IrInstr::ConstInt { result: r, value: 0, ty: IrType::Scalar(DType::I64) }, Some(IrType::Scalar(DType::I64)));
-            result_ty = Some(IrType::Scalar(DType::I64));
-            r
+            (r, Some(IrType::Scalar(DType::I64)))
         };
         self.builder.push_instr(IrInstr::Br { target: merge_bb, args: vec![some_val] }, None);
 
@@ -1754,12 +2646,11 @@ impl<'m> Lowerer<'m> {
         );
 
         let outer_scope = self.scope.clone();
-        let mut result_ty: Option<IrType> = None;
 
         // Ok branch.
         self.builder.set_current_block(ok_bb);
         self.scope = outer_scope.clone();
-        let ok_val = if let Some(arm) = ok_arm {
+        let (ok_val, mut result_ty): (ValueId, Option<IrType>) = if let Some(arm) = ok_arm {
             if let AstWhenPattern::ResultOk { binding: Some(ref bind_name) } = arm.pattern {
                 let unwrapped = self.builder.fresh_value();
                 self.builder.push_instr(
@@ -1769,13 +2660,11 @@ impl<'m> Lowerer<'m> {
                 self.scope.insert(bind_name.clone(), (unwrapped, ok_inner_ty.clone()));
             }
             let (v, ty) = self.lower_expr(&arm.body)?;
-            result_ty = Some(ty);
-            v
+            (v, Some(ty))
         } else {
             let r = self.builder.fresh_value();
             self.builder.push_instr(IrInstr::ConstInt { result: r, value: 0, ty: IrType::Scalar(DType::I64) }, Some(IrType::Scalar(DType::I64)));
-            result_ty = Some(IrType::Scalar(DType::I64));
-            r
+            (r, None)
         };
         self.builder.push_instr(IrInstr::Br { target: merge_bb, args: vec![ok_val] }, None);
 
@@ -2343,7 +3232,7 @@ impl<'m> Lowerer<'m> {
                     .map(|(name, (vid, ty))| (name.clone(), *vid, ty.clone()))
                     .collect();
 
-                let mut lifted_params: Vec<crate::ir::function::Param> = captures
+                let lifted_params: Vec<crate::ir::function::Param> = captures
                     .iter()
                     .map(|(name, _, ty)| crate::ir::function::Param { name: name.clone(), ty: ty.clone() })
                     .collect();
@@ -2459,19 +3348,50 @@ impl<'m> Lowerer<'m> {
     }
 }
 
-fn lower_function(
+/// Lower a function with full generic/monomorphization state.
+#[allow(clippy::too_many_arguments)]
+fn lower_function_with_generics(
     func: &AstFunction,
     module: &IrModule,
     fn_sigs: &HashMap<String, IrType>,
+    const_defs: &std::rc::Rc<HashMap<String, AstExpr>>,
+    generic_fns: std::rc::Rc<HashMap<String, AstFunction>>,
+    mono_cache: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
+    mono_sigs: std::rc::Rc<std::cell::RefCell<HashMap<String, IrType>>>,
+    trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
 ) -> Result<(crate::ir::function::IrFunction, Vec<crate::ir::function::IrFunction>), LowerError> {
-    let return_ty = lower_type_with_structs(&func.return_ty, module);
-    let params: Vec<Param> = func
-        .params
-        .iter()
-        .map(|p| Param {
-            name: p.name.name.clone(),
-            ty: lower_type_with_structs(&p.ty, module),
-        })
+    lower_function_with_generics_and_subs(
+        func, module, fn_sigs, const_defs, generic_fns, mono_cache, mono_sigs,
+        HashMap::new(), // no type param subs for top-level functions
+        trait_dispatch,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_function_with_generics_and_subs(
+    func: &AstFunction,
+    module: &IrModule,
+    fn_sigs: &HashMap<String, IrType>,
+    const_defs: &std::rc::Rc<HashMap<String, AstExpr>>,
+    generic_fns: std::rc::Rc<HashMap<String, AstFunction>>,
+    mono_cache: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
+    mono_sigs: std::rc::Rc<std::cell::RefCell<HashMap<String, IrType>>>,
+    type_param_subs: HashMap<String, IrType>,
+    trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
+) -> Result<(crate::ir::function::IrFunction, Vec<crate::ir::function::IrFunction>), LowerError> {
+    // Resolve param and return types with substitution applied.
+    let resolve = |ty: &AstType| -> IrType {
+        if let AstType::Named(name, _) = ty {
+            if let Some(concrete) = type_param_subs.get(name) {
+                return concrete.clone();
+            }
+        }
+        lower_type_with_structs(ty, module)
+    };
+
+    let return_ty = resolve(&func.return_ty);
+    let params: Vec<Param> = func.params.iter()
+        .map(|p| Param { name: p.name.name.clone(), ty: resolve(&p.ty) })
         .collect();
 
     let mut builder = IrFunctionBuilder::new(&func.name.name, params.clone(), return_ty.clone());
@@ -2480,33 +3400,34 @@ fn lower_function(
 
     let lambda_counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
     let lifted_fns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let mut lowerer = Lowerer::new_with_lambda_state(builder, module, fn_sigs, lambda_counter, lifted_fns.clone());
+    let mut lowerer = Lowerer::new_generic(
+        builder, module, fn_sigs, lambda_counter, lifted_fns.clone(),
+        type_param_subs, generic_fns, mono_cache, mono_sigs, const_defs.clone(),
+        trait_dispatch,
+    );
 
     // Register function parameters as entry block params.
-    for param in &func.params {
-        let ty = lower_type_with_structs(&param.ty, module);
-        let val = lowerer
-            .builder
-            .add_block_param(entry, Some(&param.name.name), ty.clone());
-        lowerer.scope.insert(param.name.name.clone(), (val, ty));
+    for (param, ir_param) in func.params.iter().zip(params.iter()) {
+        let val = lowerer.builder.add_block_param(entry, Some(&param.name.name), ir_param.ty.clone());
+        lowerer.scope.insert(param.name.name.clone(), (val, ir_param.ty.clone()));
     }
 
-    // Lower the body.
+    // Inject global constants into scope.
+    for (name, expr) in lowerer.const_defs.clone().iter() {
+        let (val, ty) = lowerer.lower_expr(expr)?;
+        lowerer.scope.insert(name.clone(), (val, ty));
+    }
+
     let tail_val = lowerer.lower_block(&func.body)?;
 
-    // Emit return only if the current block isn't already terminated
-    // (e.g. the body ended with an early `return` statement).
     if !lowerer.builder.is_current_block_terminated() {
         let ret_values: Vec<ValueId> = match tail_val {
             Some((v, _)) => vec![v],
             None => vec![],
         };
-        lowerer
-            .builder
-            .push_instr(IrInstr::Return { values: ret_values }, None);
+        lowerer.builder.push_instr(IrInstr::Return { values: ret_values }, None);
     }
 
-    // Seal any unterminated blocks (e.g. post_return dead-code blocks).
     lowerer.builder.seal_unterminated_blocks();
 
     let ir_func = lowerer.builder.build();
@@ -2558,6 +3479,42 @@ pub fn lower_type(ty: &AstType) -> IrType {
     }
 }
 
+/// Converts a type name string (as written in `impl Trait for TypeName`) to an `IrType`.
+fn type_name_to_ir_type(name: &str, module: &IrModule) -> IrType {
+    match name {
+        "i64"  => IrType::Scalar(DType::I64),
+        "i32"  => IrType::Scalar(DType::I32),
+        "f64"  => IrType::Scalar(DType::F64),
+        "f32"  => IrType::Scalar(DType::F32),
+        "bool" => IrType::Scalar(DType::Bool),
+        "str"  => IrType::Str,
+        _ => {
+            if let Some(fields) = module.struct_def(name) {
+                IrType::Struct { name: name.to_owned(), fields: fields.clone() }
+            } else if let Some(variants) = module.enum_def(name) {
+                IrType::Enum { name: name.to_owned(), variants: variants.clone() }
+            } else {
+                IrType::Infer
+            }
+        }
+    }
+}
+
+/// Returns a short string key for `ty` used to look up trait dispatch entries.
+fn ir_type_dispatch_name(ty: &IrType) -> String {
+    match ty {
+        IrType::Scalar(DType::I64)  => "i64".to_owned(),
+        IrType::Scalar(DType::I32)  => "i32".to_owned(),
+        IrType::Scalar(DType::F64)  => "f64".to_owned(),
+        IrType::Scalar(DType::F32)  => "f32".to_owned(),
+        IrType::Scalar(DType::Bool) => "bool".to_owned(),
+        IrType::Str => "str".to_owned(),
+        IrType::Struct { name, .. } => name.clone(),
+        IrType::Enum { name, .. } => name.clone(),
+        other => format!("{}", other),
+    }
+}
+
 /// Type lowering with struct/enum definition lookup from the module.
 pub fn lower_type_with_structs(ty: &AstType, module: &IrModule) -> IrType {
     match ty {
@@ -2570,6 +3527,10 @@ pub fn lower_type_with_structs(ty: &AstType, module: &IrModule) -> IrType {
         AstType::Named(name, _) => {
             if name == "str" {
                 return IrType::Str;
+            }
+            // Check type aliases first.
+            if let Some(aliased) = module.type_alias(name) {
+                return aliased.clone();
             }
             if let Some(fields) = module.struct_def(name) {
                 IrType::Struct {

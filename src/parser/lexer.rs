@@ -63,6 +63,18 @@ pub enum Token {
     Async,
     /// `await` keyword for awaiting async expressions
     Await,
+    /// `const` keyword for global constant declarations
+    Const,
+    /// `type` keyword for type alias declarations
+    Type,
+    /// `trait` keyword for trait definitions
+    Trait,
+    /// `impl` keyword for trait implementations
+    Impl,
+    /// `pub` visibility modifier
+    Pub,
+    /// `mod` keyword for inline module blocks
+    Mod,
     // Model DSL keywords
     Model,
     Layer,
@@ -154,6 +166,10 @@ impl std::fmt::Display for Token {
             Token::Break => write!(f, "break"),
             Token::Continue => write!(f, "continue"),
             Token::Record => write!(f, "record"),
+            Token::Trait => write!(f, "trait"),
+            Token::Impl => write!(f, "impl"),
+            Token::Pub => write!(f, "pub"),
+            Token::Mod => write!(f, "mod"),
             Token::Bring => write!(f, "bring"),
             Token::When => write!(f, "when"),
             Token::Choice => write!(f, "choice"),
@@ -163,6 +179,8 @@ impl std::fmt::Display for Token {
             Token::Par => write!(f, "par"),
             Token::Async => write!(f, "async"),
             Token::Await => write!(f, "await"),
+            Token::Const => write!(f, "const"),
+            Token::Type  => write!(f, "type"),
             Token::Model => write!(f, "model"),
             Token::Layer => write!(f, "layer"),
             Token::Input => write!(f, "input"),
@@ -527,6 +545,11 @@ impl<'src> Lexer<'src> {
             "par" => Token::Par,
             "async" => Token::Async,
             "await" => Token::Await,
+            "const" => Token::Const,
+            "type"  => Token::Type,
+            "trait" => Token::Trait,
+            "impl"  => Token::Impl,
+            "pub"   => Token::Pub,
             "model" => Token::Model,
             "layer" => Token::Layer,
             "input" => Token::Input,

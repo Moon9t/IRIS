@@ -471,6 +471,110 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
             write!(out, "print {}", operand)?;
         }
 
+        IrInstr::StrContains { result, haystack, needle } => {
+            write!(out, "{} = str_contains {}, {}", result, haystack, needle)?;
+        }
+        IrInstr::StrStartsWith { result, haystack, prefix } => {
+            write!(out, "{} = str_starts_with {}, {}", result, haystack, prefix)?;
+        }
+        IrInstr::StrEndsWith { result, haystack, suffix } => {
+            write!(out, "{} = str_ends_with {}, {}", result, haystack, suffix)?;
+        }
+        IrInstr::StrToUpper { result, operand } => {
+            write!(out, "{} = str_to_upper {}", result, operand)?;
+        }
+        IrInstr::StrToLower { result, operand } => {
+            write!(out, "{} = str_to_lower {}", result, operand)?;
+        }
+        IrInstr::StrTrim { result, operand } => {
+            write!(out, "{} = str_trim {}", result, operand)?;
+        }
+        IrInstr::StrRepeat { result, operand, count } => {
+            write!(out, "{} = str_repeat {}, {}", result, operand, count)?;
+        }
+
+        IrInstr::Panic { msg } => {
+            write!(out, "panic {}", msg)?;
+        }
+
+        IrInstr::ValueToStr { result, operand } => {
+            write!(out, "{} = to_str {}", result, operand)?;
+        }
+
+        IrInstr::ReadLine { result } => {
+            write!(out, "{} = read_line", result)?;
+        }
+
+        IrInstr::ReadI64 { result } => {
+            write!(out, "{} = read_i64", result)?;
+        }
+
+        IrInstr::ReadF64 { result } => {
+            write!(out, "{} = read_f64", result)?;
+        }
+
+        IrInstr::ParseI64 { result, operand } => {
+            write!(out, "{} = parse_i64 {}", result, operand)?;
+        }
+
+        IrInstr::ParseF64 { result, operand } => {
+            write!(out, "{} = parse_f64 {}", result, operand)?;
+        }
+
+        IrInstr::StrIndex { result, string, index } => {
+            write!(out, "{} = str_index {}, {}", result, string, index)?;
+        }
+
+        IrInstr::StrSlice { result, string, start, end } => {
+            write!(out, "{} = str_slice {}, {}, {}", result, string, start, end)?;
+        }
+
+        IrInstr::StrFind { result, haystack, needle } => {
+            write!(out, "{} = str_find {}, {}", result, haystack, needle)?;
+        }
+
+        IrInstr::StrReplace { result, string, from, to } => {
+            write!(out, "{} = str_replace {}, {}, {}", result, string, from, to)?;
+        }
+
+        IrInstr::ListNew { result, elem_ty } => {
+            write!(out, "{} = list_new<{}>", result, elem_ty)?;
+        }
+        IrInstr::ListPush { list, value } => {
+            write!(out, "list_push {}, {}", list, value)?;
+        }
+        IrInstr::ListLen { result, list } => {
+            write!(out, "{} = list_len {}", result, list)?;
+        }
+        IrInstr::ListGet { result, list, index, .. } => {
+            write!(out, "{} = list_get {}, {}", result, list, index)?;
+        }
+        IrInstr::ListSet { list, index, value } => {
+            write!(out, "list_set {}, {}, {}", list, index, value)?;
+        }
+        IrInstr::ListPop { result, list, .. } => {
+            write!(out, "{} = list_pop {}", result, list)?;
+        }
+
+        IrInstr::MapNew { result, key_ty, val_ty } => {
+            write!(out, "{} = map_new<{}, {}>", result, key_ty, val_ty)?;
+        }
+        IrInstr::MapSet { map, key, value } => {
+            write!(out, "map_set {}, {}, {}", map, key, value)?;
+        }
+        IrInstr::MapGet { result, map, key, .. } => {
+            write!(out, "{} = map_get {}, {}", result, map, key)?;
+        }
+        IrInstr::MapContains { result, map, key } => {
+            write!(out, "{} = map_contains {}, {}", result, map, key)?;
+        }
+        IrInstr::MapRemove { map, key } => {
+            write!(out, "map_remove {}, {}", map, key)?;
+        }
+        IrInstr::MapLen { result, map } => {
+            write!(out, "{} = map_len {}", result, map)?;
+        }
+
         IrInstr::MakeClosure { result, fn_name, captures, .. } => {
             let caps: Vec<String> = captures.iter().map(|v| format!("{}", v)).collect();
             write!(out, "{} = make_closure @{} [{}]", result, fn_name, caps.join(", "))?;

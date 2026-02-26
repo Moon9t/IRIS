@@ -21,15 +21,59 @@ use crate::ir::types::{DType, IrType};
 use crate::ir::value::ValueId;
 
 /// Emits LLVM IR for all functions in the module.
+///
+/// Phase 48 improvements:
+/// - Target triple and data layout header.
+/// - Global string constants for all `ConstStr` values.
+/// - `declare` statements for all iris runtime helper functions.
 pub fn emit_llvm_stub(module: &IrModule) -> Result<String, CodegenError> {
     let mut out = String::new();
-    writeln!(out, "; IRIS LLVM — scalar arithmetic + control flow")?;
+
+    // ── Header ────────────────────────────────────────────────────────────
+    writeln!(out, "; IRIS LLVM IR — scalar arithmetic + control flow")?;
+    writeln!(out, "; Tensor ops use opaque ptr (LLVM 15+ style).\n")?;
     writeln!(
         out,
-        "; Tensor types are lowered to opaque ptr (LLVM 15+ style)."
+        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128\""
     )?;
-    writeln!(out, "; TensorOp/Call are emitted as opaque extern calls.\n")?;
+    writeln!(out, "target triple = \"x86_64-unknown-linux-gnu\"\n")?;
 
+    // ── Collect global string constants ───────────────────────────────────
+    // Build a dedup table: string content → global index.
+    let mut str_table: HashMap<String, usize> = HashMap::new();
+    let mut str_vec: Vec<String> = Vec::new();
+    for func in module.functions() {
+        for block in func.blocks() {
+            for instr in &block.instrs {
+                if let IrInstr::ConstStr { value, .. } = instr {
+                    if !str_table.contains_key(value) {
+                        let idx = str_vec.len();
+                        str_table.insert(value.clone(), idx);
+                        str_vec.push(value.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Emit global string constants ──────────────────────────────────────
+    for (idx, content) in str_vec.iter().enumerate() {
+        let escaped = llvm_escape_string(content);
+        let len = content.len() + 1; // +1 for null terminator
+        writeln!(
+            out,
+            "@.str.{} = private unnamed_addr constant [{} x i8] c\"{}\\00\", align 1",
+            idx, len, escaped
+        )?;
+    }
+    if !str_vec.is_empty() {
+        writeln!(out)?;
+    }
+
+    // ── Runtime function declarations ─────────────────────────────────────
+    emit_iris_runtime_declares(&mut out)?;
+
+    // ── Function definitions ──────────────────────────────────────────────
     for func in module.functions() {
         let ret = llvm_type_name(&func.return_ty)?;
 
@@ -41,7 +85,7 @@ pub fn emit_llvm_stub(module: &IrModule) -> Result<String, CodegenError> {
         let params = params?.join(", ");
 
         writeln!(out, "define {} @{}({}) {{", ret, func.name, params)?;
-        emit_llvm_body(func, &mut out)?;
+        emit_llvm_body(func, &str_table, &mut out)?;
         writeln!(out, "}}\n")?;
     }
     Ok(out)
@@ -51,7 +95,11 @@ pub fn emit_llvm_stub(module: &IrModule) -> Result<String, CodegenError> {
 // Body emitter
 // ---------------------------------------------------------------------------
 
-fn emit_llvm_body(func: &IrFunction, out: &mut String) -> Result<(), CodegenError> {
+fn emit_llvm_body(
+    func: &IrFunction,
+    str_table: &HashMap<String, usize>,
+    out: &mut String,
+) -> Result<(), CodegenError> {
     // Sub-pass A: collect constant values for inline substitution.
     // Constants are never emitted as LLVM instructions; they are used as
     // literal operands wherever the ValueId is referenced.
@@ -144,7 +192,7 @@ fn emit_llvm_body(func: &IrFunction, out: &mut String) -> Result<(), CodegenErro
 
         // Instructions
         for instr in &block.instrs {
-            emit_llvm_instr(instr, &consts, func, &mut gep_counter, out)?;
+            emit_llvm_instr(instr, &consts, func, &mut gep_counter, str_table, out)?;
         }
     }
     Ok(())
@@ -155,6 +203,7 @@ fn emit_llvm_instr(
     consts: &HashMap<ValueId, String>,
     func: &IrFunction,
     gep_counter: &mut u32,
+    str_table: &HashMap<String, usize>,
     out: &mut String,
 ) -> Result<(), CodegenError> {
     let val = |v: ValueId| llvm_val(v, consts, func);
@@ -202,6 +251,22 @@ fn emit_llvm_instr(
                 (BinOp::CmpLe, false) => format!("icmp sle {} {}, {}", ty_s, lv, rv),
                 (BinOp::CmpGt, false) => format!("icmp sgt {} {}, {}", ty_s, lv, rv),
                 (BinOp::CmpGe, false) => format!("icmp sge {} {}, {}", ty_s, lv, rv),
+                // Math builtins lower to LLVM intrinsic calls
+                (BinOp::Pow, true)  => format!("call {} @llvm.pow.f64({} {}, {} {})", ty_s, ty_s, lv, ty_s, rv),
+                (BinOp::Pow, false) => format!("call i64 @iris_pow_i64(i64 {}, i64 {})", lv, rv),
+                (BinOp::Min, true)  => format!("call {} @llvm.minnum.f64({} {}, {} {})", ty_s, ty_s, lv, ty_s, rv),
+                (BinOp::Min, false) => format!("call i64 @iris_min_i64(i64 {}, i64 {})", lv, rv),
+                (BinOp::Max, true)  => format!("call {} @llvm.maxnum.f64({} {}, {} {})", ty_s, ty_s, lv, ty_s, rv),
+                (BinOp::Max, false) => format!("call i64 @iris_max_i64(i64 {}, i64 {})", lv, rv),
+                // Bitwise ops — integers only
+                (BinOp::BitAnd, false) => format!("and {} {}, {}", ty_s, lv, rv),
+                (BinOp::BitOr,  false) => format!("or {} {}, {}", ty_s, lv, rv),
+                (BinOp::BitXor, false) => format!("xor {} {}, {}", ty_s, lv, rv),
+                (BinOp::Shl,    false) => format!("shl {} {}, {}", ty_s, lv, rv),
+                (BinOp::Shr,    false) => format!("ashr {} {}, {}", ty_s, lv, rv),
+                (BinOp::BitAnd, true) | (BinOp::BitOr, true) | (BinOp::BitXor, true)
+                | (BinOp::Shl, true) | (BinOp::Shr, true) =>
+                    format!("call {} @iris_bitop_float_unsupported()", ty_s),
             };
             writeln!(out, "  %v{} = {}", result.0, llvm_op)?;
         }
@@ -224,6 +289,51 @@ fn emit_llvm_instr(
                 }
                 ScalarUnaryOp::Not => {
                     writeln!(out, "  %v{} = xor i1 {}, true", result.0, ov)?;
+                }
+                ScalarUnaryOp::Sqrt => {
+                    writeln!(out, "  %v{} = call {} @llvm.sqrt.f64({} {})", result.0, ty_s, ty_s, ov)?;
+                }
+                ScalarUnaryOp::Abs if is_float => {
+                    writeln!(out, "  %v{} = call {} @llvm.fabs.f64({} {})", result.0, ty_s, ty_s, ov)?;
+                }
+                ScalarUnaryOp::Abs => {
+                    writeln!(out, "  ; abs({}) -- iris runtime call", ov)?;
+                    writeln!(out, "  %v{} = call i64 @iris_abs_i64(i64 {})", result.0, ov)?;
+                }
+                ScalarUnaryOp::Floor => {
+                    writeln!(out, "  %v{} = call {} @llvm.floor.f64({} {})", result.0, ty_s, ty_s, ov)?;
+                }
+                ScalarUnaryOp::Ceil => {
+                    writeln!(out, "  %v{} = call {} @llvm.ceil.f64({} {})", result.0, ty_s, ty_s, ov)?;
+                }
+                ScalarUnaryOp::BitNot => {
+                    // Bitwise NOT: xor with all-ones (-1 in two's complement)
+                    writeln!(out, "  %v{} = xor {} {}, -1", result.0, ty_s, ov)?;
+                }
+                // Phase 36: trig / transcendental builtins
+                ScalarUnaryOp::Sin => {
+                    writeln!(out, "  %v{} = call {} @llvm.sin.f64({} {})", result.0, ty_s, ty_s, ov)?;
+                }
+                ScalarUnaryOp::Cos => {
+                    writeln!(out, "  %v{} = call {} @llvm.cos.f64({} {})", result.0, ty_s, ty_s, ov)?;
+                }
+                ScalarUnaryOp::Tan => {
+                    writeln!(out, "  %v{} = call double @tan(double {})", result.0, ov)?;
+                }
+                ScalarUnaryOp::Exp => {
+                    writeln!(out, "  %v{} = call {} @llvm.exp.f64({} {})", result.0, ty_s, ty_s, ov)?;
+                }
+                ScalarUnaryOp::Log => {
+                    writeln!(out, "  %v{} = call {} @llvm.log.f64({} {})", result.0, ty_s, ty_s, ov)?;
+                }
+                ScalarUnaryOp::Log2 => {
+                    writeln!(out, "  %v{} = call {} @llvm.log2.f64({} {})", result.0, ty_s, ty_s, ov)?;
+                }
+                ScalarUnaryOp::Round => {
+                    writeln!(out, "  %v{} = call {} @llvm.round.f64({} {})", result.0, ty_s, ty_s, ov)?;
+                }
+                ScalarUnaryOp::Sign => {
+                    writeln!(out, "  %v{} = call double @iris_sign_f64(double {})", result.0, ov)?;
                 }
             }
         }
@@ -634,9 +744,19 @@ fn emit_llvm_instr(
             writeln!(out, "  %v{} = call ptr @iris_result_unwrap_err(ptr {})", result.0, val(*operand))?;
         }
 
-        // String ops: emit as opaque runtime calls.
-        IrInstr::ConstStr { result, .. } => {
-            writeln!(out, "  %v{} = call ptr @iris_const_str()", result.0)?;
+        // String ops: use getelementptr into the global string constant.
+        IrInstr::ConstStr { result, value } => {
+            if let Some(&idx) = str_table.get(value) {
+                let len = value.len() + 1;
+                writeln!(
+                    out,
+                    "  %v{} = getelementptr inbounds [{} x i8], ptr @.str.{}, i32 0, i32 0",
+                    result.0, len, idx
+                )?;
+            } else {
+                // Fallback: should not happen if emit_llvm_stub populated str_table correctly.
+                writeln!(out, "  %v{} = call ptr @iris_const_str()", result.0)?;
+            }
         }
 
         IrInstr::StrLen { result, operand } => {
@@ -685,6 +805,111 @@ fn emit_llvm_instr(
 
         IrInstr::Print { operand } => {
             writeln!(out, "  call void @iris_print(ptr {})", val(*operand))?;
+        }
+
+        IrInstr::StrContains { result, haystack, needle } => {
+            writeln!(out, "  %v{} = call i1 @iris_str_contains(ptr {}, ptr {})", result.0, val(*haystack), val(*needle))?;
+        }
+        IrInstr::StrStartsWith { result, haystack, prefix } => {
+            writeln!(out, "  %v{} = call i1 @iris_str_starts_with(ptr {}, ptr {})", result.0, val(*haystack), val(*prefix))?;
+        }
+        IrInstr::StrEndsWith { result, haystack, suffix } => {
+            writeln!(out, "  %v{} = call i1 @iris_str_ends_with(ptr {}, ptr {})", result.0, val(*haystack), val(*suffix))?;
+        }
+        IrInstr::StrToUpper { result, operand } => {
+            writeln!(out, "  %v{} = call ptr @iris_str_to_upper(ptr {})", result.0, val(*operand))?;
+        }
+        IrInstr::StrToLower { result, operand } => {
+            writeln!(out, "  %v{} = call ptr @iris_str_to_lower(ptr {})", result.0, val(*operand))?;
+        }
+        IrInstr::StrTrim { result, operand } => {
+            writeln!(out, "  %v{} = call ptr @iris_str_trim(ptr {})", result.0, val(*operand))?;
+        }
+        IrInstr::StrRepeat { result, operand, count } => {
+            writeln!(out, "  %v{} = call ptr @iris_str_repeat(ptr {}, i64 {})", result.0, val(*operand), val(*count))?;
+        }
+
+        IrInstr::Panic { msg } => {
+            writeln!(out, "  call void @iris_panic(ptr {})", val(*msg))?;
+            writeln!(out, "  unreachable")?;
+        }
+
+        IrInstr::ValueToStr { result, operand } => {
+            writeln!(out, "  %v{} = call ptr @iris_value_to_str(ptr {})", result.0, val(*operand))?;
+        }
+
+        IrInstr::ReadLine { result } => {
+            writeln!(out, "  %v{} = call ptr @iris_read_line()", result.0)?;
+        }
+
+        IrInstr::ReadI64 { result } => {
+            writeln!(out, "  %v{} = call i64 @iris_read_i64()", result.0)?;
+        }
+
+        IrInstr::ReadF64 { result } => {
+            writeln!(out, "  %v{} = call double @iris_read_f64()", result.0)?;
+        }
+
+        IrInstr::ParseI64 { result, operand } => {
+            writeln!(out, "  %v{} = call ptr @iris_parse_i64(ptr {})", result.0, val(*operand))?;
+        }
+
+        IrInstr::ParseF64 { result, operand } => {
+            writeln!(out, "  %v{} = call ptr @iris_parse_f64(ptr {})", result.0, val(*operand))?;
+        }
+
+        IrInstr::StrIndex { result, string, index } => {
+            writeln!(out, "  %v{} = call i64 @iris_str_index(ptr {}, i64 {})", result.0, val(*string), val(*index))?;
+        }
+
+        IrInstr::StrSlice { result, string, start, end } => {
+            writeln!(out, "  %v{} = call ptr @iris_str_slice(ptr {}, i64 {}, i64 {})", result.0, val(*string), val(*start), val(*end))?;
+        }
+
+        IrInstr::StrFind { result, haystack, needle } => {
+            writeln!(out, "  %v{} = call ptr @iris_str_find(ptr {}, ptr {})", result.0, val(*haystack), val(*needle))?;
+        }
+
+        IrInstr::StrReplace { result, string, from, to } => {
+            writeln!(out, "  %v{} = call ptr @iris_str_replace(ptr {}, ptr {}, ptr {})", result.0, val(*string), val(*from), val(*to))?;
+        }
+
+        IrInstr::ListNew { result, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_list_new()", result.0)?;
+        }
+        IrInstr::ListPush { list, value } => {
+            writeln!(out, "  call void @iris_list_push(ptr {}, ptr {})", val(*list), val(*value))?;
+        }
+        IrInstr::ListLen { result, list } => {
+            writeln!(out, "  %v{} = call i64 @iris_list_len(ptr {})", result.0, val(*list))?;
+        }
+        IrInstr::ListGet { result, list, index, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_list_get(ptr {}, i64 {})", result.0, val(*list), val(*index))?;
+        }
+        IrInstr::ListSet { list, index, value } => {
+            writeln!(out, "  call void @iris_list_set(ptr {}, i64 {}, ptr {})", val(*list), val(*index), val(*value))?;
+        }
+        IrInstr::ListPop { result, list, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_list_pop(ptr {})", result.0, val(*list))?;
+        }
+
+        IrInstr::MapNew { result, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_map_new()", result.0)?;
+        }
+        IrInstr::MapSet { map, key, value } => {
+            writeln!(out, "  call void @iris_map_set(ptr {}, ptr {}, ptr {})", val(*map), val(*key), val(*value))?;
+        }
+        IrInstr::MapGet { result, map, key, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_map_get(ptr {}, ptr {})", result.0, val(*map), val(*key))?;
+        }
+        IrInstr::MapContains { result, map, key } => {
+            writeln!(out, "  %v{} = call i1 @iris_map_contains(ptr {}, ptr {})", result.0, val(*map), val(*key))?;
+        }
+        IrInstr::MapRemove { map, key } => {
+            writeln!(out, "  call void @iris_map_remove(ptr {}, ptr {})", val(*map), val(*key))?;
+        }
+        IrInstr::MapLen { result, map } => {
+            writeln!(out, "  %v{} = call i64 @iris_map_len(ptr {})", result.0, val(*map))?;
         }
 
         IrInstr::MakeClosure { result, .. } => {
@@ -754,7 +979,7 @@ fn llvm_type_name(ty: &IrType) -> Result<String, CodegenError> {
         IrType::Str => Ok("ptr".to_owned()),
         IrType::Array { .. } => Ok("ptr".to_owned()),
         IrType::Option(_) | IrType::ResultType(_, _) => Ok("ptr".to_owned()),
-        IrType::Chan(_) | IrType::Atomic(_) | IrType::Mutex(_) | IrType::Grad(_) | IrType::Sparse(_) => Ok("ptr".to_owned()),
+        IrType::Chan(_) | IrType::Atomic(_) | IrType::Mutex(_) | IrType::Grad(_) | IrType::Sparse(_) | IrType::List(_) | IrType::Map(_, _) => Ok("ptr".to_owned()),
         IrType::Fn { .. } | IrType::Infer => Err(CodegenError::Unsupported {
             backend: "llvm".into(),
             detail: format!("cannot lower type {} to LLVM", ty),
@@ -770,4 +995,122 @@ fn fmt_float(v: f64) -> String {
     } else {
         format!("{}.0", s)
     }
+}
+
+/// Escapes a string for use as an LLVM IR string constant.
+/// LLVM uses `\HH` hex escapes for special/non-printable bytes.
+fn llvm_escape_string(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'"'  => out.push_str("\\22"),
+            b'\\' => out.push_str("\\5C"),
+            b'\n' => out.push_str("\\0A"),
+            b'\r' => out.push_str("\\0D"),
+            b'\t' => out.push_str("\\09"),
+            0x20..=0x7E => out.push(b as char),
+            other => out.push_str(&format!("\\{:02X}", other)),
+        }
+    }
+    out
+}
+
+/// Emits `declare` statements for all iris runtime helper functions used by
+/// the LLVM emitter, plus common C/system library functions.
+fn emit_iris_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
+    let declares: &[&str] = &[
+        // I/O
+        "declare void @iris_print(ptr)",
+        "declare void @iris_panic(ptr)",
+        "declare ptr @iris_read_line()",
+        "declare i64 @iris_read_i64()",
+        "declare double @iris_read_f64()",
+        // String ops
+        "declare i64 @iris_str_len(ptr)",
+        "declare ptr @iris_str_concat(ptr, ptr)",
+        "declare i1 @iris_str_contains(ptr, ptr)",
+        "declare i1 @iris_str_starts_with(ptr, ptr)",
+        "declare i1 @iris_str_ends_with(ptr, ptr)",
+        "declare ptr @iris_str_to_upper(ptr)",
+        "declare ptr @iris_str_to_lower(ptr)",
+        "declare ptr @iris_str_trim(ptr)",
+        "declare ptr @iris_str_repeat(ptr, i64)",
+        "declare ptr @iris_value_to_str(ptr)",
+        "declare ptr @iris_parse_i64(ptr)",
+        "declare ptr @iris_parse_f64(ptr)",
+        "declare i64 @iris_str_index(ptr, i64)",
+        "declare ptr @iris_str_slice(ptr, i64, i64)",
+        "declare ptr @iris_str_find(ptr, ptr)",
+        "declare ptr @iris_str_replace(ptr, ptr, ptr)",
+        // Option / Result
+        "declare ptr @iris_make_some()",
+        "declare ptr @iris_make_none()",
+        "declare i1 @iris_is_some(ptr)",
+        "declare ptr @iris_option_unwrap(ptr)",
+        "declare ptr @iris_make_ok()",
+        "declare ptr @iris_make_err()",
+        "declare i1 @iris_is_ok(ptr)",
+        "declare ptr @iris_result_unwrap(ptr)",
+        "declare ptr @iris_result_unwrap_err(ptr)",
+        // Collections
+        "declare ptr @iris_list_new()",
+        "declare void @iris_list_push(ptr, ptr)",
+        "declare i64 @iris_list_len(ptr)",
+        "declare ptr @iris_list_get(ptr, i64)",
+        "declare void @iris_list_set(ptr, i64, ptr)",
+        "declare ptr @iris_list_pop(ptr)",
+        "declare ptr @iris_map_new()",
+        "declare void @iris_map_set(ptr, ptr, ptr)",
+        "declare ptr @iris_map_get(ptr, ptr)",
+        "declare i1 @iris_map_contains(ptr, ptr)",
+        "declare void @iris_map_remove(ptr, ptr)",
+        "declare i64 @iris_map_len(ptr)",
+        // Arrays / Tensors
+        "declare ptr @iris_alloc_array()",
+        "declare ptr @iris_array_load(ptr, i64)",
+        "declare void @iris_array_store(ptr, i64, ptr)",
+        "declare ptr @iris_tensor_op()",
+        "declare ptr @iris_tensor_load(ptr, ...)",
+        "declare void @iris_tensor_store(ptr, ...)",
+        // Channels / Concurrency
+        "declare ptr @iris_chan_new()",
+        "declare void @iris_chan_send(ptr, ptr)",
+        "declare ptr @iris_chan_recv(ptr)",
+        "declare void @iris_spawn_fn(ptr)",
+        "declare void @iris_par_for(ptr, i64, i64)",
+        // Atomics / Mutex
+        "declare ptr @iris_atomic_new()",
+        "declare ptr @iris_atomic_load(ptr)",
+        "declare void @iris_atomic_store(ptr, ptr)",
+        "declare ptr @iris_atomic_add(ptr, ptr)",
+        "declare ptr @iris_mutex_new()",
+        "declare ptr @iris_mutex_lock(ptr)",
+        "declare void @iris_mutex_unlock(ptr)",
+        // Structs / Tuples / Closures
+        "declare ptr @iris_make_struct(...)",
+        "declare ptr @iris_get_field(ptr, i32)",
+        "declare ptr @iris_make_tuple(...)",
+        "declare ptr @iris_get_element(ptr, i32)",
+        "declare ptr @iris_make_closure()",
+        "declare ptr @iris_call_closure(ptr, ...)",
+        "declare void @iris_call_closure_void(ptr, ...)",
+        // Grad / Sparse
+        "declare ptr @iris_make_grad()",
+        "declare ptr @iris_grad_value()",
+        "declare ptr @iris_grad_tangent()",
+        "declare ptr @iris_sparsify()",
+        "declare ptr @iris_densify()",
+        // Math helpers (non-llvm-intrinsic)
+        "declare i64 @iris_pow_i64(i64, i64)",
+        "declare i64 @iris_min_i64(i64, i64)",
+        "declare i64 @iris_max_i64(i64, i64)",
+        "declare i64 @iris_abs_i64(i64)",
+        "declare double @iris_sign_f64(double)",
+        "declare double @tan(double)",
+    ];
+    for decl in declares {
+        writeln!(out, "{}", decl)?;
+    }
+    writeln!(out)?;
+    Ok(())
 }

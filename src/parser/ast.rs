@@ -86,6 +86,10 @@ pub struct AstParam {
 #[derive(Debug, Clone)]
 pub struct AstFunction {
     pub name: Ident,
+    /// Whether this function is publicly exported (`pub def`).
+    pub is_pub: bool,
+    /// Type parameter names, e.g. `["T", "U"]` for `def f[T, U](...)`.
+    pub type_params: Vec<String>,
     pub params: Vec<AstParam>,
     pub return_ty: AstType,
     pub body: AstBlock,
@@ -436,12 +440,65 @@ pub struct AstModel {
     pub span: Span,
 }
 
+/// A global constant declaration: `const NAME: type = value` or `const NAME = value`.
+#[derive(Debug, Clone)]
+pub struct AstConst {
+    pub name: Ident,
+    /// Optional explicit type annotation.
+    pub ty: Option<AstType>,
+    pub value: AstExpr,
+    pub span: Span,
+}
+
+/// A type alias declaration: `type Name = Type`.
+#[derive(Debug, Clone)]
+pub struct AstTypeAlias {
+    pub name: String,
+    pub ty: AstType,
+    pub span: Span,
+}
+
+/// A method signature inside a trait definition (no body).
+#[derive(Debug, Clone)]
+pub struct AstTraitMethod {
+    pub name: Ident,
+    pub params: Vec<AstParam>,
+    pub return_ty: AstType,
+    pub span: Span,
+}
+
+/// A trait definition: `trait Name { def method(params) -> type }`.
+#[derive(Debug, Clone)]
+pub struct AstTraitDef {
+    pub name: Ident,
+    pub methods: Vec<AstTraitMethod>,
+    pub span: Span,
+}
+
+/// An impl block: `impl TraitName for TypeName { def method(params) -> type { body } }`.
+#[derive(Debug, Clone)]
+pub struct AstImplDef {
+    /// The trait being implemented.
+    pub trait_name: String,
+    /// The type being implemented for (e.g. "i64", "Point").
+    pub type_name: String,
+    /// Full method bodies.
+    pub methods: Vec<AstFunction>,
+    pub span: Span,
+}
+
 /// The top-level AST for an IRIS source file.
-/// A file may contain any mix of `def`, `record`, `choice`, and `model` definitions.
+/// A file may contain any mix of `def`, `record`, `choice`, `model`, `const`, `type`, `trait`, `impl`, and `bring` definitions.
 #[derive(Debug, Clone)]
 pub struct AstModule {
     pub enums: Vec<AstEnumDef>,
     pub structs: Vec<AstStructDef>,
     pub functions: Vec<AstFunction>,
     pub models: Vec<AstModel>,
+    pub consts: Vec<AstConst>,
+    pub type_aliases: Vec<AstTypeAlias>,
+    pub traits: Vec<AstTraitDef>,
+    pub impls: Vec<AstImplDef>,
+    /// Names of modules imported via `bring module_name`.
+    pub imports: Vec<String>,
 }

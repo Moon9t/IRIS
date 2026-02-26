@@ -133,6 +133,9 @@ pub enum InterpError {
 
     #[error("unsupported: {detail}")]
     Unsupported { detail: String },
+
+    #[error("panic: {msg}")]
+    Panic { msg: String },
 }
 
 // ---------------------------------------------------------------------------

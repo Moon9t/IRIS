@@ -37,9 +37,10 @@
 
 use crate::error::ParseError;
 use crate::parser::ast::{
-    AstBinOp, AstBlock, AstDim, AstEnumDef, AstExpr, AstFieldDef, AstFunction, AstLayer,
-    AstLayerParam, AstModel, AstModelInput, AstModelOutput, AstModule, AstParam, AstScalarKind,
-    AstStmt, AstStructDef, AstType, AstUnaryOp, AstWhenArm, AstWhenPattern, Ident,
+    AstBinOp, AstBlock, AstConst, AstDim, AstEnumDef, AstExpr, AstFieldDef, AstFunction,
+    AstImplDef, AstLayer, AstLayerParam, AstModel, AstModelInput, AstModelOutput, AstModule,
+    AstParam, AstScalarKind, AstStmt, AstStructDef, AstTraitDef, AstTraitMethod, AstType,
+    AstTypeAlias, AstUnaryOp, AstWhenArm, AstWhenPattern, Ident,
 };
 use crate::parser::lexer::{Span, Spanned, Token};
 
@@ -125,15 +126,47 @@ impl<'t> Parser<'t> {
         let mut structs = Vec::new();
         let mut functions = Vec::new();
         let mut models = Vec::new();
+        let mut consts = Vec::new();
+        let mut type_aliases = Vec::new();
+        let mut traits = Vec::new();
+        let mut impls = Vec::new();
+        let mut imports = Vec::new();
         while !self.at_eof() {
             match self.peek_tok().clone() {
                 Token::Choice => enums.push(self.parse_enum_def()?),
                 Token::Record => structs.push(self.parse_struct_def()?),
                 Token::Def | Token::Async => functions.push(self.parse_fn()?),
                 Token::Model => models.push(self.parse_model()?),
+                Token::Const => consts.push(self.parse_const_decl()?),
+                Token::Type => type_aliases.push(self.parse_type_alias()?),
+                Token::Trait => traits.push(self.parse_trait_def()?),
+                Token::Impl => impls.push(self.parse_impl_def()?),
+                Token::Bring => {
+                    self.advance();
+                    let mod_name = self.expect_ident()?.name;
+                    imports.push(mod_name);
+                }
+                Token::Pub => {
+                    self.advance(); // consume 'pub'
+                    match self.peek_tok().clone() {
+                        Token::Def | Token::Async => {
+                            let mut func = self.parse_fn()?;
+                            func.is_pub = true;
+                            functions.push(func);
+                        }
+                        Token::Record => structs.push(self.parse_struct_def()?),
+                        Token::Choice => enums.push(self.parse_enum_def()?),
+                        Token::Trait => traits.push(self.parse_trait_def()?),
+                        _ => return Err(ParseError::UnexpectedToken {
+                            expected: "'def', 'record', or 'choice' after 'pub'".to_owned(),
+                            found: format!("{}", self.peek_tok()),
+                            span: self.current_span(),
+                        }),
+                    }
+                }
                 _ => {
                     return Err(ParseError::UnexpectedToken {
-                        expected: "'choice', 'record', 'def', or 'model'".to_owned(),
+                        expected: "'choice', 'record', 'def', 'model', 'const', 'type', 'trait', 'impl', or 'bring'".to_owned(),
                         found: format!("{}", self.peek_tok()),
                         span: self.current_span(),
                     })
@@ -145,6 +178,118 @@ impl<'t> Parser<'t> {
             structs,
             functions,
             models,
+            consts,
+            type_aliases,
+            traits,
+            impls,
+            imports,
+        })
+    }
+
+    /// Parses a type name as a plain string (handles keywords like `i64`, `f64`, `bool`, `str`
+    /// in addition to bare identifiers). Used for `impl Trait for TypeName`.
+    fn parse_type_name_str(&mut self) -> Result<String, ParseError> {
+        let name = match self.peek_tok().clone() {
+            Token::I64 => { self.advance(); "i64".to_owned() }
+            Token::I32 => { self.advance(); "i32".to_owned() }
+            Token::F64 => { self.advance(); "f64".to_owned() }
+            Token::F32 => { self.advance(); "f32".to_owned() }
+            Token::Bool => { self.advance(); "bool".to_owned() }
+            Token::Str => { self.advance(); "str".to_owned() }
+            Token::Ident(n) => { let n = n.clone(); self.advance(); n }
+            _ => return Err(ParseError::UnexpectedToken {
+                expected: "type name".to_owned(),
+                found: format!("{}", self.peek_tok()),
+                span: self.current_span(),
+            }),
+        };
+        Ok(name)
+    }
+
+    /// Parses `trait Name { (def method(params) -> type)* }`.
+    fn parse_trait_def(&mut self) -> Result<AstTraitDef, ParseError> {
+        let start = self.current_span();
+        self.expect(&Token::Trait)?;
+        let name = self.expect_ident()?;
+        self.expect(&Token::LBrace)?;
+        let mut methods = Vec::new();
+        while !matches!(self.peek_tok(), Token::RBrace | Token::Eof) {
+            let m_start = self.current_span();
+            self.expect(&Token::Def)?;
+            let m_name = self.expect_ident()?;
+            self.expect(&Token::LParen)?;
+            let mut params = Vec::new();
+            while !matches!(self.peek_tok(), Token::RParen | Token::Eof) {
+                let pname = self.expect_ident()?;
+                self.expect(&Token::Colon)?;
+                let pty = self.parse_type()?;
+                params.push(AstParam { name: pname, ty: pty });
+                if matches!(self.peek_tok(), Token::Comma) {
+                    self.advance();
+                }
+            }
+            self.expect(&Token::RParen)?;
+            self.expect(&Token::Arrow)?;
+            let ret = self.parse_type()?;
+            let m_end = ret.span();
+            methods.push(AstTraitMethod {
+                name: m_name,
+                params,
+                return_ty: ret,
+                span: m_start.merge(m_end),
+            });
+        }
+        let end = self.expect(&Token::RBrace)?;
+        Ok(AstTraitDef { name, methods, span: start.merge(end) })
+    }
+
+    /// Parses `impl TraitName for TypeName { (def method(...) -> type { body })* }`.
+    fn parse_impl_def(&mut self) -> Result<AstImplDef, ParseError> {
+        let start = self.current_span();
+        self.expect(&Token::Impl)?;
+        let trait_name = self.expect_ident()?.name;
+        // Expect the keyword `for`; since `for` is Token::For:
+        self.expect(&Token::For)?;
+        let type_name = self.parse_type_name_str()?;
+        self.expect(&Token::LBrace)?;
+        let mut methods = Vec::new();
+        while !matches!(self.peek_tok(), Token::RBrace | Token::Eof) {
+            methods.push(self.parse_fn()?);
+        }
+        let end = self.expect(&Token::RBrace)?;
+        Ok(AstImplDef { trait_name, type_name, methods, span: start.merge(end) })
+    }
+
+    /// Parses `type Name = Type`.
+    fn parse_type_alias(&mut self) -> Result<AstTypeAlias, ParseError> {
+        let start = self.current_span();
+        self.expect(&Token::Type)?;
+        let name = self.expect_ident()?.name;
+        self.expect(&Token::Eq)?;
+        let ty = self.parse_type()?;
+        let end = start; // span is approximate — just use the keyword span
+        Ok(AstTypeAlias { name, ty, span: start.merge(end) })
+    }
+
+    /// Parses `const NAME [: type] = expr`.
+    fn parse_const_decl(&mut self) -> Result<AstConst, ParseError> {
+        let start = self.current_span();
+        self.expect(&Token::Const)?;
+        let name = self.expect_ident()?;
+        let ty = if matches!(self.peek_tok(), Token::Colon) {
+            self.advance();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        self.expect(&Token::Eq)?;
+        let value = self.parse_expr()?;
+        let end = value.span();
+        Ok(AstConst {
+            name,
+            ty,
+            value,
+            span: start.merge(end),
         })
     }
 
@@ -205,6 +350,22 @@ impl<'t> Parser<'t> {
         };
         self.expect(&Token::Def)?;
         let name = self.expect_ident()?;
+        // Optional type parameters: `[T, U, ...]`
+        let type_params = if matches!(self.peek_tok(), Token::LBracket) {
+            self.advance(); // consume '['
+            let mut ty_params = Vec::new();
+            while !matches!(self.peek_tok(), Token::RBracket | Token::Eof) {
+                let tp = self.expect_ident()?;
+                ty_params.push(tp.name);
+                if matches!(self.peek_tok(), Token::Comma) {
+                    self.advance();
+                }
+            }
+            self.expect(&Token::RBracket)?;
+            ty_params
+        } else {
+            Vec::new()
+        };
         self.expect(&Token::LParen)?;
         let params = self.parse_params()?;
         self.expect(&Token::RParen)?;
@@ -214,6 +375,8 @@ impl<'t> Parser<'t> {
         let span = start.merge(body.span);
         Ok(AstFunction {
             name,
+            is_pub: false, // set to true by parse_module when preceded by `pub`
+            type_params,
             params,
             return_ty,
             body,

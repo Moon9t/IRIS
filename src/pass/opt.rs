@@ -51,6 +51,7 @@ fn is_side_effecting(instr: &IrInstr) -> bool {
             | IrInstr::Call { .. }
             | IrInstr::SwitchVariant { .. }
             | IrInstr::Print { .. }
+            | IrInstr::Panic { .. }
             | IrInstr::ArrayStore { .. }
             | IrInstr::ChanSend { .. }
             | IrInstr::Spawn { .. }
@@ -59,6 +60,14 @@ fn is_side_effecting(instr: &IrInstr) -> bool {
             | IrInstr::AtomicAdd { .. }
             | IrInstr::MutexUnlock { .. }
             | IrInstr::Barrier
+            | IrInstr::ReadLine { .. }
+            | IrInstr::ReadI64 { .. }
+            | IrInstr::ReadF64 { .. }
+            | IrInstr::ListPush { .. }
+            | IrInstr::ListSet { .. }
+            | IrInstr::ListPop { .. }
+            | IrInstr::MapSet { .. }
+            | IrInstr::MapRemove { .. }
     )
 }
 
@@ -386,6 +395,36 @@ fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
         IrInstr::MakeGrad { value, tangent, .. } => { replace(value); replace(tangent); }
         IrInstr::GradValue { operand, .. } => { replace(operand); }
         IrInstr::GradTangent { operand, .. } => { replace(operand); }
+        IrInstr::StrContains { haystack, needle, .. } => { replace(haystack); replace(needle); }
+        IrInstr::StrStartsWith { haystack, prefix, .. } => { replace(haystack); replace(prefix); }
+        IrInstr::StrEndsWith { haystack, suffix, .. } => { replace(haystack); replace(suffix); }
+        IrInstr::StrToUpper { operand, .. } => { replace(operand); }
+        IrInstr::StrToLower { operand, .. } => { replace(operand); }
+        IrInstr::StrTrim { operand, .. } => { replace(operand); }
+        IrInstr::StrRepeat { operand, count, .. } => { replace(operand); replace(count); }
+        IrInstr::Panic { msg } => { replace(msg); }
+        IrInstr::ValueToStr { operand, .. } => { replace(operand); }
+        IrInstr::ReadLine { .. } => {}
+        IrInstr::ReadI64 { .. } => {}
+        IrInstr::ReadF64 { .. } => {}
+        IrInstr::ParseI64 { operand, .. } => { replace(operand); }
+        IrInstr::ParseF64 { operand, .. } => { replace(operand); }
+        IrInstr::StrIndex { string, index, .. } => { replace(string); replace(index); }
+        IrInstr::StrSlice { string, start, end, .. } => { replace(string); replace(start); replace(end); }
+        IrInstr::StrFind { haystack, needle, .. } => { replace(haystack); replace(needle); }
+        IrInstr::StrReplace { string, from, to, .. } => { replace(string); replace(from); replace(to); }
+        IrInstr::ListNew { .. } => {}
+        IrInstr::ListPush { list, value } => { replace(list); replace(value); }
+        IrInstr::ListLen { list, .. } => { replace(list); }
+        IrInstr::ListGet { list, index, .. } => { replace(list); replace(index); }
+        IrInstr::ListSet { list, index, value } => { replace(list); replace(index); replace(value); }
+        IrInstr::ListPop { list, .. } => { replace(list); }
+        IrInstr::MapNew { .. } => {}
+        IrInstr::MapSet { map, key, value } => { replace(map); replace(key); replace(value); }
+        IrInstr::MapGet { map, key, .. } => { replace(map); replace(key); }
+        IrInstr::MapContains { map, key, .. } => { replace(map); replace(key); }
+        IrInstr::MapRemove { map, key } => { replace(map); replace(key); }
+        IrInstr::MapLen { map, .. } => { replace(map); }
     }
 }
 

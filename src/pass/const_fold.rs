@@ -81,28 +81,82 @@ fn const_fold_func(func: &mut IrFunction) {
                     ty,
                 } => {
                     if let Some(kv) = known.get(operand).cloned() {
-                        match (op, kv) {
+                        let folded: Option<(IrInstr, KnownVal)> = match (op, &kv) {
                             (ScalarUnaryOp::Neg, KnownVal::Float(f)) => {
                                 let v = -f;
-                                known.insert(*result, KnownVal::Float(v));
-                                new_instrs.push(IrInstr::ConstFloat {
-                                    result: *result,
-                                    value: v,
-                                    ty: ty.clone(),
-                                });
-                                continue;
+                                Some((IrInstr::ConstFloat { result: *result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
                             }
                             (ScalarUnaryOp::Neg, KnownVal::Int(i)) => {
                                 let v = i.wrapping_neg();
-                                known.insert(*result, KnownVal::Int(v));
-                                new_instrs.push(IrInstr::ConstInt {
-                                    result: *result,
-                                    value: v,
-                                    ty: ty.clone(),
-                                });
-                                continue;
+                                Some((IrInstr::ConstInt { result: *result, value: v, ty: ty.clone() }, KnownVal::Int(v)))
                             }
-                            _ => {}
+                            (ScalarUnaryOp::Sqrt, KnownVal::Float(f)) => {
+                                let v = f.sqrt();
+                                Some((IrInstr::ConstFloat { result: *result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
+                            }
+                            (ScalarUnaryOp::Abs, KnownVal::Float(f)) => {
+                                let v = f.abs();
+                                Some((IrInstr::ConstFloat { result: *result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
+                            }
+                            (ScalarUnaryOp::Abs, KnownVal::Int(i)) => {
+                                let v = i.wrapping_abs();
+                                Some((IrInstr::ConstInt { result: *result, value: v, ty: ty.clone() }, KnownVal::Int(v)))
+                            }
+                            (ScalarUnaryOp::Floor, KnownVal::Float(f)) => {
+                                let v = f.floor();
+                                Some((IrInstr::ConstFloat { result: *result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
+                            }
+                            (ScalarUnaryOp::Ceil, KnownVal::Float(f)) => {
+                                let v = f.ceil();
+                                Some((IrInstr::ConstFloat { result: *result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
+                            }
+                            (ScalarUnaryOp::BitNot, KnownVal::Int(i)) => {
+                                let v = !i;
+                                Some((IrInstr::ConstInt { result: *result, value: v, ty: ty.clone() }, KnownVal::Int(v)))
+                            }
+                            // Phase 36 trig/transcendental folding
+                            (ScalarUnaryOp::Sin, KnownVal::Float(f)) => {
+                                let v = f.sin();
+                                Some((IrInstr::ConstFloat { result: *result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
+                            }
+                            (ScalarUnaryOp::Cos, KnownVal::Float(f)) => {
+                                let v = f.cos();
+                                Some((IrInstr::ConstFloat { result: *result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
+                            }
+                            (ScalarUnaryOp::Tan, KnownVal::Float(f)) => {
+                                let v = f.tan();
+                                Some((IrInstr::ConstFloat { result: *result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
+                            }
+                            (ScalarUnaryOp::Exp, KnownVal::Float(f)) => {
+                                let v = f.exp();
+                                Some((IrInstr::ConstFloat { result: *result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
+                            }
+                            (ScalarUnaryOp::Log, KnownVal::Float(f)) => {
+                                let v = f.ln();
+                                Some((IrInstr::ConstFloat { result: *result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
+                            }
+                            (ScalarUnaryOp::Log2, KnownVal::Float(f)) => {
+                                let v = f.log2();
+                                Some((IrInstr::ConstFloat { result: *result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
+                            }
+                            (ScalarUnaryOp::Round, KnownVal::Float(f)) => {
+                                let v = f.round();
+                                Some((IrInstr::ConstFloat { result: *result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
+                            }
+                            (ScalarUnaryOp::Sign, KnownVal::Float(f)) => {
+                                let v = f.signum();
+                                Some((IrInstr::ConstFloat { result: *result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
+                            }
+                            (ScalarUnaryOp::Sign, KnownVal::Int(i)) => {
+                                let v = i.signum();
+                                Some((IrInstr::ConstInt { result: *result, value: v, ty: ty.clone() }, KnownVal::Int(v)))
+                            }
+                            _ => None,
+                        };
+                        if let Some((folded_instr, folded_val)) = folded {
+                            known.insert(*result, folded_val);
+                            new_instrs.push(folded_instr);
+                            continue;
                         }
                     }
                     new_instrs.push(instr);
@@ -262,13 +316,55 @@ fn eval_binop(
         (BinOp::Mod, KnownVal::Float(a), KnownVal::Float(b)) if *b != 0.0 => {
             let v = a % b;
             Some((
-                IrInstr::ConstFloat {
-                    result,
-                    value: v,
-                    ty: ty.clone(),
-                },
+                IrInstr::ConstFloat { result, value: v, ty: ty.clone() },
                 KnownVal::Float(v),
             ))
+        }
+        // Math builtins: pow, min, max
+        (BinOp::Pow, KnownVal::Float(a), KnownVal::Float(b)) => {
+            let v = a.powf(*b);
+            Some((IrInstr::ConstFloat { result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
+        }
+        (BinOp::Min, KnownVal::Float(a), KnownVal::Float(b)) => {
+            let v = a.min(*b);
+            Some((IrInstr::ConstFloat { result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
+        }
+        (BinOp::Max, KnownVal::Float(a), KnownVal::Float(b)) => {
+            let v = a.max(*b);
+            Some((IrInstr::ConstFloat { result, value: v, ty: ty.clone() }, KnownVal::Float(v)))
+        }
+        (BinOp::Pow, KnownVal::Int(a), KnownVal::Int(b)) => {
+            let v = (*a as f64).powf(*b as f64) as i64;
+            Some((IrInstr::ConstInt { result, value: v, ty: ty.clone() }, KnownVal::Int(v)))
+        }
+        (BinOp::Min, KnownVal::Int(a), KnownVal::Int(b)) => {
+            let v = *a.min(b);
+            Some((IrInstr::ConstInt { result, value: v, ty: ty.clone() }, KnownVal::Int(v)))
+        }
+        (BinOp::Max, KnownVal::Int(a), KnownVal::Int(b)) => {
+            let v = *a.max(b);
+            Some((IrInstr::ConstInt { result, value: v, ty: ty.clone() }, KnownVal::Int(v)))
+        }
+        // Bitwise ops on integers
+        (BinOp::BitAnd, KnownVal::Int(a), KnownVal::Int(b)) => {
+            let v = a & b;
+            Some((IrInstr::ConstInt { result, value: v, ty: ty.clone() }, KnownVal::Int(v)))
+        }
+        (BinOp::BitOr, KnownVal::Int(a), KnownVal::Int(b)) => {
+            let v = a | b;
+            Some((IrInstr::ConstInt { result, value: v, ty: ty.clone() }, KnownVal::Int(v)))
+        }
+        (BinOp::BitXor, KnownVal::Int(a), KnownVal::Int(b)) => {
+            let v = a ^ b;
+            Some((IrInstr::ConstInt { result, value: v, ty: ty.clone() }, KnownVal::Int(v)))
+        }
+        (BinOp::Shl, KnownVal::Int(a), KnownVal::Int(b)) => {
+            let v = a.wrapping_shl(*b as u32);
+            Some((IrInstr::ConstInt { result, value: v, ty: ty.clone() }, KnownVal::Int(v)))
+        }
+        (BinOp::Shr, KnownVal::Int(a), KnownVal::Int(b)) => {
+            let v = a.wrapping_shr(*b as u32);
+            Some((IrInstr::ConstInt { result, value: v, ty: ty.clone() }, KnownVal::Int(v)))
         }
 
         _ => None,
@@ -474,5 +570,35 @@ fn apply_reps(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
         IrInstr::MakeGrad { value, tangent, .. } => { replace(value); replace(tangent); }
         IrInstr::GradValue { operand, .. } => { replace(operand); }
         IrInstr::GradTangent { operand, .. } => { replace(operand); }
+        IrInstr::StrContains { haystack, needle, .. } => { replace(haystack); replace(needle); }
+        IrInstr::StrStartsWith { haystack, prefix, .. } => { replace(haystack); replace(prefix); }
+        IrInstr::StrEndsWith { haystack, suffix, .. } => { replace(haystack); replace(suffix); }
+        IrInstr::StrToUpper { operand, .. } => { replace(operand); }
+        IrInstr::StrToLower { operand, .. } => { replace(operand); }
+        IrInstr::StrTrim { operand, .. } => { replace(operand); }
+        IrInstr::StrRepeat { operand, count, .. } => { replace(operand); replace(count); }
+        IrInstr::Panic { msg } => { replace(msg); }
+        IrInstr::ValueToStr { operand, .. } => { replace(operand); }
+        IrInstr::ReadLine { .. } => {}
+        IrInstr::ReadI64 { .. } => {}
+        IrInstr::ReadF64 { .. } => {}
+        IrInstr::ParseI64 { operand, .. } => { replace(operand); }
+        IrInstr::ParseF64 { operand, .. } => { replace(operand); }
+        IrInstr::StrIndex { string, index, .. } => { replace(string); replace(index); }
+        IrInstr::StrSlice { string, start, end, .. } => { replace(string); replace(start); replace(end); }
+        IrInstr::StrFind { haystack, needle, .. } => { replace(haystack); replace(needle); }
+        IrInstr::StrReplace { string, from, to, .. } => { replace(string); replace(from); replace(to); }
+        IrInstr::ListNew { .. } => {}
+        IrInstr::ListPush { list, value } => { replace(list); replace(value); }
+        IrInstr::ListLen { list, .. } => { replace(list); }
+        IrInstr::ListGet { list, index, .. } => { replace(list); replace(index); }
+        IrInstr::ListSet { list, index, value } => { replace(list); replace(index); replace(value); }
+        IrInstr::ListPop { list, .. } => { replace(list); }
+        IrInstr::MapNew { .. } => {}
+        IrInstr::MapSet { map, key, value } => { replace(map); replace(key); replace(value); }
+        IrInstr::MapGet { map, key, .. } => { replace(map); replace(key); }
+        IrInstr::MapContains { map, key, .. } => { replace(map); replace(key); }
+        IrInstr::MapRemove { map, key } => { replace(map); replace(key); }
+        IrInstr::MapLen { map, .. } => { replace(map); }
     }
 }

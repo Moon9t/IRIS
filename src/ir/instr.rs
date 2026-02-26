@@ -17,6 +17,22 @@ pub enum BinOp {
     FloorDiv,
     /// Modulo / remainder.
     Mod,
+    /// Power: `pow(base, exp)`
+    Pow,
+    /// Minimum: `min(a, b)`
+    Min,
+    /// Maximum: `max(a, b)`
+    Max,
+    /// Bitwise AND: `a & b`
+    BitAnd,
+    /// Bitwise OR: `a | b`
+    BitOr,
+    /// Bitwise XOR: `a ^ b`
+    BitXor,
+    /// Logical left shift: `a << b`
+    Shl,
+    /// Arithmetic right shift: `a >> b`
+    Shr,
     /// Element-wise comparisons: yield a bool scalar.
     CmpEq,
     CmpNe,
@@ -29,18 +45,26 @@ pub enum BinOp {
 impl std::fmt::Display for BinOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            BinOp::Add => "add",
-            BinOp::Sub => "sub",
-            BinOp::Mul => "mul",
-            BinOp::Div => "div",
+            BinOp::Add      => "add",
+            BinOp::Sub      => "sub",
+            BinOp::Mul      => "mul",
+            BinOp::Div      => "div",
             BinOp::FloorDiv => "floordiv",
-            BinOp::Mod => "mod",
-            BinOp::CmpEq => "cmpeq",
-            BinOp::CmpNe => "cmpne",
-            BinOp::CmpLt => "cmplt",
-            BinOp::CmpLe => "cmple",
-            BinOp::CmpGt => "cmpgt",
-            BinOp::CmpGe => "cmpge",
+            BinOp::Mod      => "mod",
+            BinOp::Pow      => "pow",
+            BinOp::Min      => "min",
+            BinOp::Max      => "max",
+            BinOp::BitAnd   => "band",
+            BinOp::BitOr    => "bor",
+            BinOp::BitXor   => "bxor",
+            BinOp::Shl      => "shl",
+            BinOp::Shr      => "shr",
+            BinOp::CmpEq    => "cmpeq",
+            BinOp::CmpNe    => "cmpne",
+            BinOp::CmpLt    => "cmplt",
+            BinOp::CmpLe    => "cmple",
+            BinOp::CmpGt    => "cmpgt",
+            BinOp::CmpGe    => "cmpge",
         };
         f.write_str(s)
     }
@@ -53,13 +77,52 @@ pub enum ScalarUnaryOp {
     Neg,
     /// Boolean NOT: `!x`
     Not,
+    /// Square root: `sqrt(x)`
+    Sqrt,
+    /// Absolute value: `abs(x)`
+    Abs,
+    /// Floor: `floor(x)`
+    Floor,
+    /// Ceiling: `ceil(x)`
+    Ceil,
+    /// Bitwise NOT: `~x`
+    BitNot,
+    /// Sine: `sin(x)`
+    Sin,
+    /// Cosine: `cos(x)`
+    Cos,
+    /// Tangent: `tan(x)`
+    Tan,
+    /// Natural exponential: `exp(x)`
+    Exp,
+    /// Natural logarithm: `log(x)`
+    Log,
+    /// Base-2 logarithm: `log2(x)`
+    Log2,
+    /// Round to nearest integer: `round(x)`
+    Round,
+    /// Sign function: `sign(x)` → -1, 0, or 1
+    Sign,
 }
 
 impl std::fmt::Display for ScalarUnaryOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ScalarUnaryOp::Neg => f.write_str("neg"),
-            ScalarUnaryOp::Not => f.write_str("not"),
+            ScalarUnaryOp::Neg    => f.write_str("neg"),
+            ScalarUnaryOp::Not    => f.write_str("not"),
+            ScalarUnaryOp::Sqrt   => f.write_str("sqrt"),
+            ScalarUnaryOp::Abs    => f.write_str("abs"),
+            ScalarUnaryOp::Floor  => f.write_str("floor"),
+            ScalarUnaryOp::Ceil   => f.write_str("ceil"),
+            ScalarUnaryOp::BitNot => f.write_str("bnot"),
+            ScalarUnaryOp::Sin    => f.write_str("sin"),
+            ScalarUnaryOp::Cos    => f.write_str("cos"),
+            ScalarUnaryOp::Tan    => f.write_str("tan"),
+            ScalarUnaryOp::Exp    => f.write_str("exp"),
+            ScalarUnaryOp::Log    => f.write_str("log"),
+            ScalarUnaryOp::Log2   => f.write_str("log2"),
+            ScalarUnaryOp::Round  => f.write_str("round"),
+            ScalarUnaryOp::Sign   => f.write_str("sign"),
         }
     }
 }
@@ -366,6 +429,77 @@ pub enum IrInstr {
     StrConcat { result: ValueId, lhs: ValueId, rhs: ValueId },
     /// Print a value to stdout (side-effecting, no result).
     Print { operand: ValueId },
+    // ---- Extended string operations ----
+    /// `contains(s, sub)` → bool
+    StrContains { result: ValueId, haystack: ValueId, needle: ValueId },
+    /// `starts_with(s, prefix)` → bool
+    StrStartsWith { result: ValueId, haystack: ValueId, prefix: ValueId },
+    /// `ends_with(s, suffix)` → bool
+    StrEndsWith { result: ValueId, haystack: ValueId, suffix: ValueId },
+    /// `to_upper(s)` → str
+    StrToUpper { result: ValueId, operand: ValueId },
+    /// `to_lower(s)` → str
+    StrToLower { result: ValueId, operand: ValueId },
+    /// `trim(s)` → str  (strips leading/trailing ASCII whitespace)
+    StrTrim { result: ValueId, operand: ValueId },
+    /// `repeat(s, n)` → str
+    StrRepeat { result: ValueId, operand: ValueId, count: ValueId },
+    /// Unconditional abort with a message string. Terminates execution.
+    Panic { msg: ValueId },
+    /// Convert any scalar or string value to its string representation.
+    ValueToStr { result: ValueId, operand: ValueId },
+
+    // ---- User input ----
+    /// Read a line from stdin (strips trailing newline). Returns str.
+    ReadLine { result: ValueId },
+    /// Read a line from stdin and parse it as i64.
+    ReadI64 { result: ValueId },
+    /// Read a line from stdin and parse it as f64.
+    ReadF64 { result: ValueId },
+
+    // ---- String parsing ----
+    /// Parse a str as i64. Returns option<i64>: some(n) on success, none on failure.
+    ParseI64 { result: ValueId, operand: ValueId },
+    /// Parse a str as f64. Returns option<f64>: some(x) on success, none on failure.
+    ParseF64 { result: ValueId, operand: ValueId },
+
+    // ---- String indexing and slicing ----
+    /// `str_index(s, i)` → i64 byte value at position i.
+    StrIndex { result: ValueId, string: ValueId, index: ValueId },
+    /// `slice(s, start, end)` → str substring [start..end).
+    StrSlice { result: ValueId, string: ValueId, start: ValueId, end: ValueId },
+    /// `find(s, sub)` → option<i64>: index of first occurrence of sub in s, or none.
+    StrFind { result: ValueId, haystack: ValueId, needle: ValueId },
+    /// `str_replace(s, old, new)` → str with all occurrences of old replaced by new.
+    StrReplace { result: ValueId, string: ValueId, from: ValueId, to: ValueId },
+
+    // ---- Dynamic list operations ----
+    /// Create a new empty list of the given element type.
+    ListNew { result: ValueId, elem_ty: IrType },
+    /// Append a value to a list (side-effecting, no SSA result).
+    ListPush { list: ValueId, value: ValueId },
+    /// Get the length of a list. Returns i64.
+    ListLen { result: ValueId, list: ValueId },
+    /// Load an element from a list by index. Returns elem_ty.
+    ListGet { result: ValueId, list: ValueId, index: ValueId, elem_ty: IrType },
+    /// Store a value into a list element by index (side-effecting).
+    ListSet { list: ValueId, index: ValueId, value: ValueId },
+    /// Remove and return the last element of a list. Returns option<elem_ty>.
+    ListPop { result: ValueId, list: ValueId, elem_ty: IrType },
+
+    // ---- HashMap operations ----
+    /// Create a new empty map with the given key/value types.
+    MapNew { result: ValueId, key_ty: IrType, val_ty: IrType },
+    /// Insert or update a key-value pair (side-effecting, no SSA result).
+    MapSet { map: ValueId, key: ValueId, value: ValueId },
+    /// Get the value for a key. Returns option<val_ty>.
+    MapGet { result: ValueId, map: ValueId, key: ValueId, val_ty: IrType },
+    /// Check whether a key exists. Returns bool.
+    MapContains { result: ValueId, map: ValueId, key: ValueId },
+    /// Remove a key from the map (side-effecting, no SSA result).
+    MapRemove { map: ValueId, key: ValueId },
+    /// Return the number of entries in the map. Returns i64.
+    MapLen { result: ValueId, map: ValueId },
 }
 
 impl IrInstr {
@@ -428,6 +562,36 @@ impl IrInstr {
             IrInstr::StrLen { result, .. } => Some(*result),
             IrInstr::StrConcat { result, .. } => Some(*result),
             IrInstr::Print { .. } => None,
+            IrInstr::StrContains { result, .. } => Some(*result),
+            IrInstr::StrStartsWith { result, .. } => Some(*result),
+            IrInstr::StrEndsWith { result, .. } => Some(*result),
+            IrInstr::StrToUpper { result, .. } => Some(*result),
+            IrInstr::StrToLower { result, .. } => Some(*result),
+            IrInstr::StrTrim { result, .. } => Some(*result),
+            IrInstr::StrRepeat { result, .. } => Some(*result),
+            IrInstr::Panic { .. } => None,
+            IrInstr::ValueToStr { result, .. } => Some(*result),
+            IrInstr::ReadLine { result } => Some(*result),
+            IrInstr::ReadI64 { result } => Some(*result),
+            IrInstr::ReadF64 { result } => Some(*result),
+            IrInstr::ParseI64 { result, .. } => Some(*result),
+            IrInstr::ParseF64 { result, .. } => Some(*result),
+            IrInstr::StrIndex { result, .. } => Some(*result),
+            IrInstr::StrSlice { result, .. } => Some(*result),
+            IrInstr::StrFind { result, .. } => Some(*result),
+            IrInstr::StrReplace { result, .. } => Some(*result),
+            IrInstr::ListNew { result, .. } => Some(*result),
+            IrInstr::ListPush { .. } => None,
+            IrInstr::ListLen { result, .. } => Some(*result),
+            IrInstr::ListGet { result, .. } => Some(*result),
+            IrInstr::ListSet { .. } => None,
+            IrInstr::ListPop { result, .. } => Some(*result),
+            IrInstr::MapNew { result, .. } => Some(*result),
+            IrInstr::MapSet { .. } => None,
+            IrInstr::MapGet { result, .. } => Some(*result),
+            IrInstr::MapContains { result, .. } => Some(*result),
+            IrInstr::MapRemove { .. } => None,
+            IrInstr::MapLen { result, .. } => Some(*result),
         }
     }
 
@@ -533,6 +697,36 @@ impl IrInstr {
             IrInstr::StrLen { operand, .. } => vec![*operand],
             IrInstr::StrConcat { lhs, rhs, .. } => vec![*lhs, *rhs],
             IrInstr::Print { operand } => vec![*operand],
+            IrInstr::StrContains { haystack, needle, .. } => vec![*haystack, *needle],
+            IrInstr::StrStartsWith { haystack, prefix, .. } => vec![*haystack, *prefix],
+            IrInstr::StrEndsWith { haystack, suffix, .. } => vec![*haystack, *suffix],
+            IrInstr::StrToUpper { operand, .. } => vec![*operand],
+            IrInstr::StrToLower { operand, .. } => vec![*operand],
+            IrInstr::StrTrim { operand, .. } => vec![*operand],
+            IrInstr::StrRepeat { operand, count, .. } => vec![*operand, *count],
+            IrInstr::Panic { msg } => vec![*msg],
+            IrInstr::ValueToStr { operand, .. } => vec![*operand],
+            IrInstr::ReadLine { .. } => vec![],
+            IrInstr::ReadI64 { .. } => vec![],
+            IrInstr::ReadF64 { .. } => vec![],
+            IrInstr::ParseI64 { operand, .. } => vec![*operand],
+            IrInstr::ParseF64 { operand, .. } => vec![*operand],
+            IrInstr::StrIndex { string, index, .. } => vec![*string, *index],
+            IrInstr::StrSlice { string, start, end, .. } => vec![*string, *start, *end],
+            IrInstr::StrFind { haystack, needle, .. } => vec![*haystack, *needle],
+            IrInstr::StrReplace { string, from, to, .. } => vec![*string, *from, *to],
+            IrInstr::ListNew { .. } => vec![],
+            IrInstr::ListPush { list, value } => vec![*list, *value],
+            IrInstr::ListLen { list, .. } => vec![*list],
+            IrInstr::ListGet { list, index, .. } => vec![*list, *index],
+            IrInstr::ListSet { list, index, value } => vec![*list, *index, *value],
+            IrInstr::ListPop { list, .. } => vec![*list],
+            IrInstr::MapNew { .. } => vec![],
+            IrInstr::MapSet { map, key, value } => vec![*map, *key, *value],
+            IrInstr::MapGet { map, key, .. } => vec![*map, *key],
+            IrInstr::MapContains { map, key, .. } => vec![*map, *key],
+            IrInstr::MapRemove { map, key } => vec![*map, *key],
+            IrInstr::MapLen { map, .. } => vec![*map],
         }
     }
 }

@@ -80,6 +80,52 @@ impl Pass for TypeInferPass {
                                             });
                                         }
                                     }
+                                    // Math builtins — accept any numeric scalar.
+                                    ScalarUnaryOp::Sqrt
+                                    | ScalarUnaryOp::Abs
+                                    | ScalarUnaryOp::Floor
+                                    | ScalarUnaryOp::Ceil
+                                    | ScalarUnaryOp::Sin
+                                    | ScalarUnaryOp::Cos
+                                    | ScalarUnaryOp::Tan
+                                    | ScalarUnaryOp::Exp
+                                    | ScalarUnaryOp::Log
+                                    | ScalarUnaryOp::Log2
+                                    | ScalarUnaryOp::Round
+                                    | ScalarUnaryOp::Sign => {
+                                        if !matches!(
+                                            ty,
+                                            IrType::Scalar(
+                                                DType::F32
+                                                    | DType::F64
+                                                    | DType::I32
+                                                    | DType::I64
+                                            )
+                                        ) {
+                                            return Err(PassError::TypeError {
+                                                func: func.name.clone(),
+                                                detail: format!(
+                                                    "{:?} operand must be numeric scalar, got {}",
+                                                    op, ty
+                                                ),
+                                            });
+                                        }
+                                    }
+                                    // BitNot — integer scalars only.
+                                    ScalarUnaryOp::BitNot => {
+                                        if !matches!(
+                                            ty,
+                                            IrType::Scalar(DType::I32 | DType::I64)
+                                        ) {
+                                            return Err(PassError::TypeError {
+                                                func: func.name.clone(),
+                                                detail: format!(
+                                                    "bitnot operand must be integer scalar, got {}",
+                                                    ty
+                                                ),
+                                            });
+                                        }
+                                    }
                                 }
                             }
                         }

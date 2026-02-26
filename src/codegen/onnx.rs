@@ -75,6 +75,8 @@ fn fmt_onnx_type(ty: &IrType) -> String {
         IrType::Mutex(inner) => format!("unknown_type {{ // mutex<{}> }}", inner),
         IrType::Grad(inner) => format!("unknown_type {{ // grad<{}> }}", inner),
         IrType::Sparse(inner) => format!("unknown_type {{ // sparse<{}> }}", inner),
+        IrType::List(inner) => format!("unknown_type {{ // list<{}> }}", inner),
+        IrType::Map(k, v) => format!("unknown_type {{ // map<{}, {}> }}", k, v),
         IrType::Infer | IrType::Fn { .. } => "unknown_type {}".to_owned(),
     }
 }

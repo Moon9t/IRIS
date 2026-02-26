@@ -22,6 +22,8 @@ pub struct IrModule {
     pub(crate) struct_defs: HashMap<String, Vec<(String, IrType)>>,
     /// Enum type definitions: name → ordered list of variant names.
     pub(crate) enum_defs: HashMap<String, Vec<String>>,
+    /// Type alias definitions: alias name → concrete IrType.
+    pub(crate) type_aliases: HashMap<String, IrType>,
 }
 
 impl IrModule {
@@ -32,6 +34,7 @@ impl IrModule {
             function_index: HashMap::new(),
             struct_defs: HashMap::new(),
             enum_defs: HashMap::new(),
+            type_aliases: HashMap::new(),
         }
     }
 
@@ -71,6 +74,21 @@ impl IrModule {
     /// Looks up an enum definition by name (returns variant list).
     pub fn enum_def(&self, name: &str) -> Option<&Vec<String>> {
         self.enum_defs.get(name)
+    }
+
+    /// Registers a type alias. Returns `Err` if the name already exists.
+    pub fn add_type_alias(&mut self, name: impl Into<String>, ty: IrType) -> Result<(), String> {
+        let name = name.into();
+        if self.type_aliases.contains_key(&name) {
+            return Err(format!("type alias '{}' already defined", name));
+        }
+        self.type_aliases.insert(name, ty);
+        Ok(())
+    }
+
+    /// Looks up a type alias by name.
+    pub fn type_alias(&self, name: &str) -> Option<&IrType> {
+        self.type_aliases.get(name)
     }
 
     pub fn function(&self, id: FunctionId) -> Option<&IrFunction> {

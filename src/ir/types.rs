@@ -114,6 +114,10 @@ pub enum IrType {
     Grad(Box<IrType>),
     /// Sparse type: `sparse<T>` — a sparse representation of a tensor or array.
     Sparse(Box<IrType>),
+    /// Dynamic list type: `list<T>` — a growable sequence of values.
+    List(Box<IrType>),
+    /// Hash map type: `map<K, V>` — a key-value store.
+    Map(Box<IrType>, Box<IrType>),
 }
 
 impl std::fmt::Display for IrType {
@@ -153,6 +157,8 @@ impl std::fmt::Display for IrType {
             IrType::Mutex(inner) => write!(f, "mutex<{}>", inner),
             IrType::Grad(inner) => write!(f, "grad<{}>", inner),
             IrType::Sparse(inner) => write!(f, "sparse<{}>", inner),
+            IrType::List(elem) => write!(f, "list<{}>", elem),
+            IrType::Map(k, v) => write!(f, "map<{}, {}>", k, v),
         }
     }
 }

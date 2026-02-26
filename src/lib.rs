@@ -46,31 +46,68 @@ pub enum EmitKind {
     OnnxBinary,
 }
 
-/// Compiles an IRIS source string through the full pipeline.
+/// Compiles multiple IRIS source strings together, supporting `bring module_name`
+/// to import public definitions from other modules.
 ///
-/// Returns the emitted output as a `String`, or an `Error` if any
-/// stage fails. The pipeline aborts at the first error.
-pub fn compile(source: &str, module_name: &str, emit: EmitKind) -> Result<String, Error> {
+/// `sources` is a slice of `(module_name, source_code)` pairs.
+/// `main_module` is the name of the entry-point module (the one with the top-level `f()`).
+pub fn compile_multi(sources: &[(&str, &str)], main_module: &str, emit: EmitKind) -> Result<String, Error> {
+    use crate::parser::lexer::Lexer;
+    use crate::parser::parse::Parser;
+    use std::collections::HashMap;
+
+    // Parse all modules.
+    let mut parsed: HashMap<&str, crate::parser::ast::AstModule> = HashMap::new();
+    for (name, src) in sources {
+        let tokens = Lexer::new(src).tokenize()?;
+        let ast = Parser::new(&tokens).parse_module()?;
+        parsed.insert(name, ast);
+    }
+
+    // Remove the main module and merge imported public definitions into it.
+    let mut main_ast = parsed.remove(main_module)
+        .ok_or_else(|| Error::Parse(crate::error::ParseError::UnexpectedToken {
+            expected: format!("module named '{}'", main_module),
+            found: "not found".to_owned(),
+            span: crate::parser::lexer::Span::at(0),
+        }))?;
+
+    // Collect the bring list before mutably borrowing main_ast.
+    let import_names: Vec<String> = main_ast.imports.clone();
+    for mod_name in &import_names {
+        if let Some(imported) = parsed.get(mod_name.as_str()) {
+            for func in &imported.functions {
+                if func.is_pub {
+                    main_ast.functions.push(func.clone());
+                }
+            }
+            // Always import structs, enums, type aliases, traits, impls, consts
+            // (they are inherently public in this simple module system).
+            main_ast.structs.extend(imported.structs.iter().cloned());
+            main_ast.enums.extend(imported.enums.iter().cloned());
+            main_ast.consts.extend(imported.consts.iter().cloned());
+            main_ast.type_aliases.extend(imported.type_aliases.iter().cloned());
+            main_ast.traits.extend(imported.traits.iter().cloned());
+            main_ast.impls.extend(imported.impls.iter().cloned());
+        }
+    }
+
+    compile_ast(&main_ast, main_module, emit)
+}
+
+/// Internal: compile a pre-built `AstModule` through the full pipeline.
+fn compile_ast(ast_module: &crate::parser::ast::AstModule, module_name: &str, emit: EmitKind) -> Result<String, Error> {
     use crate::codegen::graph_printer::emit_graph_text;
     use crate::codegen::llvm_stub::emit_llvm_stub;
     use crate::codegen::onnx::emit_onnx_text;
     use crate::codegen::onnx_binary::emit_onnx_binary;
     use crate::codegen::printer::emit_ir_text;
     use crate::lower::{lower, lower_graph_to_ir, lower_model};
-    use crate::parser::lexer::Lexer;
-    use crate::parser::parse::Parser;
     use crate::pass::infer_shapes;
     use crate::pass::type_infer::TypeInferPass;
     use crate::pass::validate::ValidatePass;
     use crate::pass::{ConstFoldPass, CsePass, DcePass, DeadNodePass, GraphPassManager, OpExpandPass, PassManager, ShapeCheckPass};
 
-    // 1. Lex
-    let tokens = Lexer::new(source).tokenize()?;
-
-    // 2. Parse
-    let ast_module = Parser::new(&tokens).parse_module()?;
-
-    // 3. Graph emit path (model DSL) — short-circuit before IR lowering.
     if emit == EmitKind::Graph {
         let mut out = String::new();
         for model in &ast_module.models {
@@ -80,7 +117,6 @@ pub fn compile(source: &str, module_name: &str, emit: EmitKind) -> Result<String
         return Ok(out);
     }
 
-    // 4. ONNX emit paths — run dead-node elimination then emit text or binary.
     if emit == EmitKind::Onnx || emit == EmitKind::OnnxBinary {
         let mut out = String::new();
         for model in &ast_module.models {
@@ -91,9 +127,7 @@ pub fn compile(source: &str, module_name: &str, emit: EmitKind) -> Result<String
             let shapes = infer_shapes(&graph)?;
             if emit == EmitKind::OnnxBinary {
                 let bytes = emit_onnx_binary(&graph, &shapes)?;
-                // Encode as hex string for the text return value.
-                let hex: String =
-                    bytes.iter().map(|b| format!("{:02x}", b)).collect();
+                let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
                 out.push_str(&hex);
             } else {
                 out.push_str(&emit_onnx_text(&graph, &shapes)?);
@@ -102,10 +136,8 @@ pub fn compile(source: &str, module_name: &str, emit: EmitKind) -> Result<String
         return Ok(out);
     }
 
-    // 5. Lower all fn definitions to IrFunctions.
-    let mut ir_module = lower(&ast_module, module_name)?;
+    let mut ir_module = lower(ast_module, module_name)?;
 
-    // 6. Lower model definitions: shape-infer then convert to IrFunctions.
     for model in &ast_module.models {
         let graph = lower_model(model)?;
         let shapes = infer_shapes(&graph)?;
@@ -118,7 +150,6 @@ pub fn compile(source: &str, module_name: &str, emit: EmitKind) -> Result<String
             })?;
     }
 
-    // 7. Run pass pipeline.
     let mut pm = PassManager::new();
     pm.add_pass(ValidatePass);
     pm.add_pass(TypeInferPass);
@@ -129,17 +160,20 @@ pub fn compile(source: &str, module_name: &str, emit: EmitKind) -> Result<String
     pm.add_pass(ShapeCheckPass);
     pm.run(&mut ir_module).map_err(|(_, e)| Error::Pass(e))?;
 
-    // 8. Emit.
     match emit {
         EmitKind::Ir => Ok(emit_ir_text(&ir_module)?),
         EmitKind::Llvm => Ok(emit_llvm_stub(&ir_module)?),
-        EmitKind::Graph | EmitKind::Onnx | EmitKind::OnnxBinary => unreachable!("handled above"),
+        EmitKind::Graph | EmitKind::Onnx | EmitKind::OnnxBinary => unreachable!(),
         EmitKind::Eval => {
-            let func = ir_module.functions().first().ok_or_else(|| {
-                Error::Interp(crate::error::InterpError::Unsupported {
-                    detail: "no functions in module to evaluate".into(),
-                })
-            })?;
+            let func = ir_module
+                .functions()
+                .iter()
+                .find(|f| f.params.is_empty())
+                .ok_or_else(|| {
+                    Error::Interp(crate::error::InterpError::Unsupported {
+                        detail: "no zero-argument function in module to evaluate".into(),
+                    })
+                })?;
             let results = interp::eval_function_in_module(&ir_module, func, &[])?;
             let mut out = String::new();
             for val in &results {
@@ -148,4 +182,17 @@ pub fn compile(source: &str, module_name: &str, emit: EmitKind) -> Result<String
             Ok(out)
         }
     }
+}
+
+/// Compiles an IRIS source string through the full pipeline.
+///
+/// Returns the emitted output as a `String`, or an `Error` if any
+/// stage fails. The pipeline aborts at the first error.
+pub fn compile(source: &str, module_name: &str, emit: EmitKind) -> Result<String, Error> {
+    use crate::parser::lexer::Lexer;
+    use crate::parser::parse::Parser;
+
+    let tokens = Lexer::new(source).tokenize()?;
+    let ast_module = Parser::new(&tokens).parse_module()?;
+    compile_ast(&ast_module, module_name, emit)
 }
