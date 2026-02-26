@@ -12,6 +12,36 @@ use crate::ir::types::IrType;
 use crate::ir::value::ValueId;
 use crate::pass::Pass;
 
+/// Returns `true` if `ty` contains an unresolved `IrType::Infer` in a
+/// position that must be concrete after lowering.
+///
+/// Intentionally skips:
+/// - `Option` — `none` produces `Option(Infer)` when the element type is unknown.
+/// - `ResultType` — `ok(v)` / `err(v)` leave one type parameter as `Infer`.
+/// - `Chan`, `Atomic`, `Mutex` — the element type is resolved lazily at the
+///   first `send` / `atomic_store` call; the IR `value_types` map only records
+///   the initial `Infer` placeholder emitted by `channel()` / `atomic()`.
+fn contains_infer(ty: &IrType) -> bool {
+    match ty {
+        IrType::Infer => true,
+        // Deferred-type containers: element type resolved at use site.
+        IrType::Option(_)
+        | IrType::ResultType(..)
+        | IrType::Chan(_)
+        | IrType::Atomic(_)
+        | IrType::Mutex(_) => false,
+        IrType::Scalar(_) | IrType::Str | IrType::Enum { .. } | IrType::Struct { .. } => false,
+        IrType::Tensor { .. } => false,
+        IrType::Tuple(elems) => elems.iter().any(contains_infer),
+        IrType::Array { elem, .. } => contains_infer(elem),
+        IrType::Grad(inner) | IrType::Sparse(inner) | IrType::List(inner) => {
+            contains_infer(inner)
+        }
+        IrType::Map(k, v) => contains_infer(k) || contains_infer(v),
+        IrType::Fn { params, ret } => params.iter().any(contains_infer) || contains_infer(ret),
+    }
+}
+
 /// Validates SSA invariants across the entire module.
 ///
 /// Checks:
@@ -20,7 +50,8 @@ use crate::pass::Pass;
 ///    style the lowerer emits, where blocks appear in topological order).
 /// 2. Every value is defined exactly once.
 /// 3. Every block ends with exactly one terminator as its last instruction.
-/// 4. No `IrType::Infer` values remain in the type map.
+/// 4. No `IrType::Infer` remains in the type map, including inside compound
+///    types such as `Chan`, `Atomic`, `Mutex`, `Fn`, `Tuple`, and `Array`.
 pub struct ValidatePass;
 
 impl Pass for ValidatePass {
@@ -32,9 +63,10 @@ impl Pass for ValidatePass {
         for func in module.functions() {
             let func_name = &func.name;
 
-            // Check for unresolved Infer types anywhere in the value_types map.
+            // Check for unresolved Infer types (top-level and inside compound
+            // types) anywhere in the value_types map.
             for (_value_id, ty) in &func.value_types {
-                if matches!(ty, IrType::Infer) {
+                if contains_infer(ty) {
                     return Err(PassError::UnresolvedInfer {
                         func: func_name.clone(),
                     });

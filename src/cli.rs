@@ -13,6 +13,10 @@ pub struct CliArgs {
     pub output: Option<PathBuf>,
     /// Dump IR to stderr immediately after this pass completes.
     pub dump_ir_after: Option<String>,
+    /// Maximum interpreter step count before aborting (default: 1 000 000).
+    pub max_steps: usize,
+    /// Maximum interpreter call depth before aborting (default: 500).
+    pub max_depth: usize,
 }
 
 /// Result of `parse_args`.
@@ -30,6 +34,8 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
     let mut path: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
     let mut dump_ir_after: Option<String> = None;
+    let mut max_steps: usize = 1_000_000;
+    let mut max_depth: usize = 500;
     let mut i = 1usize;
 
     while i < args.len() {
@@ -75,6 +81,24 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
                     .ok_or_else(|| "--dump-ir-after requires an argument".to_owned())?;
                 dump_ir_after = Some(name.clone());
             }
+            "--max-steps" => {
+                i += 1;
+                let n = args
+                    .get(i)
+                    .ok_or_else(|| "--max-steps requires an argument".to_owned())?;
+                max_steps = n.parse::<usize>().map_err(|_| {
+                    format!("--max-steps: '{}' is not a valid positive integer", n)
+                })?;
+            }
+            "--max-depth" => {
+                i += 1;
+                let n = args
+                    .get(i)
+                    .ok_or_else(|| "--max-depth requires an argument".to_owned())?;
+                max_depth = n.parse::<usize>().map_err(|_| {
+                    format!("--max-depth: '{}' is not a valid positive integer", n)
+                })?;
+            }
             arg if !arg.starts_with('-') => {
                 path = Some(PathBuf::from(arg));
             }
@@ -84,7 +108,7 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
     }
 
     let path = path.ok_or_else(|| "no input file specified".to_owned())?;
-    Ok(ParseArgsResult::Args(CliArgs { path, emit, output, dump_ir_after }))
+    Ok(ParseArgsResult::Args(CliArgs { path, emit, output, dump_ir_after, max_steps, max_depth }))
 }
 
 /// Returns the usage/help text for the CLI.
@@ -93,8 +117,11 @@ pub fn help_text() -> &'static str {
      Usage: iris [options] <file.iris>\n\
      \n\
      Options:\n\
-       --emit <kind>         Output kind: ir (default), llvm, graph, onnx, onnx-binary, eval\n\
+       --emit <kind>         Output kind: ir (default), llvm, llvm-complete, cuda, simd,\n\
+                             jit, pgo-instrument, pgo-optimize, graph, onnx, onnx-binary, eval\n\
        -o <file>             Write output to <file> instead of stdout\n\
        --dump-ir-after <p>   Dump IR to stderr after pass <p> completes\n\
+       --max-steps <n>       Max interpreter steps before abort (default: 1000000)\n\
+       --max-depth <n>       Max call depth before abort (default: 500)\n\
        --help, -h            Print this help and exit\n"
 }

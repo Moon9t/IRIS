@@ -328,14 +328,47 @@ impl<'m> Lowerer<'m> {
                 let (lhs_val, lhs_ty) = self.lower_expr(lhs)?;
                 let (rhs_val, rhs_ty) = self.lower_expr(rhs)?;
 
-                // Require operand types to match for scalar binops.
-                if lhs_ty != rhs_ty {
-                    return Err(LowerError::TypeMismatch {
-                        expected: format!("{}", lhs_ty),
-                        found: format!("{}", rhs_ty),
-                        span: *span,
-                    });
-                }
+                // Auto-promote f32 <-> f64: widen the narrower operand so that
+                // float literals (always f32) work transparently with f64 params.
+                let (lhs_val, rhs_val, lhs_ty) = match (&lhs_ty, &rhs_ty) {
+                    (IrType::Scalar(DType::F32), IrType::Scalar(DType::F64)) => {
+                        let cast = self.builder.fresh_value();
+                        self.builder.push_instr(
+                            IrInstr::Cast {
+                                result: cast,
+                                operand: lhs_val,
+                                from_ty: lhs_ty.clone(),
+                                to_ty: IrType::Scalar(DType::F64),
+                            },
+                            Some(IrType::Scalar(DType::F64)),
+                        );
+                        (cast, rhs_val, IrType::Scalar(DType::F64))
+                    }
+                    (IrType::Scalar(DType::F64), IrType::Scalar(DType::F32)) => {
+                        let cast = self.builder.fresh_value();
+                        self.builder.push_instr(
+                            IrInstr::Cast {
+                                result: cast,
+                                operand: rhs_val,
+                                from_ty: rhs_ty.clone(),
+                                to_ty: IrType::Scalar(DType::F64),
+                            },
+                            Some(IrType::Scalar(DType::F64)),
+                        );
+                        (lhs_val, cast, lhs_ty)
+                    }
+                    _ => {
+                        // Require operand types to match for all other scalar binops.
+                        if lhs_ty != rhs_ty {
+                            return Err(LowerError::TypeMismatch {
+                                expected: format!("{}", lhs_ty),
+                                found: format!("{}", rhs_ty),
+                                span: *span,
+                            });
+                        }
+                        (lhs_val, rhs_val, lhs_ty)
+                    }
+                };
 
                 let ir_op = lower_binop(*op);
                 let result_ty = match op {
@@ -1127,7 +1160,7 @@ impl<'m> Lowerer<'m> {
             return Ok((result, ty));
         }
 
-        // Built-in: unwrap(v) → OptionUnwrap
+        // Built-in: unwrap(v) → OptionUnwrap (option<T>) or ResultUnwrap (result<T,E>)
         if callee.name == "unwrap" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
@@ -1135,14 +1168,34 @@ impl<'m> Lowerer<'m> {
                     span,
                 });
             }
-            let (val, opt_ty) = self.lower_expr(&args[0])?;
-            let inner_ty = if let IrType::Option(inner) = opt_ty { *inner } else { IrType::Infer };
+            let (val, val_ty) = self.lower_expr(&args[0])?;
             let result = self.builder.fresh_value();
-            self.builder.push_instr(
-                IrInstr::OptionUnwrap { result, operand: val, result_ty: inner_ty.clone() },
-                Some(inner_ty.clone()),
-            );
-            return Ok((result, inner_ty));
+            match &val_ty {
+                IrType::ResultType(ok_ty, _) => {
+                    let inner_ty = (**ok_ty).clone();
+                    self.builder.push_instr(
+                        IrInstr::ResultUnwrap { result, operand: val, result_ty: inner_ty.clone() },
+                        Some(inner_ty.clone()),
+                    );
+                    return Ok((result, inner_ty));
+                }
+                IrType::Option(inner) => {
+                    let inner_ty = (**inner).clone();
+                    self.builder.push_instr(
+                        IrInstr::OptionUnwrap { result, operand: val, result_ty: inner_ty.clone() },
+                        Some(inner_ty.clone()),
+                    );
+                    return Ok((result, inner_ty));
+                }
+                _ => {
+                    // Fallback — ValidatePass will catch remaining Infer.
+                    self.builder.push_instr(
+                        IrInstr::OptionUnwrap { result, operand: val, result_ty: IrType::Infer },
+                        Some(IrType::Infer),
+                    );
+                    return Ok((result, IrType::Infer));
+                }
+            }
         }
 
         // Built-in: ok(v) → MakeOk
@@ -2215,16 +2268,17 @@ impl<'m> Lowerer<'m> {
         Ok((result, result_ty))
     }
 
-    /// Lowers `if cond { then_blk } else { else_blk }` to SSA control flow.
+    /// Lowers `if cond { then_blk } [else { else_blk }]` to SSA control flow.
     ///
-    /// Creates three new blocks (then / else / merge) and emits a `CondBr`
-    /// in the current block. Each branch is lowered independently with a
-    /// saved/restored scope to prevent variable leakage across branches.
-    /// The merge block receives the result via a block parameter.
+    /// **With else**: Creates three blocks (then / else / merge) with a `CondBr`.
+    /// Each branch is lowered independently; the merge block receives the result
+    /// via a block parameter.
+    ///
+    /// **Without else**: Creates two blocks (then / merge). The expression always
+    /// evaluates to unit (`i64 0`) — the then branch runs for its side effects.
     ///
     /// If a branch terminates early (e.g. via `return`), no `Br` to merge is
-    /// emitted for that branch. If both branches terminate early, the merge
-    /// block is unreachable but still created for well-formedness.
+    /// emitted for that branch.
     fn lower_if_expr(
         &mut self,
         cond: &AstExpr,
@@ -2232,76 +2286,107 @@ impl<'m> Lowerer<'m> {
         else_blk: Option<&AstBlock>,
         span: Span,
     ) -> Result<(ValueId, IrType), LowerError> {
-        let else_blk = else_blk.ok_or_else(|| LowerError::Unsupported {
-            detail: "if-without-else is not supported as a value expression".into(),
-            span,
-        })?;
+        let _ = span; // span used only for error messages which no longer apply
 
         // 1. Evaluate condition in the current block.
         let (cond_val, _) = self.lower_expr(cond)?;
 
-        // 2. Allocate the three new blocks.
-        let then_bb = self.builder.create_block(Some("then"));
-        let else_bb = self.builder.create_block(Some("else"));
-        let merge_bb = self.builder.create_block(Some("merge"));
+        if let Some(else_blk) = else_blk {
+            // Full if/else: three-block CFG (then / else / merge).
+            let then_bb = self.builder.create_block(Some("then"));
+            let else_bb = self.builder.create_block(Some("else"));
+            let merge_bb = self.builder.create_block(Some("merge"));
 
-        // 3. Terminate the current block with a conditional branch.
-        self.builder.push_instr(
-            IrInstr::CondBr {
-                cond: cond_val,
-                then_block: then_bb,
-                then_args: vec![],
-                else_block: else_bb,
-                else_args: vec![],
-            },
-            None,
-        );
-
-        // 4. Lower the THEN branch.
-        //    Save the outer scope so inner let-bindings don't leak out.
-        let outer_scope = self.scope.clone();
-        self.builder.set_current_block(then_bb);
-        let then_result = self.lower_block(then_blk)?;
-        // Only emit Br to merge if the branch produced a value (didn't return early).
-        if let Some((then_val, _)) = &then_result {
             self.builder.push_instr(
-                IrInstr::Br {
-                    target: merge_bb,
-                    args: vec![*then_val],
+                IrInstr::CondBr {
+                    cond: cond_val,
+                    then_block: then_bb,
+                    then_args: vec![],
+                    else_block: else_bb,
+                    else_args: vec![],
                 },
                 None,
             );
-        }
-        self.scope = outer_scope.clone();
 
-        // 5. Lower the ELSE branch.
-        self.builder.set_current_block(else_bb);
-        let else_result = self.lower_block(else_blk)?;
-        if let Some((else_val, _)) = &else_result {
+            // Lower THEN branch.
+            let outer_scope = self.scope.clone();
+            self.builder.set_current_block(then_bb);
+            let then_result = self.lower_block(then_blk)?;
+            if let Some((then_val, _)) = &then_result {
+                self.builder.push_instr(
+                    IrInstr::Br { target: merge_bb, args: vec![*then_val] },
+                    None,
+                );
+            }
+            self.scope = outer_scope.clone();
+
+            // Lower ELSE branch.
+            self.builder.set_current_block(else_bb);
+            let else_result = self.lower_block(else_blk)?;
+            if let Some((else_val, _)) = &else_result {
+                self.builder.push_instr(
+                    IrInstr::Br { target: merge_bb, args: vec![*else_val] },
+                    None,
+                );
+            }
+            self.scope = outer_scope;
+
+            // Merge block parameter type = type of whichever branch produced a value.
+            let result_ty = match (&then_result, &else_result) {
+                (Some((_, ty)), _) => ty.clone(),
+                (_, Some((_, ty))) => ty.clone(),
+                (None, None) => IrType::Scalar(DType::I64),
+            };
+
+            let result = self
+                .builder
+                .add_block_param(merge_bb, Some("if_result"), result_ty.clone());
+            self.builder.set_current_block(merge_bb);
+            Ok((result, result_ty))
+        } else {
+            // if-without-else: two-block CFG (then / merge).
+            // The whole expression evaluates to unit (i64 0).
+            let unit_ty = IrType::Scalar(DType::I64);
+            let unit_val = self.builder.fresh_value();
             self.builder.push_instr(
-                IrInstr::Br {
-                    target: merge_bb,
-                    args: vec![*else_val],
+                IrInstr::ConstInt { result: unit_val, value: 0, ty: unit_ty.clone() },
+                Some(unit_ty.clone()),
+            );
+
+            let then_bb = self.builder.create_block(Some("then"));
+            let merge_bb = self.builder.create_block(Some("merge"));
+
+            // False branch jumps directly to merge with the unit value.
+            self.builder.push_instr(
+                IrInstr::CondBr {
+                    cond: cond_val,
+                    then_block: then_bb,
+                    then_args: vec![],
+                    else_block: merge_bb,
+                    else_args: vec![unit_val],
                 },
                 None,
             );
+
+            // Lower THEN branch (side effects only; result is discarded).
+            let outer_scope = self.scope.clone();
+            self.builder.set_current_block(then_bb);
+            let _then_result = self.lower_block(then_blk)?;
+            if !self.builder.is_current_block_terminated() {
+                // Branch didn't return early: jump to merge with unit.
+                self.builder.push_instr(
+                    IrInstr::Br { target: merge_bb, args: vec![unit_val] },
+                    None,
+                );
+            }
+            self.scope = outer_scope;
+
+            let merge_param = self
+                .builder
+                .add_block_param(merge_bb, Some("if_result"), unit_ty.clone());
+            self.builder.set_current_block(merge_bb);
+            Ok((merge_param, unit_ty))
         }
-        self.scope = outer_scope;
-
-        // 6. Determine the result type for the merge block parameter.
-        let result_ty = match (&then_result, &else_result) {
-            (Some((_, ty)), _) => ty.clone(),
-            (_, Some((_, ty))) => ty.clone(),
-            // Both branches terminated early — merge is unreachable.
-            (None, None) => IrType::Scalar(DType::I64),
-        };
-
-        let result = self
-            .builder
-            .add_block_param(merge_bb, Some("if_result"), result_ty.clone());
-        self.builder.set_current_block(merge_bb);
-
-        Ok((result, result_ty))
     }
 
     /// Lowers short-circuit `&&` / `||` to SSA control flow.

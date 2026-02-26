@@ -68,6 +68,7 @@ fn is_side_effecting(instr: &IrInstr) -> bool {
             | IrInstr::ListPop { .. }
             | IrInstr::MapSet { .. }
             | IrInstr::MapRemove { .. }
+            | IrInstr::CallClosure { .. }
     )
 }
 

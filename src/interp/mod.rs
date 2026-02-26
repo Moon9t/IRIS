@@ -156,13 +156,28 @@ impl PartialEq for IrValue {
     }
 }
 
+/// Interpreter execution options.
+#[derive(Debug, Clone, Copy)]
+pub struct InterpOptions {
+    /// Maximum number of block-execution steps before aborting (default: 1 000 000).
+    pub max_steps: usize,
+    /// Maximum call-stack depth before aborting (default: 500).
+    pub max_depth: usize,
+}
+
+impl Default for InterpOptions {
+    fn default() -> Self {
+        Self { max_steps: 1_000_000, max_depth: 500 }
+    }
+}
+
 /// Evaluates `func` with the given `args`, returning its return values.
 ///
 /// Call instructions that refer to other functions will fail with
 /// `InterpError::Unsupported`. Use `eval_function_in_module` if you need
 /// cross-function calls.
 pub fn eval_function(func: &IrFunction, args: &[IrValue]) -> Result<Vec<IrValue>, InterpError> {
-    Interpreter::new(None).run(func, args)
+    Interpreter::new(None, InterpOptions::default(), 0).run(func, args)
 }
 
 /// Like `eval_function` but with access to a full module for cross-function calls.
@@ -171,7 +186,17 @@ pub fn eval_function_in_module(
     func: &IrFunction,
     args: &[IrValue],
 ) -> Result<Vec<IrValue>, InterpError> {
-    Interpreter::new(Some(module)).run(func, args)
+    Interpreter::new(Some(module), InterpOptions::default(), 0).run(func, args)
+}
+
+/// Like `eval_function_in_module` but accepts custom execution limits.
+pub fn eval_function_in_module_opts(
+    module: &IrModule,
+    func: &IrFunction,
+    args: &[IrValue],
+    opts: InterpOptions,
+) -> Result<Vec<IrValue>, InterpError> {
+    Interpreter::new(Some(module), opts, 0).run(func, args)
 }
 
 // ---------------------------------------------------------------------------
@@ -181,13 +206,18 @@ pub fn eval_function_in_module(
 struct Interpreter<'m> {
     values: HashMap<ValueId, IrValue>,
     module: Option<&'m IrModule>,
+    opts: InterpOptions,
+    /// Current call-stack depth (0 = top-level).
+    depth: usize,
 }
 
 impl<'m> Interpreter<'m> {
-    fn new(module: Option<&'m IrModule>) -> Self {
+    fn new(module: Option<&'m IrModule>, opts: InterpOptions, depth: usize) -> Self {
         Self {
             values: HashMap::new(),
             module,
+            opts,
+            depth,
         }
     }
 
@@ -204,13 +234,15 @@ impl<'m> Interpreter<'m> {
 
         let mut current = BlockId(0);
         let mut steps = 0usize;
-        const MAX_STEPS: usize = 1_000_000;
 
         'blocks: loop {
             steps += 1;
-            if steps > MAX_STEPS {
+            if steps > self.opts.max_steps {
                 return Err(InterpError::Unsupported {
-                    detail: "exceeded step limit (infinite loop?)".into(),
+                    detail: format!(
+                        "exceeded step limit of {} (infinite loop?); use --max-steps to increase",
+                        self.opts.max_steps
+                    ),
                 });
             }
 
@@ -410,7 +442,15 @@ impl<'m> Interpreter<'m> {
 
                         if let Some(module) = self.module {
                             if let Some(callee_func) = module.function_by_name(callee) {
-                                let mut sub = Interpreter::new(self.module);
+                                if self.depth >= self.opts.max_depth {
+                                    return Err(InterpError::Unsupported {
+                                        detail: format!(
+                                            "call depth exceeded {} (infinite recursion?); use --max-steps to adjust",
+                                            self.opts.max_depth
+                                        ),
+                                    });
+                                }
+                                let mut sub = Interpreter::new(self.module, self.opts, self.depth + 1);
                                 let ret = sub.run(callee_func, &call_args)?;
                                 if let Some(r) = result {
                                     if let Some(v) = ret.into_iter().next() {
@@ -748,7 +788,7 @@ impl<'m> Interpreter<'m> {
                         for i in s..e {
                             let mut call_args = vec![IrValue::I64(i)];
                             call_args.extend(cap_vals.iter().cloned());
-                            let mut sub = Interpreter::new(self.module);
+                            let mut sub = Interpreter::new(self.module, self.opts, self.depth + 1);
                             sub.run(&callee, &call_args)?;
                         }
                     }
@@ -796,7 +836,7 @@ impl<'m> Interpreter<'m> {
                         for a in args {
                             call_args.push(self.get(*a)?);
                         }
-                        let mut sub = Interpreter::new(self.module);
+                        let mut sub = Interpreter::new(self.module, self.opts, self.depth + 1);
                         sub.run(&callee, &call_args)?;
                     }
 
@@ -1052,7 +1092,15 @@ impl<'m> Interpreter<'m> {
                         for a in args {
                             call_args.push(self.get(*a)?);
                         }
-                        let mut sub = Interpreter::new(self.module);
+                        if self.depth >= self.opts.max_depth {
+                            return Err(InterpError::Unsupported {
+                                detail: format!(
+                                    "call depth exceeded {} (infinite recursion?)",
+                                    self.opts.max_depth
+                                ),
+                            });
+                        }
+                        let mut sub = Interpreter::new(self.module, self.opts, self.depth + 1);
                         let ret = sub.run(&callee, &call_args)?;
                         if let Some(r) = result {
                             self.values.insert(*r, ret.into_iter().next().unwrap_or(IrValue::Unit));

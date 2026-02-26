@@ -104,11 +104,17 @@ pub fn compile_multi(sources: &[(&str, &str)], main_module: &str, emit: EmitKind
         }
     }
 
-    compile_ast(&main_ast, main_module, emit)
+    compile_ast(&main_ast, main_module, emit, 1_000_000, 500)
 }
 
 /// Internal: compile a pre-built `AstModule` through the full pipeline.
-fn compile_ast(ast_module: &crate::parser::ast::AstModule, module_name: &str, emit: EmitKind) -> Result<String, Error> {
+fn compile_ast(
+    ast_module: &crate::parser::ast::AstModule,
+    module_name: &str,
+    emit: EmitKind,
+    max_steps: usize,
+    max_depth: usize,
+) -> Result<String, Error> {
     use crate::codegen::cuda::emit_cuda;
     use crate::codegen::graph_printer::emit_graph_text;
     use crate::codegen::jit::emit_jit;
@@ -197,7 +203,8 @@ fn compile_ast(ast_module: &crate::parser::ast::AstModule, module_name: &str, em
                         detail: "no zero-argument function in module to evaluate".into(),
                     })
                 })?;
-            let results = interp::eval_function_in_module(&ir_module, func, &[])?;
+            let opts = interp::InterpOptions { max_steps, max_depth };
+            let results = interp::eval_function_in_module_opts(&ir_module, func, &[], opts)?;
             let mut out = String::new();
             for val in &results {
                 out.push_str(&format!("{}\n", val));
@@ -217,5 +224,21 @@ pub fn compile(source: &str, module_name: &str, emit: EmitKind) -> Result<String
 
     let tokens = Lexer::new(source).tokenize()?;
     let ast_module = Parser::new(&tokens).parse_module()?;
-    compile_ast(&ast_module, module_name, emit)
+    compile_ast(&ast_module, module_name, emit, 1_000_000, 500)
+}
+
+/// Like [`compile`] but with configurable interpreter limits for `--emit eval`.
+pub fn compile_with_opts(
+    source: &str,
+    module_name: &str,
+    emit: EmitKind,
+    max_steps: usize,
+    max_depth: usize,
+) -> Result<String, Error> {
+    use crate::parser::lexer::Lexer;
+    use crate::parser::parse::Parser;
+
+    let tokens = Lexer::new(source).tokenize()?;
+    let ast_module = Parser::new(&tokens).parse_module()?;
+    compile_ast(&ast_module, module_name, emit, max_steps, max_depth)
 }

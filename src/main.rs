@@ -22,7 +22,7 @@ fn main() {
                 .and_then(|s| s.to_str())
                 .unwrap_or("module");
 
-            match iris::compile(&source, module_name, cli.emit) {
+            match iris::compile_with_opts(&source, module_name, cli.emit, cli.max_steps, cli.max_depth) {
                 Ok(output) => {
                     if let Some(out_path) = cli.output {
                         if let Err(e) = std::fs::write(&out_path, &output) {

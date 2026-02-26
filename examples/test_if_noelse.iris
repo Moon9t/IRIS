@@ -1,0 +1,8 @@
+// test_if_noelse.iris -- test if-without-else
+def main() -> i64 {
+    var x = 0
+    if x == 0 {
+        x = 42
+    };
+    x
+}
