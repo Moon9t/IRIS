@@ -1,0 +1,36 @@
+// neural_net.iris -- a simple neural network forward pass
+//
+// Demonstrates: exp, log, clamp, max, sigmoid, relu, cross-entropy loss.
+//
+// Run: cargo run -- --emit eval examples/neural_net.iris
+
+def sigmoid(x: f32) -> f32 {
+    val neg_x = 0.0 - x
+    val e_neg = exp(neg_x)
+    1.0 / (1.0 + e_neg)
+}
+
+def relu(x: f32) -> f32 {
+    max(0.0, x)
+}
+
+def bce_loss(y: f32, p: f32) -> f32 {
+    val eps = 0.000001
+    val p_clamp = clamp(p, eps, 1.0 - eps)
+    val pos = y * log(p_clamp)
+    val neg = (1.0 - y) * log(1.0 - p_clamp)
+    0.0 - (pos + neg)
+}
+
+def neuron(w0: f32, w1: f32, w2: f32, x0: f32, x1: f32, x2: f32, b: f32) -> f32 {
+    val z = w0 * x0 + w1 * x1 + w2 * x2 + b
+    sigmoid(z)
+}
+
+def main() -> f32 {
+    val out = neuron(0.2, 0.4, -0.1, 0.5, -0.3, 0.8, 0.1)
+    val loss = bce_loss(1.0, out)
+    print(concat("output = ", to_str(out)));
+    print(concat("loss   = ", to_str(loss)));
+    out
+}

@@ -36,6 +36,18 @@ pub enum EmitKind {
     Ir,
     /// Scalar LLVM IR with full arithmetic, comparison, and control-flow bodies.
     Llvm,
+    /// Complete LLVM IR: named struct types, typed calls, alloca for fixed arrays.
+    LlvmComplete,
+    /// CUDA/NVPTX LLVM IR: kernel functions, thread/block IDs, !nvvm.annotations.
+    Cuda,
+    /// SIMD-annotated LLVM IR: <N x T> vector types, AVX2 target, !llvm.loop metadata.
+    Simd,
+    /// JIT compilation: compile via clang subprocess (or interpreter fallback) and run.
+    Jit,
+    /// PGO instrumented IR: block counters, @__llvm_profile_instrument_target.
+    PgoInstrument,
+    /// PGO optimized IR: branch weights from profile, hot/cold annotations.
+    PgoOptimize,
     /// High-level computation graph text (for model definitions).
     Graph,
     /// Structural ONNX text stub (protobuf-text-style, no binary).
@@ -97,11 +109,16 @@ pub fn compile_multi(sources: &[(&str, &str)], main_module: &str, emit: EmitKind
 
 /// Internal: compile a pre-built `AstModule` through the full pipeline.
 fn compile_ast(ast_module: &crate::parser::ast::AstModule, module_name: &str, emit: EmitKind) -> Result<String, Error> {
+    use crate::codegen::cuda::emit_cuda;
     use crate::codegen::graph_printer::emit_graph_text;
+    use crate::codegen::jit::emit_jit;
+    use crate::codegen::llvm_ir::emit_llvm_ir;
     use crate::codegen::llvm_stub::emit_llvm_stub;
     use crate::codegen::onnx::emit_onnx_text;
     use crate::codegen::onnx_binary::emit_onnx_binary;
+    use crate::codegen::pgo::{emit_pgo_instrument, emit_pgo_optimize};
     use crate::codegen::printer::emit_ir_text;
+    use crate::codegen::simd::emit_simd;
     use crate::lower::{lower, lower_graph_to_ir, lower_model};
     use crate::pass::infer_shapes;
     use crate::pass::type_infer::TypeInferPass;
@@ -163,6 +180,12 @@ fn compile_ast(ast_module: &crate::parser::ast::AstModule, module_name: &str, em
     match emit {
         EmitKind::Ir => Ok(emit_ir_text(&ir_module)?),
         EmitKind::Llvm => Ok(emit_llvm_stub(&ir_module)?),
+        EmitKind::LlvmComplete => Ok(emit_llvm_ir(&ir_module)?),
+        EmitKind::Cuda => Ok(emit_cuda(&ir_module)?),
+        EmitKind::Simd => Ok(emit_simd(&ir_module)?),
+        EmitKind::Jit => Ok(emit_jit(&ir_module)?),
+        EmitKind::PgoInstrument => Ok(emit_pgo_instrument(&ir_module)?),
+        EmitKind::PgoOptimize => Ok(emit_pgo_optimize(&ir_module, "")?),
         EmitKind::Graph | EmitKind::Onnx | EmitKind::OnnxBinary => unreachable!(),
         EmitKind::Eval => {
             let func = ir_module

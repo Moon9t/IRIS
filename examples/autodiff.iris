@@ -1,0 +1,22 @@
+// autodiff.iris -- forward-mode automatic differentiation with grad<T>
+//
+// grad<f32> is a dual number: (value, derivative).
+// f(x) = x^3 + x^2 + x,  f'(x) = 3x^2 + 2x + 1
+// At x=2: f(2) = 8+4+2 = 14,  f'(2) = 12+4+1 = 17
+//
+// Run: cargo run -- --emit eval examples/autodiff.iris
+
+def main() -> f32 {
+    val x = grad(2.0)
+
+    val x2 = x * x
+    val x3 = x2 * x
+    val fx = x3 + x2 + x
+
+    val value = fx.value
+    val derivative = fx.grad
+
+    print(concat("f(2)  = ", to_str(value)));
+    print(concat("f'(2) = ", to_str(derivative)));
+    derivative
+}

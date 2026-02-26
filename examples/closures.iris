@@ -1,0 +1,26 @@
+// closures.iris -- closures and inline functions
+//
+// Run: cargo run -- --emit eval examples/closures.iris
+
+def apply_twice(f: i64, x: i64) -> i64 {
+    // Closures are first-class; call them with CallClosure.
+    // Here we demonstrate closures bound to vals.
+    f * x
+}
+
+def main() -> i64 {
+    // Closure that doubles its argument.
+    val double = |x: i64| x * 2
+    // Closure that adds 10.
+    val add10 = |x: i64| x + 10
+
+    val a = double(7)
+    val b = add10(a)
+    val c = double(add10(3))
+
+    print(concat("double(7)       = ", to_str(a)));
+    print(concat("add10(double(7)) = ", to_str(b)));
+    print(concat("double(add10(3)) = ", to_str(c)));
+
+    b
+}

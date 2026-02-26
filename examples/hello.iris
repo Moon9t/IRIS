@@ -1,0 +1,8 @@
+// hello.iris -- the classic first program
+//
+// Run: cargo run -- --emit eval examples/hello.iris
+
+def main() -> i64 {
+    print("Hello, IRIS!");
+    0
+}

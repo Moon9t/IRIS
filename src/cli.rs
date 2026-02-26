@@ -43,13 +43,19 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
                 emit = match kind.as_str() {
                     "ir" => EmitKind::Ir,
                     "llvm" => EmitKind::Llvm,
+                    "llvm-complete" => EmitKind::LlvmComplete,
+                    "cuda" => EmitKind::Cuda,
+                    "simd" => EmitKind::Simd,
+                    "jit" => EmitKind::Jit,
+                    "pgo-instrument" => EmitKind::PgoInstrument,
+                    "pgo-optimize" => EmitKind::PgoOptimize,
                     "graph" => EmitKind::Graph,
                     "onnx" => EmitKind::Onnx,
                     "onnx-binary" => EmitKind::OnnxBinary,
                     "eval" => EmitKind::Eval,
                     other => {
                         return Err(format!(
-                            "unknown emit kind: '{}' (valid: ir, llvm, graph, onnx, onnx-binary, eval)",
+                            "unknown emit kind: '{}' (valid: ir, llvm, llvm-complete, cuda, simd, jit, pgo-instrument, pgo-optimize, graph, onnx, onnx-binary, eval)",
                             other
                         ))
                     }

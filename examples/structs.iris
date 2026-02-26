@@ -1,0 +1,23 @@
+// structs.iris -- record types with field access
+//
+// Run: cargo run -- --emit eval examples/structs.iris
+
+record Point { x: f64, y: f64 }
+
+def distance(px: f64, py: f64, qx: f64, qy: f64) -> f64 {
+    val dx = px - qx
+    val dy = py - qy
+    sqrt(dx * dx + dy * dy)
+}
+
+def main() -> f64 {
+    val p = Point { x: 3.0, y: 4.0 }
+
+    val d = distance(0.0, 0.0, p.x, p.y)
+    print(concat("distance((0,0),(3,4)) = ", to_str(d)));
+
+    val area = 6.0 * 7.0
+    print(concat("area(6,7) = ", to_str(area)));
+
+    d
+}

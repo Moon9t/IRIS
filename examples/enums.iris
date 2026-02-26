@@ -1,0 +1,36 @@
+// enums.iris -- algebraic data types (choice) and pattern matching
+//
+// Run: cargo run -- --emit eval examples/enums.iris
+
+choice Direction { North, South, East, West }
+
+choice Shape { Circle, Square, Triangle }
+
+def direction_num(d: Direction) -> i64 {
+    when d {
+        Direction.North => 1
+        Direction.South => 2
+        Direction.East  => 3
+        Direction.West  => 4
+    }
+}
+
+def sides(s: Shape) -> i64 {
+    when s {
+        Shape.Circle   => 0
+        Shape.Square   => 4
+        Shape.Triangle => 3
+    }
+}
+
+def main() -> i64 {
+    val d = Direction.East
+    val dn = direction_num(d)
+    print(concat("East = ", to_str(dn)));
+
+    val s = Shape.Triangle
+    val n = sides(s)
+    print(concat("Triangle sides = ", to_str(n)));
+
+    n
+}

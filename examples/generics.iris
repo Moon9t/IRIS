@@ -1,0 +1,33 @@
+// generics.iris -- generic functions
+//
+// Run: cargo run -- --emit eval examples/generics.iris
+
+def identity[T](x: T) -> T {
+    x
+}
+
+def my_min[T](a: T, b: T) -> T {
+    if a <= b { a } else { b }
+}
+
+def my_max[T](a: T, b: T) -> T {
+    if a >= b { a } else { b }
+}
+
+def my_clamp[T](v: T, lo: T, hi: T) -> T {
+    my_max(lo, my_min(v, hi))
+}
+
+def main() -> i64 {
+    val x = identity(42)
+    val y = my_min(10, 20)
+    val z = my_max(10, 20)
+    val c = my_clamp(15, 0, 10)
+
+    print(concat("identity(42)    = ", to_str(x)));
+    print(concat("min(10,20)      = ", to_str(y)));
+    print(concat("max(10,20)      = ", to_str(z)));
+    print(concat("clamp(15,0,10) = ", to_str(c)));
+
+    x
+}
