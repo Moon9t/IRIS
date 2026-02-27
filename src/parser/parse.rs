@@ -37,10 +37,10 @@
 
 use crate::error::ParseError;
 use crate::parser::ast::{
-    AstBinOp, AstBlock, AstConst, AstDim, AstEnumDef, AstExpr, AstFieldDef, AstFunction,
-    AstImplDef, AstLayer, AstLayerParam, AstModel, AstModelInput, AstModelOutput, AstModule,
-    AstParam, AstScalarKind, AstStmt, AstStructDef, AstTraitDef, AstTraitMethod, AstType,
-    AstTypeAlias, AstUnaryOp, AstWhenArm, AstWhenPattern, Ident,
+    AstBinOp, AstBlock, AstConst, AstDim, AstEnumDef, AstEnumVariant, AstExpr, AstFieldDef,
+    AstFunction, AstImplDef, AstLayer, AstLayerParam, AstModel, AstModelInput, AstModelOutput,
+    AstModule, AstParam, AstScalarKind, AstStmt, AstStructDef, AstTraitDef, AstTraitMethod,
+    AstType, AstTypeAlias, AstUnaryOp, AstWhenArm, AstWhenPattern, Ident,
 };
 use crate::parser::lexer::{Span, Spanned, Token};
 
@@ -135,7 +135,7 @@ impl<'t> Parser<'t> {
             match self.peek_tok().clone() {
                 Token::Choice => enums.push(self.parse_enum_def()?),
                 Token::Record => structs.push(self.parse_struct_def()?),
-                Token::Def | Token::Async => functions.push(self.parse_fn()?),
+                Token::Def | Token::Async | Token::At => functions.push(self.parse_fn()?),
                 Token::Model => models.push(self.parse_model()?),
                 Token::Const => consts.push(self.parse_const_decl()?),
                 Token::Type => type_aliases.push(self.parse_type_alias()?),
@@ -243,14 +243,23 @@ impl<'t> Parser<'t> {
         Ok(AstTraitDef { name, methods, span: start.merge(end) })
     }
 
-    /// Parses `impl TraitName for TypeName { (def method(...) -> type { body })* }`.
+    /// Parses either:
+    /// - `impl TraitName for TypeName { ... }` — trait implementation
+    /// - `impl TypeName { ... }` — standalone struct methods (trait_name = "")
     fn parse_impl_def(&mut self) -> Result<AstImplDef, ParseError> {
         let start = self.current_span();
         self.expect(&Token::Impl)?;
-        let trait_name = self.expect_ident()?.name;
-        // Expect the keyword `for`; since `for` is Token::For:
-        self.expect(&Token::For)?;
-        let type_name = self.parse_type_name_str()?;
+        // Disambiguate: if the token after the first ident is `for`, it's a trait impl.
+        // Otherwise it's a standalone struct impl block.
+        let first_name = self.parse_type_name_str()?;
+        let (trait_name, type_name) = if matches!(self.peek_tok(), Token::For) {
+            self.advance(); // consume `for`
+            let type_name = self.parse_type_name_str()?;
+            (first_name, type_name)
+        } else {
+            // Standalone `impl TypeName { ... }` — no trait
+            ("".to_string(), first_name)
+        };
         self.expect(&Token::LBrace)?;
         let mut methods = Vec::new();
         while !matches!(self.peek_tok(), Token::RBrace | Token::Eof) {
@@ -300,7 +309,29 @@ impl<'t> Parser<'t> {
         self.expect(&Token::LBrace)?;
         let mut variants = Vec::new();
         while !matches!(self.peek_tok(), Token::RBrace | Token::Eof) {
-            variants.push(self.expect_ident()?);
+            let v_start = self.current_span();
+            let v_name = self.expect_ident()?;
+            // Optionally parse payload types: `Variant(T1, T2, ...)`.
+            let fields = if matches!(self.peek_tok(), Token::LParen) {
+                self.advance(); // consume '('
+                let mut tys = Vec::new();
+                while !matches!(self.peek_tok(), Token::RParen | Token::Eof) {
+                    tys.push(self.parse_type()?);
+                    if matches!(self.peek_tok(), Token::Comma) {
+                        self.advance();
+                    }
+                }
+                self.expect(&Token::RParen)?;
+                tys
+            } else {
+                Vec::new()
+            };
+            let v_end = self.current_span();
+            variants.push(AstEnumVariant {
+                name: v_name,
+                fields,
+                span: v_start.merge(v_end),
+            });
             if matches!(self.peek_tok(), Token::Comma) {
                 self.advance();
             }
@@ -341,6 +372,13 @@ impl<'t> Parser<'t> {
 
     fn parse_fn(&mut self) -> Result<AstFunction, ParseError> {
         let start = self.current_span();
+        // Optional @attr annotations before async/def
+        let mut attrs = Vec::new();
+        while matches!(self.peek_tok(), Token::At) {
+            self.advance(); // consume '@'
+            let attr_name = self.expect_ident()?.name;
+            attrs.push(attr_name);
+        }
         // Optional async keyword before def
         let is_async = if matches!(self.peek_tok(), Token::Async) {
             self.advance();
@@ -382,6 +420,7 @@ impl<'t> Parser<'t> {
             body,
             span,
             is_async,
+            attrs,
         })
     }
 
@@ -596,6 +635,26 @@ impl<'t> Parser<'t> {
                     len,
                     span: span.merge(end),
                 })
+            }
+            Token::Ident(ref name) if name == "u8" => {
+                let _ = name.clone(); self.advance();
+                Ok(AstType::Scalar(AstScalarKind::U8, span))
+            }
+            Token::Ident(ref name) if name == "i8" => {
+                let _ = name.clone(); self.advance();
+                Ok(AstType::Scalar(AstScalarKind::I8, span))
+            }
+            Token::Ident(ref name) if name == "u32" => {
+                let _ = name.clone(); self.advance();
+                Ok(AstType::Scalar(AstScalarKind::U32, span))
+            }
+            Token::Ident(ref name) if name == "u64" => {
+                let _ = name.clone(); self.advance();
+                Ok(AstType::Scalar(AstScalarKind::U64, span))
+            }
+            Token::Ident(ref name) if name == "usize" => {
+                let _ = name.clone(); self.advance();
+                Ok(AstType::Scalar(AstScalarKind::USize, span))
             }
             Token::Ident(ref name) if name == "chan" => {
                 let _ = name.clone();
@@ -1272,43 +1331,89 @@ impl<'t> Parser<'t> {
                 let mut arms = Vec::new();
                 while !matches!(self.peek_tok(), Token::RBrace | Token::Eof) {
                     let arm_start = self.current_span();
-                    // Peek to determine pattern type:
-                    // - `some(binding)` or `none` or `ok(binding)` or `err(binding)` — option/result patterns
-                    // - `EnumName.Variant` — enum variant pattern
-                    let first_name = self.expect_ident()?.name;
+                    // Peek BEFORE consuming to handle literal/wildcard patterns.
                     let (pattern, enum_name_leg, variant_name_leg) =
-                        if (first_name == "some" || first_name == "ok" || first_name == "err")
-                            && matches!(self.peek_tok(), Token::LParen)
-                        {
-                            // `some(x)` / `ok(x)` / `err(e)` — consume `(binding)`
-                            self.advance(); // consume '('
-                            let binding = if matches!(self.peek_tok(), Token::RParen) {
-                                None
-                            } else {
-                                Some(self.expect_ident()?.name)
-                            };
-                            self.expect(&Token::RParen)?;
-                            let pat = if first_name == "some" {
-                                AstWhenPattern::OptionSome { binding: binding.clone() }
-                            } else if first_name == "ok" {
-                                AstWhenPattern::ResultOk { binding: binding.clone() }
-                            } else {
-                                AstWhenPattern::ResultErr { binding: binding.clone() }
-                            };
-                            (pat, first_name.clone(), binding.unwrap_or_default())
-                        } else if first_name == "none" && !matches!(self.peek_tok(), Token::Dot) {
-                            // `none` pattern (no dot follows)
-                            (AstWhenPattern::OptionNone, "none".to_string(), "none".to_string())
-                        } else {
-                            // `EnumName.Variant` — legacy enum pattern
-                            self.expect(&Token::Dot)?;
-                            let variant_name = self.expect_ident()?.name;
-                            let pat = AstWhenPattern::EnumVariant {
-                                enum_name: first_name.clone(),
-                                variant_name: variant_name.clone(),
-                            };
-                            (pat, first_name, variant_name)
+                        match self.peek_tok() {
+                            Token::IntLit(n) => {
+                                let n = *n;
+                                self.advance(); // consume int literal
+                                (AstWhenPattern::IntLit(n), "_lit".to_string(), n.to_string())
+                            }
+                            Token::BoolLit(b) => {
+                                let b = *b;
+                                self.advance(); // consume bool literal
+                                (AstWhenPattern::BoolLit(b), "_lit".to_string(), b.to_string())
+                            }
+                            Token::StringLit(_) => {
+                                let s = if let Token::StringLit(s) = self.peek_tok() {
+                                    s.clone()
+                                } else { unreachable!() };
+                                self.advance(); // consume string literal
+                                (AstWhenPattern::StringLit(s.clone()), "_lit".to_string(), s)
+                            }
+                            _ => {
+                                // Peek at ident to determine pattern type.
+                                let first_name = self.expect_ident()?.name;
+                                if first_name == "_" {
+                                    // Wildcard pattern.
+                                    (AstWhenPattern::Wildcard, "_".to_string(), "_".to_string())
+                                } else if (first_name == "some" || first_name == "ok" || first_name == "err")
+                                    && matches!(self.peek_tok(), Token::LParen)
+                                {
+                                    // `some(x)` / `ok(x)` / `err(e)` — consume `(binding)`
+                                    self.advance(); // consume '('
+                                    let binding = if matches!(self.peek_tok(), Token::RParen) {
+                                        None
+                                    } else {
+                                        Some(self.expect_ident()?.name)
+                                    };
+                                    self.expect(&Token::RParen)?;
+                                    let pat = if first_name == "some" {
+                                        AstWhenPattern::OptionSome { binding: binding.clone() }
+                                    } else if first_name == "ok" {
+                                        AstWhenPattern::ResultOk { binding: binding.clone() }
+                                    } else {
+                                        AstWhenPattern::ResultErr { binding: binding.clone() }
+                                    };
+                                    (pat, first_name.clone(), binding.unwrap_or_default())
+                                } else if first_name == "none" && !matches!(self.peek_tok(), Token::Dot) {
+                                    // `none` pattern (no dot follows)
+                                    (AstWhenPattern::OptionNone, "none".to_string(), "none".to_string())
+                                } else {
+                                    // `EnumName.Variant` or `EnumName.Variant(a, b, ...)` — enum pattern
+                                    self.expect(&Token::Dot)?;
+                                    let variant_name = self.expect_ident()?.name;
+                                    // Optionally parse data bindings: `Variant(a, b, ...)`
+                                    let bindings = if matches!(self.peek_tok(), Token::LParen) {
+                                        self.advance(); // consume '('
+                                        let mut names = Vec::new();
+                                        while !matches!(self.peek_tok(), Token::RParen | Token::Eof) {
+                                            names.push(self.expect_ident()?.name);
+                                            if matches!(self.peek_tok(), Token::Comma) {
+                                                self.advance();
+                                            }
+                                        }
+                                        self.expect(&Token::RParen)?;
+                                        names
+                                    } else {
+                                        Vec::new()
+                                    };
+                                    let pat = AstWhenPattern::EnumVariant {
+                                        enum_name: first_name.clone(),
+                                        variant_name: variant_name.clone(),
+                                        bindings,
+                                    };
+                                    (pat, first_name, variant_name)
+                                }
+                            }
                         };
+                    // Optional guard: `pattern if expr =>`
+                    let guard = if matches!(self.peek_tok(), Token::If) {
+                        self.advance(); // consume 'if'
+                        Some(Box::new(self.parse_expr()?))
+                    } else {
+                        None
+                    };
                     self.expect(&Token::FatArrow)?;
                     let body = self.parse_expr()?;
                     let arm_end = body.span();
@@ -1318,6 +1423,7 @@ impl<'t> Parser<'t> {
                     }
                     arms.push(AstWhenArm {
                         pattern,
+                        guard,
                         enum_name: enum_name_leg,
                         variant_name: variant_name_leg,
                         body: Box::new(body),
@@ -1376,12 +1482,25 @@ impl<'t> Parser<'t> {
                     };
                 } else {
                     let field = self.expect_ident()?;
-                    let end = field.span;
-                    expr = AstExpr::FieldAccess {
-                        base: Box::new(expr),
-                        field: field.name,
-                        span: start.merge(end),
-                    };
+                    // Method call: expr.method(args...)
+                    if matches!(self.peek_tok(), Token::LParen) {
+                        self.advance(); // consume '('
+                        let args = self.parse_call_args()?;
+                        let end = self.expect(&Token::RParen)?;
+                        expr = AstExpr::MethodCall {
+                            base: Box::new(expr),
+                            method: field.name,
+                            args,
+                            span: start.merge(end),
+                        };
+                    } else {
+                        let end = field.span;
+                        expr = AstExpr::FieldAccess {
+                            base: Box::new(expr),
+                            field: field.name,
+                            span: start.merge(end),
+                        };
+                    }
                 }
             } else if matches!(self.peek_tok(), Token::Question) {
                 let end = self.advance().span; // consume '?'
@@ -1416,18 +1535,30 @@ impl<'t> Parser<'t> {
         self.expect(&Token::For)?;
         let var = self.expect_ident()?;
         self.expect(&Token::In)?;
-        let range_start = self.parse_expr()?;
-        self.expect(&Token::DotDot)?;
-        let range_end = self.parse_expr()?;
-        let body = self.parse_block()?;
-        let span = start.merge(body.span);
-        Ok(AstStmt::ForRange {
-            var,
-            start: Box::new(range_start),
-            end: Box::new(range_end),
-            body,
-            span,
-        })
+        let iter_expr = self.parse_expr()?;
+        // If the next token is `..`, it's a range loop; otherwise it's a foreach loop.
+        if matches!(self.peek_tok(), Token::DotDot) {
+            self.expect(&Token::DotDot)?;
+            let range_end = self.parse_expr()?;
+            let body = self.parse_block()?;
+            let span = start.merge(body.span);
+            Ok(AstStmt::ForRange {
+                var,
+                start: Box::new(iter_expr),
+                end: Box::new(range_end),
+                body,
+                span,
+            })
+        } else {
+            let body = self.parse_block()?;
+            let span = start.merge(body.span);
+            Ok(AstStmt::ForEach {
+                var,
+                iter: Box::new(iter_expr),
+                body,
+                span,
+            })
+        }
     }
 
     fn parse_loop_stmt(&mut self) -> Result<AstStmt, ParseError> {

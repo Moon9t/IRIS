@@ -6,6 +6,12 @@ pub enum DType {
     I32,
     I64,
     Bool,
+    // Extended integer types (Phase 63)
+    U8,
+    I8,
+    U32,
+    U64,
+    USize,
 }
 
 impl std::fmt::Display for DType {
@@ -16,6 +22,11 @@ impl std::fmt::Display for DType {
             DType::I32 => f.write_str("i32"),
             DType::I64 => f.write_str("i64"),
             DType::Bool => f.write_str("bool"),
+            DType::U8 => f.write_str("u8"),
+            DType::I8 => f.write_str("i8"),
+            DType::U32 => f.write_str("u32"),
+            DType::U64 => f.write_str("u64"),
+            DType::USize => f.write_str("usize"),
         }
     }
 }

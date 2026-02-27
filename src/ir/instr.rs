@@ -263,10 +263,12 @@ pub enum IrInstr {
     },
 
     // ---- Enum operations ----
-    /// Construct an enum variant (tag integer).
+    /// Construct an enum variant (tag integer, optional payload fields).
     MakeVariant {
         result: ValueId,
         variant_idx: usize,
+        /// Payload field values (empty for unit variants).
+        fields: Vec<ValueId>,
         result_ty: IrType,
     },
     /// Dispatch to a block based on enum variant tag (terminator).
@@ -276,6 +278,17 @@ pub enum IrInstr {
         arms: Vec<(usize, BlockId)>,
         /// Fallback block if tag matches none (may be None for exhaustive match).
         default_block: Option<BlockId>,
+    },
+    /// Extract a payload field from an enum variant value.
+    ExtractVariantField {
+        result: ValueId,
+        /// The enum value to extract from.
+        operand: ValueId,
+        /// Which variant index we expect (for documentation/verification).
+        variant_idx: usize,
+        /// Which field within that variant to extract (0-indexed).
+        field_idx: usize,
+        result_ty: IrType,
     },
 
     // ---- Tuple operations ----
@@ -500,6 +513,44 @@ pub enum IrInstr {
     MapRemove { map: ValueId, key: ValueId },
     /// Return the number of entries in the map. Returns i64.
     MapLen { result: ValueId, map: ValueId },
+
+    // ---- File I/O operations (Phase 56) ----
+    /// Read entire file as a string. Returns result<str, str>.
+    FileReadAll { result: ValueId, path: ValueId },
+    /// Write string to a file. Returns result<unit, str>.
+    FileWriteAll { result: ValueId, path: ValueId, content: ValueId },
+    /// Check if a file exists. Returns bool.
+    FileExists { result: ValueId, path: ValueId },
+    /// Read file as a list of lines. Returns list<str>.
+    FileLines { result: ValueId, path: ValueId },
+
+    // ---- Extended collection operations (Phase 58) ----
+    /// Check if a list contains a value. Returns bool.
+    ListContains { result: ValueId, list: ValueId, value: ValueId },
+    /// Sort a list in-place (side-effecting, no result).
+    ListSort { list: ValueId },
+    /// Get all keys of a map as list<str>.
+    MapKeys { result: ValueId, map: ValueId },
+    /// Get all values of a map as a list.
+    MapValues { result: ValueId, map: ValueId },
+    /// Concatenate two lists into a new list.
+    ListConcat { result: ValueId, lhs: ValueId, rhs: ValueId },
+    /// Slice a list from start to end (exclusive). Returns list.
+    ListSlice { result: ValueId, list: ValueId, start: ValueId, end: ValueId },
+
+    // ---- Process / environment operations (Phase 59) ----
+    /// Exit the process with the given i64 exit code (side-effecting, no result).
+    ProcessExit { code: ValueId },
+    /// Get command-line arguments as list<str>.
+    ProcessArgs { result: ValueId },
+    /// Get an environment variable by name. Returns option<str>.
+    EnvVar { result: ValueId, name: ValueId },
+
+    // ---- Pattern matching helpers (Phase 61) ----
+    /// Extract the tag (variant index as i64) from an enum value.
+    GetVariantTag { result: ValueId, operand: ValueId },
+    /// Compare two string values for equality. Returns bool.
+    StrEq { result: ValueId, lhs: ValueId, rhs: ValueId },
 }
 
 impl IrInstr {
@@ -524,6 +575,7 @@ impl IrInstr {
             IrInstr::GetField { result, .. } => Some(*result),
             IrInstr::MakeVariant { result, .. } => Some(*result),
             IrInstr::SwitchVariant { .. } => None,
+            IrInstr::ExtractVariantField { result, .. } => Some(*result),
             IrInstr::MakeTuple { result, .. } => Some(*result),
             IrInstr::GetElement { result, .. } => Some(*result),
             IrInstr::MakeClosure { result, .. } => Some(*result),
@@ -592,6 +644,25 @@ impl IrInstr {
             IrInstr::MapContains { result, .. } => Some(*result),
             IrInstr::MapRemove { .. } => None,
             IrInstr::MapLen { result, .. } => Some(*result),
+            // Phase 56: File I/O
+            IrInstr::FileReadAll { result, .. } => Some(*result),
+            IrInstr::FileWriteAll { result, .. } => Some(*result),
+            IrInstr::FileExists { result, .. } => Some(*result),
+            IrInstr::FileLines { result, .. } => Some(*result),
+            // Phase 58: Extended collections
+            IrInstr::ListContains { result, .. } => Some(*result),
+            IrInstr::ListSort { .. } => None,
+            IrInstr::MapKeys { result, .. } => Some(*result),
+            IrInstr::MapValues { result, .. } => Some(*result),
+            IrInstr::ListConcat { result, .. } => Some(*result),
+            IrInstr::ListSlice { result, .. } => Some(*result),
+            // Phase 59: Process / environment
+            IrInstr::ProcessExit { .. } => None,
+            IrInstr::ProcessArgs { result } => Some(*result),
+            IrInstr::EnvVar { result, .. } => Some(*result),
+            // Phase 61: Pattern matching helpers
+            IrInstr::GetVariantTag { result, .. } => Some(*result),
+            IrInstr::StrEq { result, .. } => Some(*result),
         }
     }
 
@@ -649,8 +720,9 @@ impl IrInstr {
             IrInstr::Call { args, .. } => args.clone(),
             IrInstr::MakeStruct { fields, .. } => fields.clone(),
             IrInstr::GetField { base, .. } => vec![*base],
-            IrInstr::MakeVariant { .. } => vec![],
+            IrInstr::MakeVariant { fields, .. } => fields.clone(),
             IrInstr::SwitchVariant { scrutinee, .. } => vec![*scrutinee],
+            IrInstr::ExtractVariantField { operand, .. } => vec![*operand],
             IrInstr::MakeTuple { elements, .. } => elements.clone(),
             IrInstr::GetElement { base, .. } => vec![*base],
             IrInstr::MakeClosure { captures, .. } => captures.clone(),
@@ -727,6 +799,25 @@ impl IrInstr {
             IrInstr::MapContains { map, key, .. } => vec![*map, *key],
             IrInstr::MapRemove { map, key } => vec![*map, *key],
             IrInstr::MapLen { map, .. } => vec![*map],
+            // Phase 56: File I/O
+            IrInstr::FileReadAll { path, .. } => vec![*path],
+            IrInstr::FileWriteAll { path, content, .. } => vec![*path, *content],
+            IrInstr::FileExists { path, .. } => vec![*path],
+            IrInstr::FileLines { path, .. } => vec![*path],
+            // Phase 58: Extended collections
+            IrInstr::ListContains { list, value, .. } => vec![*list, *value],
+            IrInstr::ListSort { list } => vec![*list],
+            IrInstr::MapKeys { map, .. } => vec![*map],
+            IrInstr::MapValues { map, .. } => vec![*map],
+            IrInstr::ListConcat { lhs, rhs, .. } => vec![*lhs, *rhs],
+            IrInstr::ListSlice { list, start, end, .. } => vec![*list, *start, *end],
+            // Phase 59: Process / environment
+            IrInstr::ProcessExit { code } => vec![*code],
+            IrInstr::ProcessArgs { .. } => vec![],
+            IrInstr::EnvVar { name, .. } => vec![*name],
+            // Phase 61: Pattern matching helpers
+            IrInstr::GetVariantTag { operand, .. } => vec![*operand],
+            IrInstr::StrEq { lhs, rhs, .. } => vec![*lhs, *rhs],
         }
     }
 }

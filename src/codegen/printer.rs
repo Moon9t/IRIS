@@ -265,12 +265,36 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
         IrInstr::MakeVariant {
             result,
             variant_idx,
+            fields,
+            result_ty,
+        } => {
+            if fields.is_empty() {
+                write!(
+                    out,
+                    "{} = make_variant {} : {}",
+                    result, variant_idx, result_ty
+                )?;
+            } else {
+                write!(out, "{} = make_variant {}(", result, variant_idx)?;
+                for (i, f) in fields.iter().enumerate() {
+                    if i > 0 { write!(out, ", ")?; }
+                    write!(out, "{}", f)?;
+                }
+                write!(out, ") : {}", result_ty)?;
+            }
+        }
+
+        IrInstr::ExtractVariantField {
+            result,
+            operand,
+            variant_idx,
+            field_idx,
             result_ty,
         } => {
             write!(
                 out,
-                "{} = make_variant {} : {}",
-                result, variant_idx, result_ty
+                "{} = extract_variant_field {}[{}.{}] : {}",
+                result, operand, variant_idx, field_idx, result_ty
             )?;
         }
 
@@ -587,6 +611,58 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
             } else {
                 write!(out, "call_closure {}({})", closure, arg_strs.join(", "))?;
             }
+        }
+
+        // Phase 56: File I/O
+        IrInstr::FileReadAll { result, path } => {
+            write!(out, "{} = file_read_all {}", result, path)?;
+        }
+        IrInstr::FileWriteAll { result, path, content } => {
+            write!(out, "{} = file_write_all {}, {}", result, path, content)?;
+        }
+        IrInstr::FileExists { result, path } => {
+            write!(out, "{} = file_exists {}", result, path)?;
+        }
+        IrInstr::FileLines { result, path } => {
+            write!(out, "{} = file_lines {}", result, path)?;
+        }
+
+        // Phase 58: Extended collections
+        IrInstr::ListContains { result, list, value } => {
+            write!(out, "{} = list_contains {}, {}", result, list, value)?;
+        }
+        IrInstr::ListSort { list } => {
+            write!(out, "list_sort {}", list)?;
+        }
+        IrInstr::MapKeys { result, map } => {
+            write!(out, "{} = map_keys {}", result, map)?;
+        }
+        IrInstr::MapValues { result, map } => {
+            write!(out, "{} = map_values {}", result, map)?;
+        }
+        IrInstr::ListConcat { result, lhs, rhs } => {
+            write!(out, "{} = list_concat {}, {}", result, lhs, rhs)?;
+        }
+        IrInstr::ListSlice { result, list, start, end } => {
+            write!(out, "{} = list_slice {}, {}, {}", result, list, start, end)?;
+        }
+
+        // Phase 59: Process / environment
+        IrInstr::ProcessExit { code } => {
+            write!(out, "process_exit {}", code)?;
+        }
+        IrInstr::ProcessArgs { result } => {
+            write!(out, "{} = process_args", result)?;
+        }
+        IrInstr::EnvVar { result, name } => {
+            write!(out, "{} = env_var {}", result, name)?;
+        }
+        // Phase 61: Pattern matching helpers
+        IrInstr::GetVariantTag { result, operand } => {
+            write!(out, "{} = get_variant_tag {}", result, operand)?;
+        }
+        IrInstr::StrEq { result, lhs, rhs } => {
+            write!(out, "{} = str_eq {}, {}", result, lhs, rhs)?;
         }
     }
     Ok(())

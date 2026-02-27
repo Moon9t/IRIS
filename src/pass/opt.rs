@@ -66,9 +66,12 @@ fn is_side_effecting(instr: &IrInstr) -> bool {
             | IrInstr::ListPush { .. }
             | IrInstr::ListSet { .. }
             | IrInstr::ListPop { .. }
+            | IrInstr::ListSort { .. }
             | IrInstr::MapSet { .. }
             | IrInstr::MapRemove { .. }
             | IrInstr::CallClosure { .. }
+            | IrInstr::FileWriteAll { .. }
+            | IrInstr::ProcessExit { .. }
     )
 }
 
@@ -323,9 +326,14 @@ fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
         IrInstr::GetField { base, .. } => {
             replace(base);
         }
-        IrInstr::MakeVariant { .. } => {}
+        IrInstr::MakeVariant { fields, .. } => {
+            for v in fields { replace(v); }
+        }
         IrInstr::SwitchVariant { scrutinee, .. } => {
             replace(scrutinee);
+        }
+        IrInstr::ExtractVariantField { operand, .. } => {
+            replace(operand);
         }
         IrInstr::MakeTuple { elements, .. } => {
             for v in elements {
@@ -426,6 +434,25 @@ fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
         IrInstr::MapContains { map, key, .. } => { replace(map); replace(key); }
         IrInstr::MapRemove { map, key } => { replace(map); replace(key); }
         IrInstr::MapLen { map, .. } => { replace(map); }
+        // Phase 56: File I/O
+        IrInstr::FileReadAll { path, .. } => { replace(path); }
+        IrInstr::FileWriteAll { path, content, .. } => { replace(path); replace(content); }
+        IrInstr::FileExists { path, .. } => { replace(path); }
+        IrInstr::FileLines { path, .. } => { replace(path); }
+        // Phase 58: Extended collections
+        IrInstr::ListContains { list, value, .. } => { replace(list); replace(value); }
+        IrInstr::ListSort { list } => { replace(list); }
+        IrInstr::MapKeys { map, .. } => { replace(map); }
+        IrInstr::MapValues { map, .. } => { replace(map); }
+        IrInstr::ListConcat { lhs, rhs, .. } => { replace(lhs); replace(rhs); }
+        IrInstr::ListSlice { list, start, end, .. } => { replace(list); replace(start); replace(end); }
+        // Phase 59: Process / environment
+        IrInstr::ProcessExit { code } => { replace(code); }
+        IrInstr::ProcessArgs { .. } => {}
+        IrInstr::EnvVar { name, .. } => { replace(name); }
+        // Phase 61: Pattern matching helpers
+        IrInstr::GetVariantTag { operand, .. } => { replace(operand); }
+        IrInstr::StrEq { lhs, rhs, .. } => { replace(lhs); replace(rhs); }
     }
 }
 

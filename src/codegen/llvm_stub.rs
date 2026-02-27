@@ -581,7 +581,21 @@ fn emit_llvm_instr(
             variant_idx,
             ..
         } => {
+            // Emit tag as i64; payload fields are stored via runtime calls (stub).
             writeln!(out, "  %v{} = add i64 0, {}", result.0, variant_idx)?;
+        }
+
+        IrInstr::ExtractVariantField {
+            result,
+            operand,
+            field_idx,
+            ..
+        } => {
+            writeln!(
+                out,
+                "  %v{} = call i64 @iris_extract_variant_field({}, i64 {})",
+                result.0, val(*operand), field_idx
+            )?;
         }
 
         IrInstr::SwitchVariant {
@@ -924,6 +938,59 @@ fn emit_llvm_instr(
                 writeln!(out, "  call void @iris_call_closure_void(ptr {}, {})", val(*closure), args_str.join(", "))?;
             }
         }
+
+        // Phase 56: File I/O
+        IrInstr::FileReadAll { result, path } => {
+            writeln!(out, "  %v{} = call ptr @iris_file_read_all(ptr {})", result.0, val(*path))?;
+        }
+        IrInstr::FileWriteAll { result, path, content } => {
+            writeln!(out, "  %v{} = call ptr @iris_file_write_all(ptr {}, ptr {})", result.0, val(*path), val(*content))?;
+        }
+        IrInstr::FileExists { result, path } => {
+            writeln!(out, "  %v{} = call i1 @iris_file_exists(ptr {})", result.0, val(*path))?;
+        }
+        IrInstr::FileLines { result, path } => {
+            writeln!(out, "  %v{} = call ptr @iris_file_lines(ptr {})", result.0, val(*path))?;
+        }
+
+        // Phase 58: Extended collections
+        IrInstr::ListContains { result, list, value } => {
+            writeln!(out, "  %v{} = call i1 @iris_list_contains(ptr {}, ptr {})", result.0, val(*list), val(*value))?;
+        }
+        IrInstr::ListSort { list } => {
+            writeln!(out, "  call void @iris_list_sort(ptr {})", val(*list))?;
+        }
+        IrInstr::MapKeys { result, map } => {
+            writeln!(out, "  %v{} = call ptr @iris_map_keys(ptr {})", result.0, val(*map))?;
+        }
+        IrInstr::MapValues { result, map } => {
+            writeln!(out, "  %v{} = call ptr @iris_map_values(ptr {})", result.0, val(*map))?;
+        }
+        IrInstr::ListConcat { result, lhs, rhs } => {
+            writeln!(out, "  %v{} = call ptr @iris_list_concat(ptr {}, ptr {})", result.0, val(*lhs), val(*rhs))?;
+        }
+        IrInstr::ListSlice { result, list, start, end } => {
+            writeln!(out, "  %v{} = call ptr @iris_list_slice(ptr {}, i64 {}, i64 {})", result.0, val(*list), val(*start), val(*end))?;
+        }
+
+        // Phase 59: Process / environment
+        IrInstr::ProcessExit { code } => {
+            writeln!(out, "  call void @exit(i32 {})", val(*code))?;
+            writeln!(out, "  unreachable")?;
+        }
+        IrInstr::ProcessArgs { result } => {
+            writeln!(out, "  %v{} = call ptr @iris_process_args()", result.0)?;
+        }
+        IrInstr::EnvVar { result, name } => {
+            writeln!(out, "  %v{} = call ptr @iris_env_var(ptr {})", result.0, val(*name))?;
+        }
+        // Phase 61: Pattern matching helpers
+        IrInstr::GetVariantTag { result, operand } => {
+            writeln!(out, "  %v{} = call i64 @iris_get_variant_tag({})", result.0, val(*operand))?;
+        }
+        IrInstr::StrEq { result, lhs, rhs } => {
+            writeln!(out, "  %v{} = call i1 @iris_str_eq(ptr {}, ptr {})", result.0, val(*lhs), val(*rhs))?;
+        }
     }
     Ok(())
 }
@@ -972,6 +1039,11 @@ fn llvm_type_name(ty: &IrType) -> Result<String, CodegenError> {
         IrType::Scalar(DType::I32) => Ok("i32".to_owned()),
         IrType::Scalar(DType::I64) => Ok("i64".to_owned()),
         IrType::Scalar(DType::Bool) => Ok("i1".to_owned()),
+        IrType::Scalar(DType::U8) => Ok("i8".to_owned()),
+        IrType::Scalar(DType::I8) => Ok("i8".to_owned()),
+        IrType::Scalar(DType::U32) => Ok("i32".to_owned()),
+        IrType::Scalar(DType::U64) => Ok("i64".to_owned()),
+        IrType::Scalar(DType::USize) => Ok("i64".to_owned()),
         IrType::Tensor { .. } => Ok("ptr".to_owned()),
         IrType::Struct { .. } => Ok("ptr".to_owned()),
         IrType::Enum { .. } => Ok("i64".to_owned()),

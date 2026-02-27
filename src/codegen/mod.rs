@@ -1,3 +1,4 @@
+pub mod build;
 pub mod cuda;
 pub mod graph_printer;
 pub mod jit;
@@ -9,6 +10,7 @@ pub mod pgo;
 pub mod printer;
 pub mod simd;
 
+pub use build::{build_binary, emit_binary_ir, runtime_c_source, runtime_h_source};
 pub use cuda::emit_cuda;
 pub use graph_printer::emit_graph_text;
 pub use jit::emit_jit;

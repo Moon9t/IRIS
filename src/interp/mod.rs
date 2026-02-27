@@ -26,8 +26,8 @@ pub enum IrValue {
     Tensor(Vec<f32>, Vec<usize>),
     /// Struct value: ordered field values matching the struct definition.
     Struct(Vec<IrValue>),
-    /// Enum variant value: tag index (0-indexed).
-    Enum(usize),
+    /// Enum variant value: tag index (0-indexed) and payload field values.
+    Enum(usize, Vec<IrValue>),
     /// Tuple value: ordered element values.
     Tuple(Vec<IrValue>),
     /// A UTF-8 string value.
@@ -90,7 +90,17 @@ impl fmt::Display for IrValue {
                 }
                 write!(f, "}}")
             }
-            IrValue::Enum(tag) => write!(f, "variant({})", tag),
+            IrValue::Enum(tag, data) => {
+                if data.is_empty() {
+                    write!(f, "variant({})", tag)
+                } else {
+                    write!(f, "variant({}", tag)?;
+                    for v in data {
+                        write!(f, ", {}", v)?;
+                    }
+                    write!(f, ")")
+                }
+            }
             IrValue::Tuple(elems) => {
                 write!(f, "(")?;
                 for (i, v) in elems.iter().enumerate() {
@@ -136,7 +146,7 @@ impl PartialEq for IrValue {
             (IrValue::Bool(a), IrValue::Bool(b)) => a == b,
             (IrValue::Tensor(da, sa), IrValue::Tensor(db, sb)) => da == db && sa == sb,
             (IrValue::Struct(a), IrValue::Struct(b)) => a == b,
-            (IrValue::Enum(a), IrValue::Enum(b)) => a == b,
+            (IrValue::Enum(a, da), IrValue::Enum(b, db)) => a == b && da == db,
             (IrValue::Tuple(a), IrValue::Tuple(b)) => a == b,
             (IrValue::Str(a), IrValue::Str(b)) => a == b,
             (IrValue::Array(a), IrValue::Array(b)) => a == b,
@@ -236,21 +246,21 @@ impl<'m> Interpreter<'m> {
         let mut steps = 0usize;
 
         'blocks: loop {
-            steps += 1;
-            if steps > self.opts.max_steps {
-                return Err(InterpError::Unsupported {
-                    detail: format!(
-                        "exceeded step limit of {} (infinite loop?); use --max-steps to increase",
-                        self.opts.max_steps
-                    ),
-                });
-            }
-
             let block = func
                 .block(current)
                 .ok_or(InterpError::UndefinedValue { id: current.0 })?;
 
             for instr in &block.instrs {
+                steps += 1;
+                if steps > self.opts.max_steps {
+                    return Err(InterpError::Unsupported {
+                        detail: format!(
+                            "exceeded step limit of {} (infinite loop?); use --max-steps to increase",
+                            self.opts.max_steps
+                        ),
+                    });
+                }
+
                 match instr {
                     IrInstr::ConstFloat { result, value, ty } => {
                         let v = match ty {
@@ -269,6 +279,12 @@ impl<'m> Interpreter<'m> {
                         let v = match ty {
                             IrType::Scalar(DType::I32) => IrValue::I32(*value as i32),
                             IrType::Scalar(DType::I64) => IrValue::I64(*value),
+                            // Extended integer types: stored as I64 for interpreter purposes.
+                            IrType::Scalar(DType::U8)   => IrValue::I64((*value as u8) as i64),
+                            IrType::Scalar(DType::I8)   => IrValue::I64((*value as i8) as i64),
+                            IrType::Scalar(DType::U32)  => IrValue::I64((*value as u32) as i64),
+                            IrType::Scalar(DType::U64)  => IrValue::I64(*value),
+                            IrType::Scalar(DType::USize)=> IrValue::I64(*value),
                             _ => {
                                 return Err(InterpError::TypeError {
                                     detail: format!("ConstInt with type {}", ty),
@@ -505,9 +521,14 @@ impl<'m> Interpreter<'m> {
                     IrInstr::MakeVariant {
                         result,
                         variant_idx,
+                        fields,
                         ..
                     } => {
-                        self.values.insert(*result, IrValue::Enum(*variant_idx));
+                        let field_vals: Vec<IrValue> = fields
+                            .iter()
+                            .map(|&v| self.get(v))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        self.values.insert(*result, IrValue::Enum(*variant_idx, field_vals));
                     }
 
                     IrInstr::SwitchVariant {
@@ -516,7 +537,7 @@ impl<'m> Interpreter<'m> {
                         default_block,
                     } => {
                         let tag = match self.get(*scrutinee)? {
-                            IrValue::Enum(t) => t,
+                            IrValue::Enum(t, _) => t,
                             other => {
                                 return Err(InterpError::TypeError {
                                     detail: format!(
@@ -537,6 +558,36 @@ impl<'m> Interpreter<'m> {
                         self.bind_block_params(func, target, &[])?;
                         current = target;
                         continue 'blocks;
+                    }
+
+                    IrInstr::ExtractVariantField {
+                        result,
+                        operand,
+                        field_idx,
+                        ..
+                    } => {
+                        let ev = self.get(*operand)?;
+                        match ev {
+                            IrValue::Enum(_, data) => {
+                                let val = data.get(*field_idx).cloned().ok_or_else(|| {
+                                    InterpError::TypeError {
+                                        detail: format!(
+                                            "ExtractVariantField: field {} out of bounds (variant has {} fields)",
+                                            field_idx, data.len()
+                                        ),
+                                    }
+                                })?;
+                                self.values.insert(*result, val);
+                            }
+                            other => {
+                                return Err(InterpError::TypeError {
+                                    detail: format!(
+                                        "ExtractVariantField on non-Enum value: {:?}",
+                                        other
+                                    ),
+                                });
+                            }
+                        }
                     }
 
                     IrInstr::MakeTuple {
@@ -689,7 +740,11 @@ impl<'m> Interpreter<'m> {
 
                     IrInstr::Print { operand } => {
                         let v = self.get(*operand)?;
-                        println!("{}", v);
+                        match &v {
+                            // Print strings without surrounding quotes.
+                            IrValue::Str(s) => println!("{}", s),
+                            other => println!("{}", other),
+                        }
                     }
 
                     IrInstr::StrContains { result, haystack, needle } => {
@@ -1401,6 +1456,160 @@ impl<'m> Interpreter<'m> {
                         };
                         self.values.insert(*result, IrValue::I64(len));
                     }
+
+                    // ── Phase 56: File I/O ────────────────────────────────
+                    IrInstr::FileReadAll { result, path } => {
+                        let p = self.get(*path)?;
+                        let path_str = if let IrValue::Str(s) = p { s } else { String::new() };
+                        match std::fs::read_to_string(&path_str) {
+                            Ok(s) => {
+                                self.values.insert(*result, IrValue::ResultVal(Ok(Box::new(IrValue::Str(s)))));
+                            }
+                            Err(e) => {
+                                self.values.insert(*result, IrValue::ResultVal(Err(Box::new(IrValue::Str(e.to_string())))));
+                            }
+                        }
+                    }
+                    IrInstr::FileWriteAll { result, path, content } => {
+                        let p = self.get(*path)?;
+                        let c = self.get(*content)?;
+                        let path_str = if let IrValue::Str(s) = p { s } else { String::new() };
+                        let content_str = if let IrValue::Str(s) = c { s } else { String::new() };
+                        match std::fs::write(&path_str, &content_str) {
+                            Ok(()) => {
+                                self.values.insert(*result, IrValue::ResultVal(Ok(Box::new(IrValue::Unit))));
+                            }
+                            Err(e) => {
+                                self.values.insert(*result, IrValue::ResultVal(Err(Box::new(IrValue::Str(e.to_string())))));
+                            }
+                        }
+                    }
+                    IrInstr::FileExists { result, path } => {
+                        let p = self.get(*path)?;
+                        let path_str = if let IrValue::Str(s) = p { s } else { String::new() };
+                        let exists = std::path::Path::new(&path_str).exists();
+                        self.values.insert(*result, IrValue::Bool(exists));
+                    }
+                    IrInstr::FileLines { result, path } => {
+                        let p = self.get(*path)?;
+                        let path_str = if let IrValue::Str(s) = p { s } else { String::new() };
+                        let lines: Vec<IrValue> = match std::fs::read_to_string(&path_str) {
+                            Ok(s) => s.lines().map(|l| IrValue::Str(l.to_string())).collect(),
+                            Err(_) => vec![],
+                        };
+                        self.values.insert(*result, IrValue::List(std::rc::Rc::new(std::cell::RefCell::new(lines))));
+                    }
+
+                    // ── Phase 58: Extended collections ─────────────────────
+                    IrInstr::ListContains { result, list, value } => {
+                        let v = self.get(*value)?;
+                        let lst = self.get(*list)?;
+                        if let IrValue::List(rc) = lst {
+                            let found = rc.borrow().iter().any(|item| item == &v);
+                            self.values.insert(*result, IrValue::Bool(found));
+                        } else {
+                            self.values.insert(*result, IrValue::Bool(false));
+                        }
+                    }
+                    IrInstr::ListSort { list } => {
+                        let lst = self.get(*list)?;
+                        if let IrValue::List(rc) = lst {
+                            rc.borrow_mut().sort_by(|a, b| {
+                                match (a, b) {
+                                    (IrValue::I64(x), IrValue::I64(y)) => x.cmp(y),
+                                    (IrValue::F64(x), IrValue::F64(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+                                    (IrValue::F32(x), IrValue::F32(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+                                    (IrValue::Str(x), IrValue::Str(y)) => x.cmp(y),
+                                    _ => std::cmp::Ordering::Equal,
+                                }
+                            });
+                        }
+                    }
+                    IrInstr::MapKeys { result, map } => {
+                        let m = self.get(*map)?;
+                        if let IrValue::Map(rc) = m {
+                            let keys: Vec<IrValue> = rc.borrow().keys().map(|k| IrValue::Str(k.clone())).collect();
+                            self.values.insert(*result, IrValue::List(std::rc::Rc::new(std::cell::RefCell::new(keys))));
+                        } else {
+                            self.values.insert(*result, IrValue::List(std::rc::Rc::new(std::cell::RefCell::new(vec![]))));
+                        }
+                    }
+                    IrInstr::MapValues { result, map } => {
+                        let m = self.get(*map)?;
+                        if let IrValue::Map(rc) = m {
+                            let vals: Vec<IrValue> = rc.borrow().values().cloned().collect();
+                            self.values.insert(*result, IrValue::List(std::rc::Rc::new(std::cell::RefCell::new(vals))));
+                        } else {
+                            self.values.insert(*result, IrValue::List(std::rc::Rc::new(std::cell::RefCell::new(vec![]))));
+                        }
+                    }
+                    IrInstr::ListConcat { result, lhs, rhs } => {
+                        let l = self.get(*lhs)?;
+                        let r = self.get(*rhs)?;
+                        let mut combined = vec![];
+                        if let IrValue::List(rc) = l { combined.extend(rc.borrow().iter().cloned()); }
+                        if let IrValue::List(rc) = r { combined.extend(rc.borrow().iter().cloned()); }
+                        self.values.insert(*result, IrValue::List(std::rc::Rc::new(std::cell::RefCell::new(combined))));
+                    }
+                    IrInstr::ListSlice { result, list, start, end } => {
+                        let lst = self.get(*list)?;
+                        let s = self.get(*start)?;
+                        let e = self.get(*end)?;
+                        let si = if let IrValue::I64(n) = s { n as usize } else { 0 };
+                        let ei = if let IrValue::I64(n) = e { n as usize } else { 0 };
+                        if let IrValue::List(rc) = lst {
+                            let sliced: Vec<IrValue> = rc.borrow().get(si..ei).unwrap_or(&[]).to_vec();
+                            self.values.insert(*result, IrValue::List(std::rc::Rc::new(std::cell::RefCell::new(sliced))));
+                        } else {
+                            self.values.insert(*result, IrValue::List(std::rc::Rc::new(std::cell::RefCell::new(vec![]))));
+                        }
+                    }
+
+                    // ── Phase 59: Process / environment ───────────────────
+                    IrInstr::ProcessExit { code } => {
+                        let c = self.get(*code)?;
+                        let code_val = if let IrValue::I64(n) = c { n as i32 } else { 0 };
+                        std::process::exit(code_val);
+                    }
+                    IrInstr::ProcessArgs { result } => {
+                        let args: Vec<IrValue> = std::env::args().map(|a| IrValue::Str(a)).collect();
+                        self.values.insert(*result, IrValue::List(std::rc::Rc::new(std::cell::RefCell::new(args))));
+                    }
+                    IrInstr::EnvVar { result, name } => {
+                        let n = self.get(*name)?;
+                        let name_str = if let IrValue::Str(s) = n { s } else { String::new() };
+                        match std::env::var(&name_str) {
+                            Ok(v) => {
+                                self.values.insert(*result, IrValue::OptionVal(Some(Box::new(IrValue::Str(v)))));
+                            }
+                            Err(_) => {
+                                self.values.insert(*result, IrValue::OptionVal(None));
+                            }
+                        }
+                    }
+                    // Phase 61: Pattern matching helpers
+                    IrInstr::GetVariantTag { result, operand } => {
+                        let v = self.get(*operand)?;
+                        match v {
+                            IrValue::Enum(tag, _) => {
+                                self.values.insert(*result, IrValue::I64(tag as i64));
+                            }
+                            other => {
+                                return Err(InterpError::TypeError {
+                                    detail: format!("GetVariantTag on non-Enum value: {:?}", other),
+                                });
+                            }
+                        }
+                    }
+                    IrInstr::StrEq { result, lhs, rhs } => {
+                        let lv = self.get(*lhs)?;
+                        let rv = self.get(*rhs)?;
+                        let eq = match (lv, rv) {
+                            (IrValue::Str(a), IrValue::Str(b)) => a == b,
+                            _ => false,
+                        };
+                        self.values.insert(*result, IrValue::Bool(eq));
+                    }
                 }
             }
 
@@ -1598,6 +1807,42 @@ fn eval_cast(v: &IrValue, to_ty: &IrType) -> Result<IrValue, InterpError> {
                 detail: "cannot cast to i64".into(),
             }),
         },
+        // Extended integer types: all stored as I64 in the interpreter.
+        IrType::Scalar(DType::U8) => match v {
+            IrValue::I64(n) => Ok(IrValue::I64((*n as u8) as i64)),
+            IrValue::I32(n) => Ok(IrValue::I64((*n as u8) as i64)),
+            IrValue::F32(x) => Ok(IrValue::I64((*x as u8) as i64)),
+            IrValue::F64(x) => Ok(IrValue::I64((*x as u8) as i64)),
+            _ => Err(InterpError::TypeError { detail: "cannot cast to u8".into() }),
+        },
+        IrType::Scalar(DType::I8) => match v {
+            IrValue::I64(n) => Ok(IrValue::I64((*n as i8) as i64)),
+            IrValue::I32(n) => Ok(IrValue::I64((*n as i8) as i64)),
+            IrValue::F32(x) => Ok(IrValue::I64((*x as i8) as i64)),
+            IrValue::F64(x) => Ok(IrValue::I64((*x as i8) as i64)),
+            _ => Err(InterpError::TypeError { detail: "cannot cast to i8".into() }),
+        },
+        IrType::Scalar(DType::U32) => match v {
+            IrValue::I64(n) => Ok(IrValue::I64((*n as u32) as i64)),
+            IrValue::I32(n) => Ok(IrValue::I64((*n as u32) as i64)),
+            IrValue::F32(x) => Ok(IrValue::I64((*x as u32) as i64)),
+            IrValue::F64(x) => Ok(IrValue::I64((*x as u32) as i64)),
+            _ => Err(InterpError::TypeError { detail: "cannot cast to u32".into() }),
+        },
+        IrType::Scalar(DType::U64) => match v {
+            IrValue::I64(n) => Ok(IrValue::I64(*n)),
+            IrValue::I32(n) => Ok(IrValue::I64(*n as i64)),
+            IrValue::F32(x) => Ok(IrValue::I64(*x as i64)),
+            IrValue::F64(x) => Ok(IrValue::I64(*x as i64)),
+            _ => Err(InterpError::TypeError { detail: "cannot cast to u64".into() }),
+        },
+        IrType::Scalar(DType::USize) => match v {
+            IrValue::I64(n) => Ok(IrValue::I64(*n)),
+            IrValue::I32(n) => Ok(IrValue::I64(*n as i64)),
+            IrValue::F32(x) => Ok(IrValue::I64(*x as i64)),
+            IrValue::F64(x) => Ok(IrValue::I64(*x as i64)),
+            _ => Err(InterpError::TypeError { detail: "cannot cast to usize".into() }),
+        },
         _ => Err(InterpError::Unsupported {
             detail: format!("cast to {}", to_ty),
         }),
@@ -1724,6 +1969,10 @@ fn eval_binop(op: BinOp, lv: &IrValue, rv: &IrValue) -> Result<IrValue, InterpEr
         (BinOp::Pow, I32(a), I32(b)) => Ok(I32((*a as f64).powf(*b as f64) as i32)),
         (BinOp::Min, I32(a), I32(b)) => Ok(I32(*a.min(b))),
         (BinOp::Max, I32(a), I32(b)) => Ok(I32(*a.max(b))),
+        // Bitwise/logical AND on booleans
+        (BinOp::BitAnd, IrValue::Bool(a), IrValue::Bool(b)) => Ok(IrValue::Bool(a & b)),
+        (BinOp::BitOr,  IrValue::Bool(a), IrValue::Bool(b)) => Ok(IrValue::Bool(a | b)),
+        (BinOp::BitXor, IrValue::Bool(a), IrValue::Bool(b)) => Ok(IrValue::Bool(a ^ b)),
         // Bitwise ops — I64
         (BinOp::BitAnd, I64(a), I64(b)) => Ok(I64(a & b)),
         (BinOp::BitOr,  I64(a), I64(b)) => Ok(I64(a | b)),

@@ -149,6 +149,9 @@ pub enum Token {
     /// `?` try / error-propagation operator
     Question,
 
+    /// `@` attribute sigil (e.g. `@differentiable`)
+    At,
+
     Eof,
 }
 
@@ -228,6 +231,7 @@ impl std::fmt::Display for Token {
             Token::PipePipe => write!(f, "||"),
             Token::Pipe => write!(f, "|"),
             Token::Question => write!(f, "?"),
+            Token::At => write!(f, "@"),
             Token::Eof => write!(f, "<eof>"),
         }
     }
@@ -395,6 +399,7 @@ impl<'src> Lexer<'src> {
             b'.' => Some(Token::Dot),
             b'|' => Some(Token::Pipe),
             b'?' => Some(Token::Question),
+            b'@' => Some(Token::At),
             _ => None,
         };
         if let Some(tok) = maybe_punct {

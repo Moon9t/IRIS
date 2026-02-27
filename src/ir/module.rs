@@ -20,8 +20,9 @@ pub struct IrModule {
     pub(crate) function_index: HashMap<String, FunctionId>,
     /// Struct type definitions: name → ordered list of (field_name, field_type).
     pub(crate) struct_defs: HashMap<String, Vec<(String, IrType)>>,
-    /// Enum type definitions: name → ordered list of variant names.
-    pub(crate) enum_defs: HashMap<String, Vec<String>>,
+    /// Enum type definitions: name → (variant_names, variant_field_types).
+    /// `variant_field_types[i]` is the list of payload types for variant `i`.
+    pub(crate) enum_defs: HashMap<String, (Vec<String>, Vec<Vec<IrType>>)>,
     /// Type alias definitions: alias name → concrete IrType.
     pub(crate) type_aliases: HashMap<String, IrType>,
 }
@@ -62,18 +63,24 @@ impl IrModule {
         &mut self,
         name: impl Into<String>,
         variants: Vec<String>,
+        variant_fields: Vec<Vec<IrType>>,
     ) -> Result<(), String> {
         let name = name.into();
         if self.enum_defs.contains_key(&name) {
             return Err(format!("enum '{}' already defined", name));
         }
-        self.enum_defs.insert(name, variants);
+        self.enum_defs.insert(name, (variants, variant_fields));
         Ok(())
     }
 
-    /// Looks up an enum definition by name (returns variant list).
+    /// Looks up an enum definition by name (returns variant names).
     pub fn enum_def(&self, name: &str) -> Option<&Vec<String>> {
-        self.enum_defs.get(name)
+        self.enum_defs.get(name).map(|(variants, _)| variants)
+    }
+
+    /// Looks up the payload field types for each variant of an enum.
+    pub fn enum_variant_fields(&self, name: &str) -> Option<&Vec<Vec<IrType>>> {
+        self.enum_defs.get(name).map(|(_, fields)| fields)
     }
 
     /// Registers a type alias. Returns `Err` if the name already exists.
@@ -174,6 +181,11 @@ impl IrFunctionBuilder {
             .insert(value_id, ValueDef::BlockParam { block });
         self.func.value_types.insert(value_id, ty);
         value_id
+    }
+
+    /// Returns the current insertion block.
+    pub fn current_block(&self) -> BlockId {
+        self.current_block.expect("IrFunctionBuilder: no current block set")
     }
 
     /// Sets the current insertion block.

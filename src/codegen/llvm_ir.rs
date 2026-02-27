@@ -265,6 +265,57 @@ fn emit_function_body(
 }
 
 // ---------------------------------------------------------------------------
+// Boxing helper
+// ---------------------------------------------------------------------------
+
+/// If `value_ty` is a scalar type, emit a boxing call and return the resulting
+/// `%boxN` ptr name. Otherwise, the value is already a ptr — return it unchanged.
+fn box_to_ptr(
+    out: &mut String,
+    value_str: &str,
+    value_ty: Option<&IrType>,
+    counter: &mut u32,
+) -> Result<String, CodegenError> {
+    let idx = *counter;
+    match value_ty {
+        Some(IrType::Scalar(DType::I64)) => {
+            *counter += 1;
+            let boxed = format!("%box{}", idx);
+            writeln!(out, "  {} = call ptr @iris_box_i64(i64 {})", boxed, value_str)?;
+            Ok(boxed)
+        }
+        Some(IrType::Scalar(DType::I32)) => {
+            *counter += 1;
+            let boxed = format!("%box{}", idx);
+            writeln!(out, "  {} = call ptr @iris_box_i32(i32 {})", boxed, value_str)?;
+            Ok(boxed)
+        }
+        Some(IrType::Scalar(DType::F64)) => {
+            *counter += 1;
+            let boxed = format!("%box{}", idx);
+            writeln!(out, "  {} = call ptr @iris_box_f64(double {})", boxed, value_str)?;
+            Ok(boxed)
+        }
+        Some(IrType::Scalar(DType::F32)) => {
+            *counter += 1;
+            let boxed = format!("%box{}", idx);
+            writeln!(out, "  {} = call ptr @iris_box_f32(float {})", boxed, value_str)?;
+            Ok(boxed)
+        }
+        Some(IrType::Scalar(DType::Bool)) => {
+            *counter += 1;
+            let boxed = format!("%box{}", idx);
+            writeln!(out, "  {} = call ptr @iris_box_bool(i1 {})", boxed, value_str)?;
+            Ok(boxed)
+        }
+        _ => {
+            // Not a scalar — already a ptr. No boxing needed.
+            Ok(value_str.to_owned())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Instruction emission
 // ---------------------------------------------------------------------------
 
@@ -556,6 +607,14 @@ fn emit_instr_ir(
             writeln!(out, " ]")?;
         }
 
+        IrInstr::ExtractVariantField { result, operand, field_idx, .. } => {
+            writeln!(
+                out,
+                "  %v{} = call i64 @iris_extract_variant_field({}, i64 {})",
+                result.0, val(*operand), field_idx
+            )?;
+        }
+
         // ── Tuple ops ──────────────────────────────────────────────────────
         IrInstr::MakeTuple { result, elements, .. } => {
             let args_str: Vec<String> = elements.iter().map(|e| format!("ptr {}", val(*e))).collect();
@@ -729,7 +788,10 @@ fn emit_instr_ir(
             writeln!(out, "  %v{} = call ptr @iris_chan_new()", result.0)?;
         }
         IrInstr::ChanSend { chan, value } => {
-            writeln!(out, "  call void @iris_chan_send(ptr {}, ptr {})", val(*chan), val(*value))?;
+            let vv = val(*value);
+            let vty = func.value_type(*value);
+            let ptr_v = box_to_ptr(out, &vv, vty, gep_counter)?;
+            writeln!(out, "  call void @iris_chan_send(ptr {}, ptr {})", val(*chan), ptr_v)?;
         }
         IrInstr::ChanRecv { result, chan, .. } => {
             writeln!(out, "  %v{} = call ptr @iris_chan_recv(ptr {})", result.0, val(*chan))?;
@@ -739,8 +801,11 @@ fn emit_instr_ir(
         }
 
         // ── Atomics ───────────────────────────────────────────────────────
-        IrInstr::AtomicNew { result, .. } => {
-            writeln!(out, "  %v{} = call ptr @iris_atomic_new()", result.0)?;
+        IrInstr::AtomicNew { result, value, .. } => {
+            let vv = val(*value);
+            let vty = func.value_type(*value);
+            let ptr_v = box_to_ptr(out, &vv, vty, gep_counter)?;
+            writeln!(out, "  %v{} = call ptr @iris_atomic_new(ptr {})", result.0, ptr_v)?;
         }
         IrInstr::AtomicLoad { result, atomic, result_ty } => {
             if matches!(result_ty, IrType::Scalar(_)) {
@@ -791,7 +856,10 @@ fn emit_instr_ir(
 
         // ── Option / Result ────────────────────────────────────────────────
         IrInstr::MakeSome { result, value, .. } => {
-            writeln!(out, "  %v{} = call ptr @iris_make_some(ptr {})", result.0, val(*value))?;
+            let vv = val(*value);
+            let vty = func.value_type(*value);
+            let ptr_v = box_to_ptr(out, &vv, vty, gep_counter)?;
+            writeln!(out, "  %v{} = call ptr @iris_make_some(ptr {})", result.0, ptr_v)?;
         }
         IrInstr::MakeNone { result, .. } => {
             writeln!(out, "  %v{} = call ptr @iris_make_none()", result.0)?;
@@ -803,10 +871,16 @@ fn emit_instr_ir(
             writeln!(out, "  %v{} = call ptr @iris_option_unwrap(ptr {})", result.0, val(*operand))?;
         }
         IrInstr::MakeOk { result, value, .. } => {
-            writeln!(out, "  %v{} = call ptr @iris_make_ok(ptr {})", result.0, val(*value))?;
+            let vv = val(*value);
+            let vty = func.value_type(*value);
+            let ptr_v = box_to_ptr(out, &vv, vty, gep_counter)?;
+            writeln!(out, "  %v{} = call ptr @iris_make_ok(ptr {})", result.0, ptr_v)?;
         }
         IrInstr::MakeErr { result, value, .. } => {
-            writeln!(out, "  %v{} = call ptr @iris_make_err(ptr {})", result.0, val(*value))?;
+            let vv = val(*value);
+            let vty = func.value_type(*value);
+            let ptr_v = box_to_ptr(out, &vv, vty, gep_counter)?;
+            writeln!(out, "  %v{} = call ptr @iris_make_err(ptr {})", result.0, ptr_v)?;
         }
         IrInstr::IsOk { result, operand } => {
             writeln!(out, "  %v{} = call i1 @iris_is_ok(ptr {})", result.0, val(*operand))?;
@@ -876,7 +950,10 @@ fn emit_instr_ir(
             writeln!(out, "  %v{} = call ptr @iris_list_new()", result.0)?;
         }
         IrInstr::ListPush { list, value } => {
-            writeln!(out, "  call void @iris_list_push(ptr {}, ptr {})", val(*list), val(*value))?;
+            let vv = val(*value);
+            let vty = func.value_type(*value);
+            let ptr_v = box_to_ptr(out, &vv, vty, gep_counter)?;
+            writeln!(out, "  call void @iris_list_push(ptr {}, ptr {})", val(*list), ptr_v)?;
         }
         IrInstr::ListLen { result, list } => {
             writeln!(out, "  %v{} = call i64 @iris_list_len(ptr {})", result.0, val(*list))?;
@@ -885,7 +962,10 @@ fn emit_instr_ir(
             writeln!(out, "  %v{} = call ptr @iris_list_get(ptr {}, i64 {})", result.0, val(*list), val(*index))?;
         }
         IrInstr::ListSet { list, index, value } => {
-            writeln!(out, "  call void @iris_list_set(ptr {}, i64 {}, ptr {})", val(*list), val(*index), val(*value))?;
+            let vv = val(*value);
+            let vty = func.value_type(*value);
+            let ptr_v = box_to_ptr(out, &vv, vty, gep_counter)?;
+            writeln!(out, "  call void @iris_list_set(ptr {}, i64 {}, ptr {})", val(*list), val(*index), ptr_v)?;
         }
         IrInstr::ListPop { result, list, .. } => {
             writeln!(out, "  %v{} = call ptr @iris_list_pop(ptr {})", result.0, val(*list))?;
@@ -894,7 +974,10 @@ fn emit_instr_ir(
             writeln!(out, "  %v{} = call ptr @iris_map_new()", result.0)?;
         }
         IrInstr::MapSet { map, key, value } => {
-            writeln!(out, "  call void @iris_map_set(ptr {}, ptr {}, ptr {})", val(*map), val(*key), val(*value))?;
+            let vv = val(*value);
+            let vty = func.value_type(*value);
+            let ptr_v = box_to_ptr(out, &vv, vty, gep_counter)?;
+            writeln!(out, "  call void @iris_map_set(ptr {}, ptr {}, ptr {})", val(*map), val(*key), ptr_v)?;
         }
         IrInstr::MapGet { result, map, key, .. } => {
             writeln!(out, "  %v{} = call ptr @iris_map_get(ptr {}, ptr {})", result.0, val(*map), val(*key))?;
@@ -911,36 +994,51 @@ fn emit_instr_ir(
 
         // ── Closures ──────────────────────────────────────────────────────
         IrInstr::MakeClosure { result, fn_name, captures, .. } => {
-            let cap_args: Vec<String> = captures.iter().map(|c| format!("ptr {}", val(*c))).collect();
-            let fn_ptr = format!("ptr @{}", fn_name);
-            let mut args = vec![fn_ptr];
-            args.extend(cap_args);
+            let mut args = vec![format!("ptr @{}", fn_name)];
+            for c in captures {
+                let cv = val(*c);
+                let cty = func.value_type(*c);
+                let ptr_c = box_to_ptr(out, &cv, cty, gep_counter)?;
+                args.push(format!("ptr {}", ptr_c));
+            }
             writeln!(out, "  %v{} = call ptr @iris_make_closure({})", result.0, args.join(", "))?;
         }
         IrInstr::CallClosure { result, closure, args, .. } => {
-            let args_str: Vec<String> = args.iter().map(|a| format!("ptr {}", val(*a))).collect();
+            let mut args_parts: Vec<String> = Vec::new();
+            for a in args {
+                let av = val(*a);
+                let aty = func.value_type(*a);
+                let ptr_a = box_to_ptr(out, &av, aty, gep_counter)?;
+                args_parts.push(format!("ptr {}", ptr_a));
+            }
+            let args_str = args_parts.join(", ");
             if let Some(r) = result {
-                writeln!(out, "  %v{} = call ptr @iris_call_closure(ptr {}, {})", r.0, val(*closure), args_str.join(", "))?;
+                writeln!(out, "  %v{} = call ptr @iris_call_closure(ptr {}, {})", r.0, val(*closure), args_str)?;
             } else {
-                writeln!(out, "  call void @iris_call_closure_void(ptr {}, {})", val(*closure), args_str.join(", "))?;
+                writeln!(out, "  call void @iris_call_closure_void(ptr {}, {})", val(*closure), args_str)?;
             }
         }
 
         // ── Grad / Sparse ─────────────────────────────────────────────────
-        IrInstr::MakeGrad { result, .. } => {
-            writeln!(out, "  %v{} = call ptr @iris_make_grad()", result.0)?;
+        IrInstr::MakeGrad { result, value, tangent, .. } => {
+            // value and tangent are f64 dual-number components.
+            writeln!(
+                out,
+                "  %v{} = call ptr @iris_make_grad(double {}, double {})",
+                result.0, val(*value), val(*tangent)
+            )?;
         }
-        IrInstr::GradValue { result, .. } => {
-            writeln!(out, "  %v{} = call ptr @iris_grad_value()", result.0)?;
+        IrInstr::GradValue { result, operand, .. } => {
+            writeln!(out, "  %v{} = call double @iris_grad_value(ptr {})", result.0, val(*operand))?;
         }
-        IrInstr::GradTangent { result, .. } => {
-            writeln!(out, "  %v{} = call ptr @iris_grad_tangent()", result.0)?;
+        IrInstr::GradTangent { result, operand, .. } => {
+            writeln!(out, "  %v{} = call double @iris_grad_tangent(ptr {})", result.0, val(*operand))?;
         }
-        IrInstr::Sparsify { result, .. } => {
-            writeln!(out, "  %v{} = call ptr @iris_sparsify()", result.0)?;
+        IrInstr::Sparsify { result, operand, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_sparsify(ptr {})", result.0, val(*operand))?;
         }
-        IrInstr::Densify { result, .. } => {
-            writeln!(out, "  %v{} = call ptr @iris_densify()", result.0)?;
+        IrInstr::Densify { result, operand, .. } => {
+            writeln!(out, "  %v{} = call ptr @iris_densify(ptr {})", result.0, val(*operand))?;
         }
 
         // ── I/O ────────────────────────────────────────────────────────────
@@ -988,12 +1086,91 @@ fn emit_instr_ir(
             writeln!(out, "  %v{} = call ptr @iris_parse_f64(ptr {})", result.0, val(*operand))?;
         }
         IrInstr::ValueToStr { result, operand } => {
-            writeln!(out, "  %v{} = call ptr @iris_value_to_str(ptr {})", result.0, val(*operand))?;
+            let oty = func.value_type(*operand);
+            match oty {
+                Some(IrType::Scalar(DType::I64)) => {
+                    writeln!(out, "  %v{} = call ptr @iris_i64_to_str(i64 {})", result.0, val(*operand))?;
+                }
+                Some(IrType::Scalar(DType::I32)) => {
+                    writeln!(out, "  %v{} = call ptr @iris_i32_to_str(i32 {})", result.0, val(*operand))?;
+                }
+                Some(IrType::Scalar(DType::F64)) => {
+                    writeln!(out, "  %v{} = call ptr @iris_f64_to_str(double {})", result.0, val(*operand))?;
+                }
+                Some(IrType::Scalar(DType::F32)) => {
+                    writeln!(out, "  %v{} = call ptr @iris_f32_to_str(float {})", result.0, val(*operand))?;
+                }
+                Some(IrType::Scalar(DType::Bool)) => {
+                    writeln!(out, "  %v{} = call ptr @iris_bool_to_str(i1 {})", result.0, val(*operand))?;
+                }
+                Some(IrType::Str) => {
+                    writeln!(out, "  %v{} = call ptr @iris_str_to_str(ptr {})", result.0, val(*operand))?;
+                }
+                _ => {
+                    writeln!(out, "  %v{} = call ptr @iris_value_to_str(ptr {})", result.0, val(*operand))?;
+                }
+            }
         }
 
         // ── Barrier ───────────────────────────────────────────────────────
         IrInstr::Barrier => {
             writeln!(out, "  call void @iris_barrier()")?;
+        }
+
+        // ── Phase 56: File I/O ─────────────────────────────────────────────
+        IrInstr::FileReadAll { result, path } => {
+            writeln!(out, "  %v{} = call ptr @iris_file_read_all(ptr {})", result.0, val(*path))?;
+        }
+        IrInstr::FileWriteAll { result, path, content } => {
+            writeln!(out, "  %v{} = call ptr @iris_file_write_all(ptr {}, ptr {})", result.0, val(*path), val(*content))?;
+        }
+        IrInstr::FileExists { result, path } => {
+            writeln!(out, "  %v{} = call i1 @iris_file_exists(ptr {})", result.0, val(*path))?;
+        }
+        IrInstr::FileLines { result, path } => {
+            writeln!(out, "  %v{} = call ptr @iris_file_lines(ptr {})", result.0, val(*path))?;
+        }
+
+        // ── Phase 58: Extended collections ────────────────────────────────
+        IrInstr::ListContains { result, list, value } => {
+            let vv = val(*value);
+            let vty = func.value_type(*value);
+            let ptr_v = box_to_ptr(out, &vv, vty, gep_counter)?;
+            writeln!(out, "  %v{} = call i1 @iris_list_contains(ptr {}, ptr {})", result.0, val(*list), ptr_v)?;
+        }
+        IrInstr::ListSort { list } => {
+            writeln!(out, "  call void @iris_list_sort(ptr {})", val(*list))?;
+        }
+        IrInstr::MapKeys { result, map } => {
+            writeln!(out, "  %v{} = call ptr @iris_map_keys(ptr {})", result.0, val(*map))?;
+        }
+        IrInstr::MapValues { result, map } => {
+            writeln!(out, "  %v{} = call ptr @iris_map_values(ptr {})", result.0, val(*map))?;
+        }
+        IrInstr::ListConcat { result, lhs, rhs } => {
+            writeln!(out, "  %v{} = call ptr @iris_list_concat(ptr {}, ptr {})", result.0, val(*lhs), val(*rhs))?;
+        }
+        IrInstr::ListSlice { result, list, start, end } => {
+            writeln!(out, "  %v{} = call ptr @iris_list_slice(ptr {}, i64 {}, i64 {})", result.0, val(*list), val(*start), val(*end))?;
+        }
+
+        // ── Phase 59: Process / environment ──────────────────────────────
+        IrInstr::ProcessExit { code } => {
+            writeln!(out, "  call void @exit(i32 {})", val(*code))?;
+            writeln!(out, "  unreachable")?;
+        }
+        IrInstr::ProcessArgs { result } => {
+            writeln!(out, "  %v{} = call ptr @iris_process_args()", result.0)?;
+        }
+        IrInstr::EnvVar { result, name } => {
+            writeln!(out, "  %v{} = call ptr @iris_env_var(ptr {})", result.0, val(*name))?;
+        }
+        // Phase 61: Pattern matching helpers
+        IrInstr::GetVariantTag { result, operand } => {
+            writeln!(out, "  %v{} = call i64 @iris_get_variant_tag({})", result.0, val(*operand))?;
+        }
+        IrInstr::StrEq { result, lhs, rhs } => {
+            writeln!(out, "  %v{} = call i1 @iris_str_eq(ptr {}, ptr {})", result.0, val(*lhs), val(*rhs))?;
         }
     }
     Ok(())
@@ -1011,6 +1188,11 @@ pub fn llvm_type_complete(ty: &IrType) -> Result<String, CodegenError> {
         IrType::Scalar(DType::I32) => Ok("i32".to_owned()),
         IrType::Scalar(DType::I64) => Ok("i64".to_owned()),
         IrType::Scalar(DType::Bool) => Ok("i1".to_owned()),
+        IrType::Scalar(DType::U8) => Ok("i8".to_owned()),
+        IrType::Scalar(DType::I8) => Ok("i8".to_owned()),
+        IrType::Scalar(DType::U32) => Ok("i32".to_owned()),
+        IrType::Scalar(DType::U64) => Ok("i64".to_owned()),
+        IrType::Scalar(DType::USize) => Ok("i64".to_owned()),
         // Named struct → pointer to named struct type.
         IrType::Struct { .. } => Ok("ptr".to_owned()), // pass by pointer
         // Enum → integer tag.
@@ -1077,11 +1259,14 @@ fn is_side_effecting(instr: &IrInstr) -> bool {
             | IrInstr::ListPush { .. }
             | IrInstr::ListSet { .. }
             | IrInstr::ListPop { .. }
+            | IrInstr::ListSort { .. }
             | IrInstr::MapSet { .. }
             | IrInstr::MapRemove { .. }
             | IrInstr::Spawn { .. }
             | IrInstr::ParFor { .. }
             | IrInstr::Barrier
+            | IrInstr::FileWriteAll { .. }
+            | IrInstr::ProcessExit { .. }
     )
 }
 
@@ -1190,6 +1375,22 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare i1 @iris_map_contains(ptr, ptr)",
         "declare void @iris_map_remove(ptr, ptr)",
         "declare i64 @iris_map_len(ptr)",
+        // Extended collections (Phase 58)
+        "declare i1 @iris_list_contains(ptr, ptr)",
+        "declare void @iris_list_sort(ptr)",
+        "declare ptr @iris_map_keys(ptr)",
+        "declare ptr @iris_map_values(ptr)",
+        "declare ptr @iris_list_concat(ptr, ptr)",
+        "declare ptr @iris_list_slice(ptr, i64, i64)",
+        // File I/O (Phase 56)
+        "declare ptr @iris_file_read_all(ptr)",
+        "declare ptr @iris_file_write_all(ptr, ptr)",
+        "declare i1 @iris_file_exists(ptr)",
+        "declare ptr @iris_file_lines(ptr)",
+        // Process / environment (Phase 59)
+        "declare void @exit(i32)",
+        "declare ptr @iris_process_args()",
+        "declare ptr @iris_env_var(ptr)",
         // Arrays / Tensors
         "declare ptr @iris_alloc_array()",
         "declare ptr @iris_array_load(ptr, i64)",
@@ -1213,7 +1414,7 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_call_closure(ptr, ...)",
         "declare void @iris_call_closure_void(ptr, ...)",
         // Atomics / Mutex
-        "declare ptr @iris_atomic_new()",
+        "declare ptr @iris_atomic_new(ptr)",
         "declare ptr @iris_atomic_load(ptr)",
         "declare void @iris_atomic_store(ptr, ptr)",
         "declare ptr @iris_atomic_add(ptr, ptr)",
@@ -1221,11 +1422,24 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_mutex_lock(ptr)",
         "declare void @iris_mutex_unlock(ptr)",
         // Grad / Sparse
-        "declare ptr @iris_make_grad()",
-        "declare ptr @iris_grad_value()",
-        "declare ptr @iris_grad_tangent()",
-        "declare ptr @iris_sparsify()",
-        "declare ptr @iris_densify()",
+        "declare ptr @iris_make_grad(double, double)",
+        "declare double @iris_grad_value(ptr)",
+        "declare double @iris_grad_tangent(ptr)",
+        "declare ptr @iris_sparsify(ptr)",
+        "declare ptr @iris_densify(ptr)",
+        // Boxing helpers (scalar → IrisVal*)
+        "declare ptr @iris_box_i64(i64)",
+        "declare ptr @iris_box_i32(i32)",
+        "declare ptr @iris_box_f64(double)",
+        "declare ptr @iris_box_f32(float)",
+        "declare ptr @iris_box_bool(i1)",
+        // Typed to-string conversions
+        "declare ptr @iris_i64_to_str(i64)",
+        "declare ptr @iris_i32_to_str(i32)",
+        "declare ptr @iris_f64_to_str(double)",
+        "declare ptr @iris_f32_to_str(float)",
+        "declare ptr @iris_bool_to_str(i1)",
+        "declare ptr @iris_str_to_str(ptr)",
         // Math helpers
         "declare i64 @iris_pow_i64(i64, i64)",
         "declare i64 @iris_min_i64(i64, i64)",

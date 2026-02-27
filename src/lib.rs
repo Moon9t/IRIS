@@ -56,6 +56,9 @@ pub enum EmitKind {
     Eval,
     /// Binary ONNX protobuf (valid ModelProto bytes, base64-encoded for string return).
     OnnxBinary,
+    /// Native binary: emit LLVM IR text intended for clang compilation via `build_binary()`.
+    /// `compile()` returns the LLVM IR text; use `codegen::build_binary()` to produce an exe.
+    Binary,
 }
 
 /// Compiles multiple IRIS source strings together, supporting `bring module_name`
@@ -104,7 +107,7 @@ pub fn compile_multi(sources: &[(&str, &str)], main_module: &str, emit: EmitKind
         }
     }
 
-    compile_ast(&main_ast, main_module, emit, 1_000_000, 500)
+    compile_ast(&main_ast, main_module, emit, 1_000_000, 500, None)
 }
 
 /// Internal: compile a pre-built `AstModule` through the full pipeline.
@@ -114,12 +117,12 @@ fn compile_ast(
     emit: EmitKind,
     max_steps: usize,
     max_depth: usize,
+    dump_ir_after: Option<&str>,
 ) -> Result<String, Error> {
     use crate::codegen::cuda::emit_cuda;
     use crate::codegen::graph_printer::emit_graph_text;
     use crate::codegen::jit::emit_jit;
     use crate::codegen::llvm_ir::emit_llvm_ir;
-    use crate::codegen::llvm_stub::emit_llvm_stub;
     use crate::codegen::onnx::emit_onnx_text;
     use crate::codegen::onnx_binary::emit_onnx_binary;
     use crate::codegen::pgo::{emit_pgo_instrument, emit_pgo_optimize};
@@ -181,12 +184,14 @@ fn compile_ast(
     pm.add_pass(DcePass);
     pm.add_pass(CsePass);
     pm.add_pass(ShapeCheckPass);
+    if let Some(pass_name) = dump_ir_after {
+        pm.set_dump_after(pass_name);
+    }
     pm.run(&mut ir_module).map_err(|(_, e)| Error::Pass(e))?;
 
     match emit {
         EmitKind::Ir => Ok(emit_ir_text(&ir_module)?),
-        EmitKind::Llvm => Ok(emit_llvm_stub(&ir_module)?),
-        EmitKind::LlvmComplete => Ok(emit_llvm_ir(&ir_module)?),
+        EmitKind::Llvm | EmitKind::LlvmComplete | EmitKind::Binary => Ok(emit_llvm_ir(&ir_module)?),
         EmitKind::Cuda => Ok(emit_cuda(&ir_module)?),
         EmitKind::Simd => Ok(emit_simd(&ir_module)?),
         EmitKind::Jit => Ok(emit_jit(&ir_module)?),
@@ -207,6 +212,11 @@ fn compile_ast(
             let results = interp::eval_function_in_module_opts(&ir_module, func, &[], opts)?;
             let mut out = String::new();
             for val in &results {
+                // Skip unit/sentinel returns — programs that use print() for output
+                // shouldn't also emit a spurious "0" from a `main() -> i64` sentinel.
+                if matches!(val, interp::IrValue::Unit) {
+                    continue;
+                }
                 out.push_str(&format!("{}\n", val));
             }
             Ok(out)
@@ -224,7 +234,7 @@ pub fn compile(source: &str, module_name: &str, emit: EmitKind) -> Result<String
 
     let tokens = Lexer::new(source).tokenize()?;
     let ast_module = Parser::new(&tokens).parse_module()?;
-    compile_ast(&ast_module, module_name, emit, 1_000_000, 500)
+    compile_ast(&ast_module, module_name, emit, 1_000_000, 500, None)
 }
 
 /// Like [`compile`] but with configurable interpreter limits for `--emit eval`.
@@ -240,5 +250,22 @@ pub fn compile_with_opts(
 
     let tokens = Lexer::new(source).tokenize()?;
     let ast_module = Parser::new(&tokens).parse_module()?;
-    compile_ast(&ast_module, module_name, emit, max_steps, max_depth)
+    compile_ast(&ast_module, module_name, emit, max_steps, max_depth, None)
+}
+
+/// Like [`compile_with_opts`] but also supports `--dump-ir-after`.
+pub fn compile_with_full_opts(
+    source: &str,
+    module_name: &str,
+    emit: EmitKind,
+    max_steps: usize,
+    max_depth: usize,
+    dump_ir_after: Option<&str>,
+) -> Result<String, Error> {
+    use crate::parser::lexer::Lexer;
+    use crate::parser::parse::Parser;
+
+    let tokens = Lexer::new(source).tokenize()?;
+    let ast_module = Parser::new(&tokens).parse_module()?;
+    compile_ast(&ast_module, module_name, emit, max_steps, max_depth, dump_ir_after)
 }

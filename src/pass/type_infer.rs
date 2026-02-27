@@ -58,6 +58,7 @@ impl Pass for TypeInferPass {
                                                     | DType::F64
                                                     | DType::I32
                                                     | DType::I64
+                                                    | DType::I8
                                             )
                                         ) {
                                             return Err(PassError::TypeError {
@@ -100,6 +101,11 @@ impl Pass for TypeInferPass {
                                                     | DType::F64
                                                     | DType::I32
                                                     | DType::I64
+                                                    | DType::U8
+                                                    | DType::I8
+                                                    | DType::U32
+                                                    | DType::U64
+                                                    | DType::USize
                                             )
                                         ) {
                                             return Err(PassError::TypeError {
@@ -115,7 +121,7 @@ impl Pass for TypeInferPass {
                                     ScalarUnaryOp::BitNot => {
                                         if !matches!(
                                             ty,
-                                            IrType::Scalar(DType::I32 | DType::I64)
+                                            IrType::Scalar(DType::I32 | DType::I64 | DType::U8 | DType::I8 | DType::U32 | DType::U64 | DType::USize)
                                         ) {
                                             return Err(PassError::TypeError {
                                                 func: func.name.clone(),
@@ -186,6 +192,63 @@ impl Pass for TypeInferPass {
                                         to_ty
                                     ),
                                 });
+                            }
+                        }
+
+                        IrInstr::GetField { base, field_index, .. } => {
+                            if let Some(ty) = func.value_type(*base) {
+                                if !matches!(ty, IrType::Struct { .. }) {
+                                    return Err(PassError::TypeError {
+                                        func: func.name.clone(),
+                                        detail: format!(
+                                            "GetField: base must be a struct, got {}",
+                                            ty
+                                        ),
+                                    });
+                                }
+                            }
+                            let _ = field_index;
+                        }
+
+                        IrInstr::ArrayLoad { array, .. } => {
+                            if let Some(ty) = func.value_type(*array) {
+                                if !matches!(ty, IrType::Array { .. }) {
+                                    return Err(PassError::TypeError {
+                                        func: func.name.clone(),
+                                        detail: format!(
+                                            "ArrayLoad: operand must be an array, got {}",
+                                            ty
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+
+                        IrInstr::ArrayStore { array, .. } => {
+                            if let Some(ty) = func.value_type(*array) {
+                                if !matches!(ty, IrType::Array { .. }) {
+                                    return Err(PassError::TypeError {
+                                        func: func.name.clone(),
+                                        detail: format!(
+                                            "ArrayStore: operand must be an array, got {}",
+                                            ty
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+
+                        IrInstr::GetElement { base, .. } => {
+                            if let Some(ty) = func.value_type(*base) {
+                                if !matches!(ty, IrType::Tuple(_) | IrType::Struct { .. }) {
+                                    return Err(PassError::TypeError {
+                                        func: func.name.clone(),
+                                        detail: format!(
+                                            "GetElement: base must be a tuple or struct, got {}",
+                                            ty
+                                        ),
+                                    });
+                                }
                             }
                         }
 

@@ -22,6 +22,12 @@ pub enum AstScalarKind {
     I32,
     I64,
     Bool,
+    // Extended integer types (Phase 63)
+    U8,
+    I8,
+    U32,
+    U64,
+    USize,
 }
 
 /// A parsed type expression.
@@ -95,6 +101,8 @@ pub struct AstFunction {
     pub body: AstBlock,
     pub span: Span,
     pub is_async: bool,
+    /// Attribute annotations, e.g. `["differentiable"]` for `@differentiable def f(...)`
+    pub attrs: Vec<String>,
 }
 
 /// A block of statements with an optional tail expression (the block's value).
@@ -167,6 +175,13 @@ pub enum AstStmt {
         var: Ident,
         start: Box<AstExpr>,
         end: Box<AstExpr>,
+        body: AstBlock,
+        span: Span,
+    },
+    /// `for <var> in <list_expr> { body }` — foreach over a list.
+    ForEach {
+        var: Ident,
+        iter: Box<AstExpr>,
         body: AstBlock,
         span: Span,
     },
@@ -308,6 +323,13 @@ pub enum AstExpr {
         expr: Box<AstExpr>,
         span: Span,
     },
+    /// `base.method(args...)` method call on a struct.
+    MethodCall {
+        base: Box<AstExpr>,
+        method: String,
+        args: Vec<AstExpr>,
+        span: Span,
+    },
 }
 
 impl AstExpr {
@@ -334,6 +356,7 @@ impl AstExpr {
             AstExpr::Lambda { span, .. } => *span,
             AstExpr::Await { span, .. } => *span,
             AstExpr::Try { span, .. } => *span,
+            AstExpr::MethodCall { span, .. } => *span,
         }
     }
 }
@@ -353,20 +376,29 @@ pub struct AstStructDef {
     pub span: Span,
 }
 
-/// An enum definition: `choice Name { Variant1, Variant2, ... }`.
+/// A single enum variant, optionally carrying typed fields.
+#[derive(Debug, Clone)]
+pub struct AstEnumVariant {
+    pub name: Ident,
+    /// Payload field types, empty for unit (tag-only) variants.
+    pub fields: Vec<AstType>,
+    pub span: Span,
+}
+
+/// An enum definition: `choice Name { Variant1, Variant2(T), ... }`.
 #[derive(Debug, Clone)]
 pub struct AstEnumDef {
     pub name: Ident,
-    /// Ordered list of variant names.
-    pub variants: Vec<Ident>,
+    /// Ordered list of variants (may carry payload types).
+    pub variants: Vec<AstEnumVariant>,
     pub span: Span,
 }
 
 /// The pattern in a `when` arm.
 #[derive(Debug, Clone)]
 pub enum AstWhenPattern {
-    /// `EnumName.Variant` — enum variant pattern.
-    EnumVariant { enum_name: String, variant_name: String },
+    /// `EnumName.Variant` or `EnumName.Variant(a, b, ...)` — enum variant pattern.
+    EnumVariant { enum_name: String, variant_name: String, bindings: Vec<String> },
     /// `some(binding)` — option Some pattern with an optional bound name.
     OptionSome { binding: Option<String> },
     /// `none` — option None pattern.
@@ -375,12 +407,22 @@ pub enum AstWhenPattern {
     ResultOk { binding: Option<String> },
     /// `err(binding)` — result Err pattern.
     ResultErr { binding: Option<String> },
+    /// `_` — wildcard pattern, matches anything.
+    Wildcard,
+    /// Integer literal pattern, e.g. `0` or `1`.
+    IntLit(i64),
+    /// Bool literal pattern, e.g. `true` or `false`.
+    BoolLit(bool),
+    /// String literal pattern, e.g. `"hello"`.
+    StringLit(String),
 }
 
 /// A single arm in a `when` expression.
 #[derive(Debug, Clone)]
 pub struct AstWhenArm {
     pub pattern: AstWhenPattern,
+    /// Optional guard expression: `pattern if expr =>`.
+    pub guard: Option<Box<AstExpr>>,
     pub body: Box<AstExpr>,
     pub span: Span,
     // Legacy fields kept for backward compatibility during transition.

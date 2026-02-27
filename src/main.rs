@@ -11,6 +11,10 @@ fn main() {
             print!("{}", iris::cli::help_text());
             process::exit(0);
         }
+        Ok(ParseArgsResult::Version) => {
+            print!("{}", iris::cli::version_text());
+            process::exit(0);
+        }
         Ok(ParseArgsResult::Args(cli)) => {
             let source = std::fs::read_to_string(&cli.path).unwrap_or_else(|e| {
                 eprintln!("error: cannot read '{}': {}", cli.path.display(), e);
@@ -22,7 +26,7 @@ fn main() {
                 .and_then(|s| s.to_str())
                 .unwrap_or("module");
 
-            match iris::compile_with_opts(&source, module_name, cli.emit, cli.max_steps, cli.max_depth) {
+            match iris::compile_with_full_opts(&source, module_name, cli.emit, cli.max_steps, cli.max_depth, cli.dump_ir_after.as_deref()) {
                 Ok(output) => {
                     if let Some(out_path) = cli.output {
                         if let Err(e) = std::fs::write(&out_path, &output) {

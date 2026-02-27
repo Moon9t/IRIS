@@ -122,6 +122,7 @@ fn test_interp_make_variant() {
         IrInstr::MakeVariant {
             result: v,
             variant_idx: 1,
+            fields: vec![],
             result_ty: enum_ty,
         },
         Some(i64_ty()),
@@ -130,7 +131,7 @@ fn test_interp_make_variant() {
     let func = b.build();
 
     let result = eval_function(&func, &[]).expect("should eval");
-    assert_eq!(result, vec![IrValue::Enum(1)]);
+    assert_eq!(result, vec![IrValue::Enum(1, vec![])]);
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +156,7 @@ fn test_interp_switch_variant() {
         IrInstr::MakeVariant {
             result: tag,
             variant_idx: 0,
+            fields: vec![],
             result_ty: enum_ty,
         },
         Some(i64_ty()),

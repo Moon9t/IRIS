@@ -88,6 +88,11 @@ fn dtype_to_onnx_elem(dtype: DType) -> u8 {
         DType::I32 => 6,
         DType::I64 => 7,
         DType::Bool => 9,
+        DType::U8 => 2,
+        DType::I8 => 3,
+        DType::U32 => 12,
+        DType::U64 => 13,
+        DType::USize => 7, // map usize to i64 ONNX element type
     }
 }
 

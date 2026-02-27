@@ -26,6 +26,8 @@ pub enum ParseArgsResult {
     Args(CliArgs),
     /// `--help` was present; caller should print usage and exit 0.
     Help,
+    /// `--version` was present; caller should print version and exit 0.
+    Version,
 }
 
 /// Parses command-line arguments (the full `std::env::args()` slice including `argv[0]`).
@@ -41,6 +43,7 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
     while i < args.len() {
         match args[i].as_str() {
             "--help" | "-h" => return Ok(ParseArgsResult::Help),
+            "--version" | "-V" => return Ok(ParseArgsResult::Version),
             "--emit" => {
                 i += 1;
                 let kind = args
@@ -59,9 +62,10 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
                     "onnx" => EmitKind::Onnx,
                     "onnx-binary" => EmitKind::OnnxBinary,
                     "eval" => EmitKind::Eval,
+                    "binary" => EmitKind::Binary,
                     other => {
                         return Err(format!(
-                            "unknown emit kind: '{}' (valid: ir, llvm, llvm-complete, cuda, simd, jit, pgo-instrument, pgo-optimize, graph, onnx, onnx-binary, eval)",
+                            "unknown emit kind: '{}' (valid: ir, llvm, llvm-complete, cuda, simd, jit, pgo-instrument, pgo-optimize, graph, onnx, onnx-binary, eval, binary)",
                             other
                         ))
                     }
@@ -111,6 +115,11 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
     Ok(ParseArgsResult::Args(CliArgs { path, emit, output, dump_ir_after, max_steps, max_depth }))
 }
 
+/// Returns the version string for the CLI.
+pub fn version_text() -> &'static str {
+    concat!("iris ", env!("CARGO_PKG_VERSION"), "\n")
+}
+
 /// Returns the usage/help text for the CLI.
 pub fn help_text() -> &'static str {
     "IRIS compiler\n\
@@ -118,10 +127,12 @@ pub fn help_text() -> &'static str {
      \n\
      Options:\n\
        --emit <kind>         Output kind: ir (default), llvm, llvm-complete, cuda, simd,\n\
-                             jit, pgo-instrument, pgo-optimize, graph, onnx, onnx-binary, eval\n\
+                             jit, pgo-instrument, pgo-optimize, graph, onnx, onnx-binary,\n\
+                             eval, binary\n\
        -o <file>             Write output to <file> instead of stdout\n\
        --dump-ir-after <p>   Dump IR to stderr after pass <p> completes\n\
        --max-steps <n>       Max interpreter steps before abort (default: 1000000)\n\
        --max-depth <n>       Max call depth before abort (default: 500)\n\
-       --help, -h            Print this help and exit\n"
+       --help, -h            Print this help and exit\n\
+       --version, -V         Print version and exit\n"
 }
