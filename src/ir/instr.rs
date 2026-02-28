@@ -246,6 +246,19 @@ pub enum IrInstr {
         args: Vec<ValueId>,
         result_ty: Option<IrType>,
     },
+    /// Call an extern (C-linkage) function declared with `extern def`.
+    CallExtern {
+        result: Option<ValueId>,
+        name: String,
+        args: Vec<ValueId>,
+        ret_ty: IrType,
+    },
+
+    // ---- Phase 83: Ref-counting GC ----
+    /// Increment the reference count of a heap value (list, map, option, …).
+    Retain { ptr: ValueId },
+    /// Decrement the reference count; frees the value when it reaches zero.
+    Release { ptr: ValueId, ty: IrType },
 
     // ---- Struct operations ----
     /// Construct a struct value from field values.
@@ -663,6 +676,9 @@ impl IrInstr {
             // Phase 61: Pattern matching helpers
             IrInstr::GetVariantTag { result, .. } => Some(*result),
             IrInstr::StrEq { result, .. } => Some(*result),
+            IrInstr::CallExtern { result, .. } => *result,
+            IrInstr::Retain { .. } => None,
+            IrInstr::Release { .. } => None,
         }
     }
 
@@ -818,6 +834,9 @@ impl IrInstr {
             // Phase 61: Pattern matching helpers
             IrInstr::GetVariantTag { operand, .. } => vec![*operand],
             IrInstr::StrEq { lhs, rhs, .. } => vec![*lhs, *rhs],
+            IrInstr::CallExtern { args, .. } => args.clone(),
+            IrInstr::Retain { ptr } => vec![*ptr],
+            IrInstr::Release { ptr, .. } => vec![*ptr],
         }
     }
 }

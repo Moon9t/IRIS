@@ -1,5 +1,6 @@
 pub mod const_fold;
 pub mod dead_node;
+pub mod gc_annotate;
 pub mod graph_pass;
 pub mod lint;
 pub mod opt;
@@ -11,6 +12,7 @@ pub mod validate;
 
 pub use const_fold::ConstFoldPass;
 pub use dead_node::DeadNodePass;
+pub use gc_annotate::GcAnnotatePass;
 pub use graph_pass::{GraphPass, GraphPassManager};
 pub use lint::{find_unused_vars, IrWarning};
 pub use opt::{CsePass, DcePass, OpExpandPass};

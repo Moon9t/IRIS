@@ -124,6 +124,9 @@ const OP_PROCESS_ARGS: u8      = 0x62;
 const OP_ENV_VAR: u8           = 0x63;
 const OP_GET_VARIANT_TAG: u8   = 0x64;
 const OP_STR_EQ: u8            = 0x65;
+const OP_CALL_EXTERN: u8       = 0x66;
+const OP_RETAIN: u8            = 0x67;
+const OP_RELEASE: u8           = 0x68;
 
 const MAGIC: &[u8; 4] = b"IRIS";
 const VERSION: u8 = 1;
@@ -539,6 +542,11 @@ impl Writer {
             IrInstr::StrEq { result, lhs, rhs } => {
                 self.u8(OP_STR_EQ); self.vid(*result); self.vid(*lhs); self.vid(*rhs);
             }
+            IrInstr::CallExtern { result, name, args, ret_ty } => {
+                self.u8(OP_CALL_EXTERN); self.opt_vid(*result); self.str(name); self.vids(args); self.ty(ret_ty);
+            }
+            IrInstr::Retain { ptr } => { self.u8(OP_RETAIN); self.vid(*ptr); }
+            IrInstr::Release { ptr, ty } => { self.u8(OP_RELEASE); self.vid(*ptr); self.ty(ty); }
         }
     }
 }
@@ -954,6 +962,13 @@ impl<'a> Reader<'a> {
             OP_ENV_VAR       => { let result = self.vid()?; let name = self.vid()?; IrInstr::EnvVar { result, name } }
             OP_GET_VARIANT_TAG => { let result = self.vid()?; let operand = self.vid()?; IrInstr::GetVariantTag { result, operand } }
             OP_STR_EQ          => { let result = self.vid()?; let lhs = self.vid()?; let rhs = self.vid()?; IrInstr::StrEq { result, lhs, rhs } }
+            OP_CALL_EXTERN     => {
+                let result = self.opt_vid()?; let name = self.str()?;
+                let args = self.vids()?; let ret_ty = self.ty()?;
+                IrInstr::CallExtern { result, name, args, ret_ty }
+            }
+            OP_RETAIN  => { let ptr = self.vid()?; IrInstr::Retain { ptr } }
+            OP_RELEASE => { let ptr = self.vid()?; let ty = self.ty()?; IrInstr::Release { ptr, ty } }
             t => return Err(format!("unknown opcode 0x{:02x}", t)),
         })
     }

@@ -539,8 +539,18 @@ pub struct AstImplDef {
     pub span: Span,
 }
 
+/// An extern function declaration: `extern def name(params) -> ret_ty`.
+/// Declares a C-linkage function callable from IRIS but defined outside.
+#[derive(Debug, Clone)]
+pub struct AstExternFn {
+    pub name: Ident,
+    pub params: Vec<AstParam>,
+    pub ret_ty: AstType,
+    pub span: Span,
+}
+
 /// The top-level AST for an IRIS source file.
-/// A file may contain any mix of `def`, `record`, `choice`, `model`, `const`, `type`, `trait`, `impl`, and `bring` definitions.
+/// A file may contain any mix of `def`, `record`, `choice`, `model`, `const`, `type`, `trait`, `impl`, `bring`, and `extern def` definitions.
 #[derive(Debug, Clone)]
 pub struct AstModule {
     pub enums: Vec<AstEnumDef>,
@@ -553,4 +563,6 @@ pub struct AstModule {
     pub impls: Vec<AstImplDef>,
     /// Names of modules imported via `bring module_name`.
     pub imports: Vec<String>,
+    /// Extern function declarations: `extern def name(params) -> type`.
+    pub extern_fns: Vec<AstExternFn>,
 }

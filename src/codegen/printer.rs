@@ -664,6 +664,22 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
         IrInstr::StrEq { result, lhs, rhs } => {
             write!(out, "{} = str_eq {}, {}", result, lhs, rhs)?;
         }
+        // Phase 81: FFI
+        IrInstr::CallExtern { result, name, args, .. } => {
+            let args_str: Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
+            if let Some(r) = result {
+                write!(out, "{} = call_extern @{}({})", r, name, args_str.join(", "))?;
+            } else {
+                write!(out, "call_extern @{}({})", name, args_str.join(", "))?;
+            }
+        }
+        // Phase 83: GC
+        IrInstr::Retain { ptr } => {
+            write!(out, "retain {}", ptr)?;
+        }
+        IrInstr::Release { ptr, ty } => {
+            write!(out, "release {}, {:?}", ptr, ty)?;
+        }
     }
     Ok(())
 }

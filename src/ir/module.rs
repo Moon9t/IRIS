@@ -13,6 +13,14 @@ use crate::ir::value::{BlockParam, ValueDef, ValueId};
 /// - `FunctionId(n)` always indexes `functions[n]`.
 /// - Once a function is added via `add_function()`, it is immutable to external
 ///   callers. Passes may mutate through the `pub(crate)` fields.
+/// An extern function declaration (C-linkage FFI).
+#[derive(Debug, Clone)]
+pub struct IrExternFn {
+    pub name: String,
+    pub param_types: Vec<IrType>,
+    pub ret_ty: IrType,
+}
+
 #[derive(Debug, Default)]
 pub struct IrModule {
     pub name: String,
@@ -25,6 +33,8 @@ pub struct IrModule {
     pub(crate) enum_defs: HashMap<String, (Vec<String>, Vec<Vec<IrType>>)>,
     /// Type alias definitions: alias name → concrete IrType.
     pub(crate) type_aliases: HashMap<String, IrType>,
+    /// Extern function declarations: name → signature.
+    pub extern_fns: Vec<IrExternFn>,
 }
 
 impl IrModule {
@@ -36,6 +46,7 @@ impl IrModule {
             struct_defs: HashMap::new(),
             enum_defs: HashMap::new(),
             type_aliases: HashMap::new(),
+            extern_fns: Vec::new(),
         }
     }
 

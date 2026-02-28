@@ -30,7 +30,7 @@ pub mod proto;
 pub use codegen::ir_serial::{deserialize_module, serialize_module};
 pub use error::Error;
 pub use ir::module::IrModule;
-pub use pass::{IrWarning, StrengthReducePass};
+pub use pass::{GcAnnotatePass, IrWarning, StrengthReducePass};
 
 /// Controls what the `compile()` function emits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

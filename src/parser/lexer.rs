@@ -73,6 +73,8 @@ pub enum Token {
     Impl,
     /// `pub` visibility modifier
     Pub,
+    /// `extern` keyword for FFI declarations
+    Extern,
     /// `mod` keyword for inline module blocks
     Mod,
     // Model DSL keywords
@@ -179,6 +181,7 @@ impl std::fmt::Display for Token {
             Token::Trait => write!(f, "trait"),
             Token::Impl => write!(f, "impl"),
             Token::Pub => write!(f, "pub"),
+            Token::Extern => write!(f, "extern"),
             Token::Mod => write!(f, "mod"),
             Token::Bring => write!(f, "bring"),
             Token::When => write!(f, "when"),
@@ -614,8 +617,9 @@ impl<'src> Lexer<'src> {
             "const" => Token::Const,
             "type"  => Token::Type,
             "trait" => Token::Trait,
-            "impl"  => Token::Impl,
-            "pub"   => Token::Pub,
+            "impl"   => Token::Impl,
+            "pub"    => Token::Pub,
+            "extern" => Token::Extern,
             "model" => Token::Model,
             "layer" => Token::Layer,
             "input" => Token::Input,

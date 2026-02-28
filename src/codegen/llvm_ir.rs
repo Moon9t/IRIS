@@ -92,6 +92,18 @@ pub fn emit_llvm_ir(module: &IrModule) -> Result<String, CodegenError> {
     // ── Runtime declarations ──────────────────────────────────────────────
     emit_runtime_declares(&mut out)?;
 
+    // ── Extern (FFI) function declarations ───────────────────────────────
+    for ext in &module.extern_fns {
+        let ret_s = llvm_type_complete(&ext.ret_ty).unwrap_or_else(|_| "ptr".to_owned());
+        let param_ss: Vec<String> = ext.param_types.iter()
+            .map(|t| llvm_type_complete(t).unwrap_or_else(|_| "ptr".to_owned()))
+            .collect();
+        writeln!(out, "declare {} @{}({})", ret_s, ext.name, param_ss.join(", "))?;
+    }
+    if !module.extern_fns.is_empty() {
+        writeln!(out)?;
+    }
+
     // ── Build function signature map for typed calls ──────────────────────
     // Maps function name → (return_type_string, Vec<param_type_string>)
     let mut fn_sigs: HashMap<String, (String, Vec<String>)> = HashMap::new();
@@ -1171,6 +1183,25 @@ fn emit_instr_ir(
         }
         IrInstr::StrEq { result, lhs, rhs } => {
             writeln!(out, "  %v{} = call i1 @iris_str_eq(ptr {}, ptr {})", result.0, val(*lhs), val(*rhs))?;
+        }
+        // Phase 83: GC retain/release
+        IrInstr::Retain { ptr } => {
+            writeln!(out, "  call void @iris_retain(ptr {})", val(*ptr))?;
+        }
+        IrInstr::Release { ptr, .. } => {
+            writeln!(out, "  call void @iris_release(ptr {})", val(*ptr))?;
+        }
+        // Phase 81: FFI extern calls
+        IrInstr::CallExtern { result, name, args, ret_ty } => {
+            let llvm_ret = llvm_type_complete(ret_ty).unwrap_or_else(|_| "ptr".to_owned());
+            let arg_strs: Vec<String> = args.iter()
+                .map(|a| format!("ptr {}", val(*a)))
+                .collect();
+            if let Some(r) = result {
+                writeln!(out, "  %v{} = call {} @{}({})", r.0, llvm_ret, name, arg_strs.join(", "))?;
+            } else {
+                writeln!(out, "  call {} @{}({})", llvm_ret, name, arg_strs.join(", "))?;
+            }
         }
     }
     Ok(())

@@ -72,6 +72,9 @@ fn is_side_effecting(instr: &IrInstr) -> bool {
             | IrInstr::CallClosure { .. }
             | IrInstr::FileWriteAll { .. }
             | IrInstr::ProcessExit { .. }
+            | IrInstr::CallExtern { .. }
+            | IrInstr::Retain { .. }
+            | IrInstr::Release { .. }
     )
 }
 
@@ -453,6 +456,11 @@ fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
         // Phase 61: Pattern matching helpers
         IrInstr::GetVariantTag { operand, .. } => { replace(operand); }
         IrInstr::StrEq { lhs, rhs, .. } => { replace(lhs); replace(rhs); }
+        // Phase 81: FFI
+        IrInstr::CallExtern { args, .. } => { for a in args { replace(a); } }
+        // Phase 83: GC
+        IrInstr::Retain { ptr } => { replace(ptr); }
+        IrInstr::Release { ptr, .. } => { replace(ptr); }
     }
 }
 

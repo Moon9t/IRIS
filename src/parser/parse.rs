@@ -131,6 +131,7 @@ impl<'t> Parser<'t> {
         let mut traits = Vec::new();
         let mut impls = Vec::new();
         let mut imports = Vec::new();
+        let mut extern_fns = Vec::new();
         while !self.at_eof() {
             match self.peek_tok().clone() {
                 Token::Choice => enums.push(self.parse_enum_def()?),
@@ -145,6 +146,9 @@ impl<'t> Parser<'t> {
                     self.advance();
                     let mod_name = self.expect_ident()?.name;
                     imports.push(mod_name);
+                }
+                Token::Extern => {
+                    extern_fns.push(self.parse_extern_fn()?);
                 }
                 Token::Pub => {
                     self.advance(); // consume 'pub'
@@ -166,7 +170,7 @@ impl<'t> Parser<'t> {
                 }
                 _ => {
                     return Err(ParseError::UnexpectedToken {
-                        expected: "'choice', 'record', 'def', 'model', 'const', 'type', 'trait', 'impl', or 'bring'".to_owned(),
+                        expected: "'choice', 'record', 'def', 'extern', 'model', 'const', 'type', 'trait', 'impl', or 'bring'".to_owned(),
                         found: format!("{}", self.peek_tok()),
                         span: self.current_span(),
                     })
@@ -183,7 +187,31 @@ impl<'t> Parser<'t> {
             traits,
             impls,
             imports,
+            extern_fns,
         })
+    }
+
+    /// Parses `extern def name(params) -> ret_ty` (no body).
+    fn parse_extern_fn(&mut self) -> Result<crate::parser::ast::AstExternFn, ParseError> {
+        use crate::parser::ast::AstExternFn;
+        let span_start = self.current_span();
+        self.expect(&Token::Extern)?;
+        self.expect(&Token::Def)?;
+        let name = self.expect_ident()?;
+        self.expect(&Token::LParen)?;
+        let mut params = Vec::new();
+        while !matches!(self.peek_tok(), &Token::RParen) {
+            let param_name = self.expect_ident()?;
+            self.expect(&Token::Colon)?;
+            let ty = self.parse_type()?;
+            params.push(crate::parser::ast::AstParam { name: param_name, ty, default: None });
+            if matches!(self.peek_tok(), &Token::Comma) { self.advance(); }
+        }
+        self.expect(&Token::RParen)?;
+        self.expect(&Token::Arrow)?;
+        let ret_ty = self.parse_type()?;
+        let span = span_start.merge(self.current_span());
+        Ok(AstExternFn { name, params, ret_ty, span })
     }
 
     /// Parses a type name as a plain string (handles keywords like `i64`, `f64`, `bool`, `str`

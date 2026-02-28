@@ -991,6 +991,22 @@ fn emit_llvm_instr(
         IrInstr::StrEq { result, lhs, rhs } => {
             writeln!(out, "  %v{} = call i1 @iris_str_eq(ptr {}, ptr {})", result.0, val(*lhs), val(*rhs))?;
         }
+        // Phase 83: GC retain/release
+        IrInstr::Retain { ptr } => {
+            writeln!(out, "  call void @iris_retain(ptr {})", val(*ptr))?;
+        }
+        IrInstr::Release { ptr, .. } => {
+            writeln!(out, "  call void @iris_release(ptr {})", val(*ptr))?;
+        }
+        // Phase 81: FFI extern calls
+        IrInstr::CallExtern { result, name, args, .. } => {
+            let arg_strs: Vec<String> = args.iter().map(|a| format!("ptr {}", val(*a))).collect();
+            if let Some(r) = result {
+                writeln!(out, "  %v{} = call ptr @{}({})", r.0, name, arg_strs.join(", "))?;
+            } else {
+                writeln!(out, "  call void @{}({})", name, arg_strs.join(", "))?;
+            }
+        }
     }
     Ok(())
 }
