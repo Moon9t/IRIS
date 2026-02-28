@@ -1230,6 +1230,12 @@ impl<'t> Parser<'t> {
                 AstExpr::StringLit { value: s, span }
             }
 
+            Token::FStringLit(raw) => {
+                let raw = raw.clone();
+                self.advance();
+                self.desugar_fstring(&raw, span)
+            }
+
             Token::LParen => {
                 self.advance(); // consume '('
                 let first = self.parse_expr()?;
@@ -1616,5 +1622,66 @@ impl<'t> Parser<'t> {
             args.push(self.parse_expr()?);
         }
         Ok(args)
+    }
+
+    /// Desugar `f"Hello {name}! You are {age} years old."` into nested `concat` calls.
+    /// Only simple identifiers (no spaces) are supported inside `{...}`.
+    /// Each placeholder is wrapped with `to_str(ident)` so any type can be interpolated.
+    fn desugar_fstring(&self, raw: &str, span: Span) -> AstExpr {
+        // Split raw into alternating text/ident parts.
+        enum Part { Text(String), Ident(String) }
+        let mut parts: Vec<Part> = Vec::new();
+        let mut cur = String::new();
+        let mut chars = raw.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                if !cur.is_empty() {
+                    parts.push(Part::Text(cur.clone()));
+                    cur.clear();
+                }
+                let mut ident = String::new();
+                for ic in chars.by_ref() {
+                    if ic == '}' { break; }
+                    ident.push(ic);
+                }
+                let ident = ident.trim().to_owned();
+                if !ident.is_empty() {
+                    parts.push(Part::Ident(ident));
+                }
+            } else {
+                cur.push(c);
+            }
+        }
+        if !cur.is_empty() {
+            parts.push(Part::Text(cur));
+        }
+
+        // Helper: build an AstExpr for a single part.
+        let make_part = |p: &Part| -> AstExpr {
+            match p {
+                Part::Text(s) => AstExpr::StringLit { value: s.clone(), span },
+                Part::Ident(name) => AstExpr::Call {
+                    callee: Ident { name: "to_str".into(), span },
+                    args: vec![AstExpr::Ident(Ident { name: name.clone(), span })],
+                    span,
+                },
+            }
+        };
+
+        if parts.is_empty() {
+            return AstExpr::StringLit { value: String::new(), span };
+        }
+
+        // Build right-to-left concat chain.
+        let mut expr = make_part(parts.last().unwrap());
+        for p in parts[..parts.len() - 1].iter().rev() {
+            let left = make_part(p);
+            expr = AstExpr::Call {
+                callee: Ident { name: "concat".into(), span },
+                args: vec![left, expr],
+                span,
+            };
+        }
+        expr
     }
 }

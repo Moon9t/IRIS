@@ -152,6 +152,10 @@ pub enum Token {
     /// `@` attribute sigil (e.g. `@differentiable`)
     At,
 
+    /// `f"..."` string with `{ident}` interpolation placeholders.
+    /// The payload is the raw content (with `{...}` markers preserved).
+    FStringLit(String),
+
     Eof,
 }
 
@@ -232,6 +236,7 @@ impl std::fmt::Display for Token {
             Token::Pipe => write!(f, "|"),
             Token::Question => write!(f, "?"),
             Token::At => write!(f, "@"),
+            Token::FStringLit(s) => write!(f, "f\"{}\"", s),
             Token::Eof => write!(f, "<eof>"),
         }
     }
@@ -419,6 +424,11 @@ impl<'src> Lexer<'src> {
         }
 
         if ch.is_ascii_alphabetic() || ch == b'_' {
+            // Detect f"..." string interpolation prefix before normal identifier
+            if ch == b'f' && self.peek2() == Some(b'"') {
+                self.pos += 1; // consume 'f'
+                return self.lex_fstring(start);
+            }
             return Ok(self.lex_ident_or_keyword(start));
         }
 
@@ -473,6 +483,45 @@ impl<'src> Lexer<'src> {
         }
         Ok(Spanned {
             node: Token::StringLit(s),
+            span: Span::new(start, self.pos as u32),
+        })
+    }
+
+    /// Lex an f-string literal `f"..."` — the `f` has already been consumed.
+    /// The raw content (including `{...}` markers) is stored verbatim.
+    fn lex_fstring(&mut self, start: u32) -> Result<Spanned<Token>, ParseError> {
+        self.advance(); // consume opening `"`
+        let mut raw = String::new();
+        loop {
+            match self.peek() {
+                None => return Err(ParseError::UnterminatedString { pos: start }),
+                Some(b'"') => {
+                    self.advance();
+                    break;
+                }
+                Some(b'\\') => {
+                    self.advance();
+                    match self.peek() {
+                        Some(b'n') => { self.advance(); raw.push('\n'); }
+                        Some(b't') => { self.advance(); raw.push('\t'); }
+                        Some(b'"') => { self.advance(); raw.push('"'); }
+                        Some(b'\\') => { self.advance(); raw.push('\\'); }
+                        other => {
+                            return Err(ParseError::InvalidEscape {
+                                ch: other.map(|b| b as char),
+                                pos: self.pos as u32,
+                            });
+                        }
+                    }
+                }
+                Some(b) => {
+                    self.advance();
+                    raw.push(b as char);
+                }
+            }
+        }
+        Ok(Spanned {
+            node: Token::FStringLit(raw),
             span: Span::new(start, self.pos as u32),
         })
     }
