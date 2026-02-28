@@ -297,6 +297,71 @@ char* iris_str_replace(const char* s, const char* old_s, const char* new_s) {
 }
 char* iris_const_str(void) { return (char*)""; }  /* fallback; should never be reached */
 
+/* Phase 95: split/join */
+IrisList* iris_str_split(const char* s, const char* delim) {
+    IrisList* result = iris_list_new();
+    size_t dlen = strlen(delim);
+    if (dlen == 0) {
+        /* split into individual characters */
+        while (*s) {
+            char buf[5] = {0};
+            /* simple single-byte split (ASCII) */
+            buf[0] = *s++;
+            IrisVal* v = (IrisVal*)xmalloc(sizeof(IrisVal));
+            v->tag = IRIS_TAG_STR;
+            v->str = xstrdup(buf);
+            iris_list_push(result, v);
+        }
+        return result;
+    }
+    const char* p = s;
+    const char* found;
+    while ((found = strstr(p, delim)) != NULL) {
+        size_t seg = (size_t)(found - p);
+        char* part = (char*)xmalloc(seg + 1);
+        memcpy(part, p, seg);
+        part[seg] = '\0';
+        IrisVal* v = (IrisVal*)xmalloc(sizeof(IrisVal));
+        v->tag = IRIS_TAG_STR;
+        v->str = part;
+        iris_list_push(result, v);
+        p = found + dlen;
+    }
+    /* last segment */
+    IrisVal* v = (IrisVal*)xmalloc(sizeof(IrisVal));
+    v->tag = IRIS_TAG_STR;
+    v->str = xstrdup(p);
+    iris_list_push(result, v);
+    return result;
+}
+
+char* iris_str_join(IrisList* list, const char* delim) {
+    if (!list || list->len == 0) return xstrdup("");
+    size_t dlen = strlen(delim);
+    size_t total = 0;
+    for (int64_t i = 0; i < list->len; i++) {
+        IrisVal* v = list->data[i];
+        if (v && v->tag == IRIS_TAG_STR && v->str) total += strlen(v->str);
+        if (i + 1 < list->len) total += dlen;
+    }
+    char* r = (char*)xmalloc(total + 1);
+    char* w = r;
+    for (int64_t i = 0; i < list->len; i++) {
+        IrisVal* v = list->data[i];
+        if (v && v->tag == IRIS_TAG_STR && v->str) {
+            size_t sl = strlen(v->str);
+            memcpy(w, v->str, sl);
+            w += sl;
+        }
+        if (i + 1 < list->len) {
+            memcpy(w, delim, dlen);
+            w += dlen;
+        }
+    }
+    *w = '\0';
+    return r;
+}
+
 // ---------------------------------------------------------------------------
 // Typed value-to-string conversions
 // ---------------------------------------------------------------------------

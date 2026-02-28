@@ -15,7 +15,7 @@ def f() -> str {
 }
 "#;
     let result = compile(src, "test", EmitKind::Eval).unwrap();
-    assert_eq!(result.trim(), "\"Hello World!\"");
+    assert_eq!(result.trim(), "Hello World!");
 }
 
 // ---------------------------------------------------------------------------
@@ -31,7 +31,7 @@ def f() -> str {
 }
 "#;
     let result = compile(src, "test", EmitKind::Eval).unwrap();
-    assert_eq!(result.trim(), "\"foo and bar\"");
+    assert_eq!(result.trim(), "foo and bar");
 }
 
 // ---------------------------------------------------------------------------
@@ -45,7 +45,7 @@ def f() -> str {
 }
 "#;
     let result = compile(src, "test", EmitKind::Eval).unwrap();
-    assert_eq!(result.trim(), "\"just a plain string\"");
+    assert_eq!(result.trim(), "just a plain string");
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ def f() -> str {
 }
 "#;
     let result = compile(src, "test", EmitKind::Eval).unwrap();
-    assert_eq!(result.trim(), "\"hi, there!\"");
+    assert_eq!(result.trim(), "hi, there!");
 }
 
 // ---------------------------------------------------------------------------

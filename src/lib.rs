@@ -18,6 +18,7 @@
 
 pub mod cli;
 pub mod codegen;
+pub mod compiler;
 pub mod dap;
 pub mod debugger;
 pub mod diagnostics;
@@ -30,12 +31,15 @@ pub mod parser;
 pub mod pass;
 pub mod proto;
 pub mod repl;
+pub mod stdlib;
 
 pub use codegen::ir_serial::{deserialize_module, serialize_module};
+pub use compiler::FileCompiler;
 pub use debugger::{DebugSession, TraceEntry};
 pub use error::Error;
 pub use ir::module::IrModule;
 pub use lsp::{LspDiagnostic, LspState};
+pub use parser::ast::{AstBring, BringPath};
 pub use pass::{ExhaustivePass, GcAnnotatePass, HmTypeInferPass, InlinePass, IrWarning, LoopUnrollPass, StrengthReducePass};
 pub use repl::ReplState;
 
@@ -71,17 +75,27 @@ pub enum EmitKind {
     Binary,
 }
 
-/// Compiles multiple IRIS source strings together, supporting `bring module_name`
-/// to import public definitions from other modules.
+/// Compiles multiple IRIS source strings together, supporting `bring module_name`,
+/// `bring "file.iris"`, and `bring std.name` to import public definitions.
 ///
 /// `sources` is a slice of `(module_name, source_code)` pairs.
-/// `main_module` is the name of the entry-point module (the one with the top-level `f()`).
+/// `main_module` is the name of the entry-point module.
 pub fn compile_multi(sources: &[(&str, &str)], main_module: &str, emit: EmitKind) -> Result<String, Error> {
+    let main_ast = compile_multi_to_ast(sources, main_module)?;
+    compile_ast(&main_ast, main_module, emit, 1_000_000, 500, None)
+}
+
+/// Internal: parse+merge all brought modules into a single merged `AstModule`.
+pub fn compile_multi_to_ast(
+    sources: &[(&str, &str)],
+    main_module: &str,
+) -> Result<crate::parser::ast::AstModule, Error> {
+    use crate::parser::ast::BringPath;
     use crate::parser::lexer::Lexer;
     use crate::parser::parse::Parser;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet, VecDeque};
 
-    // Parse all modules.
+    // Parse all provided modules.
     let mut parsed: HashMap<&str, crate::parser::ast::AstModule> = HashMap::new();
     for (name, src) in sources {
         let tokens = Lexer::new(src).tokenize()?;
@@ -89,7 +103,7 @@ pub fn compile_multi(sources: &[(&str, &str)], main_module: &str, emit: EmitKind
         parsed.insert(name, ast);
     }
 
-    // Remove the main module and merge imported public definitions into it.
+    // Remove the main module.
     let mut main_ast = parsed.remove(main_module)
         .ok_or_else(|| Error::Parse(crate::error::ParseError::UnexpectedToken {
             expected: format!("module named '{}'", main_module),
@@ -97,27 +111,70 @@ pub fn compile_multi(sources: &[(&str, &str)], main_module: &str, emit: EmitKind
             span: crate::parser::lexer::Span::at(0),
         }))?;
 
-    // Collect the bring list before mutably borrowing main_ast.
-    let import_names: Vec<String> = main_ast.imports.clone();
-    for mod_name in &import_names {
-        if let Some(imported) = parsed.get(mod_name.as_str()) {
-            for func in &imported.functions {
+    // BFS over brings; handles transitivity.
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
+
+    // Seed from main's brings.
+    for bring in &main_ast.brings {
+        let key = bring_key(&bring.path);
+        if visited.insert(key.clone()) {
+            queue.push_back(key);
+        }
+    }
+
+    while let Some(key) = queue.pop_front() {
+        // Try to resolve: first by File stem (look up in `parsed`), then by Stdlib.
+        let dep_ast_opt: Option<crate::parser::ast::AstModule> = if key.starts_with("std:") {
+            let lib_name = &key["std:".len()..];
+            crate::stdlib::stdlib_source(lib_name)
+                .map(|src| -> Result<_, Error> {
+                    let tokens = Lexer::new(src).tokenize()?;
+                    Ok(Parser::new(&tokens).parse_module()?)
+                })
+                .transpose()?
+        } else {
+            // Key is the stem name (e.g., "utils" from "utils.iris" or legacy "utils").
+            parsed.remove(key.as_str())
+        };
+
+        if let Some(dep) = dep_ast_opt {
+            // Enqueue dep's own brings.
+            for bring in &dep.brings {
+                let dep_key = bring_key(&bring.path);
+                if visited.insert(dep_key.clone()) {
+                    queue.push_back(dep_key);
+                }
+            }
+            // Merge pub functions.
+            for func in &dep.functions {
                 if func.is_pub {
                     main_ast.functions.push(func.clone());
                 }
             }
-            // Always import structs, enums, type aliases, traits, impls, consts
-            // (they are inherently public in this simple module system).
-            main_ast.structs.extend(imported.structs.iter().cloned());
-            main_ast.enums.extend(imported.enums.iter().cloned());
-            main_ast.consts.extend(imported.consts.iter().cloned());
-            main_ast.type_aliases.extend(imported.type_aliases.iter().cloned());
-            main_ast.traits.extend(imported.traits.iter().cloned());
-            main_ast.impls.extend(imported.impls.iter().cloned());
+            // Merge structs/enums/consts/type_aliases/traits/impls (backward compat).
+            main_ast.structs.extend(dep.structs.iter().cloned());
+            main_ast.enums.extend(dep.enums.iter().cloned());
+            main_ast.consts.extend(dep.consts.iter().cloned());
+            main_ast.type_aliases.extend(dep.type_aliases.iter().cloned());
+            main_ast.traits.extend(dep.traits.iter().cloned());
+            main_ast.impls.extend(dep.impls.iter().cloned());
         }
     }
 
-    compile_ast(&main_ast, main_module, emit, 1_000_000, 500, None)
+    Ok(main_ast)
+}
+
+/// Compute a lookup key from a `BringPath`.
+fn bring_key(path: &crate::parser::ast::BringPath) -> String {
+    use crate::parser::ast::BringPath;
+    match path {
+        BringPath::File(p) => {
+            // Strip .iris extension to get the stem (module name).
+            p.trim_end_matches(".iris").to_owned()
+        }
+        BringPath::Stdlib(name) => format!("std:{}", name),
+    }
 }
 
 /// Internal: compile a pre-built `AstModule` through the full pipeline to an `IrModule`.
@@ -269,7 +326,11 @@ fn compile_ast(
                 if matches!(val, interp::IrValue::Unit) {
                     continue;
                 }
-                out.push_str(&format!("{}\n", val));
+                // Str values are printed without surrounding quotes in eval output.
+                match val {
+                    interp::IrValue::Str(s) => out.push_str(&format!("{}\n", s)),
+                    _ => out.push_str(&format!("{}\n", val)),
+                }
             }
             Ok(out)
         }
@@ -380,6 +441,27 @@ pub fn compile_with_opts(
 pub fn compile_with_diagnostics(source: &str, module_name: &str, emit: EmitKind) -> Result<String, String> {
     compile(source, module_name, emit)
         .map_err(|e| diagnostics::render_error(source, &e))
+}
+
+/// Compiles an `.iris` file from disk, resolving all `bring` declarations
+/// relative to the file's directory (and optional extra search paths).
+///
+/// Uses `FileCompiler` from `src/compiler.rs` internally.
+pub fn compile_file(path: &std::path::Path, emit: EmitKind) -> Result<String, Error> {
+    let main_ast = compiler::FileCompiler::new().compile_file_to_ast(path, &[])?;
+    let module_name = path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("main");
+    compile_ast(&main_ast, module_name, emit, 1_000_000, 500, None)
+}
+
+/// Like [`compile_file`] but returns the merged `IrModule` for further processing.
+pub fn compile_file_to_module(path: &std::path::Path) -> Result<IrModule, Error> {
+    let main_ast = compiler::FileCompiler::new().compile_file_to_ast(path, &[])?;
+    let module_name = path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("main");
+    compile_ast_to_module(&main_ast, module_name, None)
 }
 
 /// Like [`compile_with_opts`] but also supports `--dump-ir-after`.

@@ -60,6 +60,10 @@ pub enum AstType {
     Grad(Box<AstType>, Span),
     /// `sparse<T>` sparse tensor/array type.
     Sparse(Box<AstType>, Span),
+    /// `list<T>` dynamic list type.
+    List(Box<AstType>, Span),
+    /// `map<K, V>` map type.
+    Map(Box<AstType>, Box<AstType>, Span),
     /// Function type, e.g. `(i64, bool) -> i64`.
     Fn { params: Vec<AstType>, ret: Box<AstType>, span: Span },
 }
@@ -79,6 +83,8 @@ impl AstType {
             AstType::Mutex(_, s) => *s,
             AstType::Grad(_, s) => *s,
             AstType::Sparse(_, s) => *s,
+            AstType::List(_, s) => *s,
+            AstType::Map(_, _, s) => *s,
             AstType::Fn { span, .. } => *span,
         }
     }
@@ -379,6 +385,8 @@ pub struct AstStructDef {
     pub name: Ident,
     pub fields: Vec<AstFieldDef>,
     pub span: Span,
+    /// Whether this struct is publicly exported (`pub record`).
+    pub is_pub: bool,
 }
 
 /// A single enum variant, optionally carrying typed fields.
@@ -397,6 +405,8 @@ pub struct AstEnumDef {
     /// Ordered list of variants (may carry payload types).
     pub variants: Vec<AstEnumVariant>,
     pub span: Span,
+    /// Whether this enum is publicly exported (`pub choice`).
+    pub is_pub: bool,
 }
 
 /// The pattern in a `when` arm.
@@ -500,6 +510,8 @@ pub struct AstConst {
     pub ty: Option<AstType>,
     pub value: AstExpr,
     pub span: Span,
+    /// Whether this const is publicly exported (`pub const`).
+    pub is_pub: bool,
 }
 
 /// A type alias declaration: `type Name = Type`.
@@ -507,6 +519,28 @@ pub struct AstConst {
 pub struct AstTypeAlias {
     pub name: String,
     pub ty: AstType,
+    pub span: Span,
+    /// Whether this type alias is publicly exported (`pub type`).
+    pub is_pub: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Module bring / import system
+// ---------------------------------------------------------------------------
+
+/// The path of a `bring` declaration.
+#[derive(Debug, Clone)]
+pub enum BringPath {
+    /// `bring "path/to/file.iris"` — resolved from disk (or virtual source map).
+    File(String),
+    /// `bring std.name` — resolved from the embedded stdlib registry.
+    Stdlib(String),
+}
+
+/// A `bring` declaration at module level.
+#[derive(Debug, Clone)]
+pub struct AstBring {
+    pub path: BringPath,
     pub span: Span,
 }
 
@@ -561,8 +595,8 @@ pub struct AstModule {
     pub type_aliases: Vec<AstTypeAlias>,
     pub traits: Vec<AstTraitDef>,
     pub impls: Vec<AstImplDef>,
-    /// Names of modules imported via `bring module_name`.
-    pub imports: Vec<String>,
+    /// Bring declarations: `bring "file.iris"`, `bring std.name`, or `bring module_name`.
+    pub brings: Vec<AstBring>,
     /// Extern function declarations: `extern def name(params) -> type`.
     pub extern_fns: Vec<AstExternFn>,
 }

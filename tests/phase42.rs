@@ -50,8 +50,8 @@ def f() -> str {
 }
 "#;
     let out = compile(src, "test", EmitKind::Eval).expect("should eval");
-    // Empty string — output will be "" (with quotes from Str display)
-    assert!(out.contains("\"\"") || out.trim() == "\"\"", "slice of empty range, got: {}", out.trim());
+    // Empty string — output is blank (no quotes in eval mode)
+    assert!(out.trim().is_empty(), "slice of empty range, got: {}", out.trim());
 }
 
 // ---------------------------------------------------------------------------

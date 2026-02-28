@@ -168,6 +168,9 @@ char*    iris_str_slice(const char* s, int64_t start, int64_t end);
 IrisOption* iris_str_find(const char* s, const char* sub);
 char*    iris_str_replace(const char* s, const char* old_s, const char* new_s);
 char*    iris_const_str(void);
+/* Phase 95: split/join */
+IrisList* iris_str_split(const char* s, const char* delim);
+char*     iris_str_join(IrisList* list, const char* delim);
 
 // Typed value-to-string conversions
 char*    iris_i64_to_str(int64_t v);

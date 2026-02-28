@@ -1,0 +1,44 @@
+// src/stdlib/math.iris -- IRIS standard math library
+
+pub def gcd(a: i64, b: i64) -> i64 {
+    var x = a
+    var y = b
+    while y != 0 {
+        val tmp = y
+        y = x - (x / y) * y
+        x = tmp
+    }
+    x
+}
+
+pub def lcm(a: i64, b: i64) -> i64 {
+    (a / gcd(a, b)) * b
+}
+
+pub def abs_i64(n: i64) -> i64 {
+    if n < 0 { 0 - n } else { n }
+}
+
+pub def clamp_i64(x: i64, lo: i64, hi: i64) -> i64 {
+    if x < lo { lo } else { if x > hi { hi } else { x } }
+}
+
+pub def min_i64(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+pub def max_i64(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+pub def sign_i64(n: i64) -> i64 {
+    if n > 0 { 1 } else { if n < 0 { 0 - 1 } else { 0 } }
+}
+
+pub def is_even(n: i64) -> bool {
+    (n - (n / 2) * 2) == 0
+}
+
+pub def is_odd(n: i64) -> bool {
+    (n - (n / 2) * 2) != 0
+}

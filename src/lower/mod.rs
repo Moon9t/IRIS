@@ -1542,7 +1542,7 @@ impl<'m> Lowerer<'m> {
             return Ok((result, ret_ty));
         }
 
-        // Built-in: len(s) → StrLen
+        // Built-in: len(s) → StrLen or ListLen depending on argument type
         if callee.name == "len" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
@@ -1550,13 +1550,17 @@ impl<'m> Lowerer<'m> {
                     span,
                 });
             }
-            let (operand, _) = self.lower_expr(&args[0])?;
+            let (operand, operand_ty) = self.lower_expr(&args[0])?;
             let result = self.builder.fresh_value();
             let ty = IrType::Scalar(DType::I64);
-            self.builder.push_instr(
-                IrInstr::StrLen { result, operand },
-                Some(ty.clone()),
-            );
+            match &operand_ty {
+                IrType::List(_) => {
+                    self.builder.push_instr(IrInstr::ListLen { result, list: operand }, Some(ty.clone()));
+                }
+                _ => {
+                    self.builder.push_instr(IrInstr::StrLen { result, operand }, Some(ty.clone()));
+                }
+            }
             return Ok((result, ty));
         }
 
@@ -2493,6 +2497,38 @@ impl<'m> Lowerer<'m> {
                 Some(result_ty.clone()),
             );
             return Ok((result, result_ty));
+        }
+
+        // Built-in: split(s, delim) → list<str>
+        if callee.name == "split" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported {
+                    detail: "split() requires exactly 2 arguments".to_owned(),
+                    span,
+                });
+            }
+            let (str_val, _) = self.lower_expr(&args[0])?;
+            let (delim, _) = self.lower_expr(&args[1])?;
+            let result = self.builder.fresh_value();
+            let ret_ty = IrType::List(Box::new(IrType::Str));
+            self.builder.push_instr(IrInstr::StrSplit { result, str_val, delim }, Some(ret_ty.clone()));
+            return Ok((result, ret_ty));
+        }
+
+        // Built-in: join(lst, delim) → str
+        if callee.name == "join" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported {
+                    detail: "join() requires exactly 2 arguments".to_owned(),
+                    span,
+                });
+            }
+            let (list_val, _) = self.lower_expr(&args[0])?;
+            let (delim, _) = self.lower_expr(&args[1])?;
+            let result = self.builder.fresh_value();
+            let ret_ty = IrType::Str;
+            self.builder.push_instr(IrInstr::StrJoin { result, list_val, delim }, Some(ret_ty.clone()));
+            return Ok((result, ret_ty));
         }
 
         // Built-in string predicates: contains(s, sub), starts_with(s, p), ends_with(s, p)
@@ -6643,6 +6679,8 @@ pub fn lower_type(ty: &AstType) -> IrType {
         AstType::Mutex(inner, _) => IrType::Mutex(Box::new(lower_type(inner))),
         AstType::Grad(inner, _) => IrType::Grad(Box::new(lower_type(inner))),
         AstType::Sparse(inner, _) => IrType::Sparse(Box::new(lower_type(inner))),
+        AstType::List(elem, _) => IrType::List(Box::new(lower_type(elem))),
+        AstType::Map(k, v, _) => IrType::Map(Box::new(lower_type(k)), Box::new(lower_type(v))),
         AstType::Fn { params, ret, .. } => IrType::Fn {
             params: params.iter().map(lower_type).collect(),
             ret: Box::new(lower_type(ret)),
@@ -6736,6 +6774,11 @@ pub fn lower_type_with_structs(ty: &AstType, module: &IrModule) -> IrType {
         AstType::Chan(elem, _) => IrType::Chan(Box::new(lower_type_with_structs(elem, module))),
         AstType::Atomic(inner, _) => IrType::Atomic(Box::new(lower_type_with_structs(inner, module))),
         AstType::Mutex(inner, _) => IrType::Mutex(Box::new(lower_type_with_structs(inner, module))),
+        AstType::List(elem, _) => IrType::List(Box::new(lower_type_with_structs(elem, module))),
+        AstType::Map(k, v, _) => IrType::Map(
+            Box::new(lower_type_with_structs(k, module)),
+            Box::new(lower_type_with_structs(v, module)),
+        ),
         other => lower_type(other),
     }
 }

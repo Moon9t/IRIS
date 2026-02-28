@@ -698,6 +698,12 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
         IrInstr::TcpClose { conn } => {
             write!(out, "tcp_close {}", conn)?;
         }
+        IrInstr::StrSplit { result, str_val, delim } => {
+            write!(out, "{} = str_split {}, {}", result, str_val, delim)?;
+        }
+        IrInstr::StrJoin { result, list_val, delim } => {
+            write!(out, "{} = str_join {}, {}", result, list_val, delim)?;
+        }
     }
     Ok(())
 }

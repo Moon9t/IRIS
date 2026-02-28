@@ -1725,6 +1725,36 @@ impl<'m> Interpreter<'m> {
                     }
                     IrInstr::TcpWrite { .. } => {}
                     IrInstr::TcpClose { .. } => {}
+                    IrInstr::StrSplit { result, str_val, delim } => {
+                        let sv = self.get(*str_val)?;
+                        let dv = self.get(*delim)?;
+                        let (s, d) = match (&sv, &dv) {
+                            (IrValue::Str(s), IrValue::Str(d)) => (s.clone(), d.clone()),
+                            _ => return Err(InterpError::TypeError { detail: "str_split: expected str".into() }),
+                        };
+                        let parts: Vec<IrValue> = if d.is_empty() {
+                            s.chars().map(|c| IrValue::Str(c.to_string())).collect()
+                        } else {
+                            s.split(d.as_str()).map(|p| IrValue::Str(p.to_owned())).collect()
+                        };
+                        let list = IrValue::List(std::rc::Rc::new(std::cell::RefCell::new(parts)));
+                        self.values.insert(*result, list);
+                    }
+                    IrInstr::StrJoin { result, list_val, delim } => {
+                        let lv = self.get(*list_val)?;
+                        let dv = self.get(*delim)?;
+                        let d = if let IrValue::Str(s) = &dv { s.clone() } else {
+                            return Err(InterpError::TypeError { detail: "str_join: delim must be str".into() });
+                        };
+                        let joined = if let IrValue::List(cells) = &lv {
+                            cells.borrow().iter().map(|v| {
+                                if let IrValue::Str(s) = v { s.clone() } else { format!("{}", v) }
+                            }).collect::<Vec<_>>().join(&d)
+                        } else {
+                            return Err(InterpError::TypeError { detail: "str_join: expected list<str>".into() });
+                        };
+                        self.values.insert(*result, IrValue::Str(joined));
+                    }
                 }
             }
 

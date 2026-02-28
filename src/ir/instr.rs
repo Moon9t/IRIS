@@ -578,6 +578,12 @@ pub enum IrInstr {
     TcpWrite { conn: ValueId, data: ValueId },
     /// Close a TCP connection or listener. Side-effecting.
     TcpClose { conn: ValueId },
+
+    // ---- Phase 95: String split/join ----
+    /// Split a string by a delimiter. Returns list<str>.
+    StrSplit { result: ValueId, str_val: ValueId, delim: ValueId },
+    /// Join a list<str> with a delimiter string. Returns str.
+    StrJoin { result: ValueId, list_val: ValueId, delim: ValueId },
 }
 
 impl IrInstr {
@@ -699,6 +705,8 @@ impl IrInstr {
             IrInstr::TcpRead { result, .. } => Some(*result),
             IrInstr::TcpWrite { .. } => None,
             IrInstr::TcpClose { .. } => None,
+            IrInstr::StrSplit { result, .. } => Some(*result),
+            IrInstr::StrJoin { result, .. } => Some(*result),
         }
     }
 
@@ -863,6 +871,8 @@ impl IrInstr {
             IrInstr::TcpRead { conn, .. } => vec![*conn],
             IrInstr::TcpWrite { conn, data } => vec![*conn, *data],
             IrInstr::TcpClose { conn } => vec![*conn],
+            IrInstr::StrSplit { str_val, delim, .. } => vec![*str_val, *delim],
+            IrInstr::StrJoin { list_val, delim, .. } => vec![*list_val, *delim],
         }
     }
 }

@@ -1,0 +1,47 @@
+// src/stdlib/fmt.iris -- IRIS standard formatting library
+
+// Pad an integer to at least `width` characters, right-aligned.
+pub def pad_int(n: i64, width: i64) -> str {
+    val s = to_str(n)
+    var result = s
+    var current_len = len(result)
+    while current_len < width {
+        result = concat(" ", result)
+        current_len = current_len + 1
+    }
+    result
+}
+
+// Pad an integer with leading zeros to at least `width` characters.
+pub def zero_pad_int(n: i64, width: i64) -> str {
+    val s = to_str(n)
+    var result = s
+    var current_len = len(result)
+    while current_len < width {
+        result = concat("0", result)
+        current_len = current_len + 1
+    }
+    result
+}
+
+// Left-align a string in a field of at least `width` characters.
+pub def left_align(s: str, width: i64) -> str {
+    var result = s
+    var current_len = len(result)
+    while current_len < width {
+        result = concat(result, " ")
+        current_len = current_len + 1
+    }
+    result
+}
+
+// Right-align a string in a field of at least `width` characters.
+pub def right_align(s: str, width: i64) -> str {
+    var result = s
+    var current_len = len(result)
+    while current_len < width {
+        result = concat(" ", result)
+        current_len = current_len + 1
+    }
+    result
+}

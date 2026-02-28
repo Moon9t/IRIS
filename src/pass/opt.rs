@@ -473,6 +473,8 @@ pub(crate) fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, Va
         IrInstr::TcpRead { conn, .. } => { replace(conn); }
         IrInstr::TcpWrite { conn, data } => { replace(conn); replace(data); }
         IrInstr::TcpClose { conn } => { replace(conn); }
+        IrInstr::StrSplit { str_val, delim, .. } => { replace(str_val); replace(delim); }
+        IrInstr::StrJoin { list_val, delim, .. } => { replace(list_val); replace(delim); }
     }
 }
 

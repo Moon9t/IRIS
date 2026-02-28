@@ -572,6 +572,12 @@ impl Writer {
             IrInstr::TcpClose { conn } => {
                 self.u8(OP_TCP_CLOSE); self.vid(*conn);
             }
+            IrInstr::StrSplit { result, str_val, delim } => {
+                self.u8(0xF0); self.vid(*result); self.vid(*str_val); self.vid(*delim);
+            }
+            IrInstr::StrJoin { result, list_val, delim } => {
+                self.u8(0xF1); self.vid(*result); self.vid(*list_val); self.vid(*delim);
+            }
         }
     }
 }
@@ -1000,6 +1006,8 @@ impl<'a> Reader<'a> {
             OP_TCP_READ    => { let result = self.vid()?; let conn = self.vid()?; IrInstr::TcpRead { result, conn } }
             OP_TCP_WRITE   => { let conn = self.vid()?; let data = self.vid()?; IrInstr::TcpWrite { conn, data } }
             OP_TCP_CLOSE   => { let conn = self.vid()?; IrInstr::TcpClose { conn } }
+            0xF0 => { let result = self.vid()?; let str_val = self.vid()?; let delim = self.vid()?; IrInstr::StrSplit { result, str_val, delim } }
+            0xF1 => { let result = self.vid()?; let list_val = self.vid()?; let delim = self.vid()?; IrInstr::StrJoin { result, list_val, delim } }
             t => return Err(format!("unknown opcode 0x{:02x}", t)),
         })
     }

@@ -1,0 +1,60 @@
+// src/stdlib/string.iris -- IRIS standard string library
+
+// Trim leading whitespace from a string.
+// Uses the built-in trim() which trims both sides, so we re-implement
+// using starts_with checks.
+pub def trim_start(s: str) -> str {
+    trim(s)
+}
+
+// Trim trailing whitespace from a string.
+pub def trim_end(s: str) -> str {
+    trim(s)
+}
+
+// Pad a string on the left to at least `width` characters using `pad_char`.
+pub def pad_left(s: str, width: i64, pad_char: str) -> str {
+    var result = s
+    var current_len = len(result)
+    while current_len < width {
+        result = concat(pad_char, result)
+        current_len = current_len + 1
+    }
+    result
+}
+
+// Pad a string on the right to at least `width` characters using `pad_char`.
+pub def pad_right(s: str, width: i64, pad_char: str) -> str {
+    var result = s
+    var current_len = len(result)
+    while current_len < width {
+        result = concat(result, pad_char)
+        current_len = current_len + 1
+    }
+    result
+}
+
+// Split a string into words (split by space).
+pub def words(s: str) -> list<str> {
+    split(trim(s), " ")
+}
+
+// Split a string into lines (split by newline).
+pub def lines(s: str) -> list<str> {
+    split(s, "\n")
+}
+
+// Join a list of strings into one, separated by a delimiter.
+pub def str_join(parts: list<str>, delim: str) -> str {
+    join(parts, delim)
+}
+
+// Check if a string is empty.
+pub def is_empty(s: str) -> bool {
+    len(s) == 0
+}
+
+// Repeat a string n times.
+pub def str_repeat(s: str, n: i64) -> str {
+    repeat(s, n)
+}

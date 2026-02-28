@@ -37,10 +37,11 @@
 
 use crate::error::ParseError;
 use crate::parser::ast::{
-    AstBinOp, AstBlock, AstConst, AstDim, AstEnumDef, AstEnumVariant, AstExpr, AstFieldDef,
-    AstFunction, AstImplDef, AstLayer, AstLayerParam, AstModel, AstModelInput, AstModelOutput,
-    AstModule, AstParam, AstScalarKind, AstStmt, AstStructDef, AstTraitDef, AstTraitMethod,
-    AstType, AstTypeAlias, AstUnaryOp, AstWhenArm, AstWhenPattern, Ident,
+    AstBinOp, AstBlock, AstBring, AstConst, AstDim, AstEnumDef, AstEnumVariant, AstExpr,
+    AstFieldDef, AstFunction, AstImplDef, AstLayer, AstLayerParam, AstModel, AstModelInput,
+    AstModelOutput, AstModule, AstParam, AstScalarKind, AstStmt, AstStructDef, AstTraitDef,
+    AstTraitMethod, AstType, AstTypeAlias, AstUnaryOp, AstWhenArm, AstWhenPattern, BringPath,
+    Ident,
 };
 use crate::parser::lexer::{Span, Spanned, Token};
 
@@ -130,7 +131,7 @@ impl<'t> Parser<'t> {
         let mut type_aliases = Vec::new();
         let mut traits = Vec::new();
         let mut impls = Vec::new();
-        let mut imports = Vec::new();
+        let mut brings = Vec::new();
         let mut extern_fns = Vec::new();
         while !self.at_eof() {
             match self.peek_tok().clone() {
@@ -143,9 +144,33 @@ impl<'t> Parser<'t> {
                 Token::Trait => traits.push(self.parse_trait_def()?),
                 Token::Impl => impls.push(self.parse_impl_def()?),
                 Token::Bring => {
-                    self.advance();
-                    let mod_name = self.expect_ident()?.name;
-                    imports.push(mod_name);
+                    let bring_span = self.current_span();
+                    self.advance(); // consume 'bring'
+                    let bring = match self.peek_tok().clone() {
+                        // bring "path/to/file.iris"
+                        Token::StringLit(path) => {
+                            self.advance();
+                            AstBring { path: BringPath::File(path), span: bring_span }
+                        }
+                        // bring std.name  OR  bring module_name (legacy identifier)
+                        Token::Ident(name) => {
+                            self.advance();
+                            if name == "std" && matches!(self.peek_tok(), Token::Dot) {
+                                self.advance(); // consume '.'
+                                let lib_name = self.expect_ident()?.name;
+                                AstBring { path: BringPath::Stdlib(lib_name), span: bring_span }
+                            } else {
+                                // Legacy: bring module_name → treat as File("module_name.iris")
+                                AstBring { path: BringPath::File(format!("{}.iris", name)), span: bring_span }
+                            }
+                        }
+                        _ => return Err(ParseError::UnexpectedToken {
+                            expected: "module path (\"file.iris\", std.name, or identifier)".to_owned(),
+                            found: format!("{}", self.peek_tok()),
+                            span: self.current_span(),
+                        }),
+                    };
+                    brings.push(bring);
                 }
                 Token::Extern => {
                     extern_fns.push(self.parse_extern_fn()?);
@@ -158,11 +183,29 @@ impl<'t> Parser<'t> {
                             func.is_pub = true;
                             functions.push(func);
                         }
-                        Token::Record => structs.push(self.parse_struct_def()?),
-                        Token::Choice => enums.push(self.parse_enum_def()?),
+                        Token::Record => {
+                            let mut s = self.parse_struct_def()?;
+                            s.is_pub = true;
+                            structs.push(s);
+                        }
+                        Token::Choice => {
+                            let mut e = self.parse_enum_def()?;
+                            e.is_pub = true;
+                            enums.push(e);
+                        }
+                        Token::Const => {
+                            let mut c = self.parse_const_decl()?;
+                            c.is_pub = true;
+                            consts.push(c);
+                        }
+                        Token::Type => {
+                            let mut t = self.parse_type_alias()?;
+                            t.is_pub = true;
+                            type_aliases.push(t);
+                        }
                         Token::Trait => traits.push(self.parse_trait_def()?),
                         _ => return Err(ParseError::UnexpectedToken {
-                            expected: "'def', 'record', or 'choice' after 'pub'".to_owned(),
+                            expected: "'def', 'record', 'choice', 'const', 'type', or 'trait' after 'pub'".to_owned(),
                             found: format!("{}", self.peek_tok()),
                             span: self.current_span(),
                         }),
@@ -186,7 +229,7 @@ impl<'t> Parser<'t> {
             type_aliases,
             traits,
             impls,
-            imports,
+            brings,
             extern_fns,
         })
     }
@@ -305,7 +348,7 @@ impl<'t> Parser<'t> {
         self.expect(&Token::Eq)?;
         let ty = self.parse_type()?;
         let end = start; // span is approximate — just use the keyword span
-        Ok(AstTypeAlias { name, ty, span: start.merge(end) })
+        Ok(AstTypeAlias { name, ty, span: start.merge(end), is_pub: false })
     }
 
     /// Parses `const NAME [: type] = expr`.
@@ -327,6 +370,7 @@ impl<'t> Parser<'t> {
             ty,
             value,
             span: start.merge(end),
+            is_pub: false,
         })
     }
 
@@ -369,6 +413,7 @@ impl<'t> Parser<'t> {
             name,
             variants,
             span: start.merge(end),
+            is_pub: false,
         })
     }
 
@@ -395,6 +440,7 @@ impl<'t> Parser<'t> {
             name,
             fields,
             span: start.merge(end),
+            is_pub: false,
         })
     }
 
@@ -729,6 +775,24 @@ impl<'t> Parser<'t> {
                 let inner = self.parse_type()?;
                 let end = self.expect(&Token::RAngle)?;
                 Ok(AstType::Sparse(Box::new(inner), span.merge(end)))
+            }
+            Token::Ident(ref name) if name == "list" => {
+                let _ = name.clone();
+                self.advance();
+                self.expect(&Token::LAngle)?;
+                let inner = self.parse_type()?;
+                let end = self.expect(&Token::RAngle)?;
+                Ok(AstType::List(Box::new(inner), span.merge(end)))
+            }
+            Token::Ident(ref name) if name == "map" => {
+                let _ = name.clone();
+                self.advance();
+                self.expect(&Token::LAngle)?;
+                let k = self.parse_type()?;
+                self.expect(&Token::Comma)?;
+                let v = self.parse_type()?;
+                let end = self.expect(&Token::RAngle)?;
+                Ok(AstType::Map(Box::new(k), Box::new(v), span.merge(end)))
             }
             Token::Ident(ref name) if name == "option" => {
                 let name = name.clone();

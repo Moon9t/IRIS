@@ -1025,6 +1025,12 @@ fn emit_llvm_instr(
         IrInstr::TcpClose { conn } => {
             writeln!(out, "  call void @iris_tcp_close(i64 {})", val(*conn))?;
         }
+        IrInstr::StrSplit { result, str_val, delim } => {
+            writeln!(out, "  %v{} = call ptr @iris_str_split(ptr {}, ptr {})", result.0, val(*str_val), val(*delim))?;
+        }
+        IrInstr::StrJoin { result, list_val, delim } => {
+            writeln!(out, "  %v{} = call ptr @iris_str_join(ptr {}, ptr {})", result.0, val(*list_val), val(*delim))?;
+        }
     }
     Ok(())
 }
