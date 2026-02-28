@@ -96,8 +96,9 @@ pub fn emit_cuda(module: &IrModule) -> Result<String, CodegenError> {
     // ── NVPTX intrinsic declarations ───────────────────────────────────────
     emit_nvptx_declares(&mut out)?;
 
-    // ── Collect which functions contain ParFor (need kernel extraction) ────
-    let kernel_bodies: Vec<String> = module
+    // ── Collect kernel function names ─────────────────────────────────────
+    // 1. ParFor body functions (existing mechanism).
+    let parfor_kernels: Vec<String> = module
         .functions()
         .iter()
         .flat_map(|f| {
@@ -113,18 +114,38 @@ pub fn emit_cuda(module: &IrModule) -> Result<String, CodegenError> {
         })
         .collect();
 
-    // Emit kernel wrappers for ParFor body functions.
-    for body_fn in &kernel_bodies {
+    // 2. Functions with `@kernel` attribute (Phase 87).
+    let attr_kernels: Vec<String> = module
+        .functions()
+        .iter()
+        .filter(|f| f.attrs.iter().any(|a| a == "kernel"))
+        .map(|f| f.name.clone())
+        .collect();
+
+    // Combined set of kernel names (for NVVM annotation).
+    let all_kernel_names: Vec<String> = parfor_kernels.iter()
+        .map(|n| format!("{}_kernel", n))
+        .chain(attr_kernels.iter().cloned())
+        .collect();
+
+    // Emit ParFor kernel wrappers.
+    for body_fn in &parfor_kernels {
         if let Some(f) = module.function_by_name(body_fn) {
             emit_cuda_kernel(f, &str_table, &mut out)?;
         }
     }
 
+    // Emit @kernel-attributed functions as CUDA kernels (use function name directly).
+    for kn in &attr_kernels {
+        if let Some(f) = module.function_by_name(kn) {
+            emit_cuda_attr_kernel(f, &str_table, &mut out)?;
+        }
+    }
+
     // ── Host-side function definitions ────────────────────────────────────
-    // Build function signature map.
     let mut fn_sigs: HashMap<String, (String, Vec<String>)> = HashMap::new();
     for func in module.functions() {
-        let ret_s = cuda_type(& func.return_ty).unwrap_or_else(|_| "ptr".to_owned());
+        let ret_s = cuda_type(&func.return_ty).unwrap_or_else(|_| "ptr".to_owned());
         let param_ss: Vec<String> = func
             .params
             .iter()
@@ -134,24 +155,23 @@ pub fn emit_cuda(module: &IrModule) -> Result<String, CodegenError> {
     }
 
     for func in module.functions() {
-        // Skip body functions already emitted as kernels.
-        if kernel_bodies.contains(&func.name) {
+        // Skip body functions already emitted as kernels or @kernel attrs.
+        if parfor_kernels.contains(&func.name) || attr_kernels.contains(&func.name) {
             continue;
         }
         emit_cuda_host_function(func, &str_table, &fn_sigs, &mut out)?;
     }
 
     // ── !nvvm.annotations metadata ────────────────────────────────────────
-    // Must appear at the end of the module.
-    if !kernel_bodies.is_empty() {
+    if !all_kernel_names.is_empty() {
         writeln!(out, "; NVVM annotations — mark kernel functions.")?;
         writeln!(out, "!nvvm.annotations = !{{")?;
-        for (i, name) in kernel_bodies.iter().enumerate() {
+        for (i, name) in all_kernel_names.iter().enumerate() {
             writeln!(
                 out,
-                "  !{{ptr @{}_kernel, !\"kernel\", i32 1}}{}",
+                "  !{{ptr @{}, !\"kernel\", i32 1}}{}",
                 name,
-                if i + 1 < kernel_bodies.len() { "," } else { "" }
+                if i + 1 < all_kernel_names.len() { "," } else { "" }
             )?;
         }
         writeln!(out, "}}")?;
@@ -196,6 +216,30 @@ fn emit_cuda_kernel(
     // Emit the kernel body with the flat index as the loop variable.
     emit_cuda_kernel_body(func, str_table, out)?;
 
+    writeln!(out, "}}\n")?;
+    Ok(())
+}
+
+/// Emit a function annotated with `@kernel` directly as a CUDA kernel.
+/// Unlike `emit_cuda_kernel` (which wraps a ParFor body and computes a flat index),
+/// this emits the function body verbatim with standard GPU entry boilerplate.
+fn emit_cuda_attr_kernel(
+    func: &IrFunction,
+    str_table: &HashMap<String, usize>,
+    out: &mut String,
+) -> Result<(), CodegenError> {
+    let ret = cuda_type(&func.return_ty).unwrap_or_else(|_| "void".to_owned());
+    let params: Result<Vec<String>, CodegenError> = func.params.iter().map(|p| {
+        let ty = cuda_type(&p.ty).unwrap_or_else(|_| "ptr".to_owned());
+        Ok(format!("{} %{}", ty, p.name))
+    }).collect();
+    writeln!(out, "; ── CUDA kernel (attr): {} ──────────────────────────────────", func.name)?;
+    writeln!(out, "define {} @{}({}) {{", ret, func.name, params?.join(", "))?;
+    // Expose thread/block indices as values programs can read.
+    writeln!(out, "kernel_entry_{}_attr:", func.name)?;
+    writeln!(out, "  %tid.x = call i32 @llvm.nvvm.read.ptx.sreg.tid.x()")?;
+    writeln!(out, "  %bid.x = call i32 @llvm.nvvm.read.ptx.sreg.ctaid.x()")?;
+    emit_cuda_kernel_body(func, str_table, out)?;
     writeln!(out, "}}\n")?;
     Ok(())
 }

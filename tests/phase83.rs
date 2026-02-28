@@ -11,34 +11,11 @@ fn eval(src: &str) -> String {
     compile(src, "phase83", EmitKind::Eval).expect("eval failed")
 }
 
-fn ir_with_gc(src: &str) -> String {
-    let mut module = compile_to_module(src, "phase83").expect("compile failed");
-    let mut pass = GcAnnotatePass;
-    pass.run(&mut module).expect("gc pass failed");
-    iris::compile(src, "phase83", EmitKind::Ir).expect("ir failed")
-}
-
 fn module_with_gc(src: &str) -> (iris::IrModule, String) {
     let mut module = compile_to_module(src, "phase83").expect("compile failed");
     let mut pass = GcAnnotatePass;
     pass.run(&mut module).expect("gc pass failed");
-    let ir_text = {
-        use iris::pass::Pass;
-        // Serialize the annotated module to IR text via printer
-        let mut s = String::new();
-        for func in module.functions() {
-            s.push_str(&format!("def {}:\n", func.name));
-            for block in func.blocks() {
-                s.push_str(&format!("  block {:?}:\n", block.id));
-                for instr in &block.instrs {
-                    let mut tmp = String::new();
-                    iris::codegen::printer::emit_instr(&mut tmp, instr).unwrap();
-                    s.push_str(&format!("    {}\n", tmp));
-                }
-            }
-        }
-        s
-    };
+    let ir_text = iris::codegen::printer::emit_ir_text(&module).expect("emit_ir_text failed");
     (module, ir_text)
 }
 

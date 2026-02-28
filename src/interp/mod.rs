@@ -209,6 +209,49 @@ pub fn eval_function_in_module_opts(
     Interpreter::new(Some(module), opts, 0).run(func, args)
 }
 
+/// Runs the first zero-argument function in `module`, collecting a trace of
+/// executed statements for use by the debugger.
+///
+/// Each [`crate::debugger::TraceEntry`] records the function name, source
+/// position (from the function's `span_table`), and a snapshot of named values.
+///
+/// Functions without span information produce entries with `line = 0`.
+pub fn collect_trace(
+    module: &IrModule,
+    source: &str,
+    out: std::rc::Rc<std::cell::RefCell<Vec<crate::debugger::TraceEntry>>>,
+) -> Result<(), InterpError> {
+    use crate::debugger::TraceEntry;
+
+    let func = module
+        .functions()
+        .iter()
+        .find(|f| f.params.is_empty())
+        .ok_or_else(|| InterpError::Unsupported {
+            detail: "no zero-argument function for trace collection".into(),
+        })?;
+
+    // Run the program with trace collection enabled.
+    let opts = InterpOptions::default();
+    let mut interp = Interpreter::new(Some(module), opts, 0);
+    interp.trace_out = Some(std::rc::Rc::clone(&out));
+    interp.trace_func = func.name.clone();
+    interp.trace_source = source.to_owned();
+    let _ = interp.run(func, &[]);
+
+    // Ensure at least one trace entry exists so the session is non-empty.
+    if out.borrow().is_empty() {
+        out.borrow_mut().push(TraceEntry {
+            func_name: func.name.clone(),
+            line: 0,
+            column: 0,
+            variables: Vec::new(),
+        });
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Interpreter state
 // ---------------------------------------------------------------------------
@@ -219,6 +262,12 @@ struct Interpreter<'m> {
     opts: InterpOptions,
     /// Current call-stack depth (0 = top-level).
     depth: usize,
+    /// Optional trace output buffer (populated by the debugger).
+    trace_out: Option<std::rc::Rc<std::cell::RefCell<Vec<crate::debugger::TraceEntry>>>>,
+    /// Name of the function being traced (used in TraceEntry.func_name).
+    trace_func: String,
+    /// Source text for byte-offset → line/col conversion.
+    trace_source: String,
 }
 
 impl<'m> Interpreter<'m> {
@@ -228,6 +277,9 @@ impl<'m> Interpreter<'m> {
             module,
             opts,
             depth,
+            trace_out: None,
+            trace_func: String::new(),
+            trace_source: String::new(),
         }
     }
 
@@ -250,7 +302,7 @@ impl<'m> Interpreter<'m> {
                 .block(current)
                 .ok_or(InterpError::UndefinedValue { id: current.0 })?;
 
-            for instr in &block.instrs {
+            for (instr_idx, instr) in block.instrs.iter().enumerate() {
                 steps += 1;
                 if steps > self.opts.max_steps {
                     return Err(InterpError::Unsupported {
@@ -259,6 +311,39 @@ impl<'m> Interpreter<'m> {
                             self.opts.max_steps
                         ),
                     });
+                }
+
+                // Emit a trace entry whenever this instruction has a recorded span.
+                if let Some(ref trace) = self.trace_out {
+                    if let Some(byte) = func.span_table.get(current.0, instr_idx) {
+                        let (line, col) = if self.trace_source.is_empty() {
+                            (0, 0)
+                        } else {
+                            crate::diagnostics::byte_to_line_col(&self.trace_source, byte)
+                        };
+                        // Snapshot all named block-param values currently in scope.
+                        let variables: Vec<(String, String)> = func
+                            .value_defs
+                            .iter()
+                            .filter_map(|(vid, def)| {
+                                if let crate::ir::value::ValueDef::BlockParam { block: bid } = def {
+                                    let b = func.block(*bid)?;
+                                    let param = b.params.iter().find(|p| p.id == *vid)?;
+                                    let name = param.name.as_ref()?.clone();
+                                    let val = self.values.get(vid)?;
+                                    Some((name, format!("{}", val)))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        trace.borrow_mut().push(crate::debugger::TraceEntry {
+                            func_name: self.trace_func.clone(),
+                            line,
+                            column: col,
+                            variables,
+                        });
+                    }
                 }
 
                 match instr {
@@ -1625,6 +1710,21 @@ impl<'m> Interpreter<'m> {
                             self.values.insert(*r, ret);
                         }
                     }
+                    // Phase 88: TCP network I/O — interpreter stubs (return sentinel values)
+                    IrInstr::TcpConnect { result, .. } => {
+                        self.values.insert(*result, IrValue::I64(-1));
+                    }
+                    IrInstr::TcpListen { result, .. } => {
+                        self.values.insert(*result, IrValue::I64(-1));
+                    }
+                    IrInstr::TcpAccept { result, .. } => {
+                        self.values.insert(*result, IrValue::I64(-1));
+                    }
+                    IrInstr::TcpRead { result, .. } => {
+                        self.values.insert(*result, IrValue::Str("".to_owned()));
+                    }
+                    IrInstr::TcpWrite { .. } => {}
+                    IrInstr::TcpClose { .. } => {}
                 }
             }
 

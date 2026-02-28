@@ -523,6 +523,185 @@ void iris_map_remove(IrisMap* m, const char* key) {
 int64_t iris_map_len(IrisMap* m) { return (int64_t)m->len; }
 
 // ---------------------------------------------------------------------------
+// Extended list operations
+// ---------------------------------------------------------------------------
+
+static int iris_val_equal(IrisVal* a, IrisVal* b) {
+    if (a == b) return 1;
+    if (!a || !b) return 0;
+    if (a->tag != b->tag) return 0;
+    switch (a->tag) {
+        case IRIS_TAG_I64:  return a->i64 == b->i64;
+        case IRIS_TAG_I32:  return a->i32 == b->i32;
+        case IRIS_TAG_F64:  return a->f64 == b->f64;
+        case IRIS_TAG_F32:  return a->f32 == b->f32;
+        case IRIS_TAG_BOOL: return a->boolean == b->boolean;
+        case IRIS_TAG_STR:  return (a->str && b->str && strcmp(a->str, b->str) == 0);
+        default: return 0;
+    }
+}
+
+int iris_list_contains(IrisList* l, IrisVal* val) {
+    if (!l || !val) return 0;
+    for (size_t i = 0; i < l->len; i++) {
+        if (iris_val_equal(l->data[i], val)) return 1;
+    }
+    return 0;
+}
+
+static int iris_val_compare(IrisVal* a, IrisVal* b) {
+    if (!a && !b) return 0;
+    if (!a) return -1;
+    if (!b) return 1;
+    if (a->tag != b->tag) return (int)a->tag - (int)b->tag;
+    switch (a->tag) {
+        case IRIS_TAG_I64:  return (a->i64 > b->i64) ? 1 : (a->i64 < b->i64 ? -1 : 0);
+        case IRIS_TAG_I32:  return (a->i32 > b->i32) ? 1 : (a->i32 < b->i32 ? -1 : 0);
+        case IRIS_TAG_F64:  return (a->f64 > b->f64) ? 1 : (a->f64 < b->f64 ? -1 : 0);
+        case IRIS_TAG_F32:  return (a->f32 > b->f32) ? 1 : (a->f32 < b->f32 ? -1 : 0);
+        case IRIS_TAG_BOOL: return (int)a->boolean - (int)b->boolean;
+        case IRIS_TAG_STR:
+            if (!a->str && !b->str) return 0;
+            if (!a->str) return -1;
+            if (!b->str) return 1;
+            return strcmp(a->str, b->str);
+        default: return 0;
+    }
+}
+
+void iris_list_sort(IrisList* l) {
+    if (!l || l->len <= 1) return;
+    /* Simple bubble sort for stability; replace with qsort if needed */
+    for (size_t i = 0; i < l->len - 1; i++) {
+        for (size_t j = 0; j < l->len - 1 - i; j++) {
+            if (iris_val_compare(l->data[j], l->data[j+1]) > 0) {
+                IrisVal* t = l->data[j];
+                l->data[j] = l->data[j+1];
+                l->data[j+1] = t;
+            }
+        }
+    }
+}
+
+IrisList* iris_list_concat(IrisList* a, IrisList* b) {
+    IrisList* r = iris_list_new();
+    if (a) for (size_t i = 0; i < a->len; i++) iris_list_push(r, a->data[i]);
+    if (b) for (size_t i = 0; i < b->len; i++) iris_list_push(r, b->data[i]);
+    return r;
+}
+
+IrisList* iris_list_slice(IrisList* l, int64_t start, int64_t end_idx) {
+    IrisList* r = iris_list_new();
+    if (!l) return r;
+    size_t len = l->len;
+    if (start < 0) start = 0;
+    if ((size_t)end_idx > len) end_idx = (int64_t)len;
+    if (start >= end_idx) return r;
+    for (int64_t i = start; i < end_idx; i++) iris_list_push(r, l->data[(size_t)i]);
+    return r;
+}
+
+// ---------------------------------------------------------------------------
+// Extended map operations
+// ---------------------------------------------------------------------------
+
+IrisList* iris_map_keys(IrisMap* m) {
+    IrisList* r = iris_list_new();
+    if (!m) return r;
+    for (size_t b = 0; b < m->n_buckets; b++) {
+        for (IrisMapEntry* e = m->buckets[b]; e; e = e->next) {
+            iris_list_push(r, iris_box_str(e->key));
+        }
+    }
+    return r;
+}
+
+IrisList* iris_map_values(IrisMap* m) {
+    IrisList* r = iris_list_new();
+    if (!m) return r;
+    for (size_t b = 0; b < m->n_buckets; b++) {
+        for (IrisMapEntry* e = m->buckets[b]; e; e = e->next) {
+            iris_list_push(r, e->val);
+        }
+    }
+    return r;
+}
+
+// ---------------------------------------------------------------------------
+// File I/O
+// ---------------------------------------------------------------------------
+
+char* iris_file_read_all(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long sz = ftell(f);
+    if (sz < 0) { fclose(f); return NULL; }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    size_t size = (size_t)sz;
+    char* buf = xmalloc(size + 1);
+    size_t n = fread(buf, 1, size, f);
+    buf[n] = '\0';
+    fclose(f);
+    return buf;
+}
+
+char* iris_file_write_all(const char* path, const char* contents) {
+    FILE* f = fopen(path, "wb");
+    if (!f) return NULL;
+    size_t len = strlen(contents);
+    int ok = (fwrite(contents, 1, len, f) == len);
+    fclose(f);
+    return ok ? (char*)path : NULL;
+}
+
+int iris_file_exists(const char* path) {
+    FILE* f = fopen(path, "r");
+    if (!f) return 0;
+    fclose(f);
+    return 1;
+}
+
+IrisList* iris_file_lines(const char* path) {
+    FILE* f = fopen(path, "r");
+    if (!f) return iris_list_new();
+    IrisList* r = iris_list_new();
+    char buf[8192];
+    while (fgets(buf, sizeof(buf), f)) {
+        size_t n = strlen(buf);
+        if (n > 0 && buf[n-1] == '\n') buf[--n] = '\0';
+        iris_list_push(r, iris_box_str(buf));
+    }
+    fclose(f);
+    return r;
+}
+
+// ---------------------------------------------------------------------------
+// Process and environment
+// ---------------------------------------------------------------------------
+
+static int saved_argc = 0;
+static char** saved_argv = NULL;
+
+void iris_set_argv(int argc, char** argv) {
+    saved_argc = argc;
+    saved_argv = argv;
+}
+
+IrisList* iris_process_args(void) {
+    IrisList* r = iris_list_new();
+    if (!saved_argv) return r;
+    for (int i = 0; i < saved_argc; i++)
+        iris_list_push(r, iris_box_str(saved_argv[i]));
+    return r;
+}
+
+char* iris_env_var(const char* key) {
+    const char* v = getenv(key);
+    return v ? xstrdup(v) : NULL;
+}
+
+// ---------------------------------------------------------------------------
 // Channels and concurrency
 // ---------------------------------------------------------------------------
 

@@ -11,6 +11,8 @@ pub struct CliArgs {
     pub emit: EmitKind,
     /// Write output to this file instead of stdout.
     pub output: Option<PathBuf>,
+    /// If true, after building a binary run it (used with `iris run`).
+    pub run_after_build: bool,
     /// Dump IR to stderr immediately after this pass completes.
     pub dump_ir_after: Option<String>,
     /// Maximum interpreter step count before aborting (default: 1 000 000).
@@ -28,6 +30,12 @@ pub enum ParseArgsResult {
     Help,
     /// `--version` was present; caller should print version and exit 0.
     Version,
+    /// `repl` subcommand: start the interactive REPL.
+    Repl,
+    /// `lsp` subcommand: start the LSP server over stdin/stdout.
+    Lsp,
+    /// `dap` subcommand: start the DAP debug adapter over stdin/stdout.
+    Dap,
 }
 
 /// Parses command-line arguments (the full `std::env::args()` slice including `argv[0]`).
@@ -35,10 +43,29 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
     let mut emit = EmitKind::Ir;
     let mut path: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
+    let mut run_after_build = false;
     let mut dump_ir_after: Option<String> = None;
     let mut max_steps: usize = 1_000_000;
     let mut max_depth: usize = 500;
     let mut i = 1usize;
+
+    if let Some(first) = args.get(i) {
+        match first.as_str() {
+            "build" => {
+                emit = EmitKind::Binary;
+                i += 1;
+            }
+            "run" => {
+                emit = EmitKind::Binary;
+                run_after_build = true;
+                i += 1;
+            }
+            "repl" => return Ok(ParseArgsResult::Repl),
+            "lsp"  => return Ok(ParseArgsResult::Lsp),
+            "dap"  => return Ok(ParseArgsResult::Dap),
+            _ => {}
+        }
+    }
 
     while i < args.len() {
         match args[i].as_str() {
@@ -112,7 +139,7 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
     }
 
     let path = path.ok_or_else(|| "no input file specified".to_owned())?;
-    Ok(ParseArgsResult::Args(CliArgs { path, emit, output, dump_ir_after, max_steps, max_depth }))
+    Ok(ParseArgsResult::Args(CliArgs { path, emit, output, run_after_build, dump_ir_after, max_steps, max_depth }))
 }
 
 /// Returns the version string for the CLI.
@@ -123,7 +150,14 @@ pub fn version_text() -> &'static str {
 /// Returns the usage/help text for the CLI.
 pub fn help_text() -> &'static str {
     "IRIS compiler\n\
-     Usage: iris [options] <file.iris>\n\
+     Usage: iris [subcommand] [options] <file.iris>\n\
+     \n\
+     Subcommands:\n\
+       build                 Build native binary (same as --emit binary)\n\
+       run                   Build and run the binary\n\
+       repl                  Start an interactive REPL session\n\
+       lsp                   Start the LSP server (JSON-RPC on stdin/stdout)\n\
+       dap                   Start the DAP debug adapter (JSON-RPC on stdin/stdout)\n\
      \n\
      Options:\n\
        --emit <kind>         Output kind: ir (default), llvm, llvm-complete, cuda, simd,\n\

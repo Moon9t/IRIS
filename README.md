@@ -357,17 +357,30 @@ cargo test
 
 ```sh
 # Emit SSA IR text
-cargo run -- --emit ir examples/mlp.iris
+cargo run -- --emit ir examples/hello.iris
 
 # Emit LLVM IR
-cargo run -- --emit llvm examples/mlp.iris
+cargo run -- --emit llvm examples/hello.iris
 
 # Emit ONNX binary
-cargo run -- --emit onnx examples/mlp.iris
+cargo run -- --emit onnx examples/neural_net.iris
 
 # Evaluate (interpret) — prints return value
-cargo run -- --emit eval examples/mlp.iris
+cargo run -- --emit eval examples/hello.iris
+
+# Build native binary (requires clang in PATH)
+cargo run -- build examples/hello.iris -o hello
+cargo run -- run examples/hello.iris   # build and run
+
+# Or explicitly
+cargo run -- --emit binary examples/hello.iris -o hello
 ```
+
+**Entry point for binaries:** Define `def main() -> i64` (or a zero-argument function). The compiler emits a C-compatible `main(argc, argv)` that calls your entry and exits with its return value.
+
+**Standard library:** Minimal modules in `stdlib/` — `file` (read_all, write_all, exists, lines) and `io` (get_args, get_env). Use with multi-file compilation: pass `("file", file_src), ("main", main_src)` to `compile_multi` with your main module using `bring file` or `bring io`. Builtins `file_read_all`, `file_write_all`, `file_exists`, `file_lines`, `args()`, `env_var(key)` are always available.
+
+**ML-backend (ONNX, CUDA):** Export models with `--emit onnx` or `--emit onnx-binary`. Use `--emit cuda` for GPU kernel IR (NVPTX). Native `build` produces a CPU executable; tensor execution in binaries is not yet implemented — use the interpreter or ONNX for tensor workloads.
 
 ---
 

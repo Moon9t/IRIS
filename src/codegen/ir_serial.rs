@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 
 use crate::ir::block::{BlockId, IrBlock};
-use crate::ir::function::{FunctionId, IrFunction, Param};
+use crate::ir::function::{FunctionId, IrFunction, Param, SpanTable};
 use crate::ir::instr::{BinOp, InstrId, IrInstr, ScalarUnaryOp, TensorOp};
 use crate::ir::module::IrModule;
 use crate::ir::types::{DType, Dim, IrType, Shape};
@@ -127,6 +127,13 @@ const OP_STR_EQ: u8            = 0x65;
 const OP_CALL_EXTERN: u8       = 0x66;
 const OP_RETAIN: u8            = 0x67;
 const OP_RELEASE: u8           = 0x68;
+// Phase 88: TCP network I/O
+const OP_TCP_CONNECT: u8       = 0x69;
+const OP_TCP_LISTEN: u8        = 0x6A;
+const OP_TCP_ACCEPT: u8        = 0x6B;
+const OP_TCP_READ: u8          = 0x6C;
+const OP_TCP_WRITE: u8         = 0x6D;
+const OP_TCP_CLOSE: u8         = 0x6E;
 
 const MAGIC: &[u8; 4] = b"IRIS";
 const VERSION: u8 = 1;
@@ -547,6 +554,24 @@ impl Writer {
             }
             IrInstr::Retain { ptr } => { self.u8(OP_RETAIN); self.vid(*ptr); }
             IrInstr::Release { ptr, ty } => { self.u8(OP_RELEASE); self.vid(*ptr); self.ty(ty); }
+            IrInstr::TcpConnect { result, host, port } => {
+                self.u8(OP_TCP_CONNECT); self.vid(*result); self.vid(*host); self.vid(*port);
+            }
+            IrInstr::TcpListen { result, port } => {
+                self.u8(OP_TCP_LISTEN); self.vid(*result); self.vid(*port);
+            }
+            IrInstr::TcpAccept { result, listener } => {
+                self.u8(OP_TCP_ACCEPT); self.vid(*result); self.vid(*listener);
+            }
+            IrInstr::TcpRead { result, conn } => {
+                self.u8(OP_TCP_READ); self.vid(*result); self.vid(*conn);
+            }
+            IrInstr::TcpWrite { conn, data } => {
+                self.u8(OP_TCP_WRITE); self.vid(*conn); self.vid(*data);
+            }
+            IrInstr::TcpClose { conn } => {
+                self.u8(OP_TCP_CLOSE); self.vid(*conn);
+            }
         }
     }
 }
@@ -969,6 +994,12 @@ impl<'a> Reader<'a> {
             }
             OP_RETAIN  => { let ptr = self.vid()?; IrInstr::Retain { ptr } }
             OP_RELEASE => { let ptr = self.vid()?; let ty = self.ty()?; IrInstr::Release { ptr, ty } }
+            OP_TCP_CONNECT => { let result = self.vid()?; let host = self.vid()?; let port = self.vid()?; IrInstr::TcpConnect { result, host, port } }
+            OP_TCP_LISTEN  => { let result = self.vid()?; let port = self.vid()?; IrInstr::TcpListen { result, port } }
+            OP_TCP_ACCEPT  => { let result = self.vid()?; let listener = self.vid()?; IrInstr::TcpAccept { result, listener } }
+            OP_TCP_READ    => { let result = self.vid()?; let conn = self.vid()?; IrInstr::TcpRead { result, conn } }
+            OP_TCP_WRITE   => { let conn = self.vid()?; let data = self.vid()?; IrInstr::TcpWrite { conn, data } }
+            OP_TCP_CLOSE   => { let conn = self.vid()?; IrInstr::TcpClose { conn } }
             t => return Err(format!("unknown opcode 0x{:02x}", t)),
         })
     }
@@ -1103,5 +1134,7 @@ fn deserialize_function(r: &mut Reader) -> Result<IrFunction, String> {
         value_defs,
         value_types,
         next_value,
+        attrs: Vec::new(),
+        span_table: SpanTable::default(),
     })
 }

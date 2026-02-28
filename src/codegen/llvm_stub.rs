@@ -1007,6 +1007,24 @@ fn emit_llvm_instr(
                 writeln!(out, "  call void @{}({})", name, arg_strs.join(", "))?;
             }
         }
+        IrInstr::TcpConnect { result, host, port } => {
+            writeln!(out, "  %v{} = call i64 @iris_tcp_connect(ptr {}, i64 {})", result.0, val(*host), val(*port))?;
+        }
+        IrInstr::TcpListen { result, port } => {
+            writeln!(out, "  %v{} = call i64 @iris_tcp_listen(i64 {})", result.0, val(*port))?;
+        }
+        IrInstr::TcpAccept { result, listener } => {
+            writeln!(out, "  %v{} = call i64 @iris_tcp_accept(i64 {})", result.0, val(*listener))?;
+        }
+        IrInstr::TcpRead { result, conn } => {
+            writeln!(out, "  %v{} = call ptr @iris_tcp_read(i64 {})", result.0, val(*conn))?;
+        }
+        IrInstr::TcpWrite { conn, data } => {
+            writeln!(out, "  call void @iris_tcp_write(i64 {}, ptr {})", val(*conn), val(*data))?;
+        }
+        IrInstr::TcpClose { conn } => {
+            writeln!(out, "  call void @iris_tcp_close(i64 {})", val(*conn))?;
+        }
     }
     Ok(())
 }

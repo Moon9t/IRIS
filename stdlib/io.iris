@@ -1,0 +1,12 @@
+//! Standard I/O and process — thin wrappers around builtins.
+//! Use: bring io
+//! Then: io.get_args(), io.get_env(key)
+//! Builtins (use directly): print, read_line, read_i64, read_f64, format, to_str
+
+pub def get_args() -> list<str> {
+    args()
+}
+
+pub def get_env(key: str) -> option<str> {
+    env_var(key)
+}

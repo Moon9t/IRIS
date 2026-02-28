@@ -4,6 +4,32 @@ use crate::ir::block::{BlockId, IrBlock};
 use crate::ir::types::IrType;
 use crate::ir::value::{ValueDef, ValueId};
 
+/// Maps `(block_id, instr_index)` to the start byte offset of the source
+/// statement that produced the instruction. Populated during lowering.
+/// Used by the debugger for source-level breakpoints and step tracing.
+#[derive(Debug, Default, Clone)]
+pub struct SpanTable {
+    /// Key: `(block_id.0, instr_index)`, value: byte offset into source text.
+    pub(crate) entries: HashMap<(u32, usize), u32>,
+}
+
+impl SpanTable {
+    /// Returns the source byte offset for the given instruction, if known.
+    pub fn get(&self, block_id: u32, instr_idx: usize) -> Option<u32> {
+        self.entries.get(&(block_id, instr_idx)).copied()
+    }
+
+    /// Returns `true` if any spans have been recorded.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Returns the number of recorded spans.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
 /// Uniquely identifies a function within an `IrModule`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FunctionId(pub u32);
@@ -36,6 +62,11 @@ pub struct IrFunction {
     pub(crate) value_types: HashMap<ValueId, IrType>,
     /// Counter for allocating fresh `ValueId`s.
     pub(crate) next_value: u32,
+    /// Function attributes, e.g. "kernel", "differentiable".
+    pub attrs: Vec<String>,
+    /// Source position table for the debugger: maps `(block_id, instr_idx)` to
+    /// the byte offset of the statement that produced the instruction.
+    pub span_table: SpanTable,
 }
 
 impl IrFunction {

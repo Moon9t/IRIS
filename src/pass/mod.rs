@@ -1,7 +1,11 @@
 pub mod const_fold;
 pub mod dead_node;
+pub mod exhaustive;
 pub mod gc_annotate;
 pub mod graph_pass;
+pub mod inline;
+pub mod loop_unroll;
+pub mod type_infer_hm;
 pub mod lint;
 pub mod opt;
 pub mod shape_check;
@@ -12,7 +16,11 @@ pub mod validate;
 
 pub use const_fold::ConstFoldPass;
 pub use dead_node::DeadNodePass;
+pub use exhaustive::ExhaustivePass;
 pub use gc_annotate::GcAnnotatePass;
+pub use inline::InlinePass;
+pub use loop_unroll::LoopUnrollPass;
+pub use type_infer_hm::HmTypeInferPass;
 pub use graph_pass::{GraphPass, GraphPassManager};
 pub use lint::{find_unused_vars, IrWarning};
 pub use opt::{CsePass, DcePass, OpExpandPass};

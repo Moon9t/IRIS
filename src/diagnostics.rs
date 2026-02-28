@@ -33,6 +33,12 @@ pub fn span_to_line_col(source: &str, start_byte: u32) -> (u32, u32) {
 }
 
 /// Extracts the starting byte offset from errors that carry location info.
+///
+/// Returns `None` for errors without source position (pass errors, runtime errors).
+pub fn error_byte_offset(err: &Error) -> Option<u32> {
+    extract_byte(err)
+}
+
 fn extract_byte(err: &Error) -> Option<u32> {
     match err {
         Error::Parse(pe) => match pe {

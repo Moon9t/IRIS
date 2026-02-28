@@ -33,6 +33,16 @@ use crate::ir::value::ValueId;
 /// 3. User function calls use real typed signatures.
 /// 4. GEP-based inline struct/array access.
 pub fn emit_llvm_ir(module: &IrModule) -> Result<String, CodegenError> {
+    emit_llvm_ir_impl(module, None)
+}
+
+/// Like `emit_llvm_ir` but for native binary: renames the entry to `iris_main`
+/// and appends a C-compatible `main(i32, ptr)` wrapper.
+pub fn emit_llvm_ir_for_binary(module: &IrModule) -> Result<String, CodegenError> {
+    emit_llvm_ir_impl(module, Some(()))
+}
+
+fn emit_llvm_ir_impl(module: &IrModule, for_binary: Option<()>) -> Result<String, CodegenError> {
     let mut out = String::new();
 
     // ── Header ────────────────────────────────────────────────────────────
@@ -117,9 +127,36 @@ pub fn emit_llvm_ir(module: &IrModule) -> Result<String, CodegenError> {
         fn_sigs.insert(func.name.clone(), (ret_s, param_ss));
     }
 
+    let entry_llvm_name: Option<String> = for_binary.and_then(|_| {
+        module
+            .functions()
+            .iter()
+            .find(|f| f.name == "main")
+            .map(|f| f.name.clone())
+            .or_else(|| {
+                module.functions().iter().find(|f| f.params.is_empty()).map(|f| f.name.clone())
+            })
+    });
+
     // ── Function definitions ──────────────────────────────────────────────
     for func in module.functions() {
-        emit_function_ir(func, &str_table, &fn_sigs, module, &mut out)?;
+        let llvm_name = if entry_llvm_name.as_deref() == Some(func.name.as_str()) {
+            "iris_main"
+        } else {
+            &func.name
+        };
+        let entry_rename = entry_llvm_name.as_deref().map(|orig| (orig, "iris_main"));
+        emit_function_ir_with_name(func, llvm_name, entry_rename, &str_table, &fn_sigs, module, &mut out)?;
+    }
+
+    if let Some(_) = entry_llvm_name {
+        writeln!(out, "define i32 @main(i32 %argc, ptr %argv) {{")?;
+        writeln!(out, "  call void @iris_set_argv(i32 %argc, ptr %argv)")?;
+        writeln!(out, "  %r = call i64 @iris_main()")?;
+        writeln!(out, "  %r32 = trunc i64 %r to i32")?;
+        writeln!(out, "  call void @exit(i32 %r32)")?;
+        writeln!(out, "  unreachable")?;
+        writeln!(out, "}}\n")?;
     }
     Ok(out)
 }
@@ -130,6 +167,20 @@ pub fn emit_llvm_ir(module: &IrModule) -> Result<String, CodegenError> {
 
 fn emit_function_ir(
     func: &IrFunction,
+    str_table: &HashMap<String, usize>,
+    fn_sigs: &HashMap<String, (String, Vec<String>)>,
+    module: &IrModule,
+    out: &mut String,
+) -> Result<(), CodegenError> {
+    emit_function_ir_with_name(func, &func.name, None, str_table, fn_sigs, module, out)
+}
+
+/// Emit one function with an optional LLVM name override (e.g. "iris_main") and
+/// optional entry rename so that calls to the entry are emitted with the override name.
+fn emit_function_ir_with_name(
+    func: &IrFunction,
+    llvm_name: &str,
+    entry_rename: Option<(&str, &str)>,
     str_table: &HashMap<String, usize>,
     fn_sigs: &HashMap<String, (String, Vec<String>)>,
     module: &IrModule,
@@ -148,14 +199,15 @@ fn emit_function_ir(
     });
     let attrs = if is_pure { " nounwind willreturn" } else { "" };
 
-    writeln!(out, "define {} @{}({}){} {{", ret, func.name, params?.join(", "), attrs)?;
-    emit_function_body(func, str_table, fn_sigs, module, out)?;
+    writeln!(out, "define {} @{}({}){} {{", ret, llvm_name, params?.join(", "), attrs)?;
+    emit_function_body(func, entry_rename, str_table, fn_sigs, module, out)?;
     writeln!(out, "}}\n")?;
     Ok(())
 }
 
 fn emit_function_body(
     func: &IrFunction,
+    entry_rename: Option<(&str, &str)>,
     str_table: &HashMap<String, usize>,
     fn_sigs: &HashMap<String, (String, Vec<String>)>,
     module: &IrModule,
@@ -264,6 +316,7 @@ fn emit_function_body(
                 instr,
                 &consts,
                 func,
+                entry_rename,
                 fn_sigs,
                 module,
                 &scalar_arrays,
@@ -336,6 +389,7 @@ fn emit_instr_ir(
     instr: &IrInstr,
     consts: &HashMap<ValueId, String>,
     func: &IrFunction,
+    entry_rename: Option<(&str, &str)>,
     fn_sigs: &HashMap<String, (String, Vec<String>)>,
     _module: &IrModule,
     scalar_arrays: &HashSet<ValueId>,
@@ -514,6 +568,9 @@ fn emit_instr_ir(
 
         // ── Typed user-defined function calls ─────────────────────────────
         IrInstr::Call { result, callee, args, result_ty } => {
+            let callee_name = entry_rename
+                .and_then(|(orig, llvm)| if *callee == orig { Some(llvm) } else { None })
+                .unwrap_or(callee);
             if let Some((ret_s, param_ss)) = fn_sigs.get(callee) {
                 // Build typed arg list.
                 let typed_args: Vec<String> = args
@@ -525,10 +582,10 @@ fn emit_instr_ir(
                     writeln!(
                         out,
                         "  %v{} = call {} @{}({})",
-                        r.0, ret_s, callee, typed_args.join(", ")
+                        r.0, ret_s, callee_name, typed_args.join(", ")
                     )?;
                 } else {
-                    writeln!(out, "  call {} @{}({})", ret_s, callee, typed_args.join(", "))?;
+                    writeln!(out, "  call {} @{}({})", ret_s, callee_name, typed_args.join(", "))?;
                 }
             } else {
                 // Unknown callee (runtime intrinsic) — opaque call.
@@ -541,10 +598,10 @@ fn emit_instr_ir(
                     writeln!(
                         out,
                         "  %v{} = call {} @{}({})",
-                        r.0, ret_ty_s, callee, args_str.join(", ")
+                        r.0, ret_ty_s, callee_name, args_str.join(", ")
                     )?;
                 } else {
-                    writeln!(out, "  call void @{}({})", callee, args_str.join(", "))?;
+                    writeln!(out, "  call void @{}({})", callee_name, args_str.join(", "))?;
                 }
             }
         }
@@ -1203,6 +1260,25 @@ fn emit_instr_ir(
                 writeln!(out, "  call {} @{}({})", llvm_ret, name, arg_strs.join(", "))?;
             }
         }
+        // Phase 88: TCP network I/O
+        IrInstr::TcpConnect { result, host, port } => {
+            writeln!(out, "  %v{} = call i64 @iris_tcp_connect(ptr {}, i64 {})", result.0, val(*host), val(*port))?;
+        }
+        IrInstr::TcpListen { result, port } => {
+            writeln!(out, "  %v{} = call i64 @iris_tcp_listen(i64 {})", result.0, val(*port))?;
+        }
+        IrInstr::TcpAccept { result, listener } => {
+            writeln!(out, "  %v{} = call i64 @iris_tcp_accept(i64 {})", result.0, val(*listener))?;
+        }
+        IrInstr::TcpRead { result, conn } => {
+            writeln!(out, "  %v{} = call ptr @iris_tcp_read(i64 {})", result.0, val(*conn))?;
+        }
+        IrInstr::TcpWrite { conn, data } => {
+            writeln!(out, "  call void @iris_tcp_write(i64 {}, ptr {})", val(*conn), val(*data))?;
+        }
+        IrInstr::TcpClose { conn } => {
+            writeln!(out, "  call void @iris_tcp_close(i64 {})", val(*conn))?;
+        }
     }
     Ok(())
 }
@@ -1420,6 +1496,7 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_file_lines(ptr)",
         // Process / environment (Phase 59)
         "declare void @exit(i32)",
+        "declare void @iris_set_argv(i32, ptr)",
         "declare ptr @iris_process_args()",
         "declare ptr @iris_env_var(ptr)",
         // Arrays / Tensors

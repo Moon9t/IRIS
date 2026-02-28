@@ -680,6 +680,24 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
         IrInstr::Release { ptr, ty } => {
             write!(out, "release {}, {:?}", ptr, ty)?;
         }
+        IrInstr::TcpConnect { result, host, port } => {
+            write!(out, "{} = tcp_connect {}, {}", result, host, port)?;
+        }
+        IrInstr::TcpListen { result, port } => {
+            write!(out, "{} = tcp_listen {}", result, port)?;
+        }
+        IrInstr::TcpAccept { result, listener } => {
+            write!(out, "{} = tcp_accept {}", result, listener)?;
+        }
+        IrInstr::TcpRead { result, conn } => {
+            write!(out, "{} = tcp_read {}", result, conn)?;
+        }
+        IrInstr::TcpWrite { conn, data } => {
+            write!(out, "tcp_write {}, {}", conn, data)?;
+        }
+        IrInstr::TcpClose { conn } => {
+            write!(out, "tcp_close {}", conn)?;
+        }
     }
     Ok(())
 }

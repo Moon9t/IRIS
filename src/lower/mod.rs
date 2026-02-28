@@ -456,6 +456,28 @@ impl<'m> Lowerer<'m> {
                     }
                 };
 
+                // Phase 86: operator overloading for struct types.
+                // Check if lhs is a struct and there's a matching operator impl.
+                if let IrType::Struct { name: struct_name, .. } = &lhs_ty {
+                    let trait_method = op_trait_method(*op);
+                    if let Some((trait_name, method_name)) = trait_method {
+                        let mangled = format!("{}__{}__{}", trait_name, struct_name, method_name);
+                        if let Some(ret_ty) = self.fn_sigs.get(&mangled).cloned() {
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::Call {
+                                    result: Some(result),
+                                    callee: mangled,
+                                    args: vec![lhs_val, rhs_val],
+                                    result_ty: Some(ret_ty.clone()),
+                                },
+                                Some(ret_ty.clone()),
+                            );
+                            return Ok((result, ret_ty));
+                        }
+                    }
+                }
+
                 let ir_op = lower_binop(*op);
                 let result_ty = match op {
                     // Comparison ops yield bool regardless of operand type.
@@ -2050,6 +2072,114 @@ impl<'m> Lowerer<'m> {
             let ty = IrType::List(Box::new(IrType::Str));
             self.builder.push_instr(IrInstr::FileLines { result, path }, Some(ty.clone()));
             return Ok((result, ty));
+        }
+
+        // ── Phase 89: Mutable cell (for closure captures) ───────────────────
+        // cell(v) → list containing one element (shared via Rc)
+        // cell_get(c) → read element 0
+        // cell_set(c, v) → write element 0
+
+        if callee.name == "cell" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported { detail: "cell(v) requires 1 argument".into(), span });
+            }
+            let (val_v, val_ty) = self.lower_expr(&args[0])?;
+            let list_ty = IrType::List(Box::new(val_ty.clone()));
+            let list = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::ListNew { result: list, elem_ty: val_ty.clone() }, Some(list_ty.clone()));
+            self.builder.push_instr(IrInstr::ListPush { list, value: val_v }, None);
+            return Ok((list, list_ty));
+        }
+        if callee.name == "cell_get" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported { detail: "cell_get(c) requires 1 argument".into(), span });
+            }
+            let (cell, cell_ty) = self.lower_expr(&args[0])?;
+            let elem_ty = if let IrType::List(inner) = &cell_ty { *inner.clone() } else { IrType::Infer };
+            let zero = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::ConstInt { result: zero, value: 0, ty: IrType::Scalar(DType::I64) }, Some(IrType::Scalar(DType::I64)));
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::ListGet { result, list: cell, index: zero, elem_ty: elem_ty.clone() }, Some(elem_ty.clone()));
+            return Ok((result, elem_ty));
+        }
+        if callee.name == "cell_set" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported { detail: "cell_set(c, v) requires 2 arguments".into(), span });
+            }
+            let (cell, _) = self.lower_expr(&args[0])?;
+            let (new_val, _) = self.lower_expr(&args[1])?;
+            let zero = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::ConstInt { result: zero, value: 0, ty: IrType::Scalar(DType::I64) }, Some(IrType::Scalar(DType::I64)));
+            self.builder.push_instr(IrInstr::ListSet { list: cell, index: zero, value: new_val }, None);
+            let unit = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::ConstInt { result: unit, value: 0, ty: IrType::Scalar(DType::I64) }, Some(IrType::Scalar(DType::I64)));
+            return Ok((unit, IrType::Scalar(DType::I64)));
+        }
+
+        // ── Phase 88: TCP network I/O ────────────────────────────────────────
+
+        if callee.name == "tcp_connect" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported { detail: "tcp_connect(host, port) requires 2 args".into(), span });
+            }
+            let (host, _) = self.lower_expr(&args[0])?;
+            let (port, _) = self.lower_expr(&args[1])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::TcpConnect { result, host, port }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+        if callee.name == "tcp_listen" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported { detail: "tcp_listen(port) requires 1 arg".into(), span });
+            }
+            let (port, _) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::TcpListen { result, port }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+        if callee.name == "tcp_accept" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported { detail: "tcp_accept(listener) requires 1 arg".into(), span });
+            }
+            let (listener, _) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::TcpAccept { result, listener }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+        if callee.name == "tcp_read" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported { detail: "tcp_read(conn) requires 1 arg".into(), span });
+            }
+            let (conn, _) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Str;
+            self.builder.push_instr(IrInstr::TcpRead { result, conn }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+        if callee.name == "tcp_write" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported { detail: "tcp_write(conn, data) requires 2 args".into(), span });
+            }
+            let (conn, _) = self.lower_expr(&args[0])?;
+            let (data, _) = self.lower_expr(&args[1])?;
+            let unit = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::TcpWrite { conn, data }, None);
+            // Return a dummy unit value.
+            self.builder.push_instr(IrInstr::ConstInt { result: unit, value: 0, ty: IrType::Scalar(DType::I64) }, Some(IrType::Scalar(DType::I64)));
+            return Ok((unit, IrType::Scalar(DType::I64)));
+        }
+        if callee.name == "tcp_close" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported { detail: "tcp_close(conn) requires 1 arg".into(), span });
+            }
+            let (conn, _) = self.lower_expr(&args[0])?;
+            let unit = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::TcpClose { conn }, None);
+            self.builder.push_instr(IrInstr::ConstInt { result: unit, value: 0, ty: IrType::Scalar(DType::I64) }, Some(IrType::Scalar(DType::I64)));
+            return Ok((unit, IrType::Scalar(DType::I64)));
         }
 
         // ── Phase 58: Extended collection builtins ───────────────────────────
@@ -6090,6 +6220,25 @@ impl<'m> Lowerer<'m> {
     }
 
     fn lower_stmt(&mut self, stmt: &AstStmt) -> Result<(), LowerError> {
+        // Record source position for the debugger span table.
+        let span_byte = match stmt {
+            AstStmt::Let { span, .. } => Some(span.start.0),
+            AstStmt::Expr(expr) => Some(expr.span().start.0),
+            AstStmt::While { span, .. } => Some(span.start.0),
+            AstStmt::Loop { span, .. } => Some(span.start.0),
+            AstStmt::Break { span } => Some(span.start.0),
+            AstStmt::Continue { span } => Some(span.start.0),
+            AstStmt::ForRange { span, .. } => Some(span.start.0),
+            AstStmt::Assign { span, .. } => Some(span.start.0),
+            AstStmt::LetTuple { span, .. } => Some(span.start.0),
+            AstStmt::Return { span, .. } => Some(span.start.0),
+            AstStmt::Spawn { span, .. } => Some(span.start.0),
+            AstStmt::ParFor { span, .. } => Some(span.start.0),
+            AstStmt::ForEach { span, .. } => Some(span.start.0),
+        };
+        if let Some(byte) = span_byte {
+            self.builder.set_span_byte(byte);
+        }
         match stmt {
             AstStmt::Let { name, init, .. } => {
                 let (val, ty) = self.lower_expr(init)?;
@@ -6446,7 +6595,9 @@ fn lower_function_with_generics_and_subs(
 
     lowerer.builder.seal_unterminated_blocks();
 
-    let ir_func = lowerer.builder.build();
+    let mut ir_func = lowerer.builder.build();
+    // Propagate AST function attributes (e.g., "kernel", "differentiable") to IR.
+    ir_func.attrs = func.attrs.clone();
     let lifted = match std::rc::Rc::try_unwrap(lifted_fns) {
         Ok(cell) => cell.into_inner(),
         Err(rc) => rc.borrow().clone(),
@@ -6628,6 +6779,19 @@ fn lower_binop(op: AstBinOp) -> BinOp {
         AstBinOp::And | AstBinOp::Or => {
             unreachable!("logical operators use short-circuit lowering")
         }
+    }
+}
+
+/// Returns (trait_name, method_name) for an operator that can be overloaded,
+/// or None for ops that cannot be overloaded (comparisons, logical).
+fn op_trait_method(op: AstBinOp) -> Option<(&'static str, &'static str)> {
+    match op {
+        AstBinOp::Add => Some(("Add", "add")),
+        AstBinOp::Sub => Some(("Sub", "sub")),
+        AstBinOp::Mul => Some(("Mul", "mul")),
+        AstBinOp::Div => Some(("Div", "div")),
+        AstBinOp::Mod => Some(("Rem", "rem")),
+        _ => None,
     }
 }
 

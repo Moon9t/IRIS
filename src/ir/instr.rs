@@ -564,6 +564,20 @@ pub enum IrInstr {
     GetVariantTag { result: ValueId, operand: ValueId },
     /// Compare two string values for equality. Returns bool.
     StrEq { result: ValueId, lhs: ValueId, rhs: ValueId },
+
+    // ---- Phase 88: TCP network I/O ----
+    /// Connect to a TCP server. Returns socket fd (i64).
+    TcpConnect { result: ValueId, host: ValueId, port: ValueId },
+    /// Listen on a TCP port. Returns listener fd (i64).
+    TcpListen { result: ValueId, port: ValueId },
+    /// Accept a connection from a listener. Returns connection fd (i64).
+    TcpAccept { result: ValueId, listener: ValueId },
+    /// Read a line from a TCP connection. Returns str.
+    TcpRead { result: ValueId, conn: ValueId },
+    /// Write a string to a TCP connection. Side-effecting.
+    TcpWrite { conn: ValueId, data: ValueId },
+    /// Close a TCP connection or listener. Side-effecting.
+    TcpClose { conn: ValueId },
 }
 
 impl IrInstr {
@@ -679,6 +693,12 @@ impl IrInstr {
             IrInstr::CallExtern { result, .. } => *result,
             IrInstr::Retain { .. } => None,
             IrInstr::Release { .. } => None,
+            IrInstr::TcpConnect { result, .. } => Some(*result),
+            IrInstr::TcpListen { result, .. } => Some(*result),
+            IrInstr::TcpAccept { result, .. } => Some(*result),
+            IrInstr::TcpRead { result, .. } => Some(*result),
+            IrInstr::TcpWrite { .. } => None,
+            IrInstr::TcpClose { .. } => None,
         }
     }
 
@@ -837,6 +857,12 @@ impl IrInstr {
             IrInstr::CallExtern { args, .. } => args.clone(),
             IrInstr::Retain { ptr } => vec![*ptr],
             IrInstr::Release { ptr, .. } => vec![*ptr],
+            IrInstr::TcpConnect { host, port, .. } => vec![*host, *port],
+            IrInstr::TcpListen { port, .. } => vec![*port],
+            IrInstr::TcpAccept { listener, .. } => vec![*listener],
+            IrInstr::TcpRead { conn, .. } => vec![*conn],
+            IrInstr::TcpWrite { conn, data } => vec![*conn, *data],
+            IrInstr::TcpClose { conn } => vec![*conn],
         }
     }
 }

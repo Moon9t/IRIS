@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::ir::block::{BlockId, IrBlock};
-use crate::ir::function::{FunctionId, IrFunction, Param};
+use crate::ir::function::{FunctionId, IrFunction, Param, SpanTable};
 use crate::ir::instr::{InstrId, IrInstr};
 use crate::ir::types::IrType;
 use crate::ir::value::{BlockParam, ValueDef, ValueId};
@@ -149,6 +149,9 @@ impl IrModule {
 pub struct IrFunctionBuilder {
     func: IrFunction,
     current_block: Option<BlockId>,
+    /// Source byte offset of the current statement being lowered. Set by the
+    /// lowerer before emitting instructions; recorded into `span_table`.
+    current_span: Option<u32>,
 }
 
 impl IrFunctionBuilder {
@@ -162,11 +165,23 @@ impl IrFunctionBuilder {
             value_defs: HashMap::new(),
             value_types: HashMap::new(),
             next_value: 0,
+            attrs: Vec::new(),
+            span_table: SpanTable::default(),
         };
         Self {
             func,
             current_block: None,
+            current_span: None,
         }
+    }
+
+    /// Records the source byte offset of the statement currently being lowered.
+    ///
+    /// Call this before `push_instr` so that the instruction is associated with
+    /// the correct source position in `span_table`. The span is cleared after
+    /// the first instruction it is attached to.
+    pub fn set_span_byte(&mut self, byte: u32) {
+        self.current_span = Some(byte);
     }
 
     /// Creates a new block and returns its `BlockId`.
@@ -224,16 +239,23 @@ impl IrFunctionBuilder {
 
         let result = instr.result();
 
+        let instr_idx = self.func.blocks[block_id.0 as usize].instrs.len();
+
         if let (Some(result_id), Some(ty)) = (result, result_ty) {
-            let instr_idx = InstrId(self.func.blocks[block_id.0 as usize].instrs.len() as u32);
+            let instr_id = InstrId(instr_idx as u32);
             self.func.value_defs.insert(
                 result_id,
                 ValueDef::InstrResult {
                     block: block_id,
-                    instr: instr_idx,
+                    instr: instr_id,
                 },
             );
             self.func.value_types.insert(result_id, ty);
+        }
+
+        // Record the current span into the span table (first instruction per statement).
+        if let Some(byte) = self.current_span.take() {
+            self.func.span_table.entries.insert((block_id.0, instr_idx), byte);
         }
 
         self.func.blocks[block_id.0 as usize].instrs.push(instr);

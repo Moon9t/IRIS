@@ -1,0 +1,11 @@
+# IRIS project manifest (optional)
+# Used by tools that support multi-file projects.
+
+[project]
+# Entry point for build/run (relative to this file or cwd).
+entry = "main.iris"
+
+# [dependencies]
+# Local path-based deps: list module names and paths.
+# file = { path = "stdlib/file.iris" }
+# io = { path = "stdlib/io.iris" }

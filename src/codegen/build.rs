@@ -38,11 +38,23 @@ pub const RUNTIME_C_SRC: &str = include_str!("../runtime/iris_runtime.c");
 ///
 /// Returns the `PathBuf` of the output binary on success, or a `CodegenError`
 /// if clang cannot be found or any compilation/link step fails.
+/// Requires at least one zero-argument function (preferably named `main`) as the entry point.
 pub fn build_binary(module: &IrModule, output_path: &Path) -> Result<PathBuf, CodegenError> {
-    use crate::codegen::llvm_ir::emit_llvm_ir;
+    use crate::codegen::llvm_ir::emit_llvm_ir_for_binary;
 
-    // 1. Emit LLVM IR.
-    let llvm_ir = emit_llvm_ir(module)?;
+    let has_entry = module
+        .functions()
+        .iter()
+        .any(|f| f.name == "main" || f.params.is_empty());
+    if !has_entry {
+        return Err(CodegenError::Unsupported {
+            backend: "binary".into(),
+            detail: "no entry point (define main() or a zero-argument function) for native binary".into(),
+        });
+    }
+
+    // 1. Emit LLVM IR (with main wrapper for binary).
+    let llvm_ir = emit_llvm_ir_for_binary(module)?;
 
     // 2. Set up a per-process temp directory so parallel builds don't collide.
     let tmp_dir = std::env::temp_dir()
@@ -99,6 +111,7 @@ pub fn build_binary(module: &IrModule, output_path: &Path) -> Result<PathBuf, Co
     // 6. Link LLVM IR + runtime object → native binary.
     let link_status = Command::new("clang")
         .args([
+            "-O2",
             ll_path.to_str().unwrap(),
             rt_obj.to_str().unwrap(),
             "-o",

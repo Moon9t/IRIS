@@ -233,6 +233,35 @@ void     iris_map_remove(IrisMap* map, const char* key);
 int64_t  iris_map_len(IrisMap* map);
 
 // ---------------------------------------------------------------------------
+// Extended list operations
+// ---------------------------------------------------------------------------
+int      iris_list_contains(IrisList* list, IrisVal* val);
+void     iris_list_sort(IrisList* list);
+IrisList* iris_list_concat(IrisList* a, IrisList* b);
+IrisList* iris_list_slice(IrisList* list, int64_t start, int64_t end);
+
+// ---------------------------------------------------------------------------
+// Extended map operations
+// ---------------------------------------------------------------------------
+IrisList* iris_map_keys(IrisMap* map);
+IrisList* iris_map_values(IrisMap* map);
+
+// ---------------------------------------------------------------------------
+// File I/O
+// ---------------------------------------------------------------------------
+char*    iris_file_read_all(const char* path);
+char*    iris_file_write_all(const char* path, const char* contents);
+int      iris_file_exists(const char* path);
+IrisList* iris_file_lines(const char* path);
+
+// ---------------------------------------------------------------------------
+// Process and environment
+// ---------------------------------------------------------------------------
+void     iris_set_argv(int argc, char** argv);  /* call from generated main before user main */
+IrisList* iris_process_args(void);
+char*    iris_env_var(const char* key);
+
+// ---------------------------------------------------------------------------
 // Channels and concurrency
 // ---------------------------------------------------------------------------
 IrisChannel* iris_chan_new(void);

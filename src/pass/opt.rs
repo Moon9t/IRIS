@@ -75,6 +75,12 @@ fn is_side_effecting(instr: &IrInstr) -> bool {
             | IrInstr::CallExtern { .. }
             | IrInstr::Retain { .. }
             | IrInstr::Release { .. }
+            | IrInstr::TcpConnect { .. }
+            | IrInstr::TcpListen { .. }
+            | IrInstr::TcpAccept { .. }
+            | IrInstr::TcpRead { .. }
+            | IrInstr::TcpWrite { .. }
+            | IrInstr::TcpClose { .. }
     )
 }
 
@@ -249,7 +255,7 @@ fn cse_key(instr: &IrInstr) -> Option<CseKey> {
     }
 }
 
-fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
+pub(crate) fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
     let replace = |v: &mut ValueId| {
         if let Some(&r) = reps.get(v) {
             *v = r;
@@ -461,6 +467,12 @@ fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
         // Phase 83: GC
         IrInstr::Retain { ptr } => { replace(ptr); }
         IrInstr::Release { ptr, .. } => { replace(ptr); }
+        IrInstr::TcpConnect { host, port, .. } => { replace(host); replace(port); }
+        IrInstr::TcpListen { port, .. } => { replace(port); }
+        IrInstr::TcpAccept { listener, .. } => { replace(listener); }
+        IrInstr::TcpRead { conn, .. } => { replace(conn); }
+        IrInstr::TcpWrite { conn, data } => { replace(conn); replace(data); }
+        IrInstr::TcpClose { conn } => { replace(conn); }
     }
 }
 

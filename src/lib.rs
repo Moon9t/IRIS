@@ -18,19 +18,26 @@
 
 pub mod cli;
 pub mod codegen;
+pub mod dap;
+pub mod debugger;
 pub mod diagnostics;
 pub mod error;
 pub mod interp;
 pub mod ir;
 pub mod lower;
+pub mod lsp;
 pub mod parser;
 pub mod pass;
 pub mod proto;
+pub mod repl;
 
 pub use codegen::ir_serial::{deserialize_module, serialize_module};
+pub use debugger::{DebugSession, TraceEntry};
 pub use error::Error;
 pub use ir::module::IrModule;
-pub use pass::{GcAnnotatePass, IrWarning, StrengthReducePass};
+pub use lsp::{LspDiagnostic, LspState};
+pub use pass::{ExhaustivePass, GcAnnotatePass, HmTypeInferPass, InlinePass, IrWarning, LoopUnrollPass, StrengthReducePass};
+pub use repl::ReplState;
 
 /// Controls what the `compile()` function emits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +118,47 @@ pub fn compile_multi(sources: &[(&str, &str)], main_module: &str, emit: EmitKind
     }
 
     compile_ast(&main_ast, main_module, emit, 1_000_000, 500, None)
+}
+
+/// Internal: compile a pre-built `AstModule` through the full pipeline to an `IrModule`.
+/// Used when building native binaries so we can pass the module to `build_binary`.
+pub fn compile_ast_to_module(
+    ast_module: &crate::parser::ast::AstModule,
+    module_name: &str,
+    dump_ir_after: Option<&str>,
+) -> Result<IrModule, Error> {
+    use crate::lower::{lower, lower_graph_to_ir, lower_model};
+    use crate::pass::infer_shapes;
+    use crate::pass::type_infer::TypeInferPass;
+    use crate::pass::validate::ValidatePass;
+    use crate::pass::{ConstFoldPass, CsePass, DcePass, OpExpandPass, PassManager, ShapeCheckPass, StrengthReducePass};
+
+    let mut ir_module = lower(ast_module, module_name)?;
+    for model in &ast_module.models {
+        let graph = lower_model(model)?;
+        let shapes = infer_shapes(&graph)?;
+        let func = lower_graph_to_ir(&graph, &shapes)?;
+        ir_module
+            .add_function(func)
+            .map_err(|_| crate::error::LowerError::DuplicateFunction {
+                name: model.name.name.clone(),
+                span: model.name.span,
+            })?;
+    }
+    let mut pm = PassManager::new();
+    pm.add_pass(ValidatePass);
+    pm.add_pass(TypeInferPass);
+    pm.add_pass(ConstFoldPass);
+    pm.add_pass(StrengthReducePass);
+    pm.add_pass(OpExpandPass);
+    pm.add_pass(DcePass);
+    pm.add_pass(CsePass);
+    pm.add_pass(ShapeCheckPass);
+    if let Some(pass_name) = dump_ir_after {
+        pm.set_dump_after(pass_name);
+    }
+    pm.run(&mut ir_module).map_err(|(_, e)| Error::Pass(e))?;
+    Ok(ir_module)
 }
 
 /// Internal: compile a pre-built `AstModule` through the full pipeline.

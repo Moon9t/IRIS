@@ -629,5 +629,11 @@ fn apply_reps(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
         // Phase 83: GC
         IrInstr::Retain { ptr } => { replace(ptr); }
         IrInstr::Release { ptr, .. } => { replace(ptr); }
+        IrInstr::TcpConnect { host, port, .. } => { replace(host); replace(port); }
+        IrInstr::TcpListen { port, .. } => { replace(port); }
+        IrInstr::TcpAccept { listener, .. } => { replace(listener); }
+        IrInstr::TcpRead { conn, .. } => { replace(conn); }
+        IrInstr::TcpWrite { conn, data } => { replace(conn); replace(data); }
+        IrInstr::TcpClose { conn } => { replace(conn); }
     }
 }

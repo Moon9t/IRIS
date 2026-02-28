@@ -1,0 +1,19 @@
+//! Standard file I/O — thin wrappers around builtins.
+//! Use: bring file
+//! Then: file.read_all(path), file.write_all(path, contents), file.exists(path), file.lines(path)
+
+pub def read_all(path: str) -> result<str, str> {
+    file_read_all(path)
+}
+
+pub def write_all(path: str, content: str) -> result<i64, str> {
+    file_write_all(path, content)
+}
+
+pub def exists(path: str) -> bool {
+    file_exists(path)
+}
+
+pub def lines(path: str) -> list<str> {
+    file_lines(path)
+}
