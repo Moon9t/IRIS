@@ -223,7 +223,7 @@ impl<'t> Parser<'t> {
                 let pname = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let pty = self.parse_type()?;
-                params.push(AstParam { name: pname, ty: pty });
+                params.push(AstParam { name: pname, ty: pty, default: None });
                 if matches!(self.peek_tok(), Token::Comma) {
                     self.advance();
                 }
@@ -562,7 +562,13 @@ impl<'t> Parser<'t> {
         let name = self.expect_ident()?;
         self.expect(&Token::Colon)?;
         let ty = self.parse_type()?;
-        Ok(AstParam { name, ty })
+        let default = if matches!(self.peek_tok(), Token::Eq) {
+            self.advance(); // consume '='
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        Ok(AstParam { name, ty, default })
     }
 
     // -----------------------------------------------------------------------
@@ -734,7 +740,19 @@ impl<'t> Parser<'t> {
                     }
                 }
                 let end = self.expect(&Token::RParen)?;
-                Ok(AstType::Tuple(elems, span.merge(end)))
+                // Check for function type: (T1, T2) -> R
+                if matches!(self.peek_tok(), Token::Arrow) {
+                    self.advance(); // consume '->'
+                    let ret = self.parse_type()?;
+                    let ret_span = ret.span();
+                    Ok(AstType::Fn {
+                        params: elems,
+                        ret: Box::new(ret),
+                        span: span.merge(ret_span),
+                    })
+                } else {
+                    Ok(AstType::Tuple(elems, span.merge(end)))
+                }
             }
             _ => Err(ParseError::UnexpectedToken {
                 expected: "type".to_owned(),
@@ -1315,7 +1333,7 @@ impl<'t> Parser<'t> {
                     let name = self.expect_ident()?;
                     self.expect(&Token::Colon)?;
                     let ty = self.parse_type()?;
-                    params.push(AstParam { name, ty });
+                    params.push(AstParam { name, ty, default: None });
                     if matches!(self.peek_tok(), Token::Comma) {
                         self.advance();
                     }
@@ -1343,7 +1361,21 @@ impl<'t> Parser<'t> {
                             Token::IntLit(n) => {
                                 let n = *n;
                                 self.advance(); // consume int literal
-                                (AstWhenPattern::IntLit(n), "_lit".to_string(), n.to_string())
+                                // Check for inclusive range pattern: lo..=hi
+                                if matches!(self.peek_tok(), Token::DotDotEq) {
+                                    self.advance(); // consume '..='
+                                    let hi = match self.peek_tok().clone() {
+                                        Token::IntLit(h) => { self.advance(); h }
+                                        _ => return Err(ParseError::UnexpectedToken {
+                                            expected: "integer for range upper bound".to_owned(),
+                                            found: format!("{}", self.peek_tok()),
+                                            span: self.current_span(),
+                                        }),
+                                    };
+                                    (AstWhenPattern::Range { lo: n, hi }, "_range".to_string(), format!("{}..={}", n, hi))
+                                } else {
+                                    (AstWhenPattern::IntLit(n), "_lit".to_string(), n.to_string())
+                                }
                             }
                             Token::BoolLit(b) => {
                                 let b = *b;
@@ -1356,6 +1388,20 @@ impl<'t> Parser<'t> {
                                 } else { unreachable!() };
                                 self.advance(); // consume string literal
                                 (AstWhenPattern::StringLit(s.clone()), "_lit".to_string(), s)
+                            }
+                            Token::LParen => {
+                                // Tuple pattern: (sub, sub, ...)
+                                self.advance(); // consume '('
+                                let mut subs = Vec::new();
+                                while !matches!(self.peek_tok(), Token::RParen | Token::Eof) {
+                                    let sub = self.parse_when_sub_pattern()?;
+                                    subs.push(sub);
+                                    if matches!(self.peek_tok(), Token::Comma) {
+                                        self.advance();
+                                    }
+                                }
+                                self.expect(&Token::RParen)?;
+                                (AstWhenPattern::Tuple(subs), "_tuple".to_string(), "_tuple".to_string())
                             }
                             _ => {
                                 // Peek at ident to determine pattern type.
@@ -1622,6 +1668,49 @@ impl<'t> Parser<'t> {
             args.push(self.parse_expr()?);
         }
         Ok(args)
+    }
+
+    /// Parse a sub-pattern inside a tuple pattern: wildcard, int/bool literal, or ident binding.
+    fn parse_when_sub_pattern(&mut self) -> Result<AstWhenPattern, ParseError> {
+        match self.peek_tok().clone() {
+            Token::Ident(ref name) if name == "_" => {
+                self.advance();
+                Ok(AstWhenPattern::Wildcard)
+            }
+            Token::Ident(name) => {
+                let name = name.clone();
+                self.advance();
+                // Treat as a binding (wildcard-style, name is captured in Wildcard for simplicity
+                // — we use a dedicated Binding variant by reusing IntLit with a sentinel? No:
+                // we store bindings as Wildcard with a special flag. Actually, just use a new
+                // convention: store as EnumVariant with empty enum name to mean "binding".
+                // Simplest: sub-patterns that are just identifiers are treated as Wildcard but
+                // we need the name for the outer tuple pattern handler to bind them. We'll use
+                // a local convention that EnumVariant { enum_name: "", variant_name: name, bindings: [] }
+                // means "bind this element to `name`".
+                Ok(AstWhenPattern::EnumVariant { enum_name: String::new(), variant_name: name, bindings: vec![] })
+            }
+            Token::IntLit(_) => {
+                let n = if let Token::IntLit(n) = self.peek_tok() { *n } else { unreachable!() };
+                self.advance();
+                Ok(AstWhenPattern::IntLit(n))
+            }
+            Token::BoolLit(_) => {
+                let b = if let Token::BoolLit(b) = self.peek_tok() { *b } else { unreachable!() };
+                self.advance();
+                Ok(AstWhenPattern::BoolLit(b))
+            }
+            Token::StringLit(_) => {
+                let s = if let Token::StringLit(s) = self.peek_tok() { s.clone() } else { unreachable!() };
+                self.advance();
+                Ok(AstWhenPattern::StringLit(s))
+            }
+            _ => Err(ParseError::UnexpectedToken {
+                expected: "sub-pattern (wildcard, literal, or identifier)".to_owned(),
+                found: format!("{}", self.peek_tok()),
+                span: self.current_span(),
+            }),
+        }
     }
 
     /// Desugar `f"Hello {name}! You are {age} years old."` into nested `concat` calls.

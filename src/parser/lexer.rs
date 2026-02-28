@@ -136,6 +136,9 @@ pub enum Token {
     /// `..` range separator used in `for i in start..end`
     DotDot,
 
+    /// `..=` inclusive range used in range patterns
+    DotDotEq,
+
     /// `=>` fat arrow used in `when` arms
     FatArrow,
 
@@ -230,6 +233,7 @@ impl std::fmt::Display for Token {
             Token::To => write!(f, "to"),
             Token::Dot => write!(f, "."),
             Token::DotDot => write!(f, ".."),
+            Token::DotDotEq => write!(f, "..="),
             Token::FatArrow => write!(f, "=>"),
             Token::AmpAmp => write!(f, "&&"),
             Token::PipePipe => write!(f, "||"),
@@ -372,6 +376,14 @@ impl<'src> Lexer<'src> {
             });
         }
 
+        // `..=` inclusive range — must come before `..`
+        if ch == b'.' && self.peek2() == Some(b'.') && self.src.as_bytes().get(self.pos + 2) == Some(&b'=') {
+            self.pos += 3;
+            return Ok(Spanned {
+                node: Token::DotDotEq,
+                span: Span::new(start, self.pos as u32),
+            });
+        }
         // `..` range separator — must come before single `.`
         if ch == b'.' && self.peek2() == Some(b'.') {
             self.pos += 2;

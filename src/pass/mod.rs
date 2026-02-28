@@ -1,18 +1,22 @@
 pub mod const_fold;
 pub mod dead_node;
 pub mod graph_pass;
+pub mod lint;
 pub mod opt;
 pub mod shape_check;
 pub mod shape_infer_graph;
+pub mod strength_reduce;
 pub mod type_infer;
 pub mod validate;
 
 pub use const_fold::ConstFoldPass;
 pub use dead_node::DeadNodePass;
 pub use graph_pass::{GraphPass, GraphPassManager};
+pub use lint::{find_unused_vars, IrWarning};
 pub use opt::{CsePass, DcePass, OpExpandPass};
 pub use shape_check::ShapeCheckPass;
 pub use shape_infer_graph::infer_shapes;
+pub use strength_reduce::StrengthReducePass;
 
 use crate::error::PassError;
 use crate::ir::module::IrModule;

@@ -125,9 +125,10 @@ def f() -> i64 {
 }
 "#;
     let out = compile(src, "test", EmitKind::Ir).expect("should compile to IR");
+    // strength-reduce may lower `n * 2` → `n << 1`, so accept either mul or shl
     assert!(
-        out.contains("read_i64") && out.contains("mul"),
-        "IR should contain read_i64 and mul, got:\n{}",
+        out.contains("read_i64") && (out.contains("mul") || out.contains("shl")),
+        "IR should contain read_i64 and an arithmetic op, got:\n{}",
         out
     );
 }

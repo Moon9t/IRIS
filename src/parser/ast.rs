@@ -60,6 +60,8 @@ pub enum AstType {
     Grad(Box<AstType>, Span),
     /// `sparse<T>` sparse tensor/array type.
     Sparse(Box<AstType>, Span),
+    /// Function type, e.g. `(i64, bool) -> i64`.
+    Fn { params: Vec<AstType>, ret: Box<AstType>, span: Span },
 }
 
 impl AstType {
@@ -77,6 +79,7 @@ impl AstType {
             AstType::Mutex(_, s) => *s,
             AstType::Grad(_, s) => *s,
             AstType::Sparse(_, s) => *s,
+            AstType::Fn { span, .. } => *span,
         }
     }
 }
@@ -86,6 +89,8 @@ impl AstType {
 pub struct AstParam {
     pub name: Ident,
     pub ty: AstType,
+    /// Optional default value expression (for `def f(x: i64 = 0)`).
+    pub default: Option<AstExpr>,
 }
 
 /// A function definition.
@@ -415,6 +420,11 @@ pub enum AstWhenPattern {
     BoolLit(bool),
     /// String literal pattern, e.g. `"hello"`.
     StringLit(String),
+    /// Tuple pattern, e.g. `(a, b)` or `(0, x)`.
+    /// Each sub-pattern is a `AstWhenPattern`; variable names bind to the elements.
+    Tuple(Vec<AstWhenPattern>),
+    /// Inclusive integer range pattern, e.g. `1..=5`.
+    Range { lo: i64, hi: i64 },
 }
 
 /// A single arm in a `when` expression.

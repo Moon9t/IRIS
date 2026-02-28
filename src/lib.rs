@@ -27,7 +27,10 @@ pub mod parser;
 pub mod pass;
 pub mod proto;
 
+pub use codegen::ir_serial::{deserialize_module, serialize_module};
 pub use error::Error;
+pub use ir::module::IrModule;
+pub use pass::{IrWarning, StrengthReducePass};
 
 /// Controls what the `compile()` function emits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,7 +135,7 @@ fn compile_ast(
     use crate::pass::infer_shapes;
     use crate::pass::type_infer::TypeInferPass;
     use crate::pass::validate::ValidatePass;
-    use crate::pass::{ConstFoldPass, CsePass, DcePass, DeadNodePass, GraphPassManager, OpExpandPass, PassManager, ShapeCheckPass};
+    use crate::pass::{ConstFoldPass, CsePass, DcePass, DeadNodePass, GraphPassManager, OpExpandPass, PassManager, ShapeCheckPass, StrengthReducePass};
 
     if emit == EmitKind::Graph {
         let mut out = String::new();
@@ -180,6 +183,7 @@ fn compile_ast(
     pm.add_pass(ValidatePass);
     pm.add_pass(TypeInferPass);
     pm.add_pass(ConstFoldPass);
+    pm.add_pass(StrengthReducePass);
     pm.add_pass(OpExpandPass);
     pm.add_pass(DcePass);
     pm.add_pass(CsePass);
@@ -224,6 +228,59 @@ fn compile_ast(
     }
 }
 
+/// Compiles an IRIS source string to a fully-optimized `IrModule`.
+///
+/// Runs all standard passes (validate, type-infer, const-fold, strength-reduce,
+/// op-expand, DCE, CSE, shape-check).  Useful before calling `serialize_module`.
+pub fn compile_to_module(source: &str, module_name: &str) -> Result<IrModule, Error> {
+    use crate::parser::lexer::Lexer;
+    use crate::parser::parse::Parser;
+
+    let tokens = Lexer::new(source).tokenize()?;
+    let ast_module = Parser::new(&tokens).parse_module()?;
+    let ir = crate::lower::lower(&ast_module, module_name)?;
+    // Run passes identical to compile_ast.
+    use crate::pass::type_infer::TypeInferPass;
+    use crate::pass::validate::ValidatePass;
+    use crate::pass::{ConstFoldPass, CsePass, DcePass, OpExpandPass, PassManager, ShapeCheckPass, StrengthReducePass};
+    let mut pm = PassManager::new();
+    pm.add_pass(ValidatePass);
+    pm.add_pass(TypeInferPass);
+    pm.add_pass(ConstFoldPass);
+    pm.add_pass(StrengthReducePass);
+    pm.add_pass(OpExpandPass);
+    pm.add_pass(DcePass);
+    pm.add_pass(CsePass);
+    pm.add_pass(ShapeCheckPass);
+    let mut ir = ir;
+    pm.run(&mut ir).map_err(|(_, e)| Error::Pass(e))?;
+    Ok(ir)
+}
+
+/// Evaluates a pre-built `IrModule` without re-running passes.
+///
+/// Finds the first zero-argument function and runs the interpreter on it.
+pub fn eval_ir_module(module: &IrModule) -> Result<String, Error> {
+    let func = module
+        .functions()
+        .iter()
+        .find(|f| f.params.is_empty())
+        .ok_or_else(|| {
+            Error::Interp(crate::error::InterpError::Unsupported {
+                detail: "no zero-argument function in module".into(),
+            })
+        })?;
+    let opts = interp::InterpOptions { max_steps: 1_000_000, max_depth: 500 };
+    let results = interp::eval_function_in_module_opts(module, func, &[], opts)?;
+    let mut out = String::new();
+    for val in &results {
+        if !matches!(val, interp::IrValue::Unit) {
+            out.push_str(&format!("{}\n", val));
+        }
+    }
+    Ok(out)
+}
+
 /// Compiles an IRIS source string through the full pipeline.
 ///
 /// Returns the emitted output as a `String`, or an `Error` if any
@@ -235,6 +292,20 @@ pub fn compile(source: &str, module_name: &str, emit: EmitKind) -> Result<String
     let tokens = Lexer::new(source).tokenize()?;
     let ast_module = Parser::new(&tokens).parse_module()?;
     compile_ast(&ast_module, module_name, emit, 1_000_000, 500, None)
+}
+
+/// Compiles an IRIS source string and also returns dead-variable warnings.
+///
+/// Returns `(output, warnings)` on success, or an `Error` on failure.
+pub fn compile_with_warnings(source: &str, module_name: &str, emit: EmitKind) -> Result<(String, Vec<IrWarning>), Error> {
+    use crate::parser::lexer::Lexer;
+    use crate::parser::parse::Parser;
+
+    let tokens = Lexer::new(source).tokenize()?;
+    let ast_module = Parser::new(&tokens).parse_module()?;
+    let warnings = pass::find_unused_vars(&ast_module);
+    let output = compile_ast(&ast_module, module_name, emit, 1_000_000, 500, None)?;
+    Ok((output, warnings))
 }
 
 /// Like [`compile`] but with configurable interpreter limits for `--emit eval`.
@@ -251,6 +322,16 @@ pub fn compile_with_opts(
     let tokens = Lexer::new(source).tokenize()?;
     let ast_module = Parser::new(&tokens).parse_module()?;
     compile_ast(&ast_module, module_name, emit, max_steps, max_depth, None)
+}
+
+/// Compiles an IRIS source string and on error returns a human-readable
+/// diagnostic with source context (line number, source excerpt, caret pointer).
+///
+/// On success returns `Ok(output)`.  On failure returns `Err(diagnostic_string)`
+/// instead of a structured `Error`, making it easy to display to end-users.
+pub fn compile_with_diagnostics(source: &str, module_name: &str, emit: EmitKind) -> Result<String, String> {
+    compile(source, module_name, emit)
+        .map_err(|e| diagnostics::render_error(source, &e))
 }
 
 /// Like [`compile_with_opts`] but also supports `--dump-ir-after`.

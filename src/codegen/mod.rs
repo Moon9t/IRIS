@@ -1,6 +1,7 @@
 pub mod build;
 pub mod cuda;
 pub mod graph_printer;
+pub mod ir_serial;
 pub mod jit;
 pub mod llvm_ir;
 pub mod llvm_stub;
@@ -11,6 +12,7 @@ pub mod printer;
 pub mod simd;
 
 pub use build::{build_binary, emit_binary_ir, runtime_c_source, runtime_h_source};
+pub use ir_serial::{deserialize_module, serialize_module};
 pub use cuda::emit_cuda;
 pub use graph_printer::emit_graph_text;
 pub use jit::emit_jit;

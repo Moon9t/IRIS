@@ -35,6 +35,9 @@ fn pattern_has_bindings(pattern: &AstWhenPattern) -> bool {
         AstWhenPattern::ResultOk { binding: Some(_) } => true,
         AstWhenPattern::ResultErr { binding: Some(_) } => true,
         AstWhenPattern::EnumVariant { bindings, .. } if !bindings.is_empty() => true,
+        // A tuple pattern has bindings if ANY sub-pattern is an ident binding
+        AstWhenPattern::Tuple(subs) => subs.iter().any(|s| pattern_has_bindings(s)
+            || matches!(s, AstWhenPattern::EnumVariant { enum_name, .. } if enum_name.is_empty())),
         _ => false,
     }
 }
@@ -88,6 +91,7 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
     // monomorphized on demand during lower_call.
     let mut fn_sigs: HashMap<String, IrType> = HashMap::new();
     let mut generic_fn_map: HashMap<String, crate::parser::ast::AstFunction> = HashMap::new();
+    let mut fn_defaults_map: HashMap<String, Vec<Option<crate::parser::ast::AstExpr>>> = HashMap::new();
     for func in &ast.functions {
         if func.type_params.is_empty() {
             let ret_ty = lower_type_with_structs(&func.return_ty, &module);
@@ -95,8 +99,15 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
         } else {
             generic_fn_map.insert(func.name.name.clone(), func.clone());
         }
+        if func.params.iter().any(|p| p.default.is_some()) {
+            fn_defaults_map.insert(
+                func.name.name.clone(),
+                func.params.iter().map(|p| p.default.clone()).collect(),
+            );
+        }
     }
     let generic_fns = std::rc::Rc::new(generic_fn_map);
+    let fn_defaults = std::rc::Rc::new(fn_defaults_map);
 
     // 3b. Collect global const declarations as named expressions.
     let const_defs_map: HashMap<String, AstExpr> = ast.consts.iter()
@@ -159,7 +170,7 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
         let (ir_func, lifted) = lower_function_with_generics(
             func, &module, &fn_sigs, &const_defs,
             generic_fns.clone(), mono_cache.clone(), mono_sigs.clone(),
-            trait_dispatch.clone(),
+            trait_dispatch.clone(), fn_defaults.clone(),
         )?;
         module
             .add_function(ir_func)
@@ -210,6 +221,8 @@ struct Lowerer<'m> {
     /// Trait method dispatch table: method_name → [(dispatch_type, mangled_fn_name)].
     /// The dispatch_type is the IrType of the first argument used to select the impl.
     trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
+    /// Default parameter expressions: fn_name → [Option<AstExpr>] per param.
+    fn_defaults: std::rc::Rc<HashMap<String, Vec<Option<crate::parser::ast::AstExpr>>>>,
 }
 
 impl<'m> Lowerer<'m> {
@@ -225,6 +238,7 @@ impl<'m> Lowerer<'m> {
             std::rc::Rc::new(HashMap::new()),
             std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new())),
             std::rc::Rc::new(std::cell::RefCell::new(HashMap::new())),
+            std::rc::Rc::new(HashMap::new()),
             std::rc::Rc::new(HashMap::new()),
             std::rc::Rc::new(HashMap::new()),
         )
@@ -243,6 +257,7 @@ impl<'m> Lowerer<'m> {
         mono_sigs: std::rc::Rc<std::cell::RefCell<HashMap<String, IrType>>>,
         const_defs: std::rc::Rc<HashMap<String, crate::parser::ast::AstExpr>>,
         trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
+        fn_defaults: std::rc::Rc<HashMap<String, Vec<Option<crate::parser::ast::AstExpr>>>>,
     ) -> Self {
         Self {
             builder,
@@ -259,6 +274,7 @@ impl<'m> Lowerer<'m> {
             mono_sigs,
             const_defs,
             trait_dispatch,
+            fn_defaults,
         }
     }
 
@@ -295,6 +311,27 @@ impl<'m> Lowerer<'m> {
                         Some(result_ty.clone()),
                     );
                     return Ok((result, result_ty));
+                }
+                // If the ident is not in scope, check if it's a named function —
+                // create a first-class function reference via MakeClosure.
+                if !self.scope.contains_key(&ident.name) {
+                    if let Some(ret_ty) = self.fn_sigs.get(&ident.name).cloned() {
+                        let fn_ty = IrType::Fn {
+                            params: vec![],           // param types not tracked in fn_sigs
+                            ret: Box::new(ret_ty.clone()),
+                        };
+                        let result = self.builder.fresh_value();
+                        self.builder.push_instr(
+                            IrInstr::MakeClosure {
+                                result,
+                                fn_name: ident.name.clone(),
+                                captures: vec![],
+                                result_ty: fn_ty.clone(),
+                            },
+                            Some(fn_ty.clone()),
+                        );
+                        return Ok((result, fn_ty));
+                    }
                 }
                 self.lookup(ident)
             }
@@ -2563,6 +2600,7 @@ impl<'m> Lowerer<'m> {
                     self.mono_sigs.clone(),
                     subs,
                     self.trait_dispatch.clone(),
+                    self.fn_defaults.clone(),
                 ).map_err(|e| e)?;
 
                 self.lifted_fns.borrow_mut().push(ir_func);
@@ -2624,10 +2662,20 @@ impl<'m> Lowerer<'m> {
             .or_else(|| self.mono_sigs.borrow().get(&callee.name).cloned())
             .unwrap_or(IrType::Infer);
 
+        // Build argument list, filling in defaults for omitted trailing args.
+        let defaults = self.fn_defaults.get(&callee.name).cloned();
         let mut arg_vals = Vec::with_capacity(args.len());
         for arg in args {
             let (v, _) = self.lower_expr(arg)?;
             arg_vals.push(v);
+        }
+        if let Some(ref defs) = defaults {
+            for def_opt in defs.iter().skip(arg_vals.len()) {
+                if let Some(default_expr) = def_opt {
+                    let (v, _) = self.lower_expr(default_expr)?;
+                    arg_vals.push(v);
+                }
+            }
         }
         let result = self.builder.fresh_value();
         self.builder.push_instr(
@@ -3560,6 +3608,57 @@ impl<'m> Lowerer<'m> {
                 );
                 Ok(result)
             }
+            AstWhenPattern::Tuple(subs) => {
+                // For a tuple pattern (a, b, ...): extract each element and check each sub-pattern.
+                // Pure bindings (EnumVariant with empty enum_name) always succeed.
+                // Literal sub-patterns (IntLit, BoolLit, StringLit) emit a check.
+                // All checks are AND-ed together.
+                let bool_ty = IrType::Scalar(DType::Bool);
+                let tuple_elems = match scrut_ty {
+                    IrType::Tuple(ref elems) => elems.clone(),
+                    _ => return Err(LowerError::Unsupported {
+                        detail: format!("tuple pattern on non-tuple type {}", scrut_ty),
+                        span,
+                    }),
+                };
+                let mut all_ok = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ConstBool { result: all_ok, value: true },
+                    Some(bool_ty.clone()),
+                );
+                for (i, sub) in subs.iter().enumerate() {
+                    let elem_ty = tuple_elems.get(i).cloned().unwrap_or(IrType::Scalar(DType::I64));
+                    let elem_val = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::GetElement { result: elem_val, base: scrut_val, index: i, result_ty: elem_ty.clone() },
+                        Some(elem_ty.clone()),
+                    );
+                    // Check sub-pattern
+                    let sub_ok = match sub {
+                        // Binding or wildcard: always true
+                        AstWhenPattern::EnumVariant { enum_name, variant_name, .. } if enum_name.is_empty() => {
+                            // Bind this element under variant_name (handled separately in bindings)
+                            let _ = variant_name;
+                            let t = self.builder.fresh_value();
+                            self.builder.push_instr(IrInstr::ConstBool { result: t, value: true }, Some(bool_ty.clone()));
+                            t
+                        }
+                        AstWhenPattern::Wildcard => {
+                            let t = self.builder.fresh_value();
+                            self.builder.push_instr(IrInstr::ConstBool { result: t, value: true }, Some(bool_ty.clone()));
+                            t
+                        }
+                        other => self.emit_pattern_condition(elem_val, &elem_ty, other, &None, &None, span)?,
+                    };
+                    let new_all = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::BinOp { result: new_all, op: BinOp::BitAnd, lhs: all_ok, rhs: sub_ok, ty: bool_ty.clone() },
+                        Some(bool_ty.clone()),
+                    );
+                    all_ok = new_all;
+                }
+                Ok(all_ok)
+            }
             AstWhenPattern::OptionNone => {
                 // !IsSome(scrutinee)
                 let is_some_result = self.builder.fresh_value();
@@ -3660,6 +3759,35 @@ impl<'m> Lowerer<'m> {
                 );
                 Ok(result)
             }
+            AstWhenPattern::Range { lo, hi } => {
+                // lo <= scrutinee && scrutinee <= hi
+                let lo_val = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ConstInt { result: lo_val, value: *lo, ty: scrut_ty.clone() },
+                    Some(scrut_ty.clone()),
+                );
+                let hi_val = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ConstInt { result: hi_val, value: *hi, ty: scrut_ty.clone() },
+                    Some(scrut_ty.clone()),
+                );
+                let lo_ok = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::BinOp { result: lo_ok, op: BinOp::CmpLe, lhs: lo_val, rhs: scrut_val, ty: scrut_ty.clone() },
+                    Some(IrType::Scalar(DType::Bool)),
+                );
+                let hi_ok = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::BinOp { result: hi_ok, op: BinOp::CmpLe, lhs: scrut_val, rhs: hi_val, ty: scrut_ty.clone() },
+                    Some(IrType::Scalar(DType::Bool)),
+                );
+                let result = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::BinOp { result, op: BinOp::BitAnd, lhs: lo_ok, rhs: hi_ok, ty: IrType::Scalar(DType::Bool) },
+                    Some(IrType::Scalar(DType::Bool)),
+                );
+                Ok(result)
+            }
         }
     }
 
@@ -3735,6 +3863,28 @@ impl<'m> Lowerer<'m> {
                                 Some(field_ty.clone()),
                             );
                             self.scope.insert(binding_name.clone(), (result, field_ty));
+                        }
+                    }
+                }
+            }
+            // Tuple pattern: bind each element to its name (sub-patterns that are ident bindings).
+            AstWhenPattern::Tuple(subs) => {
+                let tuple_elems = if let IrType::Tuple(ref elems) = scrut_ty {
+                    elems.clone()
+                } else {
+                    vec![]
+                };
+                for (i, sub) in subs.iter().enumerate() {
+                    if let AstWhenPattern::EnumVariant { enum_name, variant_name, .. } = sub {
+                        if enum_name.is_empty() {
+                            // This is an ident binding
+                            let elem_ty = tuple_elems.get(i).cloned().unwrap_or(IrType::Scalar(DType::I64));
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::GetElement { result, base: scrut_val, index: i, result_ty: elem_ty.clone() },
+                                Some(elem_ty.clone()),
+                            );
+                            self.scope.insert(variant_name.clone(), (result, elem_ty));
                         }
                     }
                 }
@@ -4889,11 +5039,12 @@ fn lower_function_with_generics(
     mono_cache: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
     mono_sigs: std::rc::Rc<std::cell::RefCell<HashMap<String, IrType>>>,
     trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
+    fn_defaults: std::rc::Rc<HashMap<String, Vec<Option<AstExpr>>>>,
 ) -> Result<(crate::ir::function::IrFunction, Vec<crate::ir::function::IrFunction>), LowerError> {
     lower_function_with_generics_and_subs(
         func, module, fn_sigs, const_defs, generic_fns, mono_cache, mono_sigs,
         HashMap::new(), // no type param subs for top-level functions
-        trait_dispatch,
+        trait_dispatch, fn_defaults,
     )
 }
 
@@ -4908,6 +5059,7 @@ fn lower_function_with_generics_and_subs(
     mono_sigs: std::rc::Rc<std::cell::RefCell<HashMap<String, IrType>>>,
     type_param_subs: HashMap<String, IrType>,
     trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
+    fn_defaults: std::rc::Rc<HashMap<String, Vec<Option<AstExpr>>>>,
 ) -> Result<(crate::ir::function::IrFunction, Vec<crate::ir::function::IrFunction>), LowerError> {
     // Resolve param and return types with substitution applied.
     let resolve = |ty: &AstType| -> IrType {
@@ -4933,7 +5085,7 @@ fn lower_function_with_generics_and_subs(
     let mut lowerer = Lowerer::new_generic(
         builder, module, fn_sigs, lambda_counter, lifted_fns.clone(),
         type_param_subs, generic_fns, mono_cache, mono_sigs, const_defs.clone(),
-        trait_dispatch,
+        trait_dispatch, fn_defaults,
     );
 
     // Register function parameters as entry block params.
@@ -5006,6 +5158,10 @@ pub fn lower_type(ty: &AstType) -> IrType {
         AstType::Mutex(inner, _) => IrType::Mutex(Box::new(lower_type(inner))),
         AstType::Grad(inner, _) => IrType::Grad(Box::new(lower_type(inner))),
         AstType::Sparse(inner, _) => IrType::Sparse(Box::new(lower_type(inner))),
+        AstType::Fn { params, ret, .. } => IrType::Fn {
+            params: params.iter().map(lower_type).collect(),
+            ret: Box::new(lower_type(ret)),
+        },
     }
 }
 
