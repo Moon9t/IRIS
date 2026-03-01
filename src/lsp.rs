@@ -242,8 +242,17 @@ impl LspState {
         // This works even when bring resolution fails (warnings are per-file).
         if let Some(ast) = parse_source(source) {
             for w in crate::pass::find_unused_vars(&ast) {
+                let (line, character) = if let Some(sp) = w.span {
+                    let (l, c) = byte_to_line_col(source, sp.start.0);
+                    (l.saturating_sub(1), c.saturating_sub(1))
+                } else {
+                    (0u32, 0u32)
+                };
                 diags.push(LspDiagnostic {
-                    line: 0, character: 0, end_line: 0, end_character: 1,
+                    line,
+                    character,
+                    end_line: line,
+                    end_character: character + 1,
                     message: w.message,
                     severity: 2,
                 });
@@ -603,10 +612,11 @@ fn token_to_str(tok: &crate::parser::lexer::Token, _source: &str) -> String {
 /// Runs the LSP server, reading JSON-RPC messages from stdin and writing
 /// responses to stdout. Blocks until the client sends `exit`.
 pub fn run_lsp_server() -> std::io::Result<()> {
-    use std::io::{Read, Write};
+    use std::io::Read;
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut state = LspState::new();
+    #[allow(unused_assignments)]
     let mut request_id: Option<serde_json::Value> = None;
 
     loop {

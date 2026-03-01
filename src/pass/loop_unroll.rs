@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use crate::ir::block::{BlockId, IrBlock};
 use crate::ir::instr::{BinOp, IrInstr};
 use crate::ir::module::IrModule;
-use crate::ir::types::IrType;
+//use crate::ir::types::IrType;
 use crate::ir::value::ValueId;
 use crate::pass::PassError;
 

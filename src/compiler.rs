@@ -4,7 +4,7 @@
 //! declarations by reading files from disk (and the embedded stdlib).
 //! It performs BFS resolution with cycle detection.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use crate::error::Error;

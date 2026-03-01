@@ -1,6 +1,6 @@
 //! Phase 94: Module System — file brings, stdlib brings, visibility, transitive, circular.
 
-use iris::{compile_multi, EmitKind, FileCompiler};
+use iris::{compile_multi, EmitKind};
 
 // ── 1. bring "file.iris" — public function callable ─────────────────────────
 

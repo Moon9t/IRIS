@@ -90,7 +90,6 @@ pub fn compile_multi_to_ast(
     sources: &[(&str, &str)],
     main_module: &str,
 ) -> Result<crate::parser::ast::AstModule, Error> {
-    use crate::parser::ast::BringPath;
     use crate::parser::lexer::Lexer;
     use crate::parser::parse::Parser;
     use std::collections::{HashMap, HashSet, VecDeque};

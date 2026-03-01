@@ -207,6 +207,7 @@ fn emit_llvm_ir_impl(module: &IrModule, for_binary: Option<()>, target_override:
 // Function emission
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn emit_function_ir(
     func: &IrFunction,
     str_table: &HashMap<String, usize>,

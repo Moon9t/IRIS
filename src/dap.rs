@@ -55,7 +55,7 @@ pub fn run_dap_server() -> std::io::Result<()> {
         let command = msg["command"].as_str().unwrap_or("");
         let arguments = msg.get("arguments").cloned().unwrap_or(serde_json::Value::Null);
 
-        let mut send = |body: serde_json::Value| -> std::io::Result<()> {
+        let send = |body: serde_json::Value| -> std::io::Result<()> {
             let text = serde_json::to_string(&body).unwrap_or_default();
             write!(stdout.lock(), "Content-Length: {}\r\n\r\n{}", text.len(), text)?;
             stdout.lock().flush()

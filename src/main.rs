@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::process;
 
 use iris::cli::{parse_args, ParseArgsResult};
+use iris::diagnostics::render_error;
 
 /// 64 MB stack — Windows default is only 1 MB, which overflows on deeply
 /// nested IRIS expressions during recursive IR lowering.
@@ -47,10 +48,11 @@ fn run() {
         }
         Ok(ParseArgsResult::Args(cli)) => {
             if cli.emit == iris::EmitKind::Binary {
+                let source = std::fs::read_to_string(&cli.path).unwrap_or_default();
                 let module = match iris::compile_file_to_module_with_opts(&cli.path, cli.dump_ir_after.as_deref()) {
                     Ok(m) => m,
                     Err(e) => {
-                        eprintln!("error: {}", e);
+                        eprint!("{}", render_error(&source, &e));
                         process::exit(1);
                     }
                 };
@@ -83,6 +85,7 @@ fn run() {
                 return;
             }
 
+            let source = std::fs::read_to_string(&cli.path).unwrap_or_default();
             match iris::compile_file_with_full_opts(&cli.path, cli.emit, cli.max_steps, cli.max_depth, cli.dump_ir_after.as_deref()) {
                 Ok(output) => {
                     if let Some(out_path) = cli.output {
@@ -95,7 +98,7 @@ fn run() {
                     }
                 }
                 Err(e) => {
-                    eprintln!("error: {}", e);
+                    eprint!("{}", render_error(&source, &e));
                     process::exit(1);
                 }
             }

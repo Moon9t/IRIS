@@ -3,7 +3,7 @@
 //! Requires clang in PATH for full build; if clang is missing, build_binary returns
 //! an error and the test still passes (we only assert the pipeline runs).
 
-use std::path::PathBuf;
+//use std::path::PathBuf;
 
 use iris::codegen::build_binary;
 use iris::parser::lexer::Lexer;

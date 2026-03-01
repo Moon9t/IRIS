@@ -1,6 +1,7 @@
 //! Dead variable warnings: detect `val x = expr` bindings that are never used.
 
 use crate::parser::ast::{AstBlock, AstExpr, AstFunction, AstModule, AstStmt, AstWhenArm};
+use crate::parser::lexer::Span;
 
 /// A compiler warning (non-fatal diagnostic).
 #[derive(Debug, Clone)]
@@ -9,6 +10,8 @@ pub struct IrWarning {
     pub func: String,
     /// Human-readable warning message.
     pub message: String,
+    /// Optional byte span for the warning location.
+    pub span: Option<Span>,
 }
 
 /// Analyze an AST module and return dead variable warnings.
@@ -21,13 +24,13 @@ pub fn find_unused_vars(module: &AstModule) -> Vec<IrWarning> {
 }
 
 fn collect_unused_in_function(func: &AstFunction, warnings: &mut Vec<IrWarning>) {
-    let declared: Vec<String> = func.body.stmts.iter()
+    let declared: Vec<(String, Option<Span>)> = func.body.stmts.iter()
         .filter_map(|s| {
-            if let AstStmt::Let { name, .. } = s { Some(name.name.clone()) } else { None }
+            if let AstStmt::Let { name, span, .. } = s { Some((name.name.clone(), Some(*span))) } else { None }
         })
         .collect();
 
-    for name in declared {
+    for (name, span) in declared {
         // Skip names starting with '_' — convention for intentionally unused.
         if name.starts_with('_') { continue; }
         // Check if this name is referenced anywhere in the block.
@@ -35,6 +38,7 @@ fn collect_unused_in_function(func: &AstFunction, warnings: &mut Vec<IrWarning>)
             warnings.push(IrWarning {
                 func: func.name.name.clone(),
                 message: format!("variable '{}' is assigned but never used", name),
+                span,
             });
         }
     }

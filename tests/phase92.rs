@@ -1,6 +1,6 @@
 //! Phase 92: LSP — language-server diagnostics, hover, and completions.
 
-use iris::{LspDiagnostic, LspState};
+use iris::{LspState};
 
 const URI: &str = "file:///test/file.iris";
 

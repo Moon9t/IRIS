@@ -130,24 +130,6 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
     let mut slots: HashMap<ValueId, usize> = HashMap::new();
     let mut errors: Vec<String> = Vec::new();
 
-    // Helper: get-or-create a slot for a ValueId.
-    macro_rules! slot_of {
-        ($v:expr) => {{
-            let v = $v;
-            if let Some(&s) = slots.get(&v) {
-                s
-            } else {
-                let ty = module.functions[fn_idx].value_types.get(&v).cloned();
-                let s = uf.new_slot(match ty {
-                    Some(IrType::Infer) | None => None,
-                    Some(t) => Some(t),
-                });
-                slots.insert(v, s);
-                s
-            }
-        }};
-    }
-
     // Pass 1: collect constraints by walking all instructions.
     let num_blocks = module.functions[fn_idx].blocks.len();
     for bi in 0..num_blocks {

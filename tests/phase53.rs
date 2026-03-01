@@ -11,7 +11,7 @@
 //   - PGO hot/cold summary is emitted
 
 use iris::{compile, EmitKind};
-use iris::codegen::pgo::{ProfileData, generate_synthetic_profile};
+use iris::codegen::pgo::{ProfileData};
 
 // ── Test 1: PgoInstrument emits counter globals ────────────────────────────
 
@@ -109,8 +109,8 @@ fn test_profile_data_entry_count() {
 
 #[test]
 fn test_synthetic_profile_parseable() {
-    use iris::compile;
-    let src = r#"def f() -> i64 { 42 }"#;
+    //use iris::compile;
+    let _src = r#"def f() -> i64 { 42 }"#;
     // We need an IrModule — use the IR pipeline to produce it via eval (we have the
     // module already from the compile path), but synthetic profile just needs function names.
     // Instead, test the profile parsing round-trip.
