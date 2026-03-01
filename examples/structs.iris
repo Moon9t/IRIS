@@ -1,23 +1,67 @@
-// structs.iris -- record types with field access
-//
-// Run: cargo run -- --emit eval examples/structs.iris
+// structs.iris — record types with field access and methods
 
-record Point { x: f64, y: f64 }
+record Point {
+    x: f64,
+    y: f64,
+}
 
-def distance(px: f64, py: f64, qx: f64, qy: f64) -> f64 {
-    val dx = px - qx
-    val dy = py - qy
+record Circle {
+    center: Point,
+    radius: f64,
+}
+
+record Rect {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+def distance(a: Point, b: Point) -> f64 {
+    val dx = a.x - b.x
+    val dy = a.y - b.y
     sqrt(dx * dx + dy * dy)
 }
 
-def main() -> f64 {
-    val p = Point { x: 3.0, y: 4.0 }
+def circle_area(c: Circle) -> f64 {
+    (3.14159265 to f64) * c.radius * c.radius
+}
 
-    val d = distance(0.0, 0.0, p.x, p.y)
-    print(concat("distance((0,0),(3,4)) = ", to_str(d)));
+def circle_circumference(c: Circle) -> f64 {
+    (2.0 to f64) * (3.14159265 to f64) * c.radius
+}
 
-    val area = 6.0 * 7.0
-    print(concat("area(6,7) = ", to_str(area)));
+def rect_area(r: Rect) -> f64 {
+    r.w * r.h
+}
 
-    d
+def rect_perimeter(r: Rect) -> f64 {
+    (2.0 to f64) * (r.w + r.h)
+}
+
+def rect_contains(r: Rect, p: Point) -> bool {
+    val in_x = if p.x >= r.x { if p.x <= (r.x + r.w) { true } else { false } } else { false }
+    val in_y = if p.y >= r.y { if p.y <= (r.y + r.h) { true } else { false } } else { false }
+    if in_x { in_y } else { false }
+}
+
+def main() -> i64 {
+    val origin = Point { x: 0.0 to f64, y: 0.0 to f64 }
+    val p = Point { x: 3.0 to f64, y: 4.0 to f64 }
+    print(concat("distance((0,0),(3,4)) = ", to_str(distance(origin, p))));
+
+    val c = Circle { center: origin, radius: 5.0 to f64 }
+    print(concat("circle area = ", to_str(circle_area(c))));
+    print(concat("circle circ = ", to_str(circle_circumference(c))));
+
+    val r = Rect { x: 1.0 to f64, y: 1.0 to f64, w: 6.0 to f64, h: 4.0 to f64 }
+    print(concat("rect area      = ", to_str(rect_area(r))));
+    print(concat("rect perimeter = ", to_str(rect_perimeter(r))));
+
+    val inside  = Point { x: 3.0 to f64, y: 2.0 to f64 }
+    val outside = Point { x: 10.0 to f64, y: 10.0 to f64 }
+    print(concat("(3,2) in rect? ", to_str(rect_contains(r, inside))));
+    print(concat("(10,10) in rect? ", to_str(rect_contains(r, outside))));
+
+    0
 }

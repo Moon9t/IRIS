@@ -1031,6 +1031,13 @@ fn emit_llvm_instr(
         IrInstr::StrJoin { result, list_val, delim } => {
             writeln!(out, "  %v{} = call ptr @iris_str_join(ptr {}, ptr {})", result.0, val(*list_val), val(*delim))?;
         }
+        IrInstr::NowMs { result } => {
+            writeln!(out, "  %v{} = call i64 @iris_now_ms()", result.0)?;
+        }
+        IrInstr::SleepMs { result, ms } => {
+            writeln!(out, "  call void @iris_sleep_ms(i64 {})", val(*ms))?;
+            writeln!(out, "  %v{} = add i64 0, 0", result.0)?;
+        }
     }
     Ok(())
 }

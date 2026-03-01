@@ -1,0 +1,105 @@
+// src/stdlib/dataframe.iris -- IRIS column-based data storage (mini pandas).
+//
+// A DataFrame stores all column data flat in a single list<f64>.
+// Row r, column c is at index: r * n_cols + c.
+
+record DataFrame { columns: list<str>, data: list<f64>, n_rows: i64, n_cols: i64 }
+
+// Create a new empty DataFrame with the given column names.
+pub def df_new(columns: list<str>) -> DataFrame {
+    DataFrame { columns: columns, data: list(), n_rows: 0, n_cols: list_len(columns) }
+}
+
+// Add a row (list<f64> with one value per column). Returns updated DataFrame.
+pub def df_add_row(df: DataFrame, row: list<f64>) -> DataFrame {
+    val nc = df.n_cols
+    val nd = list_len(df.data)
+    var new_data = list()
+    var i = 0
+    while i < nd {
+        push(new_data, list_get(df.data, i));
+        i = i + 1
+    }
+    var j = 0
+    while j < nc {
+        val v = if j < list_len(row) { list_get(row, j) } else { 0.0 to f64 }
+        push(new_data, v);
+        j = j + 1
+    }
+    DataFrame { columns: df.columns, data: new_data, n_rows: df.n_rows + 1, n_cols: nc }
+}
+
+// Return the number of rows.
+pub def df_len(df: DataFrame) -> i64 {
+    df.n_rows
+}
+
+// Find the column index by name, or -1 if not found.
+pub def df_col_idx(df: DataFrame, name: str) -> i64 {
+    val n = list_len(df.columns)
+    var idx = -1
+    var i = 0
+    while i < n {
+        val c = list_get(df.columns, i)
+        idx = if c == name { i } else { idx }
+        i = i + 1
+    }
+    idx
+}
+
+// Extract all values for a named column as list<f64>.
+pub def df_col(df: DataFrame, name: str) -> list<f64> {
+    val col_i = df_col_idx(df, name)
+    val nc = df.n_cols
+    var result = list()
+    var r = 0
+    while r < df.n_rows {
+        val idx = r * nc + col_i
+        val _ = if col_i >= 0 { push(result, list_get(df.data, idx)); 0 } else { 0 }
+        r = r + 1
+    }
+    result
+}
+
+// Filter rows where the named column is in [min_val, max_val].
+pub def df_filter(df: DataFrame, col: str, min_val: f64, max_val: f64) -> DataFrame {
+    val col_i = df_col_idx(df, col)
+    val nc = df.n_cols
+    var new_data = list()
+    var new_n = 0
+    var r = 0
+    while r < df.n_rows {
+        val base = r * nc
+        val v = if col_i >= 0 { list_get(df.data, base + col_i) } else { min_val - (1.0 to f64) }
+        val in_range = v >= min_val && v <= max_val
+        new_n = if in_range { new_n + 1 } else { new_n }
+        var c2 = 0
+        while c2 < nc {
+            val _ = if in_range { push(new_data, list_get(df.data, base + c2)); 0 } else { 0 }
+            c2 = c2 + 1
+        }
+        r = r + 1
+    }
+    DataFrame { columns: df.columns, data: new_data, n_rows: new_n, n_cols: nc }
+}
+
+// Emit the DataFrame as a CSV string.
+pub def df_to_csv(df: DataFrame) -> str {
+    val header = join(df.columns, ",")
+    val nc = df.n_cols
+    var lines = list()
+    push(lines, header);
+    var r = 0
+    while r < df.n_rows {
+        val base = r * nc
+        var cells = list()
+        var c2 = 0
+        while c2 < nc {
+            push(cells, to_str(list_get(df.data, base + c2)));
+            c2 = c2 + 1
+        }
+        push(lines, join(cells, ","));
+        r = r + 1
+    }
+    join(lines, "\n")
+}

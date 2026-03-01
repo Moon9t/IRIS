@@ -16,5 +16,5 @@ def main() -> i64 {
     val n = 10
     val f = factorial(n)
     print(concat("factorial(10) = ", to_str(f)));
-    f
+    0
 }

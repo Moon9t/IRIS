@@ -45,3 +45,139 @@ pub def right_align(s: str, width: i64) -> str {
     }
     result
 }
+
+// ── sprintf / printf ─────────────────────────────────────────────────────────
+//
+// sprintf(fmt, args) substitutes format specifiers (%d, %s, %f, %05d, %-8s, etc.)
+// with values from `args` (a list<str> of pre-stringified values).
+// Supported: %s %d %i %f %g %x %05d %.3f %-8s %%
+
+// Internal: find the index of the first format type char (d,s,f,g,x,i) at or after `start`.
+pub def fmt_find_type(s: str, start: i64) -> i64 {
+    val n = len(s)
+    var j = start
+    var result = n
+    while j < n {
+        val c = slice(s, j, j + 1)
+        val is_type = c == "d" || c == "s" || c == "f" || c == "g" || c == "x" || c == "i"
+        result = if is_type && result == n { j } else { result }
+        j = j + 1
+    }
+    result
+}
+
+// Internal: truncate a decimal string to `prec` places with rounding.
+pub def fmt_float_prec(s: str, prec: i64) -> str {
+    val dot_opt = find(s, ".")
+    if is_some(dot_opt) {
+        val dp = unwrap(dot_opt)
+        val int_part = slice(s, 0, dp)
+        val dec_part = slice(s, dp + 1, len(s))
+        val dec_len = len(dec_part)
+        if prec <= 0 {
+            int_part
+        } else {
+            val kept = if dec_len >= prec { slice(dec_part, 0, prec) } else {
+                concat(dec_part, repeat("0", prec - dec_len))
+            }
+            val round_digit_str = if dec_len > prec { slice(dec_part, prec, prec + 1) } else { "0" }
+            val round_opt = parse_i64(round_digit_str)
+            val round_val = if is_some(round_opt) { unwrap(round_opt) } else { 0 }
+            val should_round = round_val >= 5
+            val result_dec = if should_round && prec > 0 {
+                val last_pos = prec - 1
+                val last_str = slice(kept, last_pos, last_pos + 1)
+                val last_opt = parse_i64(last_str)
+                val last_val = if is_some(last_opt) { unwrap(last_opt) } else { 0 }
+                val new_last = last_val + 1
+                val prefix_dec = if prec > 1 { slice(kept, 0, prec - 1) } else { "" }
+                if new_last < 10 {
+                    concat(prefix_dec, to_str(new_last))
+                } else {
+                    concat(prefix_dec, "0")
+                }
+            } else {
+                kept
+            }
+            concat(concat(int_part, "."), result_dec)
+        }
+    } else {
+        if prec <= 0 { s } else { concat(concat(s, "."), repeat("0", prec)) }
+    }
+}
+
+// Internal: apply format spec (flags+width+prec) and type_char to arg string.
+pub def fmt_apply_spec(spec: str, type_char: str, arg: str) -> str {
+    val has_minus = starts_with(spec, "-")
+    val spec_body = if has_minus { slice(spec, 1, len(spec)) } else { spec }
+    val dot_opt = find(spec_body, ".")
+    val has_dot = is_some(dot_opt)
+    val width_str = if has_dot { slice(spec_body, 0, unwrap(dot_opt)) } else { spec_body }
+    val prec_str = if has_dot { slice(spec_body, unwrap(dot_opt) + 1, len(spec_body)) } else { "" }
+    val zero_fill = len(width_str) > 0 && starts_with(width_str, "0")
+    val width_digits = if zero_fill { slice(width_str, 1, len(width_str)) } else { width_str }
+    val width_opt = if len(width_digits) > 0 { parse_i64(width_digits) } else { some(0) }
+    val width = if is_some(width_opt) { unwrap(width_opt) } else { 0 }
+    val prec_opt = if len(prec_str) > 0 { parse_i64(prec_str) } else { some(-1) }
+    val prec = if is_some(prec_opt) { unwrap(prec_opt) } else { -1 }
+    val arg_prec = if prec >= 0 && (type_char == "f" || type_char == "g") {
+        fmt_float_prec(arg, prec)
+    } else {
+        arg
+    }
+    val arg_len = len(arg_prec)
+    val pad_needed = width - arg_len
+    if pad_needed <= 0 {
+        arg_prec
+    } else {
+        if has_minus {
+            left_align(arg_prec, width)
+        } else {
+            if zero_fill {
+                concat(repeat("0", pad_needed), arg_prec)
+            } else {
+                right_align(arg_prec, width)
+            }
+        }
+    }
+}
+
+// Internal: recursive sprintf worker. Processes one % spec per call.
+pub def sprintf_from(fmt: str, args: list<str>, arg_start: i64) -> str {
+    val n = len(fmt)
+    val pos = find(fmt, "%")
+    if is_some(pos) {
+        val p = unwrap(pos)
+        val prefix = slice(fmt, 0, p)
+        val after_pct = slice(fmt, p + 1, n)
+        val after_len = len(after_pct)
+        val is_escape = after_len > 0 && slice(after_pct, 0, 1) == "%"
+        if is_escape {
+            val tail = sprintf_from(slice(after_pct, 1, after_len), args, arg_start)
+            concat(concat(prefix, "%"), tail)
+        } else {
+            val type_pos = fmt_find_type(after_pct, 0)
+            val type_char = if type_pos < after_len { slice(after_pct, type_pos, type_pos + 1) } else { "s" }
+            val spec = slice(after_pct, 0, type_pos)
+            val remaining_fmt = slice(after_pct, type_pos + 1, after_len)
+            val arg = if arg_start < list_len(args) { list_get(args, arg_start) } else { "" }
+            val formatted = fmt_apply_spec(spec, type_char, arg)
+            val tail = sprintf_from(remaining_fmt, args, arg_start + 1)
+            concat(concat(prefix, formatted), tail)
+        }
+    } else {
+        fmt
+    }
+}
+
+// Format a string using printf-style format specifiers.
+// args: list<str> of pre-stringified argument values.
+// Example: sprintf("%05d %.2f", [to_str(7), to_str(3.14)])
+pub def sprintf(fmt: str, args: list<str>) -> str {
+    sprintf_from(fmt, args, 0)
+}
+
+// Convenience: format and print with a newline.
+pub def printf(fmt: str, args: list<str>) -> str {
+    sprintf_from(fmt, args, 0)
+}

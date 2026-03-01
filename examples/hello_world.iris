@@ -1,0 +1,14 @@
+// hello_world.iris -- Simple hello world with greeting function
+//
+// Run: cargo run -- --emit eval examples/hello_world.iris
+
+def greet(name: str) -> str {
+    f"Hello, {name}!"
+}
+
+def main() -> i64 {
+    print(greet("World"));
+    print(greet("IRIS"));
+    print(greet("Compiler"));
+    0
+}

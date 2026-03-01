@@ -25,6 +25,39 @@ use crate::ir::value::ValueId;
 // Public entry point
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Phase 101: Cross-platform target support
+// ---------------------------------------------------------------------------
+
+/// Maps a user-friendly preset name to an LLVM target triple.
+/// Returns `None` for unknown presets.
+pub fn target_preset_to_triple(preset: &str) -> Option<&'static str> {
+    match preset {
+        "linux-x64"    => Some("x86_64-unknown-linux-gnu"),
+        "linux-arm64"  => Some("aarch64-unknown-linux-gnu"),
+        "macos-x64"    => Some("x86_64-apple-macosx14.0"),
+        "macos-arm64"  => Some("aarch64-apple-macosx14.0"),
+        "windows-x64"  => Some("x86_64-pc-windows-gnu"),
+        "windows-arm64"=> Some("aarch64-pc-windows-gnu"),
+        "riscv64-linux"=> Some("riscv64gc-unknown-linux-gnu"),
+        _ => None,
+    }
+}
+
+/// Returns the LLVM data layout string for a given target triple.
+pub fn target_data_layout(triple: &str) -> &'static str {
+    if triple.starts_with("aarch64-apple") {
+        "e-m:o-i64:64-i128:128-n32:64-S128"
+    } else if triple.starts_with("aarch64") {
+        "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128"
+    } else if triple.starts_with("riscv64") {
+        "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128"
+    } else {
+        // x86_64 (linux, windows, macos)
+        "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+    }
+}
+
 /// Emits complete LLVM IR for all functions in the module.
 ///
 /// Improvements over `emit_llvm_stub`:
@@ -33,26 +66,35 @@ use crate::ir::value::ValueId;
 /// 3. User function calls use real typed signatures.
 /// 4. GEP-based inline struct/array access.
 pub fn emit_llvm_ir(module: &IrModule) -> Result<String, CodegenError> {
-    emit_llvm_ir_impl(module, None)
+    emit_llvm_ir_impl(module, None, None)
+}
+
+/// Like `emit_llvm_ir` but overrides the target triple (and deduces data layout).
+/// `target` may be a preset name (e.g. `"macos-arm64"`) or a raw LLVM triple.
+pub fn emit_llvm_ir_with_target(module: &IrModule, target: Option<&str>) -> Result<String, CodegenError> {
+    emit_llvm_ir_impl(module, None, target)
 }
 
 /// Like `emit_llvm_ir` but for native binary: renames the entry to `iris_main`
 /// and appends a C-compatible `main(i32, ptr)` wrapper.
 pub fn emit_llvm_ir_for_binary(module: &IrModule) -> Result<String, CodegenError> {
-    emit_llvm_ir_impl(module, Some(()))
+    emit_llvm_ir_impl(module, Some(()), None)
 }
 
-fn emit_llvm_ir_impl(module: &IrModule, for_binary: Option<()>) -> Result<String, CodegenError> {
+fn emit_llvm_ir_impl(module: &IrModule, for_binary: Option<()>, target_override: Option<&str>) -> Result<String, CodegenError> {
     let mut out = String::new();
+
+    // Resolve target triple and data layout.
+    let triple: &str = target_override
+        .and_then(|t| target_preset_to_triple(t).or(Some(t)))
+        .unwrap_or("x86_64-unknown-linux-gnu");
+    let layout = target_data_layout(triple);
 
     // ── Header ────────────────────────────────────────────────────────────
     writeln!(out, "; IRIS Complete LLVM IR — phase 49")?;
     writeln!(out, "; Struct/array types lowered, typed calls, alloca for fixed arrays.\n")?;
-    writeln!(
-        out,
-        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128\""
-    )?;
-    writeln!(out, "target triple = \"x86_64-unknown-linux-gnu\"\n")?;
+    writeln!(out, "target datalayout = \"{}\"", layout)?;
+    writeln!(out, "target triple = \"{}\"\n", triple)?;
 
     // ── Named struct type declarations ────────────────────────────────────
     // Collect struct names in stable order for deterministic output.
@@ -271,6 +313,109 @@ fn emit_function_body(
     let entry_id = func.blocks()[0].id;
     let mut gep_counter: u32 = 0;
 
+    // Sub-pass D: Build a map of emitted LLVM types for every SSA value.
+    // This lets the Call handler detect type mismatches and insert coercions.
+    let mut emitted_types: HashMap<ValueId, String> = HashMap::new();
+    // Function parameters.
+    for p in &func.params {
+        if let Ok(ty_s) = llvm_type_complete(&p.ty) {
+            emitted_types.insert(ValueId(func.params.iter().position(|pp| pp.name == p.name).unwrap_or(0) as u32), ty_s);
+        }
+    }
+    // Block parameters (phi nodes).
+    for block in func.blocks() {
+        for param in &block.params {
+            if let Ok(ty_s) = llvm_type_complete(&param.ty) {
+                emitted_types.insert(param.id, ty_s);
+            }
+        }
+    }
+    // Instructions.
+    for block in func.blocks() {
+        for instr in &block.instrs {
+            match instr {
+                IrInstr::ConstStr { result, .. } => { emitted_types.insert(*result, "ptr".to_owned()); }
+                IrInstr::ConstInt { result, ty, .. } => {
+                    let s = llvm_type_complete(ty).unwrap_or_else(|_| "i64".to_owned());
+                    emitted_types.insert(*result, s);
+                }
+                IrInstr::ConstFloat { result, ty, .. } => {
+                    let s = llvm_type_complete(ty).unwrap_or_else(|_| "double".to_owned());
+                    emitted_types.insert(*result, s);
+                }
+                IrInstr::ConstBool { result, .. } => { emitted_types.insert(*result, "i1".to_owned()); }
+                IrInstr::Call { result: Some(r), callee, result_ty, .. } => {
+                    if let Some((ret_s, _)) = fn_sigs.get(callee) {
+                        emitted_types.insert(*r, ret_s.clone());
+                    } else {
+                        let ty_s = result_ty.as_ref()
+                            .and_then(|t| llvm_type_complete(t).ok())
+                            .unwrap_or_else(|| "ptr".to_owned());
+                        emitted_types.insert(*r, ty_s);
+                    }
+                }
+                IrInstr::BinOp { result, ty, .. } => {
+                    let s = llvm_type_complete(ty).unwrap_or_else(|_| "i64".to_owned());
+                    emitted_types.insert(*result, s);
+                }
+                IrInstr::IsSome { result, .. } | IrInstr::IsOk { result, .. } => {
+                    emitted_types.insert(*result, "i1".to_owned());
+                }
+                IrInstr::MakeStruct { result, .. } | IrInstr::MakeTuple { result, .. }
+                | IrInstr::MakeClosure { result, .. } | IrInstr::AllocArray { result, .. }
+                | IrInstr::MakeSome { result, .. } | IrInstr::MakeNone { result, .. }
+                | IrInstr::MakeOk { result, .. } | IrInstr::MakeErr { result, .. }
+                | IrInstr::OptionUnwrap { result, .. } | IrInstr::ResultUnwrap { result, .. }
+                | IrInstr::ResultUnwrapErr { result, .. } | IrInstr::CallClosure { result: Some(result), .. } => {
+                    emitted_types.insert(*result, "ptr".to_owned());
+                }
+                // ListGet/ListPop/MapGet: runtime returns boxed IrisVal*, we unbox
+                // to the element type, so emitted type matches the element type.
+                IrInstr::ListGet { result, elem_ty, .. } | IrInstr::ListPop { result, elem_ty, .. } => {
+                    let s = match elem_ty {
+                        IrType::Scalar(DType::I64) => "i64".to_owned(),
+                        IrType::Scalar(DType::I32) => "i32".to_owned(),
+                        IrType::Scalar(DType::F64) => "double".to_owned(),
+                        IrType::Scalar(DType::F32) => "float".to_owned(),
+                        IrType::Scalar(DType::Bool) => "i1".to_owned(),
+                        _ => "ptr".to_owned(),
+                    };
+                    emitted_types.insert(*result, s);
+                }
+                IrInstr::MapGet { result, val_ty, .. } => {
+                    let s = match val_ty {
+                        IrType::Scalar(DType::I64) => "i64".to_owned(),
+                        IrType::Scalar(DType::I32) => "i32".to_owned(),
+                        IrType::Scalar(DType::F64) => "double".to_owned(),
+                        IrType::Scalar(DType::F32) => "float".to_owned(),
+                        IrType::Scalar(DType::Bool) => "i1".to_owned(),
+                        _ => "ptr".to_owned(),
+                    };
+                    emitted_types.insert(*result, s);
+                }
+                IrInstr::GetField { result, result_ty, .. } | IrInstr::GetElement { result, result_ty, .. } => {
+                    let s = llvm_type_complete(result_ty).unwrap_or_else(|_| "ptr".to_owned());
+                    emitted_types.insert(*result, s);
+                }
+                IrInstr::UnaryOp { result, ty, .. } | IrInstr::Cast { result, to_ty: ty, .. } => {
+                    let s = llvm_type_complete(ty).unwrap_or_else(|_| "i64".to_owned());
+                    emitted_types.insert(*result, s);
+                }
+                _ => {
+                    // For other instructions that produce a result, fall back to
+                    // func.value_type if available.
+                    if let Some(r) = instr_result_id(instr) {
+                        if let Some(ty) = func.value_type(r) {
+                            if let Ok(s) = llvm_type_complete(ty) {
+                                emitted_types.insert(r, s);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // ── Alloca preamble (entry block) ─────────────────────────────────────
     // Emit all scalar array allocas at the top of the entry block.
     let mut alloca_emitted: HashSet<ValueId> = HashSet::new();
@@ -281,6 +426,50 @@ fn emit_function_body(
                     // Will be emitted inline at the alloca instruction site.
                     alloca_emitted.insert(*result);
                     let _ = (elem_ty, size); // used below in emit_instr_ir
+                }
+            }
+        }
+    }
+
+    // Sub-pass E: Pre-compute phi arm coercions.
+    // When a phi incoming value has an emitted LLVM type that differs from
+    // the phi's declared type, we insert a coercion instruction in the
+    // predecessor block (before its terminator) and use the coerced name
+    // in the phi node.
+    let mut phi_casts: HashMap<(BlockId, usize, BlockId), String> = HashMap::new();
+    let mut phi_cast_instrs: HashMap<BlockId, Vec<String>> = HashMap::new();
+    for block in func.blocks() {
+        if block.id == entry_id { continue; }
+        for (i, param) in block.params.iter().enumerate() {
+            let expected_ty = llvm_type_complete(&param.ty)?;
+            if let Some(srcs) = phi_src.get(&(block.id, i)) {
+                for (pred_id, v) in srcs {
+                    // Skip constants – they are untyped literals in LLVM IR.
+                    if consts.contains_key(v) { continue; }
+                    if let Some(actual_ty) = emitted_types.get(v) {
+                        if *actual_ty != expected_ty {
+                            gep_counter += 1;
+                            let vstr = llvm_val(*v, &consts, func);
+                            let cast_name = format!("%phi_cast{}", gep_counter);
+                            let cast_instr = if actual_ty == "ptr" && expected_ty.starts_with('i') {
+                                format!("  {} = ptrtoint ptr {} to {}", cast_name, vstr, expected_ty)
+                            } else if expected_ty == "ptr" && actual_ty.starts_with('i') {
+                                format!("  {} = inttoptr {} {} to ptr", cast_name, actual_ty, vstr)
+                            } else if actual_ty.starts_with('i') && expected_ty.starts_with('i') {
+                                let aw = bit_width(actual_ty);
+                                let ew = bit_width(&expected_ty);
+                                if aw > ew {
+                                    format!("  {} = trunc {} {} to {}", cast_name, actual_ty, vstr, expected_ty)
+                                } else {
+                                    format!("  {} = zext {} {} to {}", cast_name, actual_ty, vstr, expected_ty)
+                                }
+                            } else {
+                                format!("  {} = bitcast {} {} to {}", cast_name, actual_ty, vstr, expected_ty)
+                            };
+                            phi_casts.insert((block.id, i, *pred_id), cast_name);
+                            phi_cast_instrs.entry(*pred_id).or_default().push(cast_instr);
+                        }
+                    }
                 }
             }
         }
@@ -300,18 +489,46 @@ fn emit_function_body(
                     .map(|srcs| {
                         srcs.iter()
                             .map(|(pred_id, v)| {
-                                let vstr = llvm_val(*v, &consts, func);
+                                // Use the coerced value name if a phi cast was needed.
+                                let vstr = if let Some(cast_name) = phi_casts.get(&(block.id, i, *pred_id)) {
+                                    cast_name.clone()
+                                } else {
+                                    llvm_val(*v, &consts, func)
+                                };
                                 let pred = block_label_by_id(func.blocks(), *pred_id);
                                 format!("[ {}, %{} ]", vstr, pred)
                             })
                             .collect()
                     })
                     .unwrap_or_default();
-                writeln!(out, "  {} = phi {} {}", phi_name, ty_s, arms.join(", "))?;
+                // Skip phi nodes with no arms (can happen when predecessors
+                // were converted to direct returns by the lowerer).
+                // Emit a dummy constant so downstream references are satisfied
+                // (the block is effectively unreachable in this case).
+                if arms.is_empty() {
+                    if ty_s == "ptr" {
+                        writeln!(out, "  {} = inttoptr i64 0 to ptr  ; unreachable phi stub", phi_name)?;
+                    } else if ty_s == "double" || ty_s == "float" {
+                        writeln!(out, "  {} = fadd {} 0.0, 0.0  ; unreachable phi stub", phi_name, ty_s)?;
+                    } else {
+                        // integer types (i1, i32, i64, etc.)
+                        writeln!(out, "  {} = add {} 0, 0  ; unreachable phi stub", phi_name, ty_s)?;
+                    }
+                } else {
+                    writeln!(out, "  {} = phi {} {}", phi_name, ty_s, arms.join(", "))?;
+                }
             }
         }
 
         for instr in &block.instrs {
+            // Emit phi coercion casts right before block terminators.
+            if matches!(instr, IrInstr::Br { .. } | IrInstr::CondBr { .. }) {
+                if let Some(casts) = phi_cast_instrs.get(&block.id) {
+                    for cast_instr in casts {
+                        writeln!(out, "{}", cast_instr)?;
+                    }
+                }
+            }
             emit_instr_ir(
                 instr,
                 &consts,
@@ -322,6 +539,7 @@ fn emit_function_body(
                 &scalar_arrays,
                 &mut gep_counter,
                 str_table,
+                &emitted_types,
                 out,
             )?;
         }
@@ -381,6 +599,44 @@ fn box_to_ptr(
 }
 
 // ---------------------------------------------------------------------------
+// Type coercion helper — emit ptrtoint / inttoptr / trunc / zext as needed
+// ---------------------------------------------------------------------------
+
+/// If the value's emitted LLVM type differs from `expected_ty`, emit a coercion
+/// instruction and return the coerced name. Otherwise return the raw value string.
+fn coerce_to_type(
+    v: ValueId,
+    expected_ty: &str,
+    consts: &HashMap<ValueId, String>,
+    func: &IrFunction,
+    emitted_types: &HashMap<ValueId, String>,
+    gep_counter: &mut u32,
+    out: &mut String,
+) -> Result<String, CodegenError> {
+    let v_str = llvm_val(v, consts, func);
+    // Constants don't need coercion — their type is determined by context.
+    if consts.contains_key(&v) { return Ok(v_str); }
+    if let Some(actual_ty) = emitted_types.get(&v) {
+        if actual_ty != expected_ty {
+            *gep_counter += 1;
+            let tmp = format!("%coerce{}", gep_counter);
+            if actual_ty == "ptr" && expected_ty.starts_with('i') {
+                writeln!(out, "  {} = ptrtoint ptr {} to {}", tmp, v_str, expected_ty)?;
+            } else if expected_ty == "ptr" && actual_ty.starts_with('i') {
+                writeln!(out, "  {} = inttoptr {} {} to ptr", tmp, actual_ty, v_str)?;
+            } else if actual_ty.starts_with('i') && expected_ty.starts_with('i') {
+                let op = if bit_width(actual_ty) > bit_width(expected_ty) { "trunc" } else { "zext" };
+                writeln!(out, "  {} = {} {} {} to {}", tmp, op, actual_ty, v_str, expected_ty)?;
+            } else {
+                writeln!(out, "  {} = bitcast {} {} to {}", tmp, actual_ty, v_str, expected_ty)?;
+            }
+            return Ok(tmp);
+        }
+    }
+    Ok(v_str)
+}
+
+// ---------------------------------------------------------------------------
 // Instruction emission
 // ---------------------------------------------------------------------------
 
@@ -395,6 +651,7 @@ fn emit_instr_ir(
     scalar_arrays: &HashSet<ValueId>,
     gep_counter: &mut u32,
     str_table: &HashMap<String, usize>,
+    emitted_types: &HashMap<ValueId, String>,
     out: &mut String,
 ) -> Result<(), CodegenError> {
     let val = |v: ValueId| llvm_val(v, consts, func);
@@ -404,10 +661,11 @@ fn emit_instr_ir(
         IrInstr::ConstFloat { .. } | IrInstr::ConstInt { .. } | IrInstr::ConstBool { .. } => {}
 
         IrInstr::BinOp { result, op, lhs, rhs, ty } => {
-            let lv = val(*lhs);
-            let rv = val(*rhs);
             let operand_ty = func.value_type(*lhs).unwrap_or(ty);
             let ty_s = llvm_type_complete(operand_ty)?;
+            // Coerce both operands to the expected type.
+            let lv = coerce_to_type(*lhs, &ty_s, consts, func, emitted_types, gep_counter, out)?;
+            let rv = coerce_to_type(*rhs, &ty_s, consts, func, emitted_types, gep_counter, out)?;
             let is_float = matches!(operand_ty, IrType::Scalar(DType::F32 | DType::F64));
             let llvm_op = match (op, is_float) {
                 (BinOp::Add, true) => format!("fadd {} {}, {}", ty_s, lv, rv),
@@ -451,8 +709,8 @@ fn emit_instr_ir(
         }
 
         IrInstr::UnaryOp { result, op, operand, ty } => {
-            let ov = val(*operand);
             let ty_s = llvm_type_complete(ty)?;
+            let ov = coerce_to_type(*operand, &ty_s, consts, func, emitted_types, gep_counter, out)?;
             let is_float = matches!(ty, IrType::Scalar(DType::F32 | DType::F64));
             match op {
                 ScalarUnaryOp::Neg if is_float => {
@@ -529,7 +787,15 @@ fn emit_instr_ir(
                 writeln!(out, "  %v{} = sitofp {} {} to {}", result.0, from_s, ov, to_s)?;
             } else if is_from_float && is_to_float {
                 if !is_from_f64 && is_to_f64 {
-                    writeln!(out, "  %v{} = fpext {} {} to {}", result.0, from_s, ov, to_s)?;
+                    // If the operand is an inline constant, emit it directly
+                    // as a double literal.  LLVM does not accept decimal float
+                    // literals that are not exactly representable in f32.
+                    if consts.contains_key(operand) {
+                        let dv = consts[operand].clone();
+                        writeln!(out, "  %v{} = fadd double {}, 0.0", result.0, dv)?;
+                    } else {
+                        writeln!(out, "  %v{} = fpext {} {} to {}", result.0, from_s, ov, to_s)?;
+                    }
                 } else {
                     writeln!(out, "  %v{} = fptrunc {} {} to {}", result.0, from_s, ov, to_s)?;
                 }
@@ -546,10 +812,42 @@ fn emit_instr_ir(
 
         IrInstr::Return { values } => {
             if values.is_empty() {
-                writeln!(out, "  ret void")?;
+                // If the function has a non-void return type but the IR
+                // produced an empty return (common for if-else branches that
+                // don't explicitly return), emit a zero/null return value
+                // instead of `ret void` which would be invalid LLVM IR.
+                let ret_ty = llvm_type_complete(&func.return_ty)?;
+                if ret_ty == "void" {
+                    writeln!(out, "  ret void")?;
+                } else if ret_ty == "ptr" {
+                    writeln!(out, "  ret ptr null")?;
+                } else if ret_ty.starts_with('i') {
+                    writeln!(out, "  ret {} 0", ret_ty)?;
+                } else if ret_ty == "double" || ret_ty == "float" {
+                    writeln!(out, "  ret {} 0.0", ret_ty)?;
+                } else {
+                    writeln!(out, "  ret {} zeroinitializer", ret_ty)?;
+                }
             } else {
-                let v = val(values[0]);
+                let v_id = values[0];
+                let v = val(v_id);
                 let ty_s = llvm_type_complete(&func.return_ty)?;
+                // Check for type mismatch between emitted value and return type.
+                if let Some(actual_ty) = emitted_types.get(&v_id) {
+                    if *actual_ty != ty_s && !consts.contains_key(&v_id) {
+                        *gep_counter += 1;
+                        let cast_name = format!("%ret_cast{}", gep_counter);
+                        if actual_ty == "ptr" && ty_s.starts_with('i') {
+                            writeln!(out, "  {} = ptrtoint ptr {} to {}", cast_name, v, ty_s)?;
+                        } else if ty_s == "ptr" && actual_ty.starts_with('i') {
+                            writeln!(out, "  {} = inttoptr {} {} to ptr", cast_name, actual_ty, v)?;
+                        } else {
+                            writeln!(out, "  {} = bitcast {} {} to {}", cast_name, actual_ty, v, ty_s)?;
+                        }
+                        writeln!(out, "  ret {} {}", ty_s, cast_name)?;
+                        return Ok(());
+                    }
+                }
                 writeln!(out, "  ret {} {}", ty_s, v)?;
             }
         }
@@ -572,12 +870,52 @@ fn emit_instr_ir(
                 .and_then(|(orig, llvm)| if *callee == orig { Some(llvm) } else { None })
                 .unwrap_or(callee);
             if let Some((ret_s, param_ss)) = fn_sigs.get(callee) {
-                // Build typed arg list.
-                let typed_args: Vec<String> = args
-                    .iter()
-                    .zip(param_ss.iter())
-                    .map(|(a, ty_s)| format!("{} {}", ty_s, val(*a)))
-                    .collect();
+                // Build typed arg list, inserting coercions when the actual
+                // LLVM type of a value differs from the callee's parameter type.
+                let mut typed_args: Vec<String> = Vec::with_capacity(args.len());
+                for (a, expected_ty) in args.iter().zip(param_ss.iter()) {
+                    let actual_ty = emitted_types
+                        .get(a)
+                        .cloned()
+                        .or_else(|| func.value_type(*a).and_then(|t| llvm_type_complete(t).ok()))
+                        .unwrap_or_else(|| expected_ty.clone());
+                    let v = val(*a);
+                    if actual_ty != *expected_ty {
+                        // Need a coercion.
+                        let tmp = format!("%cast{}", gep_counter);
+                        *gep_counter += 1;
+                        if actual_ty == "ptr" && expected_ty == "i64" {
+                            writeln!(out, "  {} = ptrtoint ptr {} to i64", tmp, v)?;
+                        } else if actual_ty == "i64" && expected_ty == "ptr" {
+                            writeln!(out, "  {} = inttoptr i64 {} to ptr", tmp, v)?;
+                        } else if actual_ty == "ptr" && expected_ty == "i32" {
+                            writeln!(out, "  {} = ptrtoint ptr {} to i32", tmp, v)?;
+                        } else if actual_ty == "i32" && expected_ty == "ptr" {
+                            writeln!(out, "  {} = inttoptr i32 {} to ptr", tmp, v)?;
+                        } else if (actual_ty == "i64" && expected_ty == "i1")
+                            || (actual_ty == "i1" && expected_ty == "i64")
+                            || (actual_ty == "i32" && expected_ty == "i64")
+                            || (actual_ty == "i64" && expected_ty == "i32")
+                        {
+                            // integer truncation/extension
+                            let op = if bit_width(&actual_ty) > bit_width(expected_ty) {
+                                "trunc"
+                            } else {
+                                "zext"
+                            };
+                            writeln!(
+                                out,
+                                "  {} = {} {} {} to {}",
+                                tmp, op, actual_ty, v, expected_ty
+                            )?;
+                        } else {
+                            writeln!(out, "  {} = bitcast {} {} to {}", tmp, actual_ty, v, expected_ty)?;
+                        }
+                        typed_args.push(format!("{} {}", expected_ty, tmp));
+                    } else {
+                        typed_args.push(format!("{} {}", expected_ty, v));
+                    }
+                }
                 if let Some(r) = result {
                     writeln!(
                         out,
@@ -609,9 +947,12 @@ fn emit_instr_ir(
         // ── Struct ops ─────────────────────────────────────────────────────
         IrInstr::MakeStruct { result, fields, result_ty } => {
             if let IrType::Struct { name, fields: field_tys } = result_ty {
-                // Inline struct construction via alloca + GEP stores.
+                // Heap-allocate struct so it survives function returns.
                 let struct_ty = format!("%{}", name);
-                writeln!(out, "  %struct_alloc{} = alloca {}, align 8", result.0, struct_ty)?;
+                // Compute struct size via GEP-from-null trick.
+                writeln!(out, "  %struct_sz{r} = getelementptr {sty}, ptr null, i32 1", r = result.0, sty = struct_ty)?;
+                writeln!(out, "  %struct_bytes{r} = ptrtoint ptr %struct_sz{r} to i64", r = result.0)?;
+                writeln!(out, "  %struct_alloc{r} = call ptr @malloc(i64 %struct_bytes{r})", r = result.0)?;
                 for (i, (fv, (_, fty))) in fields.iter().zip(field_tys.iter()).enumerate() {
                     let fty_s = llvm_type_complete(fty)?;
                     let gep_name = format!("%sgep{}_{}", result.0, i);
@@ -622,10 +963,11 @@ fn emit_instr_ir(
                     )?;
                     writeln!(out, "  store {} {}, ptr {}, align 8", fty_s, val(*fv), gep_name)?;
                 }
-                writeln!(out, "  %v{} = load ptr, ptr %struct_alloc{}", result.0, result.0)?;
+                // Use the malloc'd pointer directly as the struct value.
+                writeln!(out, "  %v{r} = getelementptr inbounds {sty}, ptr %struct_alloc{r}, i32 0", r = result.0, sty = struct_ty)?;
             } else {
                 let args_str: Vec<String> = fields.iter().map(|f| format!("ptr {}", val(*f))).collect();
-                writeln!(out, "  %v{} = call ptr @iris_make_struct({})", result.0, args_str.join(", "))?;
+                writeln!(out, "  %v{} = call ptr @iris_make_struct(i32 {}, {})", result.0, fields.len(), args_str.join(", "))?;
             }
         }
 
@@ -687,7 +1029,7 @@ fn emit_instr_ir(
         // ── Tuple ops ──────────────────────────────────────────────────────
         IrInstr::MakeTuple { result, elements, .. } => {
             let args_str: Vec<String> = elements.iter().map(|e| format!("ptr {}", val(*e))).collect();
-            writeln!(out, "  %v{} = call ptr @iris_make_tuple({})", result.0, args_str.join(", "))?;
+            writeln!(out, "  %v{} = call ptr @iris_make_tuple(i32 {}, {})", result.0, elements.len(), args_str.join(", "))?;
         }
 
         IrInstr::GetElement { result, base, index, result_ty } => {
@@ -1002,10 +1344,13 @@ fn emit_instr_ir(
             writeln!(out, "  %v{} = call ptr @iris_str_repeat(ptr {}, i64 {})", result.0, val(*operand), val(*count))?;
         }
         IrInstr::StrIndex { result, string, index } => {
-            writeln!(out, "  %v{} = call i64 @iris_str_index(ptr {}, i64 {})", result.0, val(*string), val(*index))?;
+            let idx_v = coerce_to_type(*index, "i64", consts, func, emitted_types, gep_counter, out)?;
+            writeln!(out, "  %v{} = call i64 @iris_str_index(ptr {}, i64 {})", result.0, val(*string), idx_v)?;
         }
         IrInstr::StrSlice { result, string, start, end } => {
-            writeln!(out, "  %v{} = call ptr @iris_str_slice(ptr {}, i64 {}, i64 {})", result.0, val(*string), val(*start), val(*end))?;
+            let start_v = coerce_to_type(*start, "i64", consts, func, emitted_types, gep_counter, out)?;
+            let end_v = coerce_to_type(*end, "i64", consts, func, emitted_types, gep_counter, out)?;
+            writeln!(out, "  %v{} = call ptr @iris_str_slice(ptr {}, i64 {}, i64 {})", result.0, val(*string), start_v, end_v)?;
         }
         IrInstr::StrFind { result, haystack, needle } => {
             writeln!(out, "  %v{} = call ptr @iris_str_find(ptr {}, ptr {})", result.0, val(*haystack), val(*needle))?;
@@ -1027,17 +1372,102 @@ fn emit_instr_ir(
         IrInstr::ListLen { result, list } => {
             writeln!(out, "  %v{} = call i64 @iris_list_len(ptr {})", result.0, val(*list))?;
         }
-        IrInstr::ListGet { result, list, index, .. } => {
-            writeln!(out, "  %v{} = call ptr @iris_list_get(ptr {}, i64 {})", result.0, val(*list), val(*index))?;
+        IrInstr::ListGet { result, list, index, elem_ty } => {
+            let idx_v = coerce_to_type(*index, "i64", consts, func, emitted_types, gep_counter, out)?;
+            // iris_list_get returns IrisVal* (boxed); unbox to the element type.
+            match elem_ty {
+                IrType::Scalar(DType::I64) => {
+                    let tmp = format!("%raw_get{}", gep_counter);
+                    *gep_counter += 1;
+                    writeln!(out, "  {} = call ptr @iris_list_get(ptr {}, i64 {})", tmp, val(*list), idx_v)?;
+                    writeln!(out, "  %v{} = call i64 @iris_unbox_i64(ptr {})", result.0, tmp)?;
+                }
+                IrType::Scalar(DType::I32) => {
+                    let tmp = format!("%raw_get{}", gep_counter);
+                    *gep_counter += 1;
+                    let tmp2 = format!("%raw_i64_{}", gep_counter);
+                    *gep_counter += 1;
+                    writeln!(out, "  {} = call ptr @iris_list_get(ptr {}, i64 {})", tmp, val(*list), idx_v)?;
+                    writeln!(out, "  {} = call i64 @iris_unbox_i64(ptr {})", tmp2, tmp)?;
+                    writeln!(out, "  %v{} = trunc i64 {} to i32", result.0, tmp2)?;
+                }
+                IrType::Scalar(DType::F64) => {
+                    let tmp = format!("%raw_get{}", gep_counter);
+                    *gep_counter += 1;
+                    writeln!(out, "  {} = call ptr @iris_list_get(ptr {}, i64 {})", tmp, val(*list), idx_v)?;
+                    writeln!(out, "  %v{} = call double @iris_unbox_f64(ptr {})", result.0, tmp)?;
+                }
+                IrType::Scalar(DType::F32) => {
+                    let tmp = format!("%raw_get{}", gep_counter);
+                    *gep_counter += 1;
+                    let tmp2 = format!("%raw_f64_{}", gep_counter);
+                    *gep_counter += 1;
+                    writeln!(out, "  {} = call ptr @iris_list_get(ptr {}, i64 {})", tmp, val(*list), idx_v)?;
+                    writeln!(out, "  {} = call double @iris_unbox_f64(ptr {})", tmp2, tmp)?;
+                    writeln!(out, "  %v{} = fptrunc double {} to float", result.0, tmp2)?;
+                }
+                IrType::Scalar(DType::Bool) => {
+                    let tmp = format!("%raw_get{}", gep_counter);
+                    *gep_counter += 1;
+                    let tmp2 = format!("%raw_bool{}", gep_counter);
+                    *gep_counter += 1;
+                    writeln!(out, "  {} = call ptr @iris_list_get(ptr {}, i64 {})", tmp, val(*list), idx_v)?;
+                    writeln!(out, "  {} = call i32 @iris_unbox_bool(ptr {})", tmp2, tmp)?;
+                    writeln!(out, "  %v{} = trunc i32 {} to i1", result.0, tmp2)?;
+                }
+                IrType::Str => {
+                    let tmp = format!("%raw_get{}", gep_counter);
+                    *gep_counter += 1;
+                    writeln!(out, "  {} = call ptr @iris_list_get(ptr {}, i64 {})", tmp, val(*list), idx_v)?;
+                    writeln!(out, "  %v{} = call ptr @iris_unbox_str(ptr {})", result.0, tmp)?;
+                }
+                _ => {
+                    // For structs, lists, etc., keep as ptr (IrisVal*)
+                    writeln!(out, "  %v{} = call ptr @iris_list_get(ptr {}, i64 {})", result.0, val(*list), idx_v)?;
+                }
+            }
         }
         IrInstr::ListSet { list, index, value } => {
             let vv = val(*value);
             let vty = func.value_type(*value);
             let ptr_v = box_to_ptr(out, &vv, vty, gep_counter)?;
-            writeln!(out, "  call void @iris_list_set(ptr {}, i64 {}, ptr {})", val(*list), val(*index), ptr_v)?;
+            let idx_v = coerce_to_type(*index, "i64", consts, func, emitted_types, gep_counter, out)?;
+            writeln!(out, "  call void @iris_list_set(ptr {}, i64 {}, ptr {})", val(*list), idx_v, ptr_v)?;
         }
-        IrInstr::ListPop { result, list, .. } => {
-            writeln!(out, "  %v{} = call ptr @iris_list_pop(ptr {})", result.0, val(*list))?;
+        IrInstr::ListPop { result, list, elem_ty } => {
+            // iris_list_pop returns IrisVal* (boxed); unbox to the element type.
+            match elem_ty {
+                IrType::Scalar(DType::I64) => {
+                    let tmp = format!("%raw_pop{}", gep_counter);
+                    *gep_counter += 1;
+                    writeln!(out, "  {} = call ptr @iris_list_pop(ptr {})", tmp, val(*list))?;
+                    writeln!(out, "  %v{} = call i64 @iris_unbox_i64(ptr {})", result.0, tmp)?;
+                }
+                IrType::Scalar(DType::F64) => {
+                    let tmp = format!("%raw_pop{}", gep_counter);
+                    *gep_counter += 1;
+                    writeln!(out, "  {} = call ptr @iris_list_pop(ptr {})", tmp, val(*list))?;
+                    writeln!(out, "  %v{} = call double @iris_unbox_f64(ptr {})", result.0, tmp)?;
+                }
+                IrType::Scalar(DType::Bool) => {
+                    let tmp = format!("%raw_pop{}", gep_counter);
+                    *gep_counter += 1;
+                    let tmp2 = format!("%raw_popbool{}", gep_counter);
+                    *gep_counter += 1;
+                    writeln!(out, "  {} = call ptr @iris_list_pop(ptr {})", tmp, val(*list))?;
+                    writeln!(out, "  {} = call i32 @iris_unbox_bool(ptr {})", tmp2, tmp)?;
+                    writeln!(out, "  %v{} = trunc i32 {} to i1", result.0, tmp2)?;
+                }
+                IrType::Str => {
+                    let tmp = format!("%raw_pop{}", gep_counter);
+                    *gep_counter += 1;
+                    writeln!(out, "  {} = call ptr @iris_list_pop(ptr {})", tmp, val(*list))?;
+                    writeln!(out, "  %v{} = call ptr @iris_unbox_str(ptr {})", result.0, tmp)?;
+                }
+                _ => {
+                    writeln!(out, "  %v{} = call ptr @iris_list_pop(ptr {})", result.0, val(*list))?;
+                }
+            }
         }
         IrInstr::MapNew { result, .. } => {
             writeln!(out, "  %v{} = call ptr @iris_map_new()", result.0)?;
@@ -1048,8 +1478,40 @@ fn emit_instr_ir(
             let ptr_v = box_to_ptr(out, &vv, vty, gep_counter)?;
             writeln!(out, "  call void @iris_map_set(ptr {}, ptr {}, ptr {})", val(*map), val(*key), ptr_v)?;
         }
-        IrInstr::MapGet { result, map, key, .. } => {
-            writeln!(out, "  %v{} = call ptr @iris_map_get(ptr {}, ptr {})", result.0, val(*map), val(*key))?;
+        IrInstr::MapGet { result, map, key, val_ty } => {
+            // iris_map_get returns IrisVal* (boxed); unbox to the value type.
+            match val_ty {
+                IrType::Scalar(DType::I64) => {
+                    let tmp = format!("%raw_mg{}", gep_counter);
+                    *gep_counter += 1;
+                    writeln!(out, "  {} = call ptr @iris_map_get(ptr {}, ptr {})", tmp, val(*map), val(*key))?;
+                    writeln!(out, "  %v{} = call i64 @iris_unbox_i64(ptr {})", result.0, tmp)?;
+                }
+                IrType::Scalar(DType::F64) => {
+                    let tmp = format!("%raw_mg{}", gep_counter);
+                    *gep_counter += 1;
+                    writeln!(out, "  {} = call ptr @iris_map_get(ptr {}, ptr {})", tmp, val(*map), val(*key))?;
+                    writeln!(out, "  %v{} = call double @iris_unbox_f64(ptr {})", result.0, tmp)?;
+                }
+                IrType::Scalar(DType::Bool) => {
+                    let tmp = format!("%raw_mg{}", gep_counter);
+                    *gep_counter += 1;
+                    let tmp2 = format!("%raw_mgbool{}", gep_counter);
+                    *gep_counter += 1;
+                    writeln!(out, "  {} = call ptr @iris_map_get(ptr {}, ptr {})", tmp, val(*map), val(*key))?;
+                    writeln!(out, "  {} = call i32 @iris_unbox_bool(ptr {})", tmp2, tmp)?;
+                    writeln!(out, "  %v{} = trunc i32 {} to i1", result.0, tmp2)?;
+                }
+                IrType::Str => {
+                    let tmp = format!("%raw_mg{}", gep_counter);
+                    *gep_counter += 1;
+                    writeln!(out, "  {} = call ptr @iris_map_get(ptr {}, ptr {})", tmp, val(*map), val(*key))?;
+                    writeln!(out, "  %v{} = call ptr @iris_unbox_str(ptr {})", result.0, tmp)?;
+                }
+                _ => {
+                    writeln!(out, "  %v{} = call ptr @iris_map_get(ptr {}, ptr {})", result.0, val(*map), val(*key))?;
+                }
+            }
         }
         IrInstr::MapContains { result, map, key } => {
             writeln!(out, "  %v{} = call i1 @iris_map_contains(ptr {}, ptr {})", result.0, val(*map), val(*key))?;
@@ -1063,13 +1525,15 @@ fn emit_instr_ir(
 
         // ── Closures ──────────────────────────────────────────────────────
         IrInstr::MakeClosure { result, fn_name, captures, .. } => {
-            let mut args = vec![format!("ptr @{}", fn_name)];
+            let mut cap_args = vec![];
             for c in captures {
                 let cv = val(*c);
                 let cty = func.value_type(*c);
                 let ptr_c = box_to_ptr(out, &cv, cty, gep_counter)?;
-                args.push(format!("ptr {}", ptr_c));
+                cap_args.push(format!("ptr {}", ptr_c));
             }
+            let mut args = vec![format!("ptr @{}", fn_name), format!("i32 {}", captures.len())];
+            args.extend(cap_args);
             writeln!(out, "  %v{} = call ptr @iris_make_closure({})", result.0, args.join(", "))?;
         }
         IrInstr::CallClosure { result, closure, args, .. } => {
@@ -1130,6 +1594,9 @@ fn emit_instr_ir(
                 Some(IrType::Scalar(DType::Bool)) => {
                     writeln!(out, "  call void @iris_print_bool(i1 {})", val(*operand))?;
                 }
+                Some(IrType::Str) => {
+                    writeln!(out, "  call void @iris_print_str(ptr {})", val(*operand))?;
+                }
                 _ => {
                     writeln!(out, "  call void @iris_print(ptr {})", val(*operand))?;
                 }
@@ -1156,12 +1623,27 @@ fn emit_instr_ir(
         }
         IrInstr::ValueToStr { result, operand } => {
             let oty = func.value_type(*operand);
+            // Check the actual emitted LLVM type; if it's ptr but IR thinks scalar,
+            // insert a ptrtoint before calling the typed to_str function.
+            let emitted_ty = emitted_types.get(operand).map(|s| s.as_str());
             match oty {
                 Some(IrType::Scalar(DType::I64)) => {
-                    writeln!(out, "  %v{} = call ptr @iris_i64_to_str(i64 {})", result.0, val(*operand))?;
+                    let arg = if emitted_ty == Some("ptr") {
+                        let tmp = format!("%cast{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = ptrtoint ptr {} to i64", tmp, val(*operand))?;
+                        tmp
+                    } else { val(*operand) };
+                    writeln!(out, "  %v{} = call ptr @iris_i64_to_str(i64 {})", result.0, arg)?;
                 }
                 Some(IrType::Scalar(DType::I32)) => {
-                    writeln!(out, "  %v{} = call ptr @iris_i32_to_str(i32 {})", result.0, val(*operand))?;
+                    let arg = if emitted_ty == Some("ptr") {
+                        let tmp = format!("%cast{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = ptrtoint ptr {} to i32", tmp, val(*operand))?;
+                        tmp
+                    } else { val(*operand) };
+                    writeln!(out, "  %v{} = call ptr @iris_i32_to_str(i32 {})", result.0, arg)?;
                 }
                 Some(IrType::Scalar(DType::F64)) => {
                     writeln!(out, "  %v{} = call ptr @iris_f64_to_str(double {})", result.0, val(*operand))?;
@@ -1287,6 +1769,13 @@ fn emit_instr_ir(
             writeln!(out, "  %v{} = call ptr @iris_str_join(ptr {}, ptr {})",
                 result.0, val(*list_val), val(*delim))?;
         }
+        IrInstr::NowMs { result } => {
+            writeln!(out, "  %v{} = call i64 @iris_now_ms()", result.0)?;
+        }
+        IrInstr::SleepMs { result, ms } => {
+            writeln!(out, "  call void @iris_sleep_ms(i64 {})", val(*ms))?;
+            writeln!(out, "  %v{} = add i64 0, 0", result.0)?;
+        }
     }
     Ok(())
 }
@@ -1330,6 +1819,55 @@ pub fn llvm_type_complete(ty: &IrType) -> Result<String, CodegenError> {
 
 fn is_scalar_type(ty: &IrType) -> bool {
     matches!(ty, IrType::Scalar(_))
+}
+
+/// Extract the primary result ValueId from an instruction (if any).
+fn instr_result_id(instr: &IrInstr) -> Option<ValueId> {
+    match instr {
+        IrInstr::Call { result, .. } => *result,
+        IrInstr::CallExtern { result, .. } => *result,
+        IrInstr::CallClosure { result, .. } => *result,
+        IrInstr::BinOp { result, .. } => Some(*result),
+        IrInstr::UnaryOp { result, .. } => Some(*result),
+        IrInstr::ConstInt { result, .. } => Some(*result),
+        IrInstr::ConstFloat { result, .. } => Some(*result),
+        IrInstr::ConstStr { result, .. } => Some(*result),
+        IrInstr::ConstBool { result, .. } => Some(*result),
+        IrInstr::MakeStruct { result, .. } => Some(*result),
+        IrInstr::MakeTuple { result, .. } => Some(*result),
+        IrInstr::MakeClosure { result, .. } => Some(*result),
+        IrInstr::GetField { result, .. } => Some(*result),
+        IrInstr::GetElement { result, .. } => Some(*result),
+        IrInstr::AllocArray { result, .. } => Some(*result),
+        IrInstr::ArrayLoad { result, .. } => Some(*result),
+        IrInstr::MakeSome { result, .. } => Some(*result),
+        IrInstr::MakeNone { result, .. } => Some(*result),
+        IrInstr::IsSome { result, .. } => Some(*result),
+        IrInstr::OptionUnwrap { result, .. } => Some(*result),
+        IrInstr::MakeOk { result, .. } => Some(*result),
+        IrInstr::MakeErr { result, .. } => Some(*result),
+        IrInstr::IsOk { result, .. } => Some(*result),
+        IrInstr::ResultUnwrap { result, .. } => Some(*result),
+        IrInstr::ResultUnwrapErr { result, .. } => Some(*result),
+        IrInstr::Cast { result, .. } => Some(*result),
+        IrInstr::Load { result, .. } => Some(*result),
+        IrInstr::TensorOp { result, .. } => Some(*result),
+        IrInstr::MakeVariant { result, .. } => Some(*result),
+        IrInstr::ExtractVariantField { result, .. } => Some(*result),
+        _ => None,
+    }
+}
+
+/// Return the bit width of an LLVM integer type string (e.g. "i64" → 64).
+fn bit_width(ty: &str) -> u32 {
+    match ty {
+        "i1" => 1,
+        "i8" => 8,
+        "i16" => 16,
+        "i32" => 32,
+        "i64" => 64,
+        _ => 64, // fallback
+    }
 }
 
 fn ety_align(ty: &IrType) -> usize {
@@ -1445,6 +1983,7 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare void @iris_print_f64(double)",
         "declare void @iris_print_f32(float)",
         "declare void @iris_print_bool(i1)",
+        "declare void @iris_print_str(ptr)",
         "declare void @iris_panic(ptr)",
         "declare ptr @iris_read_line()",
         "declare i64 @iris_read_i64()",
@@ -1504,6 +2043,7 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_file_lines(ptr)",
         // Process / environment (Phase 59)
         "declare void @exit(i32)",
+        "declare ptr @malloc(i64)",
         "declare void @iris_set_argv(i32, ptr)",
         "declare ptr @iris_process_args()",
         "declare ptr @iris_env_var(ptr)",
@@ -1522,11 +2062,11 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare void @iris_par_for(ptr, i64, i64)",
         "declare void @iris_barrier()",
         // Structs / Tuples / Closures
-        "declare ptr @iris_make_struct(...)",
+        "declare ptr @iris_make_struct(i32, ...)",
         "declare ptr @iris_get_field(ptr, i32)",
-        "declare ptr @iris_make_tuple(...)",
+        "declare ptr @iris_make_tuple(i32, ...)",
         "declare ptr @iris_get_element(ptr, i32)",
-        "declare ptr @iris_make_closure(...)",
+        "declare ptr @iris_make_closure(ptr, i32, ...)",
         "declare ptr @iris_call_closure(ptr, ...)",
         "declare void @iris_call_closure_void(ptr, ...)",
         // Atomics / Mutex
@@ -1549,6 +2089,11 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_box_f64(double)",
         "declare ptr @iris_box_f32(float)",
         "declare ptr @iris_box_bool(i1)",
+        // Unboxing helpers (IrisVal* → scalar)
+        "declare i64 @iris_unbox_i64(ptr)",
+        "declare double @iris_unbox_f64(ptr)",
+        "declare i32 @iris_unbox_bool(ptr)",
+        "declare ptr @iris_unbox_str(ptr)",
         // Typed to-string conversions
         "declare ptr @iris_i64_to_str(i64)",
         "declare ptr @iris_i32_to_str(i32)",
@@ -1580,6 +2125,9 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         // String split/join (Phase 95)
         "declare ptr @iris_str_split(ptr, ptr)",
         "declare ptr @iris_str_join(ptr, ptr)",
+        // Time/OS (Phase 97)
+        "declare i64 @iris_now_ms()",
+        "declare void @iris_sleep_ms(i64)",
     ];
     for decl in declares {
         writeln!(out, "{}", decl)?;

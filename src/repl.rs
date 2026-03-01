@@ -34,14 +34,19 @@ impl ReplState {
         self.eval_counter = 0;
     }
 
-    /// Evaluates one line of IRIS input.
+    /// Evaluates one line (or a multi-line block) of IRIS input.
     ///
     /// Returns the string result on success (for expressions) or a short
-    /// "defined: X" acknowledgement (for definitions/bindings).
+    /// acknowledgement string (for definitions/bindings/commands).
     pub fn eval(&mut self, input: &str) -> Result<String, Error> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
             return Ok(String::new());
+        }
+
+        // REPL meta-commands start with `:`.
+        if let Some(cmd) = trimmed.strip_prefix(':') {
+            return Ok(self.run_command(cmd.trim()));
         }
 
         let first_word = trimmed.split_whitespace().next().unwrap_or("");
@@ -57,6 +62,95 @@ impl ReplState {
             _ => {
                 self.eval_expression(trimmed)
             }
+        }
+    }
+
+    /// Returns the list of active top-level definitions (for `:env`).
+    pub fn top_level_defs(&self) -> &[String] { &self.top_level }
+
+    /// Returns the list of active context bindings (for `:env`).
+    pub fn context_bindings(&self) -> &[String] { &self.context }
+
+    // ------------------------------------------------------------------
+    // REPL meta-command dispatch
+    // ------------------------------------------------------------------
+
+    fn run_command(&mut self, cmd: &str) -> String {
+        let (name, arg) = cmd.split_once(' ')
+            .map(|(n, a)| (n, a.trim()))
+            .unwrap_or((cmd, ""));
+
+        match name {
+            "help" => concat!(
+                "IRIS REPL commands:\n",
+                "  :help          — show this message\n",
+                "  :env           — list all active bindings and definitions\n",
+                "  :type <expr>   — show the inferred type of an expression\n",
+                "  :bring <mod>   — load a stdlib module (e.g. :bring std.math)\n",
+                "  :reset         — clear all session state\n",
+                "  :quit          — exit the REPL",
+            ).to_owned(),
+
+            "env" => {
+                let mut out = String::new();
+                if self.top_level.is_empty() && self.context.is_empty() {
+                    return "(empty session)".to_owned();
+                }
+                for def in &self.top_level {
+                    let first_line = def.lines().next().unwrap_or(def);
+                    out.push_str(&format!("  {}\n", first_line));
+                }
+                for binding in &self.context {
+                    out.push_str(&format!("  {}\n", binding));
+                }
+                out.trim_end().to_owned()
+            }
+
+            "type" => {
+                if arg.is_empty() {
+                    return "usage: :type <expr>".to_owned();
+                }
+                let n = self.eval_counter;
+                for (ret_ty, label) in &[
+                    ("i64", "i64"), ("f64", "f64"), ("bool", "bool"), ("str", "str"),
+                ] {
+                    if self.try_eval_with_type(arg, ret_ty, n).is_some() {
+                        return format!(": {}", label);
+                    }
+                }
+                ": (unknown)".to_owned()
+            }
+
+            "bring" => {
+                // Accept both `bring std.math` and `std.math` forms.
+                let mod_spec = if arg.starts_with("std.") { arg.to_owned() }
+                    else { format!("std.{}", arg) };
+                let bring_line = format!("bring {}", mod_spec);
+                // Validate by compiling with this bring statement.
+                let test_src = format!(
+                    "{}\n{}\ndef __repl_validate__() -> i64 {{ 0 }}",
+                    bring_line, self.top_level.join("\n")
+                );
+                match crate::compile(&test_src, "repl", crate::EmitKind::Ir) {
+                    Ok(_) => {
+                        // Prepend to top-level so it's available in all future evals.
+                        self.top_level.insert(0, bring_line.clone());
+                        format!("loaded: {}", mod_spec)
+                    }
+                    Err(e) => format!("error: {}", e),
+                }
+            }
+
+            "reset" => {
+                self.reset();
+                "session cleared".to_owned()
+            }
+
+            "quit" | "exit" => {
+                std::process::exit(0);
+            }
+
+            _ => format!("unknown command: :{} (try :help)", name),
         }
     }
 

@@ -1,0 +1,105 @@
+// src/stdlib/http.iris -- IRIS HTTP message parsing and building.
+//
+// Parses/builds HTTP/1.1 requests and responses from raw strings.
+// Does NOT include actual TCP transport — use tcp_connect/tcp_read/tcp_write.
+
+// ── HTTP Request building ────────────────────────────────────────────────────
+
+// Build a minimal GET request string.
+pub def http_get_request(host: str, path: str) -> str {
+    concat(concat(concat(concat("GET ", path), " HTTP/1.1\r\nHost: "), host), "\r\n\r\n")
+}
+
+// Build a minimal POST request string.
+pub def http_post_request(host: str, path: str, body: str) -> str {
+    val body_len = to_str(len(body))
+    concat(concat(concat(concat(concat(concat(concat(
+        "POST ", path), " HTTP/1.1\r\nHost: "), host),
+        "\r\nContent-Length: "), body_len), "\r\n\r\n"), body)
+}
+
+// Build an HTTP/1.1 response string.
+pub def http_response(status: i64, status_text: str, body: str) -> str {
+    val body_len = to_str(len(body))
+    val line1 = concat(concat(concat(concat("HTTP/1.1 ", to_str(status)), " "), status_text), "\r\n")
+    val headers = concat("Content-Length: ", concat(body_len, "\r\n"))
+    concat(concat(concat(line1, headers), "\r\n"), body)
+}
+
+// ── HTTP Request parsing ─────────────────────────────────────────────────────
+
+// Extract the method from a raw HTTP request ("GET", "POST", etc.).
+pub def http_request_method(raw: str) -> str {
+    val first_space = find(raw, " ")
+    if is_some(first_space) {
+        slice(raw, 0, unwrap(first_space))
+    } else {
+        raw
+    }
+}
+
+// Extract the path from a raw HTTP request.
+pub def http_request_path(raw: str) -> str {
+    val first_space = find(raw, " ")
+    if is_some(first_space) {
+        val after_method = slice(raw, unwrap(first_space) + 1, len(raw))
+        val second_space = find(after_method, " ")
+        if is_some(second_space) {
+            slice(after_method, 0, unwrap(second_space))
+        } else {
+            after_method
+        }
+    } else {
+        "/"
+    }
+}
+
+// Extract the body from a raw HTTP message (after "\r\n\r\n").
+pub def http_body(raw: str) -> str {
+    val sep = find(raw, "\r\n\r\n")
+    if is_some(sep) {
+        slice(raw, unwrap(sep) + 4, len(raw))
+    } else {
+        ""
+    }
+}
+
+// ── HTTP Response parsing ────────────────────────────────────────────────────
+
+// Extract the status code (as i64) from a raw HTTP response.
+pub def http_status_code(raw: str) -> i64 {
+    // Format: "HTTP/1.1 200 OK\r\n..."
+    val space1 = find(raw, " ")
+    if is_some(space1) {
+        val after_version = slice(raw, unwrap(space1) + 1, len(raw))
+        val space2 = find(after_version, " ")
+        val code_str = if is_some(space2) {
+            slice(after_version, 0, unwrap(space2))
+        } else {
+            after_version
+        }
+        val parsed = parse_i64(code_str)
+        if is_some(parsed) { unwrap(parsed) } else { 0 }
+    } else {
+        0
+    }
+}
+
+// Extract a named header value from a raw HTTP message.
+pub def http_header(raw: str, name: str) -> str {
+    val header_search = concat(name, ": ")
+    // Split headers section (before \r\n\r\n)
+    val body_sep = find(raw, "\r\n\r\n")
+    val headers_section = if is_some(body_sep) { slice(raw, 0, unwrap(body_sep)) } else { raw }
+    // Find the header by looking for "\r\n<name>: "
+    val line_search = concat("\r\n", header_search)
+    val pos = find(headers_section, line_search)
+    if is_some(pos) {
+        val value_start = unwrap(pos) + len(line_search)
+        val rest = slice(headers_section, value_start, len(headers_section))
+        val end = find(rest, "\r\n")
+        if is_some(end) { slice(rest, 0, unwrap(end)) } else { rest }
+    } else {
+        ""
+    }
+}

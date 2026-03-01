@@ -1,0 +1,182 @@
+// closures_functional.iris -- functional programming patterns with lists
+//
+// Demonstrates map, filter, reduce operations using named functions.
+//
+// Run: iris run examples/closures_functional.iris
+
+// =====================
+//  Map: apply a transform to every element
+// =====================
+
+def map_double(lst: list<i64>, n: i64) -> list<i64> {
+    val result = list()
+    var i = 0
+    while i < n {
+        val v = list_get(lst, i)
+        push(result, v * 2);
+        i = i + 1
+    }
+    result
+}
+
+def map_square(lst: list<i64>, n: i64) -> list<i64> {
+    val result = list()
+    var i = 0
+    while i < n {
+        val v = list_get(lst, i)
+        push(result, v * v);
+        i = i + 1
+    }
+    result
+}
+
+// =====================
+//  Filter: keep elements matching predicate
+// =====================
+
+def filter_even(lst: list<i64>, n: i64) -> list<i64> {
+    val result = list()
+    var i = 0
+    while i < n {
+        val v = list_get(lst, i)
+        val remainder = v - ((v / 2) * 2)
+        result = if remainder == 0 { push(result, v); result } else { result };
+        i = i + 1
+    }
+    result
+}
+
+def filter_positive(lst: list<i64>, n: i64) -> list<i64> {
+    val result = list()
+    var i = 0
+    while i < n {
+        val v = list_get(lst, i)
+        result = if v > 0 { push(result, v); result } else { result };
+        i = i + 1
+    }
+    result
+}
+
+// =====================
+//  Reduce: fold into single value
+// =====================
+
+def reduce_sum(lst: list<i64>, n: i64) -> i64 {
+    var acc = 0
+    var i = 0
+    while i < n {
+        acc = acc + list_get(lst, i);
+        i = i + 1
+    }
+    acc
+}
+
+def reduce_product(lst: list<i64>, n: i64) -> i64 {
+    var acc = 1
+    var i = 0
+    while i < n {
+        acc = acc * list_get(lst, i);
+        i = i + 1
+    }
+    acc
+}
+
+def reduce_max(lst: list<i64>, n: i64) -> i64 {
+    var best = list_get(lst, 0)
+    var i = 1
+    while i < n {
+        val v = list_get(lst, i)
+        best = if v > best { v } else { best };
+        i = i + 1
+    }
+    best
+}
+
+def reduce_min(lst: list<i64>, n: i64) -> i64 {
+    var best = list_get(lst, 0)
+    var i = 1
+    while i < n {
+        val v = list_get(lst, i)
+        best = if v < best { v } else { best };
+        i = i + 1
+    }
+    best
+}
+
+// =====================
+//  Print a list
+// =====================
+
+def print_list(label: str, lst: list<i64>, n: i64) -> i64 {
+    var s = "["
+    var i = 0
+    while i < n {
+        val v = to_str(list_get(lst, i))
+        s = concat(s, v);
+        s = if (i + 1) < n { concat(s, ", ") } else { s };
+        i = i + 1
+    }
+    s = concat(s, "]");
+    print(concat(label, s));
+    0
+}
+
+def main() -> i64 {
+    // Build source list [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    val src = list()
+    var i = 1
+    while i < 11 {
+        push(src, i);
+        i = i + 1
+    }
+    val n = 10
+
+    print_list("Source:    ", src, n);
+
+    // Map: double
+    val doubled = map_double(src, n)
+    print_list("Doubled:   ", doubled, n);
+
+    // Map: square
+    val squared = map_square(src, n)
+    print_list("Squared:   ", squared, n);
+
+    // Filter: evens
+    val evens = filter_even(src, n)
+    val en = list_len(evens)
+    print_list("Evens:     ", evens, en);
+
+    // Filter: positive from mixed list
+    val mixed = list()
+    push(mixed, -3);
+    push(mixed, 5);
+    push(mixed, -1);
+    push(mixed, 7);
+    push(mixed, 0);
+    push(mixed, -8);
+    push(mixed, 2);
+    val pos = filter_positive(mixed, 7)
+    val pn = list_len(pos)
+    print_list("Positives: ", pos, pn);
+
+    // Reduce: sum
+    val total = reduce_sum(src, n)
+    print(concat("Sum:     ", to_str(total)));
+
+    // Reduce: product
+    val product = reduce_product(src, n)
+    print(concat("Product: ", to_str(product)));
+
+    // Reduce: max / min
+    val mx = reduce_max(src, n)
+    val mn = reduce_min(src, n)
+    print(concat("Max:     ", to_str(mx)));
+    print(concat("Min:     ", to_str(mn)));
+
+    // Compose: sum of squares of evens
+    val even_sq = map_square(evens, en)
+    val sum_even_sq = reduce_sum(even_sq, en)
+    print(concat("Sum of squares of evens: ", to_str(sum_even_sq)));
+
+    0
+}

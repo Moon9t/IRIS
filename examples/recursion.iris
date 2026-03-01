@@ -1,0 +1,67 @@
+// recursion.iris — Tower of Hanoi, power, GCD, flatten
+
+def hanoi(n: i64, from_peg: str, to_peg: str, aux_peg: str) -> i64 {
+    if n == 0 {
+        0
+    } else {
+        val _a = hanoi(n - 1, from_peg, aux_peg, to_peg);
+        print(concat("Move disk ", concat(to_str(n),
+            concat(" from ", concat(from_peg, concat(" -> ", to_peg))))));
+        val _b = hanoi(n - 1, aux_peg, to_peg, from_peg);
+        n
+    }
+}
+
+def power(base: i64, exp: i64) -> i64 {
+    if exp == 0 {
+        1
+    } else {
+        if (exp % 2) == 0 {
+            val half = power(base, exp / 2);
+            half * half
+        } else {
+            base * power(base, exp - 1)
+        }
+    }
+}
+
+def gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+def fib(n: i64) -> i64 {
+    if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+def count_digits(n: i64) -> i64 {
+    if n < 10 { 1 } else { 1 + count_digits(n / 10) }
+}
+
+def sum_digits(n: i64) -> i64 {
+    if n < 10 { n } else { (n % 10) + sum_digits(n / 10) }
+}
+
+def main() -> i64 {
+    print("=== Tower of Hanoi (3 disks) ===");
+    val _h = hanoi(3, "A", "C", "B");
+
+    print("\n=== Power function ===");
+    print(concat("2^10 = ", to_str(power(2, 10))));
+    print(concat("3^5  = ", to_str(power(3, 5))));
+
+    print("\n=== GCD ===");
+    print(concat("gcd(48, 18) = ", to_str(gcd(48, 18))));
+    print(concat("gcd(100, 75) = ", to_str(gcd(100, 75))));
+
+    print("\n=== Fibonacci ===");
+    var i = 0;
+    while (i < 10) {
+        print(concat("fib(", concat(to_str(i), concat(") = ", to_str(fib(i))))));
+        i = i + 1
+    }
+
+    print("\n=== Digit operations ===");
+    print(concat("digits in 12345: ", to_str(count_digits(12345))));
+    print(concat("digit sum of 9876: ", to_str(sum_digits(9876))));
+    0
+}

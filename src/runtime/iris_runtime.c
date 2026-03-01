@@ -172,6 +172,7 @@ void iris_print_f64(double v) {
 }
 void iris_print_f32(float v)    { iris_print_f64((double)v); }
 void iris_print_bool(int v)     { printf("%s\n", v ? "true" : "false"); }
+void iris_print_str(const char* s)  { printf("%s\n", s ? s : ""); }
 
 void iris_panic(const char* msg) {
     fprintf(stderr, "panic: %s\n", msg);
@@ -954,3 +955,126 @@ void       iris_array_store(IrisList* arr, int64_t idx, IrisVal* val) { iris_lis
 void* iris_tensor_op(void)                { return NULL; }
 void* iris_tensor_load(void* t, ...)      { (void)t; return NULL; }
 void  iris_tensor_store(void* t, ...)     { (void)t; }
+
+// ---------------------------------------------------------------------------
+// Time / OS (Phase 97)
+// ---------------------------------------------------------------------------
+
+#ifdef _WIN32
+#  include <windows.h>
+#else
+#  include <sys/time.h>
+#  include <unistd.h>
+#endif
+
+int64_t iris_now_ms(void) {
+#ifdef _WIN32
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    /* FILETIME is 100-ns intervals since 1601-01-01.
+       Subtract epoch offset (1601→1970) then convert to ms. */
+    uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    t -= 116444736000000000ULL;  /* 1601→1970 in 100-ns ticks */
+    return (int64_t)(t / 10000ULL);
+#else
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (int64_t)tv.tv_sec * 1000 + (int64_t)tv.tv_usec / 1000;
+#endif
+}
+
+void iris_sleep_ms(int64_t ms) {
+#ifdef _WIN32
+    Sleep((DWORD)ms);
+#else
+    usleep((useconds_t)(ms * 1000));
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Struct / Tuple / Closure fallback helpers (opaque path)
+// ---------------------------------------------------------------------------
+
+/* iris_make_struct(ptr f0, ptr f1, …)
+   — stores N boxed field values in a list-backed struct. */
+IrisVal* iris_make_struct(int nfields, ...) {
+    IrisList* l = iris_list_new();
+    va_list ap;
+    va_start(ap, nfields);
+    for (int i = 0; i < nfields; i++) {
+        IrisVal* v = va_arg(ap, IrisVal*);
+        iris_list_push(l, v);
+    }
+    va_end(ap);
+    IrisVal* r = (IrisVal*)xmalloc(sizeof(IrisVal));
+    r->tag = IRIS_TAG_STRUCT;
+    r->ptr = l;
+    return r;
+}
+
+IrisVal* iris_get_field(IrisVal* s, int32_t idx) {
+    if (!s) return iris_box_i64(0);
+    if (s->tag == IRIS_TAG_STRUCT) {
+        IrisList* l = (IrisList*)s->ptr;
+        return iris_list_get(l, (int64_t)idx);
+    }
+    return iris_box_i64(0);
+}
+
+IrisVal* iris_make_tuple(int nelems, ...) {
+    IrisList* l = iris_list_new();
+    va_list ap;
+    va_start(ap, nelems);
+    for (int i = 0; i < nelems; i++) {
+        IrisVal* v = va_arg(ap, IrisVal*);
+        iris_list_push(l, v);
+    }
+    va_end(ap);
+    IrisVal* r = (IrisVal*)xmalloc(sizeof(IrisVal));
+    r->tag = IRIS_TAG_TUPLE;
+    r->ptr = l;
+    return r;
+}
+
+IrisVal* iris_get_element(IrisVal* t, int32_t idx) {
+    if (!t) return iris_box_i64(0);
+    if (t->tag == IRIS_TAG_TUPLE) {
+        IrisList* l = (IrisList*)t->ptr;
+        return iris_list_get(l, (int64_t)idx);
+    }
+    return iris_box_i64(0);
+}
+
+/* Closure: stores a function pointer and captured environment. */
+typedef struct {
+    void*     fn;        /* function pointer */
+    IrisList* captures;  /* captured values */
+} IrisClosure;
+
+IrisVal* iris_make_closure(void* fn, int ncaptures, ...) {
+    IrisClosure* c = (IrisClosure*)xmalloc(sizeof(IrisClosure));
+    c->fn = fn;
+    c->captures = iris_list_new();
+    va_list ap;
+    va_start(ap, ncaptures);
+    for (int i = 0; i < ncaptures; i++) {
+        IrisVal* v = va_arg(ap, IrisVal*);
+        iris_list_push(c->captures, v);
+    }
+    va_end(ap);
+    IrisVal* r = (IrisVal*)xmalloc(sizeof(IrisVal));
+    r->tag = IRIS_TAG_CLOSURE;
+    r->ptr = c;
+    return r;
+}
+
+IrisVal* iris_call_closure(IrisVal* closure, ...) {
+    /* Stub: closure invocation requires codegen cooperation.
+       For now, return unit sentinel. */
+    (void)closure;
+    return iris_box_i64(0);
+}
+
+void iris_call_closure_void(IrisVal* closure, ...) {
+    (void)closure;
+}

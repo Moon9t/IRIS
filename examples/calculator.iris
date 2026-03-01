@@ -1,0 +1,61 @@
+// calculator.iris -- Simple calculator with records and choice types
+//
+// Run: cargo run -- --emit eval examples/calculator.iris
+
+record Expr {
+    left: f64,
+    right: f64,
+}
+
+choice Op {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+def calculate(e: Expr, op: Op) -> f64 {
+    when op {
+        Op.Add => e.left + e.right,
+        Op.Sub => e.left - e.right,
+        Op.Mul => e.left * e.right,
+        Op.Div => e.left / e.right,
+    }
+}
+
+def op_name(op: Op) -> str {
+    when op {
+        Op.Add => "+",
+        Op.Sub => "-",
+        Op.Mul => "*",
+        Op.Div => "/",
+    }
+}
+
+def print_result(e: Expr, op: Op) -> i64 {
+    val result = calculate(e, op)
+    val l = to_str(e.left)
+    val r = to_str(e.right)
+    val o = op_name(op)
+    val res = to_str(result)
+    print(concat(concat(concat(concat(concat(l, " "), o), " "), r), concat(" = ", res)));
+    0
+}
+
+def main() -> i64 {
+    val e1 = Expr { left: 10.0, right: 3.0 }
+    val e2 = Expr { left: 7.5, right: 2.5 }
+
+    print_result(e1, Op.Add);
+    print_result(e1, Op.Sub);
+    print_result(e1, Op.Mul);
+    print_result(e1, Op.Div);
+
+    print("---");
+    print_result(e2, Op.Add);
+    print_result(e2, Op.Sub);
+    print_result(e2, Op.Mul);
+    print_result(e2, Op.Div);
+
+    0
+}

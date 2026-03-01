@@ -1,36 +1,76 @@
 // neural_net.iris -- a simple neural network forward pass
 //
-// Demonstrates: exp, log, clamp, max, sigmoid, relu, cross-entropy loss.
+// Demonstrates: activation functions, weighted sums, loss computation.
 //
-// Run: cargo run -- --emit eval examples/neural_net.iris
+// Run: iris run examples/neural_net.iris
 
-def sigmoid(x: f32) -> f32 {
-    val neg_x = 0.0 - x
+def sigmoid(x: f64) -> f64 {
+    val neg_x = (0.0 to f64) - x
     val e_neg = exp(neg_x)
-    1.0 / (1.0 + e_neg)
+    (1.0 to f64) / ((1.0 to f64) + e_neg)
 }
 
-def relu(x: f32) -> f32 {
-    max(0.0, x)
+def relu(x: f64) -> f64 {
+    if x > (0.0 to f64) { x } else { 0.0 to f64 }
 }
 
-def bce_loss(y: f32, p: f32) -> f32 {
-    val eps = 0.000001
-    val p_clamp = clamp(p, eps, 1.0 - eps)
-    val pos = y * log(p_clamp)
-    val neg = (1.0 - y) * log(1.0 - p_clamp)
-    0.0 - (pos + neg)
-}
-
-def neuron(w0: f32, w1: f32, w2: f32, x0: f32, x1: f32, x2: f32, b: f32) -> f32 {
+// Single neuron: weighted sum + bias + sigmoid
+def neuron3(w0: f64, w1: f64, w2: f64,
+            x0: f64, x1: f64, x2: f64, b: f64) -> f64 {
     val z = w0 * x0 + w1 * x1 + w2 * x2 + b
     sigmoid(z)
 }
 
-def main() -> f32 {
-    val out = neuron(0.2, 0.4, -0.1, 0.5, -0.3, 0.8, 0.1)
-    val loss = bce_loss(1.0, out)
-    print(concat("output = ", to_str(out)));
-    print(concat("loss   = ", to_str(loss)));
-    out
+// Two-neuron hidden layer + one output neuron
+def forward_net(x0: f64, x1: f64) -> f64 {
+    // Hidden neuron 1: weights [0.5, -0.3], bias 0.1
+    val h1 = sigmoid((0.5 to f64) * x0 + (-0.3 to f64) * x1 + (0.1 to f64))
+
+    // Hidden neuron 2: weights [-0.2, 0.8], bias -0.1
+    val h2 = sigmoid((-0.2 to f64) * x0 + (0.8 to f64) * x1 + (-0.1 to f64))
+
+    // Output neuron: weights [0.6, 0.4], bias 0.0
+    sigmoid((0.6 to f64) * h1 + (0.4 to f64) * h2)
+}
+
+def main() -> i64 {
+    print("=== Single Neuron ===");
+    val out1 = neuron3(0.2 to f64, 0.4 to f64, -0.1 to f64,
+                       0.5 to f64, -0.3 to f64, 0.8 to f64, 0.1 to f64)
+    print(concat("output = ", to_str(out1)));
+
+    // MSE loss inline: (predicted - target)^2
+    val diff1 = out1 - (1.0 to f64)
+    val loss1 = diff1 * diff1
+    print(concat("MSE loss (target=1.0): ", to_str(loss1)));
+
+    print("\n=== ReLU Activation ===");
+    val r1 = relu(-2.5 to f64)
+    val r2 = relu(0.0 to f64)
+    val r3 = relu(3.7 to f64)
+    print(concat("relu(-2.5) = ", to_str(r1)));
+    print(concat("relu(0.0)  = ", to_str(r2)));
+    print(concat("relu(3.7)  = ", to_str(r3)));
+
+    print("\n=== Two-Layer Network ===");
+    val p1 = forward_net(0.0 to f64, 0.0 to f64)
+    val p2 = forward_net(1.0 to f64, 0.0 to f64)
+    val p3 = forward_net(0.0 to f64, 1.0 to f64)
+    val p4 = forward_net(1.0 to f64, 1.0 to f64)
+    print(concat("net(0,0) = ", to_str(p1)));
+    print(concat("net(1,0) = ", to_str(p2)));
+    print(concat("net(0,1) = ", to_str(p3)));
+    print(concat("net(1,1) = ", to_str(p4)));
+
+    print("\n=== Batch XOR Loss ===");
+    // Compute sum of squared errors against XOR targets
+    val d1 = p1 - (0.0 to f64)
+    val d2 = p2 - (1.0 to f64)
+    val d3 = p3 - (1.0 to f64)
+    val d4 = p4 - (0.0 to f64)
+    val total_loss = d1 * d1 + d2 * d2 + d3 * d3 + d4 * d4
+    val avg_loss = total_loss / (4.0 to f64)
+    print(concat("Average MSE loss: ", to_str(avg_loss)));
+
+    0
 }

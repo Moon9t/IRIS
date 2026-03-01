@@ -1,0 +1,180 @@
+// matrix_ops.iris — 2D matrix operations using flat list<f64> representation
+// Matrices stored row-major: element [r][c] = data[r * cols + c]
+
+record Matrix {
+    data: list<f64>,
+    rows: i64,
+    cols: i64,
+}
+
+def mat_new(rows: i64, cols: i64) -> Matrix {
+    val data = list()
+    var i = 0
+    while (i < (rows * cols)) {
+        push(data, 0.0 to f64);
+        i = i + 1
+    }
+    Matrix { data: data, rows: rows, cols: cols }
+}
+
+def mat_get(m: Matrix, r: i64, c: i64) -> f64 {
+    list_get(m.data, r * m.cols + c)
+}
+
+def mat_set(m: Matrix, r: i64, c: i64, v: f64) -> i64 {
+    list_set(m.data, r * m.cols + c, v);
+    0
+}
+
+def mat_identity(n: i64) -> Matrix {
+    val m = mat_new(n, n)
+    var i = 0
+    while (i < n) {
+        val _s = mat_set(m, i, i, 1.0 to f64);
+        i = i + 1
+    }
+    m
+}
+
+def mat_from(rows: i64, cols: i64, vals: list<f64>) -> Matrix {
+    Matrix { data: vals, rows: rows, cols: cols }
+}
+
+def mat_mul(a: Matrix, b: Matrix) -> Matrix {
+    val m = a.rows
+    val k = a.cols
+    val n = b.cols
+    val result = mat_new(m, n)
+    var r = 0
+    while (r < m) {
+        var c = 0
+        while (c < n) {
+            var sum = 0.0 to f64
+            var i = 0
+            while (i < k) {
+                sum = sum + mat_get(a, r, i) * mat_get(b, i, c);
+                i = i + 1
+            }
+            val _s = mat_set(result, r, c, sum);
+            c = c + 1
+        }
+        r = r + 1
+    }
+    result
+}
+
+def mat_transpose(m: Matrix) -> Matrix {
+    val result = mat_new(m.cols, m.rows)
+    var r = 0
+    while (r < m.rows) {
+        var c = 0
+        while (c < m.cols) {
+            val _s = mat_set(result, c, r, mat_get(m, r, c));
+            c = c + 1
+        }
+        r = r + 1
+    }
+    result
+}
+
+def mat_trace(m: Matrix) -> f64 {
+    val n = if m.rows < m.cols { m.rows } else { m.cols }
+    var sum = 0.0 to f64
+    var i = 0
+    while (i < n) {
+        sum = sum + mat_get(m, i, i);
+        i = i + 1
+    }
+    sum
+}
+
+def mat_add(a: Matrix, b: Matrix) -> Matrix {
+    val result = mat_new(a.rows, a.cols)
+    val n = a.rows * a.cols
+    var i = 0
+    while (i < n) {
+        list_set(result.data, i, list_get(a.data, i) + list_get(b.data, i));
+        i = i + 1
+    }
+    result
+}
+
+def mat_scale(m: Matrix, s: f64) -> Matrix {
+    val result = mat_new(m.rows, m.cols)
+    val n = m.rows * m.cols
+    var i = 0
+    while (i < n) {
+        list_set(result.data, i, list_get(m.data, i) * s);
+        i = i + 1
+    }
+    result
+}
+
+def mat_norm(m: Matrix) -> f64 {
+    val n = m.rows * m.cols
+    var sum = 0.0 to f64
+    var i = 0
+    while (i < n) {
+        val v = list_get(m.data, i)
+        sum = sum + v * v;
+        i = i + 1
+    }
+    sqrt(sum)
+}
+
+def mat_print(m: Matrix, name: str) -> i64 {
+    print(concat(name, concat(" (", concat(to_str(m.rows), concat("x", concat(to_str(m.cols), "):"))))));
+    var r = 0
+    while (r < m.rows) {
+        var row_str = "  ["
+        var c = 0
+        while (c < m.cols) {
+            val v = mat_get(m, r, c)
+            row_str = concat(row_str, to_str(v));
+            if (c + 1) < m.cols {
+                row_str = concat(row_str, ", ")
+            } else {
+                row_str = concat(row_str, "")
+            };
+            c = c + 1
+        }
+        print(concat(row_str, "]"));
+        r = r + 1
+    }
+    0
+}
+
+def main() -> i64 {
+    val a_data = list()
+    push(a_data, 1.0 to f64); push(a_data, 2.0 to f64); push(a_data, 3.0 to f64);
+    push(a_data, 4.0 to f64); push(a_data, 5.0 to f64); push(a_data, 6.0 to f64);
+    val a = mat_from(2, 3, a_data)
+    val _pa = mat_print(a, "A")
+
+    val b_data = list()
+    push(b_data, 7.0 to f64);  push(b_data, 8.0 to f64);
+    push(b_data, 9.0 to f64);  push(b_data, 10.0 to f64);
+    push(b_data, 11.0 to f64); push(b_data, 12.0 to f64);
+    val b = mat_from(3, 2, b_data)
+    val _pb = mat_print(b, "B")
+
+    val c = mat_mul(a, b)
+    val _pc = mat_print(c, "A @ B")
+
+    val at = mat_transpose(a)
+    val _pat = mat_print(at, "A^T")
+
+    val eye = mat_identity(3)
+    val _pi = mat_print(eye, "I_3")
+    print(concat("trace(I_3) = ", to_str(mat_trace(eye))));
+
+    val a2 = mat_scale(a, 2.0 to f64)
+    val _pa2 = mat_print(a2, "2 * A")
+
+    val a_plus_a = mat_add(a, a)
+    val _papa = mat_print(a_plus_a, "A + A")
+
+    print(concat("||A||_F = ", to_str(mat_norm(a))));
+
+    0
+}

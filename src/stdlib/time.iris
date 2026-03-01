@@ -1,0 +1,9 @@
+// src/stdlib/time.iris -- IRIS standard time library
+
+pub def now_ms() -> i64 { time_now_ms() }
+
+pub def now_s() -> i64 { time_now_ms() / 1000 }
+
+pub def sleep(ms: i64) -> i64 { sleep_ms(ms) }
+
+pub def elapsed_ms(start: i64) -> i64 { time_now_ms() - start }

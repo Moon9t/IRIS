@@ -1,22 +1,98 @@
-// autodiff.iris -- forward-mode automatic differentiation with grad<T>
+// autodiff.iris -- forward-mode automatic differentiation using dual numbers
 //
-// grad<f32> is a dual number: (value, derivative).
-// f(x) = x^3 + x^2 + x,  f'(x) = 3x^2 + 2x + 1
+// A dual number (value, derivative) lets us compute f(x) and f'(x) together.
+// We implement this manually with records and arithmetic operations.
+//
+// f(x) = x^3 + x^2 + x
+// f'(x) = 3x^2 + 2x + 1
 // At x=2: f(2) = 8+4+2 = 14,  f'(2) = 12+4+1 = 17
 //
-// Run: cargo run -- --emit eval examples/autodiff.iris
+// Run: iris run examples/autodiff.iris
 
-def main() -> f32 {
-    val x = grad(2.0)
+record Dual {
+    val_: i64,
+    deriv: i64,
+}
 
-    val x2 = x * x
-    val x3 = x2 * x
-    val fx = x3 + x2 + x
+// Create a dual number representing an independent variable
+def dual_var(x: i64) -> Dual {
+    Dual { val_: x, deriv: 1 }
+}
 
-    val value = fx.value
-    val derivative = fx.grad
+// Create a dual number representing a constant
+def dual_const(c: i64) -> Dual {
+    Dual { val_: c, deriv: 0 }
+}
 
-    print(concat("f(2)  = ", to_str(value)));
-    print(concat("f'(2) = ", to_str(derivative)));
-    derivative
+// Dual addition: (a + b, a' + b')
+def dual_add(a: Dual, b: Dual) -> Dual {
+    Dual { val_: a.val_ + b.val_, deriv: a.deriv + b.deriv }
+}
+
+// Dual multiplication (product rule): (a*b, a'*b + a*b')
+def dual_mul(a: Dual, b: Dual) -> Dual {
+    val v = a.val_ * b.val_
+    val d = (a.deriv * b.val_) + (a.val_ * b.deriv)
+    Dual { val_: v, deriv: d }
+}
+
+// Dual subtraction: (a - b, a' - b')
+def dual_sub(a: Dual, b: Dual) -> Dual {
+    Dual { val_: a.val_ - b.val_, deriv: a.deriv - b.deriv }
+}
+
+def show_dual(label: str, d: Dual) -> i64 {
+    val s = concat(label, concat("value = ", concat(to_str(d.val_), concat(", deriv = ", to_str(d.deriv)))))
+    print(s);
+    0
+}
+
+def main() -> i64 {
+    print("=== Forward-Mode Autodiff with Dual Numbers ===");
+
+    // f(x) = x^3 + x^2 + x at x = 2
+    val x = dual_var(2)    // x = (2, 1)
+
+    val x2 = dual_mul(x, x)       // x^2 = (4, 4)
+    val x3 = dual_mul(x2, x)      // x^3 = (8, 12)
+    val fx = dual_add(dual_add(x3, x2), x)  // x^3 + x^2 + x
+
+    print("f(x) = x^3 + x^2 + x, at x = 2:");
+    show_dual("  ", fx);
+    print(concat("  Expected: value = 14, deriv = 17", ""));
+
+    print("");
+
+    // g(x) = 3x^2 - 2x + 5 at x = 3
+    // g'(x) = 6x - 2
+    // g(3) = 27 - 6 + 5 = 26,  g'(3) = 18 - 2 = 16
+    val y = dual_var(3)
+    val y2 = dual_mul(y, y)
+    val three = dual_const(3)
+    val two = dual_const(2)
+    val five = dual_const(5)
+    val term1 = dual_mul(three, y2)
+    val term2 = dual_mul(two, y)
+    val gx = dual_add(dual_sub(term1, term2), five)
+
+    print("g(x) = 3x^2 - 2x + 5, at x = 3:");
+    show_dual("  ", gx);
+    print(concat("  Expected: value = 26, deriv = 16", ""));
+
+    print("");
+
+    // h(x) = (x + 1) * (x - 1) = x^2 - 1 at x = 4
+    // h'(x) = 2x
+    // h(4) = 15, h'(4) = 8
+    val z = dual_var(4)
+    val one = dual_const(1)
+    val z_plus_1 = dual_add(z, one)
+    val z_minus_1 = dual_sub(z, one)
+    val hx = dual_mul(z_plus_1, z_minus_1)
+
+    print("h(x) = (x+1)*(x-1), at x = 4:");
+    show_dual("  ", hx);
+    print(concat("  Expected: value = 15, deriv = 8", ""));
+
+    0
 }

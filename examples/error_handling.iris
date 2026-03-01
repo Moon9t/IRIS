@@ -1,0 +1,63 @@
+// error_handling.iris — option and result types for safe operations
+
+def safe_divide(a: f64, b: f64) -> f64 {
+    // Return -999.0 as sentinel when division by zero
+    if b == (0.0 to f64) { -999.0 to f64 } else { a / b }
+}
+
+def safe_sqrt(x: f64) -> f64 {
+    // Return -1.0 as sentinel for negative input
+    if x < (0.0 to f64) { -1.0 to f64 } else { sqrt(x) }
+}
+
+def show_option(label: str, opt: option<i64>) -> i64 {
+    val _r = if is_some(opt) {
+        print(concat(label, " is some")); 0
+    } else {
+        print(concat(label, " is none")); 0
+    };
+    0
+}
+
+def main() -> i64 {
+    print("=== Safe Division ===");
+    val a = safe_divide(10.0 to f64, 2.0 to f64)
+    print(concat("10 / 2 = ", to_str(a)));
+    val b = safe_divide(5.0 to f64, 0.0 to f64)
+    print(concat("5 / 0  = ", to_str(b)));
+
+    print("\n=== Safe Square Root ===");
+    val c = safe_sqrt(16.0 to f64)
+    print(concat("sqrt(16) = ", to_str(c)));
+    val d = safe_sqrt(-4.0 to f64)
+    print(concat("sqrt(-4) = ", to_str(d)));
+
+    print("\n=== Option Types ===");
+    val x = some(42)
+    val y = none
+    show_option("some(42)", x);
+    show_option("none", y);
+
+    print("\n=== Chained Operations ===");
+    // Compute sqrt(x) / divisor with checks
+    val inp = 9.0 to f64
+    val divisor = 3.0 to f64
+    val sq = safe_sqrt(inp)
+    val result = if sq < (0.0 to f64) {
+        -1.0 to f64
+    } else {
+        safe_divide(sq, divisor)
+    }
+    print(concat("sqrt(9)/3 = ", to_str(result)));
+
+    val bad_inp = -1.0 to f64
+    val sq2 = safe_sqrt(bad_inp)
+    val result2 = if sq2 < (0.0 to f64) {
+        -1.0 to f64
+    } else {
+        safe_divide(sq2, 3.0 to f64)
+    }
+    print(concat("sqrt(-1)/3 = ", to_str(result2)));
+
+    0
+}

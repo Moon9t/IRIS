@@ -1,0 +1,194 @@
+// pattern_matching.iris -- when expressions with enums and options
+//
+// Run: iris run examples/pattern_matching.iris
+
+// =====================
+//  Enum matching
+// =====================
+
+choice Shape {
+    Circle,
+    Square,
+    Triangle,
+}
+
+def shape_sides(s: Shape) -> i64 {
+    when s {
+        Shape.Circle   => 0
+        Shape.Square   => 4
+        Shape.Triangle => 3
+    }
+}
+
+def shape_name(s: Shape) -> str {
+    when s {
+        Shape.Circle   => "Circle"
+        Shape.Square   => "Square"
+        Shape.Triangle => "Triangle"
+    }
+}
+
+def demo_shapes() -> i64 {
+    print("=== Shape Matching ===");
+    val c = shape_name(Shape.Circle)
+    val cs = to_str(shape_sides(Shape.Circle))
+    print(concat(c, concat(" has ", concat(cs, " sides"))));
+
+    val sq = shape_name(Shape.Square)
+    val sqs = to_str(shape_sides(Shape.Square))
+    print(concat(sq, concat(" has ", concat(sqs, " sides"))));
+
+    val tr = shape_name(Shape.Triangle)
+    val trs = to_str(shape_sides(Shape.Triangle))
+    print(concat(tr, concat(" has ", concat(trs, " sides"))));
+    0
+}
+
+// =====================
+//  Option matching
+// =====================
+
+def safe_divide(a: i64, b: i64) -> option<i64> {
+    if b == 0 {
+        none
+    } else {
+        some(a / b)
+    }
+}
+
+def describe_option(label: str, opt: option<i64>) -> i64 {
+    val msg = if is_some(opt) {
+        concat(label, " = Some(...)")
+    } else {
+        concat(label, " = None")
+    }
+    print(msg);
+    0
+}
+
+def demo_options() -> i64 {
+    print("=== Option Matching ===");
+    val r1 = safe_divide(10, 2)
+    val r2 = safe_divide(7, 0)
+    val r3 = safe_divide(100, 4)
+
+    describe_option("10 / 2", r1);
+    describe_option("7 / 0", r2);
+    describe_option("100 / 4", r3);
+    0
+}
+
+// =====================
+//  Card suit matching
+// =====================
+
+choice Suit {
+    Hearts,
+    Diamonds,
+    Clubs,
+    Spades,
+}
+
+choice Color {
+    Red,
+    Black,
+}
+
+def suit_color(s: Suit) -> Color {
+    when s {
+        Suit.Hearts   => Color.Red
+        Suit.Diamonds => Color.Red
+        Suit.Clubs    => Color.Black
+        Suit.Spades   => Color.Black
+    }
+}
+
+def color_name(c: Color) -> str {
+    when c {
+        Color.Red   => "Red"
+        Color.Black => "Black"
+    }
+}
+
+def suit_name(s: Suit) -> str {
+    when s {
+        Suit.Hearts   => "Hearts"
+        Suit.Diamonds => "Diamonds"
+        Suit.Clubs    => "Clubs"
+        Suit.Spades   => "Spades"
+    }
+}
+
+def demo_suits() -> i64 {
+    print("=== Card Suit Matching ===");
+    val h = suit_name(Suit.Hearts)
+    val hc = color_name(suit_color(Suit.Hearts))
+    print(concat(h, concat(" -> ", hc)));
+
+    val d = suit_name(Suit.Diamonds)
+    val dc = color_name(suit_color(Suit.Diamonds))
+    print(concat(d, concat(" -> ", dc)));
+
+    val cl = suit_name(Suit.Clubs)
+    val clc = color_name(suit_color(Suit.Clubs))
+    print(concat(cl, concat(" -> ", clc)));
+
+    val sp = suit_name(Suit.Spades)
+    val spc = color_name(suit_color(Suit.Spades))
+    print(concat(sp, concat(" -> ", spc)));
+    0
+}
+
+// =====================
+//  Number classification
+// =====================
+
+choice Sign {
+    Positive,
+    Negative,
+    Zero,
+}
+
+def classify(n: i64) -> Sign {
+    if n > 0 { Sign.Positive } else {
+        if n < 0 { Sign.Negative } else { Sign.Zero }
+    }
+}
+
+def sign_name(s: Sign) -> str {
+    when s {
+        Sign.Positive => "Positive"
+        Sign.Negative => "Negative"
+        Sign.Zero     => "Zero"
+    }
+}
+
+def demo_classify() -> i64 {
+    print("=== Number Classification ===");
+    val nums = list()
+    push(nums, 42);
+    push(nums, -7);
+    push(nums, 0);
+    push(nums, 100);
+    push(nums, -1);
+
+    var i = 0
+    while i < 5 {
+        val n = list_get(nums, i)
+        val s = sign_name(classify(n))
+        print(concat(to_str(n), concat(" is ", s)));
+        i = i + 1
+    }
+    0
+}
+
+def main() -> i64 {
+    demo_shapes();
+    print("");
+    demo_options();
+    print("");
+    demo_suits();
+    print("");
+    demo_classify();
+    0
+}

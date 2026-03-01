@@ -474,6 +474,10 @@ impl<'src> Lexer<'src> {
                             self.advance();
                             s.push('\t');
                         }
+                        Some(b'r') => {
+                            self.advance();
+                            s.push('\r');
+                        }
                         Some(b'"') => {
                             self.advance();
                             s.push('"');
@@ -519,6 +523,7 @@ impl<'src> Lexer<'src> {
                     match self.peek() {
                         Some(b'n') => { self.advance(); raw.push('\n'); }
                         Some(b't') => { self.advance(); raw.push('\t'); }
+                        Some(b'r') => { self.advance(); raw.push('\r'); }
                         Some(b'"') => { self.advance(); raw.push('"'); }
                         Some(b'\\') => { self.advance(); raw.push('\\'); }
                         other => {

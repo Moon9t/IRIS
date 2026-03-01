@@ -308,10 +308,12 @@ fn compile_ast(
         EmitKind::PgoOptimize => Ok(emit_pgo_optimize(&ir_module, "")?),
         EmitKind::Graph | EmitKind::Onnx | EmitKind::OnnxBinary => unreachable!(),
         EmitKind::Eval => {
+            // Prefer a function named "main"; fall back to the first zero-arg fn.
             let func = ir_module
                 .functions()
                 .iter()
-                .find(|f| f.params.is_empty())
+                .find(|f| f.name == "main" && f.params.is_empty())
+                .or_else(|| ir_module.functions().iter().find(|f| f.params.is_empty()))
                 .ok_or_else(|| {
                     Error::Interp(crate::error::InterpError::Unsupported {
                         detail: "no zero-argument function in module to evaluate".into(),
@@ -455,6 +457,17 @@ pub fn compile_file(path: &std::path::Path, emit: EmitKind) -> Result<String, Er
     compile_ast(&main_ast, module_name, emit, 1_000_000, 500, None)
 }
 
+/// Compiles an `.iris` file with bring resolution, using the provided `source`
+/// text for the main file instead of reading it from disk.  Brings are still
+/// resolved from disk relative to `file_path`'s directory.
+pub fn compile_file_text(source: &str, file_path: &std::path::Path, emit: EmitKind) -> Result<String, Error> {
+    let main_ast = compiler::FileCompiler::new().compile_file_to_ast_with_text(file_path, source, &[])?;
+    let module_name = file_path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("main");
+    compile_ast(&main_ast, module_name, emit, 1_000_000, 500, None)
+}
+
 /// Like [`compile_file`] but returns the merged `IrModule` for further processing.
 pub fn compile_file_to_module(path: &std::path::Path) -> Result<IrModule, Error> {
     let main_ast = compiler::FileCompiler::new().compile_file_to_ast(path, &[])?;
@@ -462,6 +475,33 @@ pub fn compile_file_to_module(path: &std::path::Path) -> Result<IrModule, Error>
         .and_then(|s| s.to_str())
         .unwrap_or("main");
     compile_ast_to_module(&main_ast, module_name, None)
+}
+
+/// Like [`compile_file`] but passes through all options including `dump_ir_after`.
+pub fn compile_file_with_full_opts(
+    path: &std::path::Path,
+    emit: EmitKind,
+    max_steps: usize,
+    max_depth: usize,
+    dump_ir_after: Option<&str>,
+) -> Result<String, Error> {
+    let main_ast = compiler::FileCompiler::new().compile_file_to_ast(path, &[])?;
+    let module_name = path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("main");
+    compile_ast(&main_ast, module_name, emit, max_steps, max_depth, dump_ir_after)
+}
+
+/// Like [`compile_file_to_module`] but passes through `dump_ir_after`.
+pub fn compile_file_to_module_with_opts(
+    path: &std::path::Path,
+    dump_ir_after: Option<&str>,
+) -> Result<IrModule, Error> {
+    let main_ast = compiler::FileCompiler::new().compile_file_to_ast(path, &[])?;
+    let module_name = path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("main");
+    compile_ast_to_module(&main_ast, module_name, dump_ir_after)
 }
 
 /// Like [`compile_with_opts`] but also supports `--dump-ir-after`.

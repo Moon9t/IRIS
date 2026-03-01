@@ -1,0 +1,110 @@
+// src/stdlib/json.iris -- IRIS JSON emitter and simple flat-object parser.
+//
+// Representation: a JSON object is stored as a flat list<str>:
+//   [key0, val0, key1, val1, ...]
+// Use json_get / json_set to work with this flat-pair representation.
+
+// ── Emitter ──────────────────────────────────────────────────────────────────
+
+// Wrap a string in JSON double-quotes.
+pub def json_str(s: str) -> str {
+    concat(concat("\"", s), "\"")
+}
+
+// Build a JSON array from a list<str> of already-encoded values.
+pub def json_arr(items: list<str>) -> str {
+    concat(concat("[", join(items, ",")), "]")
+}
+
+// Build a JSON object from parallel key/value lists (values already encoded).
+pub def json_obj(keys: list<str>, vals: list<str>) -> str {
+    var parts = list()
+    var i = 0
+    val n = list_len(keys)
+    while i < n {
+        val k = json_str(list_get(keys, i))
+        val v = list_get(vals, i)
+        push(parts, concat(concat(k, ":"), v));
+        i = i + 1
+    }
+    concat(concat("{", join(parts, ",")), "}")
+}
+
+// ── Flat-pair object representation ─────────────────────────────────────────
+//
+// A parsed object is list<str> [k0, v0, k1, v1, ...].
+
+pub def json_new() -> list<str> {
+    list()
+}
+
+// Returns the value for key, or "" if not found.
+pub def json_get(pairs: list<str>, key: str) -> str {
+    val n = list_len(pairs)
+    var result = ""
+    var i = 0
+    while (i + 1) < n {
+        val k = list_get(pairs, i)
+        result = if k == key { list_get(pairs, i + 1) } else { result }
+        i = i + 2
+    }
+    result
+}
+
+// Adds or updates a key/value pair (string value). Returns new pairs list.
+pub def json_set(pairs: list<str>, key: str, val_str: str) -> list<str> {
+    var new_pairs = list()
+    var found = 0
+    var i = 0
+    val n = list_len(pairs)
+    while (i + 1) < n {
+        val k = list_get(pairs, i)
+        val v = list_get(pairs, i + 1)
+        val is_match = if k == key { 1 } else { 0 }
+        found = if is_match == 1 { 1 } else { found }
+        push(new_pairs, k);
+        push(new_pairs, if is_match == 1 { val_str } else { v });
+        i = i + 2
+    }
+    val _ = if found == 0 { push(new_pairs, key); push(new_pairs, val_str); 0 } else { 0 }
+    new_pairs
+}
+
+// ── Simple parser ────────────────────────────────────────────────────────────
+//
+// Parses a flat JSON object like: {"key":"value","k2":"v2"}
+// Returns flat pairs list<str>.
+
+// Strip surrounding double-quotes from a JSON string token.
+pub def strip_json_quotes(s: str) -> str {
+    val n = len(s)
+    if n >= 2 {
+        slice(s, 1, n - 1)
+    } else {
+        s
+    }
+}
+
+// Parse {"k":"v",...} into flat pairs list<str>.
+pub def json_parse(text: str) -> list<str> {
+    val n = len(text)
+    // Remove outer braces: { ... }
+    val inner = if n >= 2 { slice(text, 1, n - 1) } else { text }
+    // Split by "," to get "key":"value" tokens
+    val tokens = split(inner, ",")
+    var pairs = list()
+    var i = 0
+    val nt = list_len(tokens)
+    while i < nt {
+        val token = list_get(tokens, i)
+        val parts = split(token, ":")
+        val np = list_len(parts)
+        val _ = if np >= 2 {
+            push(pairs, strip_json_quotes(list_get(parts, 0)));
+            push(pairs, strip_json_quotes(list_get(parts, 1)));
+            0
+        } else { 0 }
+        i = i + 1
+    }
+    pairs
+}

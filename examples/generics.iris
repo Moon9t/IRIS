@@ -28,6 +28,5 @@ def main() -> i64 {
     print(concat("min(10,20)      = ", to_str(y)));
     print(concat("max(10,20)      = ", to_str(z)));
     print(concat("clamp(15,0,10) = ", to_str(c)));
-
-    x
+    0
 }

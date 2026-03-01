@@ -463,12 +463,22 @@ impl<'t> Parser<'t> {
         self.expect(&Token::Def)?;
         let name = self.expect_ident()?;
         // Optional type parameters: `[T, U, ...]`
+        // Supports optional "where T: Trait" constraint annotation (parsed and discarded).
+        // Example: `def max[T where T: Ord](a: T, b: T) -> T`
         let type_params = if matches!(self.peek_tok(), Token::LBracket) {
             self.advance(); // consume '['
             let mut ty_params = Vec::new();
             while !matches!(self.peek_tok(), Token::RBracket | Token::Eof) {
                 let tp = self.expect_ident()?;
                 ty_params.push(tp.name);
+                // Optional "where T: Trait [, T: Trait2 ...]" constraint — parse and discard.
+                if matches!(self.peek_tok(), Token::Ident(ref w) if w == "where") {
+                    self.advance(); // consume "where"
+                    // Skip tokens until ',' or ']'
+                    while !matches!(self.peek_tok(), Token::Comma | Token::RBracket | Token::Eof) {
+                        self.advance();
+                    }
+                }
                 if matches!(self.peek_tok(), Token::Comma) {
                     self.advance();
                 }

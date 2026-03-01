@@ -1,0 +1,64 @@
+// src/stdlib/csv.iris -- IRIS CSV parse and emit library.
+//
+// Rows are represented as list<str>. A table is a list<str> of
+// serialised rows (each row stored as a joined comma-separated string),
+// because IRIS doesn't support list<list<str>> in a type-checked way.
+
+// Parse a single CSV row string into a list<str> of fields.
+pub def csv_parse_row(row: str) -> list<str> {
+    split(row, ",")
+}
+
+// Returns the number of rows in a CSV text (count of non-empty lines).
+pub def csv_row_count(text: str) -> i64 {
+    val lines = split(text, "\n")
+    val n = list_len(lines)
+    var count = 0
+    var i = 0
+    while i < n {
+        val line = list_get(lines, i)
+        count = if len(line) > 0 { count + 1 } else { count }
+        i = i + 1
+    }
+    count
+}
+
+// Returns the number of columns in the first row of a CSV text.
+pub def csv_col_count(text: str) -> i64 {
+    val lines = split(text, "\n")
+    if list_len(lines) > 0 {
+        list_len(csv_parse_row(list_get(lines, 0)))
+    } else {
+        0
+    }
+}
+
+// Emits a CSV row (list<str> of fields) as a comma-separated string.
+pub def csv_emit_row(row: list<str>) -> str {
+    join(row, ",")
+}
+
+// Parses CSV text, returns a list<str> of raw row strings (one entry per line).
+pub def csv_rows(text: str) -> list<str> {
+    val all = split(text, "\n")
+    val n = list_len(all)
+    var result = list()
+    var i = 0
+    while i < n {
+        val line = list_get(all, i)
+        val _ = if len(line) > 0 { push(result, line); 0 } else { 0 }
+        i = i + 1
+    }
+    result
+}
+
+// Returns the Nth row as a list<str> of fields.
+pub def csv_get_row(text: str, row_idx: i64) -> list<str> {
+    val rows = csv_rows(text)
+    csv_parse_row(list_get(rows, row_idx))
+}
+
+// Emits a list<str> of raw row strings as a CSV text.
+pub def csv_emit_rows(rows: list<str>) -> str {
+    join(rows, "\n")
+}

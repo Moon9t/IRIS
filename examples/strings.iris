@@ -25,6 +25,5 @@ def main() -> i64 {
 
     val n = count_chars("Hello")
     print(concat("len('Hello') = ", to_str(n)));
-
-    n
+    0
 }

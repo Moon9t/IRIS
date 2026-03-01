@@ -1,0 +1,130 @@
+// data_structures.iris — Stack, Queue, and linked list simulation
+
+// =====================
+//  STACK (via list)
+// =====================
+
+def stack_push(lst: list<i64>, size: i64, v: i64) -> i64 {
+    push(lst, v);
+    size + 1
+}
+
+def stack_peek(lst: list<i64>, size: i64) -> i64 {
+    list_get(lst, size - 1)
+}
+
+def stack_pop(size: i64) -> i64 {
+    size - 1
+}
+
+def demo_stack() -> i64 {
+    print("=== Stack Demo ===");
+    val s = list()
+    var sz = 0
+
+    sz = stack_push(s, sz, 10);
+    sz = stack_push(s, sz, 20);
+    sz = stack_push(s, sz, 30);
+
+    print(concat("Peek: ", to_str(stack_peek(s, sz))));
+
+    sz = stack_pop(sz);
+    print(concat("After pop, peek: ", to_str(stack_peek(s, sz))));
+
+    sz = stack_pop(sz);
+    sz = stack_pop(sz);
+    print(concat("Stack empty: ", to_str(sz == 0)));
+    0
+}
+
+// =====================
+//  QUEUE (via list)
+// =====================
+
+def queue_enqueue(lst: list<i64>, v: i64) -> i64 {
+    push(lst, v);
+    0
+}
+
+def queue_front(lst: list<i64>, head: i64) -> i64 {
+    list_get(lst, head)
+}
+
+def demo_queue() -> i64 {
+    print("=== Queue Demo ===");
+    val q = list()
+    var head = 0
+
+    val _a = queue_enqueue(q, 100);
+    val _b = queue_enqueue(q, 200);
+    val _c = queue_enqueue(q, 300);
+
+    print(concat("Front: ", to_str(queue_front(q, head))));
+    head = head + 1;
+
+    print(concat("After dequeue, front: ", to_str(queue_front(q, head))));
+    head = head + 1;
+    head = head + 1;
+
+    val is_empty = if head >= len(q) { 1 } else { 0 }
+    print(concat("Queue empty: ", to_str(is_empty)));
+    0
+}
+
+// =====================
+//  LINKED LIST (via parallel lists)
+// =====================
+// Simulate a linked list with two lists: values and next-pointers.
+// next[i] = -1 means end of list.
+
+def ll_find(vals: list<i64>, nexts: list<i64>, head: i64, target: i64) -> i64 {
+    var cur = head
+    var found = 0
+    while (cur != -1) {
+        val v = list_get(vals, cur)
+        found = if v == target { 1 } else { found };
+        cur = if v == target { -1 } else { list_get(nexts, cur) }
+    }
+    found
+}
+
+def ll_print(vals: list<i64>, nexts: list<i64>, head: i64) -> i64 {
+    var cur = head
+    var s = "List: "
+    while (cur != -1) {
+        val v = list_get(vals, cur)
+        val nxt = list_get(nexts, cur)
+        s = concat(s, to_str(v));
+        s = concat(s, if nxt != -1 { " -> " } else { "" })
+        cur = nxt
+    }
+    print(s);
+    0
+}
+
+def demo_linked_list() -> i64 {
+    print("=== Linked List Demo ===");
+    // Build: 5 -> 10 -> 15 -> 20 -> end
+    val vals  = list()
+    push(vals, 5); push(vals, 10); push(vals, 15); push(vals, 20);
+    val nexts = list()
+    push(nexts, 1); push(nexts, 2); push(nexts, 3); push(nexts, -1);
+
+    val _p = ll_print(vals, nexts, 0);
+
+    val f1 = ll_find(vals, nexts, 0, 15)
+    print(concat("Found 15: ", to_str(f1)));
+
+    val f2 = ll_find(vals, nexts, 0, 99)
+    print(concat("Found 99: ", to_str(f2)));
+    0
+}
+
+def main() -> i64 {
+    val _s = demo_stack();
+    print("");
+    val _q = demo_queue();
+    print("");
+    val _l = demo_linked_list();
+    0
+}

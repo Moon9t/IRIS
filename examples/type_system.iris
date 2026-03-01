@@ -1,0 +1,114 @@
+// type_system.iris — records, choices, when expressions, type aliases, options
+
+record Point {
+    x: f64,
+    y: f64,
+}
+
+record Rectangle {
+    origin: Point,
+    width: f64,
+    height: f64,
+}
+
+record Person {
+    name: str,
+    age: i64,
+}
+
+choice Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+choice Shape {
+    Circle,
+    Rect,
+    Triangle,
+}
+
+def distance(a: Point, b: Point) -> f64 {
+    val dx = a.x - b.x
+    val dy = a.y - b.y
+    sqrt(dx * dx + dy * dy)
+}
+
+def rect_area(r: Rectangle) -> f64 {
+    r.width * r.height
+}
+
+def rect_perimeter(r: Rectangle) -> f64 {
+    (2.0 to f64) * (r.width + r.height)
+}
+
+def direction_name(d: Direction) -> str {
+    when d {
+        Direction.North => "North"
+        Direction.South => "South"
+        Direction.East  => "East"
+        Direction.West  => "West"
+    }
+}
+
+def shape_sides(s: Shape) -> i64 {
+    when s {
+        Shape.Circle   => 0
+        Shape.Rect     => 4
+        Shape.Triangle => 3
+    }
+}
+
+def greet(p: Person) -> str {
+    concat(concat("Hello, ", p.name), concat("! Age: ", to_str(p.age)))
+}
+
+def main() -> i64 {
+    // Points and distance
+    val p1 = Point { x: 0.0 to f64, y: 0.0 to f64 }
+    val p2 = Point { x: 3.0 to f64, y: 4.0 to f64 }
+    print(concat("distance: ", to_str(distance(p1, p2))));
+
+    // Rectangle
+    val r = Rectangle { origin: p1, width: 5.0 to f64, height: 3.0 to f64 }
+    print(concat("area     : ", to_str(rect_area(r))));
+    print(concat("perimeter: ", to_str(rect_perimeter(r))));
+
+    // Directions
+    val d = Direction.North
+    print(concat("direction: ", direction_name(d)));
+
+    // Shapes (simple variants)
+    val circle = Shape.Circle
+    val rect   = Shape.Rect
+    val tri    = Shape.Triangle
+    print(concat("circle sides  : ", to_str(shape_sides(circle))));
+    print(concat("rect sides    : ", to_str(shape_sides(rect))));
+    print(concat("triangle sides: ", to_str(shape_sides(tri))));
+
+    // People (records used directly, not from lists)
+    val alice = Person { name: "Alice", age: 30 }
+    val bob   = Person { name: "Bob", age: 25 }
+    val carol = Person { name: "Carol", age: 35 }
+    print(greet(alice));
+    print(greet(bob));
+    print(greet(carol));
+
+    // Option types
+    val maybe = some(42)
+    val _r1 = if is_some(maybe) {
+        print("some(42) is some: true"); 0
+    } else {
+        print("some(42) is some: false"); 0
+    };
+
+    val empty = none
+    val _r2 = if is_some(empty) {
+        print("none is some: true"); 0
+    } else {
+        print("none is some: false"); 0
+    };
+
+    0
+}

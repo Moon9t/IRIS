@@ -578,6 +578,12 @@ impl Writer {
             IrInstr::StrJoin { result, list_val, delim } => {
                 self.u8(0xF1); self.vid(*result); self.vid(*list_val); self.vid(*delim);
             }
+            IrInstr::NowMs { result } => {
+                self.u8(0xF2); self.vid(*result);
+            }
+            IrInstr::SleepMs { result, ms } => {
+                self.u8(0xF3); self.vid(*result); self.vid(*ms);
+            }
         }
     }
 }
@@ -1008,6 +1014,8 @@ impl<'a> Reader<'a> {
             OP_TCP_CLOSE   => { let conn = self.vid()?; IrInstr::TcpClose { conn } }
             0xF0 => { let result = self.vid()?; let str_val = self.vid()?; let delim = self.vid()?; IrInstr::StrSplit { result, str_val, delim } }
             0xF1 => { let result = self.vid()?; let list_val = self.vid()?; let delim = self.vid()?; IrInstr::StrJoin { result, list_val, delim } }
+            0xF2 => { let result = self.vid()?; IrInstr::NowMs { result } }
+            0xF3 => { let result = self.vid()?; let ms = self.vid()?; IrInstr::SleepMs { result, ms } }
             t => return Err(format!("unknown opcode 0x{:02x}", t)),
         })
     }

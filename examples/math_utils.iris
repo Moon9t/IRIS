@@ -1,0 +1,103 @@
+// math_utils.iris — GCD, LCM, combinations, primes, Newton's method
+
+def gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+def lcm(a: i64, b: i64) -> i64 {
+    (a / gcd(a, b)) * b
+}
+
+def factorial(n: i64) -> i64 {
+    if n <= 1 { 1 } else { n * factorial(n - 1) }
+}
+
+def combinations(n: i64, k: i64) -> i64 {
+    if k == 0 || k == n { 1 } else {
+        factorial(n) / (factorial(k) * factorial(n - k))
+    }
+}
+
+def is_prime(n: i64) -> bool {
+    if n < 2 { false } else {
+        if n == 2 { true } else {
+            if (n % 2) == 0 { false } else {
+                var d = 3
+                var prime = true
+                while ((d * d) <= n && prime) {
+                    if (n % d) == 0 { prime = false } else { d = d + 2 }
+                }
+                prime
+            }
+        }
+    }
+}
+
+def newton_sqrt(x: f64) -> f64 {
+    if x <= (0.0 to f64) { 0.0 to f64 } else {
+        var guess = x / (2.0 to f64)
+        var i = 0
+        while (i < 50) {
+            guess = (guess + x / guess) / (2.0 to f64);
+            i = i + 1
+        }
+        guess
+    }
+}
+
+def fib_list(n: i64) -> list<i64> {
+    val fibs = list()
+    push(fibs, 0);
+    push(fibs, 1);
+    var i = 2
+    while (i < n) {
+        val next = list_get(fibs, i - 1) + list_get(fibs, i - 2)
+        push(fibs, next);
+        i = i + 1
+    }
+    fibs
+}
+
+def main() -> i64 {
+    print("=== GCD and LCM ===");
+    print(concat("gcd(48, 18) = ", to_str(gcd(48, 18))));
+    print(concat("lcm(4, 6)   = ", to_str(lcm(4, 6))));
+    print(concat("lcm(12, 18) = ", to_str(lcm(12, 18))));
+
+    print("\n=== Factorials ===");
+    var i = 0
+    while (i <= 10) {
+        print(concat(to_str(i), concat("! = ", to_str(factorial(i)))));
+        i = i + 1
+    }
+
+    print("\n=== Combinations C(n,k) ===");
+    print(concat("C(5,2) = ", to_str(combinations(5, 2))));
+    print(concat("C(10,3) = ", to_str(combinations(10, 3))));
+    print(concat("C(6,6) = ", to_str(combinations(6, 6))));
+
+    print("\n=== Newton sqrt ===");
+    print(concat("sqrt(2)  = ", to_str(newton_sqrt(2.0 to f64))));
+    print(concat("sqrt(9)  = ", to_str(newton_sqrt(9.0 to f64))));
+    print(concat("sqrt(100)= ", to_str(newton_sqrt(100.0 to f64))));
+
+    print("\n=== Fibonacci sequence ===");
+    val fibs = fib_list(15)
+    var j = 0
+    var fib_str = "["
+    while (j < len(fibs)) {
+        if j > 0 { fib_str = concat(fib_str, ", ") } else { val _noop = 0 };
+        fib_str = concat(fib_str, to_str(list_get(fibs, j)));
+        j = j + 1
+    }
+    print(concat(fib_str, "]"));
+
+    print("\n=== Primes up to 30 ===");
+    var p = 2
+    while (p <= 30) {
+        if is_prime(p) { print(to_str(p)) } else { val _noop = 0 };
+        p = p + 1
+    }
+
+    0
+}

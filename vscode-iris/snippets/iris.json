@@ -1,0 +1,96 @@
+{
+  "Function": {
+    "prefix": "def",
+    "body": ["def ${1:name}(${2:params}) -> ${3:type} {", "\t$0", "}"],
+    "description": "Define a function"
+  },
+  "Public Function": {
+    "prefix": "pub def",
+    "body": ["pub def ${1:name}(${2:params}) -> ${3:type} {", "\t$0", "}"],
+    "description": "Define a public function"
+  },
+  "Record": {
+    "prefix": "record",
+    "body": ["record ${1:Name} {", "\t${2:field}: ${3:type}", "}"],
+    "description": "Define a record type"
+  },
+  "Choice": {
+    "prefix": "choice",
+    "body": ["choice ${1:Name} {", "\t${2:Variant1},", "\t${3:Variant2}", "}"],
+    "description": "Define a choice (enum) type"
+  },
+  "Val binding": {
+    "prefix": "val",
+    "body": ["val ${1:name} = $0"],
+    "description": "Immutable value binding"
+  },
+  "Var binding": {
+    "prefix": "var",
+    "body": ["var ${1:name} = $0"],
+    "description": "Mutable variable binding"
+  },
+  "If-else": {
+    "prefix": "if",
+    "body": ["if ${1:cond} {", "\t$2", "} else {", "\t$3", "}"],
+    "description": "If-else expression"
+  },
+  "While loop": {
+    "prefix": "while",
+    "body": ["while ${1:cond} {", "\t$0", "}"],
+    "description": "While loop"
+  },
+  "For loop": {
+    "prefix": "for",
+    "body": ["for ${1:i} in ${2:0}..${3:n} {", "\t$0", "}"],
+    "description": "For loop over range"
+  },
+  "When expression": {
+    "prefix": "when",
+    "body": [
+      "when ${1:expr} {",
+      "\tsome(${2:v}) => $3,",
+      "\tnone => $4",
+      "}"
+    ],
+    "description": "Pattern match with when"
+  },
+  "Main function": {
+    "prefix": "main",
+    "body": ["def main() -> i64 {", "\t$0", "\t0", "}"],
+    "description": "Main entry point"
+  },
+  "Bring stdlib": {
+    "prefix": "bring",
+    "body": ["bring std.${1|math,string,fmt,json,csv,http,fs,path,time,set,queue,heap,kv,table,dataset,dataframe|}"],
+    "description": "Import a stdlib module"
+  },
+  "List operations": {
+    "prefix": "list",
+    "body": [
+      "var ${1:lst} = list()",
+      "push(${1:lst}, ${2:value});"
+    ],
+    "description": "Create and populate a list"
+  },
+  "Option handling": {
+    "prefix": "option",
+    "body": [
+      "val ${1:opt} = ${2:some(value)}",
+      "if is_some(${1:opt}) {",
+      "\tval ${3:v} = unwrap(${1:opt})",
+      "\t$0",
+      "}"
+    ],
+    "description": "Option type with is_some check"
+  },
+  "Print to_str": {
+    "prefix": "print",
+    "body": ["print(to_str(${1:value}));"],
+    "description": "Print a value as string"
+  },
+  "Generic function": {
+    "prefix": "defg",
+    "body": ["def ${1:name}[${2:T}](${3:a}: ${2:T}) -> ${2:T} {", "\t$0", "}"],
+    "description": "Define a generic function"
+  }
+}

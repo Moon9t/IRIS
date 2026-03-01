@@ -1,0 +1,77 @@
+// storage.iris — KV-backed persistence layer for Taskman
+// Tasks are stored in `.taskman.db` (key=value lines) via std.kv.
+// Keys:
+//   __next_id__  → next available task ID (i64 as str)
+//   t:N          → encoded Task with ID N
+
+bring "task.iris"
+bring std.kv
+
+// Database file in the current working directory
+const DB: str = ".taskman.db"
+
+// ── ID allocation ─────────────────────────────────────────────────────────────
+
+pub def storage_next_id() -> i64 {
+    val s = kv_get(DB, "__next_id__");
+    if s == "" {
+        1
+    } else {
+        val opt = parse_i64(s);
+        if is_some(opt) { unwrap(opt) } else { 1 }
+    }
+}
+
+pub def storage_bump_id(current: i64) -> bool {
+    kv_set(DB, "__next_id__", to_str(current + 1))
+}
+
+// ── Task persistence ──────────────────────────────────────────────────────────
+
+pub def storage_save(t: Task) -> bool {
+    val key = concat("t:", to_str(t.id));
+    kv_set(DB, key, task_encode(t))
+}
+
+pub def storage_load(id: i64) -> option<Task> {
+    val key = concat("t:", to_str(id));
+    val s   = kv_get(DB, key);
+    if s == "" {
+        none
+    } else {
+        some(task_decode(s))
+    }
+}
+
+pub def storage_delete(id: i64) -> bool {
+    val key = concat("t:", to_str(id));
+    kv_delete(DB, key)
+}
+
+// ── Bulk operations ───────────────────────────────────────────────────────────
+
+// Load all existing tasks (scans IDs 1..next_id-1, skips deleted holes).
+pub def storage_load_all() -> list<Task> {
+    val tasks  = list();
+    val max_id = storage_next_id();
+    var id     = 1;
+    while id < max_id {
+        val opt = storage_load(id);
+        if is_some(opt) {
+            push(tasks, unwrap(opt))
+        } else {
+            val _skip = 0
+        };
+        id = id + 1
+    }
+    tasks
+}
+
+// Create a new task, persist it, and return it.
+pub def storage_add_task(title: str) -> Task {
+    val id      = storage_next_id();
+    val t       = task_new(id, title);
+    val _saved  = storage_save(t);
+    val _bumped = storage_bump_id(id);
+    t
+}

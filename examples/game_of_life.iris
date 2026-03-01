@@ -1,0 +1,105 @@
+// game_of_life.iris — Conway's Game of Life, 8x8 grid, 5 generations
+
+const ROWS: i64 = 8
+const COLS: i64 = 8
+
+def cell_idx(r: i64, c: i64) -> i64 {
+    r * COLS + c
+}
+
+def get(grid: list<i64>, r: i64, c: i64) -> i64 {
+    if r < 0 || r >= ROWS || c < 0 || c >= COLS {
+        0
+    } else {
+        list_get(grid, cell_idx(r, c))
+    }
+}
+
+def count_neighbours(grid: list<i64>, r: i64, c: i64) -> i64 {
+    get(grid, r-1, c-1) + get(grid, r-1, c) + get(grid, r-1, c+1) +
+    get(grid, r,   c-1) +                      get(grid, r,   c+1) +
+    get(grid, r+1, c-1) + get(grid, r+1, c) + get(grid, r+1, c+1)
+}
+
+def step(grid: list<i64>) -> list<i64> {
+    val next = list()
+    var i = 0
+    while (i < (ROWS * COLS)) {
+        push(next, 0);
+        i = i + 1
+    }
+    var r = 0
+    while (r < ROWS) {
+        var c = 0
+        while (c < COLS) {
+            val alive = get(grid, r, c)
+            val nb = count_neighbours(grid, r, c)
+            val new_state = if alive == 1 {
+                if nb == 2 || nb == 3 { 1 } else { 0 }
+            } else {
+                if nb == 3 { 1 } else { 0 }
+            };
+            list_set(next, cell_idx(r, c), new_state);
+            c = c + 1
+        }
+        r = r + 1
+    }
+    next
+}
+
+def print_grid(grid: list<i64>, gen: i64) -> i64 {
+    print(concat("Generation ", to_str(gen)));
+    var r = 0
+    while (r < ROWS) {
+        var row_str = ""
+        var c = 0
+        while (c < COLS) {
+            val ch = if get(grid, r, c) == 1 { "#" } else { "." };
+            row_str = concat(row_str, ch);
+            c = c + 1
+        }
+        print(row_str);
+        r = r + 1
+    }
+    print("");
+    gen
+}
+
+def make_grid() -> list<i64> {
+    val grid = list()
+    var i = 0
+    while (i < (ROWS * COLS)) {
+        push(grid, 0);
+        i = i + 1
+    }
+    grid
+}
+
+def main() -> i64 {
+    // Glider pattern
+    val grid = make_grid()
+    list_set(grid, cell_idx(0, 1), 1);
+    list_set(grid, cell_idx(1, 2), 1);
+    list_set(grid, cell_idx(2, 0), 1);
+    list_set(grid, cell_idx(2, 1), 1);
+    list_set(grid, cell_idx(2, 2), 1);
+
+    val _g0 = print_grid(grid, 0)
+
+    val g1 = step(grid)
+    val _p1 = print_grid(g1, 1)
+
+    val g2 = step(g1)
+    val _p2 = print_grid(g2, 2)
+
+    val g3 = step(g2)
+    val _p3 = print_grid(g3, 3)
+
+    val g4 = step(g3)
+    val _p4 = print_grid(g4, 4)
+
+    val g5 = step(g4)
+    val _p5 = print_grid(g5, 5)
+
+    0
+}

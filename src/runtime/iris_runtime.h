@@ -142,6 +142,7 @@ void iris_print_i32(int32_t v);
 void iris_print_f64(double v);
 void iris_print_f32(float v);
 void iris_print_bool(int v);
+void iris_print_str(const char* s);
 void iris_panic(const char* msg);
 
 // ---------------------------------------------------------------------------
@@ -309,6 +310,23 @@ void       iris_array_store(IrisList* arr, int64_t idx, IrisVal* val);
 void* iris_tensor_op(void);
 void* iris_tensor_load(void* t, ...);
 void  iris_tensor_store(void* t, ...);
+
+// ---------------------------------------------------------------------------
+// Time / OS
+// ---------------------------------------------------------------------------
+int64_t iris_now_ms(void);
+void    iris_sleep_ms(int64_t ms);
+
+// ---------------------------------------------------------------------------
+// Struct / Tuple / Closure fallback helpers (opaque path)
+// ---------------------------------------------------------------------------
+IrisVal* iris_make_struct(int nfields, ...);
+IrisVal* iris_get_field(IrisVal* s, int32_t idx);
+IrisVal* iris_make_tuple(int nelems, ...);
+IrisVal* iris_get_element(IrisVal* t, int32_t idx);
+IrisVal* iris_make_closure(void* fn, int ncaptures, ...);
+IrisVal* iris_call_closure(IrisVal* closure, ...);
+void     iris_call_closure_void(IrisVal* closure, ...);
 
 #ifdef __cplusplus
 }

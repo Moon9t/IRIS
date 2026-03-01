@@ -1,0 +1,103 @@
+// src/stdlib/dataset.iris -- IRIS ML dataset utilities.
+//
+// Operates on list<f64> for numeric data.
+
+// Compute the mean of a list of f64 values.
+pub def dataset_mean(data: list<f64>) -> f64 {
+    val n = list_len(data)
+    var sum = 0.0 to f64
+    var i = 0
+    while i < n {
+        sum = sum + list_get(data, i)
+        i = i + 1
+    }
+    if n > 0 { sum / (n to f64) } else { 0.0 to f64 }
+}
+
+// Compute the population standard deviation.
+pub def dataset_std(data: list<f64>) -> f64 {
+    val n = list_len(data)
+    val m = dataset_mean(data)
+    var var_sum = 0.0 to f64
+    var i = 0
+    while i < n {
+        val diff = list_get(data, i) - m
+        var_sum = var_sum + diff * diff
+        i = i + 1
+    }
+    val variance = if n > 0 { var_sum / (n to f64) } else { 0.0 to f64 }
+    sqrt(variance)
+}
+
+// Normalize data to zero mean and unit standard deviation.
+pub def dataset_normalize(data: list<f64>) -> list<f64> {
+    val n = list_len(data)
+    val m = dataset_mean(data)
+    val s = dataset_std(data)
+    var result = list()
+    var i = 0
+    while i < n {
+        val x = list_get(data, i)
+        val normed = if s > (0.0 to f64) { (x - m) / s } else { 0.0 to f64 }
+        push(result, normed);
+        i = i + 1
+    }
+    result
+}
+
+// Split data into train and test sets by fraction.
+// Returns (train, test) as a tuple.
+pub def dataset_split(data: list<f64>, train_frac: f64) -> (list<f64>, list<f64>) {
+    val n = list_len(data)
+    val split_idx = ((n to f64) * train_frac) to i64
+    var train = list()
+    var test = list()
+    var i = 0
+    while i < n {
+        val x = list_get(data, i)
+        val _ = if i < split_idx { push(train, x); 0 } else { push(test, x); 0 }
+        i = i + 1
+    }
+    (train, test)
+}
+
+// Returns the number of complete batches of batch_size in data.
+pub def dataset_batch_count(data: list<f64>, batch_size: i64) -> i64 {
+    val n = list_len(data)
+    n / batch_size
+}
+
+// Get the i-th batch (0-indexed) from data.
+pub def dataset_get_batch(data: list<f64>, batch_size: i64, batch_idx: i64) -> list<f64> {
+    val start = batch_idx * batch_size
+    var batch = list()
+    var i = 0
+    while i < batch_size {
+        push(batch, list_get(data, start + i));
+        i = i + 1
+    }
+    batch
+}
+
+// Simple LCG shuffle (Fisher-Yates) with an integer seed.
+pub def dataset_shuffle(data: list<f64>, seed: i64) -> list<f64> {
+    val n = list_len(data)
+    var arr = list()
+    var i = 0
+    while i < n {
+        push(arr, list_get(data, i));
+        i = i + 1
+    }
+    var rng = seed
+    var j = n - 1
+    while j > 0 {
+        rng = (1664525 * rng + 1013904223) % 2147483647
+        val raw_k = rng % (j + 1)
+        val k = if raw_k < 0 { raw_k + (j + 1) } else { raw_k }
+        val tmp = list_get(arr, j)
+        list_set(arr, j, list_get(arr, k));
+        list_set(arr, k, tmp);
+        j = j - 1
+    }
+    arr
+}

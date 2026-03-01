@@ -1,0 +1,106 @@
+// task.iris — Task record, encoding, and core operations
+// This module defines the data model for Taskman.
+// Brought by storage.iris and report.iris.
+
+bring std.time
+
+// ── Status constants ─────────────────────────────────────────────────────────
+pub const STATUS_PENDING: i64   = 0
+pub const STATUS_DONE: i64      = 1
+pub const STATUS_CANCELLED: i64 = 2
+
+// ── Data model ───────────────────────────────────────────────────────────────
+pub record Task {
+    id:         i64,
+    title:      str,
+    status:     i64,   // 0=pending 1=done 2=cancelled
+    created_ms: i64,
+    done_ms:    i64,
+}
+
+// ── Constructors ─────────────────────────────────────────────────────────────
+
+pub def task_new(id: i64, title: str) -> Task {
+    Task {
+        id:         id,
+        title:      title,
+        status:     STATUS_PENDING,
+        created_ms: now_ms(),
+        done_ms:    0,
+    }
+}
+
+pub def task_mark_done(t: Task) -> Task {
+    Task {
+        id:         t.id,
+        title:      t.title,
+        status:     STATUS_DONE,
+        created_ms: t.created_ms,
+        done_ms:    now_ms(),
+    }
+}
+
+pub def task_mark_cancelled(t: Task) -> Task {
+    Task {
+        id:         t.id,
+        title:      t.title,
+        status:     STATUS_CANCELLED,
+        created_ms: t.created_ms,
+        done_ms:    now_ms(),
+    }
+}
+
+// ── Display helpers ───────────────────────────────────────────────────────────
+
+pub def task_status_icon(t: Task) -> str {
+    if t.status == STATUS_DONE      { "[x]" }
+    else { if t.status == STATUS_CANCELLED { "[-]" }
+    else { "[ ]" } }
+}
+
+pub def task_status_name(t: Task) -> str {
+    if t.status == STATUS_DONE      { "done" }
+    else { if t.status == STATUS_CANCELLED { "cancelled" }
+    else { "pending" } }
+}
+
+// ── Predicates ────────────────────────────────────────────────────────────────
+
+pub def task_is_pending(t: Task)   -> bool { t.status == STATUS_PENDING }
+pub def task_is_done(t: Task)      -> bool { t.status == STATUS_DONE }
+pub def task_is_cancelled(t: Task) -> bool { t.status == STATUS_CANCELLED }
+
+// ── Serialisation ─────────────────────────────────────────────────────────────
+// Wire format: "id|status|created_ms|done_ms|title"
+// Limitation: title must not contain the pipe character '|'.
+
+pub def task_encode(t: Task) -> str {
+    concat(to_str(t.id),         concat("|",
+    concat(to_str(t.status),     concat("|",
+    concat(to_str(t.created_ms), concat("|",
+    concat(to_str(t.done_ms),    concat("|", t.title))))))))
+}
+
+pub def task_decode(s: str) -> Task {
+    val parts = split(s, "|");
+    val n     = len(parts);
+    if n < 5 {
+        Task { id: 0, title: "(corrupt)", status: 0, created_ms: 0, done_ms: 0 }
+    } else {
+        val id_opt = parse_i64(list_get(parts, 0));
+        val st_opt = parse_i64(list_get(parts, 1));
+        val cr_opt = parse_i64(list_get(parts, 2));
+        val dn_opt = parse_i64(list_get(parts, 3));
+        val id         = if is_some(id_opt) { unwrap(id_opt) } else { 0 };
+        val status     = if is_some(st_opt) { unwrap(st_opt) } else { 0 };
+        val created_ms = if is_some(cr_opt) { unwrap(cr_opt) } else { 0 };
+        val done_ms    = if is_some(dn_opt) { unwrap(dn_opt) } else { 0 };
+        Task {
+            id:         id,
+            title:      list_get(parts, 4),
+            status:     status,
+            created_ms: created_ms,
+            done_ms:    done_ms,
+        }
+    }
+}

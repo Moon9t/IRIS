@@ -1,0 +1,215 @@
+{
+  "name": "iris-lang",
+  "displayName": "IRIS Language",
+  "description": "IRIS compiler: syntax highlighting, LSP, debugging, and REPL — Go-like developer experience",
+  "version": "0.1.0",
+  "publisher": "iris-lang",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers",
+    "Linters",
+    "Formatters"
+  ],
+  "icon": "icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/iris-lang/iris"
+  },
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "iris",
+        "aliases": ["IRIS", "Iris", "iris"],
+        "extensions": [".iris"],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icon.png",
+          "dark": "./icon.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "iris",
+        "scopeName": "source.iris",
+        "path": "./syntaxes/iris.tmLanguage.json"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "iris",
+        "label": "IRIS Debugger",
+        "languages": ["iris"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Absolute path to the .iris file to debug.",
+                "default": "${file}"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop at the first line on launch.",
+                "default": false
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "iris",
+            "request": "launch",
+            "name": "Debug IRIS File",
+            "program": "${file}",
+            "stopOnEntry": false
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "IRIS: Debug File",
+            "description": "Debug the currently open .iris file",
+            "body": {
+              "type": "iris",
+              "request": "launch",
+              "name": "Debug ${1:File}",
+              "program": "^\"\\${file}\""
+            }
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "iris.runFile",
+        "title": "IRIS: Run File",
+        "icon": "$(play)"
+      },
+      {
+        "command": "iris.buildFile",
+        "title": "IRIS: Build Binary",
+        "icon": "$(package)"
+      },
+      {
+        "command": "iris.openRepl",
+        "title": "IRIS: Open REPL",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "iris.restartLsp",
+        "title": "IRIS: Restart Language Server"
+      },
+      {
+        "command": "iris.showIR",
+        "title": "IRIS: Show IR Output",
+        "icon": "$(symbol-structure)"
+      },
+      {
+        "command": "iris.showLLVM",
+        "title": "IRIS: Show LLVM IR Output",
+        "icon": "$(symbol-class)"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "iris.runFile",
+          "when": "resourceExtname == .iris",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "iris.runFile",
+          "when": "resourceExtname == .iris"
+        },
+        {
+          "command": "iris.buildFile",
+          "when": "resourceExtname == .iris"
+        },
+        {
+          "command": "iris.openRepl"
+        },
+        {
+          "command": "iris.restartLsp"
+        },
+        {
+          "command": "iris.showIR",
+          "when": "resourceExtname == .iris"
+        },
+        {
+          "command": "iris.showLLVM",
+          "when": "resourceExtname == .iris"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "iris.runFile",
+        "key": "ctrl+f5",
+        "when": "resourceExtname == .iris && !inDebugMode"
+      }
+    ],
+    "configuration": {
+      "title": "IRIS",
+      "properties": {
+        "iris.executablePath": {
+          "type": "string",
+          "default": "iris",
+          "description": "Path to the iris executable. Defaults to 'iris' (must be in PATH).",
+          "scope": "machine-overridable"
+        },
+        "iris.maxNumberOfProblems": {
+          "type": "number",
+          "default": 100,
+          "description": "Maximum number of problems (errors/warnings) shown in the Problems panel."
+        },
+        "iris.formatOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically format .iris files on save."
+        },
+        "iris.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Trace communication between VS Code and the IRIS language server.",
+          "enumDescriptions": [
+            "No tracing",
+            "Log messages only",
+            "Log messages and their contents"
+          ]
+        }
+      }
+    },
+    "snippets": [
+      {
+        "language": "iris",
+        "path": "./snippets/iris.json"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "npx @vscode/vsce package --no-dependencies",
+    "vscode:prepublish": "node esbuild.mjs --production"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0"
+  }
+}

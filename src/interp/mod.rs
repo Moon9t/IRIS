@@ -1755,6 +1755,22 @@ impl<'m> Interpreter<'m> {
                         };
                         self.values.insert(*result, IrValue::Str(joined));
                     }
+                    IrInstr::NowMs { result } => {
+                        use std::time::{SystemTime, UNIX_EPOCH};
+                        let ms = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        self.values.insert(*result, IrValue::I64(ms));
+                    }
+                    IrInstr::SleepMs { result, ms } => {
+                        let n = match self.get(*ms)? {
+                            IrValue::I64(n) => n,
+                            _ => return Err(InterpError::TypeError { detail: "sleep_ms: expected i64".into() }),
+                        };
+                        std::thread::sleep(std::time::Duration::from_millis(n as u64));
+                        self.values.insert(*result, IrValue::I64(0));
+                    }
                 }
             }
 
@@ -2126,6 +2142,13 @@ fn eval_binop(op: BinOp, lv: &IrValue, rv: &IrValue) -> Result<IrValue, InterpEr
         // Bool
         (BinOp::CmpEq, Bool(a), Bool(b)) => Ok(Bool(a == b)),
         (BinOp::CmpNe, Bool(a), Bool(b)) => Ok(Bool(a != b)),
+        // String comparisons
+        (BinOp::CmpEq, Str(a), Str(b)) => Ok(Bool(a == b)),
+        (BinOp::CmpNe, Str(a), Str(b)) => Ok(Bool(a != b)),
+        (BinOp::CmpLt, Str(a), Str(b)) => Ok(Bool(a < b)),
+        (BinOp::CmpLe, Str(a), Str(b)) => Ok(Bool(a <= b)),
+        (BinOp::CmpGt, Str(a), Str(b)) => Ok(Bool(a > b)),
+        (BinOp::CmpGe, Str(a), Str(b)) => Ok(Bool(a >= b)),
         // Grad (dual number) arithmetic -- forward-mode AD with chain rule
         (BinOp::Add, Grad { value: av, tangent: at }, Grad { value: bv, tangent: bt }) =>
             Ok(Grad { value: av + bv, tangent: at + bt }),

@@ -704,6 +704,12 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
         IrInstr::StrJoin { result, list_val, delim } => {
             write!(out, "{} = str_join {}, {}", result, list_val, delim)?;
         }
+        IrInstr::NowMs { result } => {
+            write!(out, "{} = now_ms", result)?;
+        }
+        IrInstr::SleepMs { result, ms } => {
+            write!(out, "{} = sleep_ms {}", result, ms)?;
+        }
     }
     Ok(())
 }

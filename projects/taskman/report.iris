@@ -1,0 +1,119 @@
+// report.iris — Display, JSON, and CSV report generation for Taskman
+// Brought by main.iris; brings task.iris transitively.
+
+bring "task.iris"
+bring std.json
+bring std.fmt
+
+// ── Formatted table listing ───────────────────────────────────────────────────
+
+pub def report_print_list(tasks: list<Task>) -> i64 {
+    val n = len(tasks);
+    if n == 0 {
+        print("  (no tasks yet — try: add Buy coffee)")
+    } else {
+        print("");
+        print("   ID  Status  Title");
+        print("  ───  ──────  ──────────────────────────────────────────");
+        var i = 0;
+        while i < n {
+            val t      = list_get(tasks, i);
+            val id_s   = pad_int(t.id, 4);
+            val icon   = task_status_icon(t);
+            print(concat("  ", concat(id_s, concat("  ", concat(icon, concat("  ", t.title))))));
+            i = i + 1
+        }
+        print("")
+    };
+    0
+}
+
+// ── Statistics ────────────────────────────────────────────────────────────────
+
+pub def report_print_stats(tasks: list<Task>) -> i64 {
+    val total = len(tasks);
+    var pending   = 0;
+    var done      = 0;
+    var cancelled = 0;
+    var i = 0;
+    while i < total {
+        val t = list_get(tasks, i);
+        if task_is_done(t) {
+            done = done + 1
+        } else {
+            if task_is_cancelled(t) {
+                cancelled = cancelled + 1
+            } else {
+                pending = pending + 1
+            }
+        };
+        i = i + 1
+    }
+    print("");
+    print(concat("  Total tasks  : ", to_str(total)));
+    print(concat("  Pending      : ", to_str(pending)));
+    print(concat("  Done         : ", to_str(done)));
+    print(concat("  Cancelled    : ", to_str(cancelled)));
+    if total > 0 {
+        val pct = (done * 100) / total;
+        print(concat("  Completion   : ", concat(to_str(pct), "%")))
+    } else {
+        print("  Completion   : n/a")
+    };
+    print("");
+    0
+}
+
+// ── JSON export ───────────────────────────────────────────────────────────────
+
+// Build a single JSON object for one task.
+pub def report_task_to_json(t: Task) -> str {
+    val s0 = concat("{\"id\":", to_str(t.id));
+    val s1 = concat(s0, concat(",\"title\":", json_str(t.title)));
+    val s2 = concat(s1, concat(",\"status\":", json_str(task_status_name(t))));
+    val s3 = concat(s2, concat(",\"created_ms\":", to_str(t.created_ms)));
+    val s4 = concat(s3, concat(",\"done_ms\":", to_str(t.done_ms)));
+    concat(s4, "}")
+}
+
+// Print the full task list as a JSON array.
+pub def report_tasks_to_json(tasks: list<Task>) -> i64 {
+    val n = len(tasks);
+    print("[");
+    var i = 0;
+    while i < n {
+        val row = concat("  ", report_task_to_json(list_get(tasks, i)));
+        if (i + 1) < n {
+            print(concat(row, ","))
+        } else {
+            print(row)
+        };
+        i = i + 1
+    }
+    print("]");
+    0
+}
+
+// ── CSV export ────────────────────────────────────────────────────────────────
+
+// Build one CSV row for a task (title is quoted).
+pub def report_task_to_csv_row(t: Task) -> str {
+    concat(to_str(t.id),            concat(",",
+    concat("\"",                    concat(t.title,
+    concat("\"",                    concat(",",
+    concat(task_status_name(t),     concat(",",
+    concat(to_str(t.created_ms),    concat(",",
+    to_str(t.done_ms)))))))))))
+}
+
+// Print a complete CSV document: header + one row per task.
+pub def report_tasks_to_csv(tasks: list<Task>) -> i64 {
+    print("id,title,status,created_ms,done_ms");
+    val n = len(tasks);
+    var i = 0;
+    while i < n {
+        print(report_task_to_csv_row(list_get(tasks, i)));
+        i = i + 1
+    }
+    0
+}

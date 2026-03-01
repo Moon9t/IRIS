@@ -1,0 +1,30 @@
+// fizzbuzz.iris -- Classic FizzBuzz 1..=100
+//
+// Run: cargo run -- --emit eval examples/fizzbuzz.iris
+
+def fizzbuzz(n: i64) -> str {
+    val by3 = (n % 3) == 0
+    val by5 = (n % 5) == 0
+    if by3 && by5 {
+        "FizzBuzz"
+    } else {
+        if by3 {
+            "Fizz"
+        } else {
+            if by5 {
+                "Buzz"
+            } else {
+                to_str(n)
+            }
+        }
+    }
+}
+
+def main() -> i64 {
+    var i = 1
+    while i <= 100 {
+        print(fizzbuzz(i));
+        i = i + 1
+    }
+    0
+}

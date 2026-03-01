@@ -1,0 +1,112 @@
+// src/stdlib/kv.iris -- IRIS file-backed key-value store.
+//
+// Serialized as "key=value\n" text in a file.
+// Keys must not contain "=" or "\n". Values must not contain "\n".
+
+// Read all text from file, return "" on error.
+pub def kv_read_file(path: str) -> str {
+    val r = file_read_all(path)
+    when r { ok(s) => s, err(_) => "" }
+}
+
+// Write all text to file, return true on success.
+pub def kv_write_file(path: str, content: str) -> bool {
+    val r = file_write_all(path, content)
+    is_ok(r)
+}
+
+// Get the value for a key, or "" if not found.
+pub def kv_get(path: str, key: str) -> str {
+    val text = kv_read_file(path)
+    val lines = split(text, "\n")
+    val n = list_len(lines)
+    var result = ""
+    var i = 0
+    while i < n {
+        val line = list_get(lines, i)
+        val eq = find(line, "=")
+        val has_eq = is_some(eq)
+        val k = if has_eq { slice(line, 0, unwrap(eq)) } else { "" }
+        val v = if has_eq { slice(line, unwrap(eq) + 1, len(line)) } else { "" }
+        result = if has_eq && k == key { v } else { result }
+        i = i + 1
+    }
+    result
+}
+
+// Build a single "key=value" line string.
+pub def kv_pair(key: str, value: str) -> str {
+    concat(concat(key, "="), value)
+}
+
+// Set a key to a value, overwriting if it exists. Returns true on success.
+pub def kv_set(path: str, key: str, value: str) -> bool {
+    val text = kv_read_file(path)
+    val lines = split(text, "\n")
+    val n = list_len(lines)
+    var new_lines = list()
+    var found = false
+    var i = 0
+    while i < n {
+        val line = list_get(lines, i)
+        val eq = find(line, "=")
+        val has_eq = is_some(eq)
+        val k = if has_eq { slice(line, 0, unwrap(eq)) } else { "" }
+        val is_key = has_eq && k == key
+        val next_line = if is_key { kv_pair(key, value) } else { line }
+        val _ = if has_eq {
+            push(new_lines, next_line);
+            0
+        } else {
+            val _ = if len(line) > 0 { push(new_lines, line); 0 } else { 0 }
+            0
+        }
+        found = if is_key { true } else { found }
+        i = i + 1
+    }
+    val _ = if found { 0 } else { push(new_lines, kv_pair(key, value)); 0 }
+    kv_write_file(path, join(new_lines, "\n"))
+}
+
+// Delete a key. Returns true if key existed and was removed.
+pub def kv_delete(path: str, key: str) -> bool {
+    val text = kv_read_file(path)
+    val lines = split(text, "\n")
+    val n = list_len(lines)
+    var new_lines = list()
+    var found = false
+    var i = 0
+    while i < n {
+        val line = list_get(lines, i)
+        val eq = find(line, "=")
+        val has_eq = is_some(eq)
+        val k = if has_eq { slice(line, 0, unwrap(eq)) } else { "" }
+        val is_key = has_eq && k == key
+        val _ = if is_key { 0 } else {
+            val _ = if len(line) > 0 { push(new_lines, line); 0 } else { 0 }
+            0
+        }
+        found = if is_key { true } else { found }
+        i = i + 1
+    }
+    val _ = kv_write_file(path, join(new_lines, "\n"))
+    found
+}
+
+// Return all keys in the store.
+pub def kv_keys(path: str) -> list<str> {
+    val text = kv_read_file(path)
+    val lines = split(text, "\n")
+    val n = list_len(lines)
+    var keys = list()
+    var i = 0
+    while i < n {
+        val line = list_get(lines, i)
+        val eq = find(line, "=")
+        val has_eq = is_some(eq)
+        val k = if has_eq { slice(line, 0, unwrap(eq)) } else { "" }
+        val _ = if has_eq && len(k) > 0 { push(keys, k); 0 } else { 0 }
+        i = i + 1
+    }
+    keys
+}

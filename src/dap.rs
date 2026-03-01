@@ -231,6 +231,28 @@ pub fn run_dap_server() -> std::io::Result<()> {
                 }))?;
                 seq += 1;
             }
+            "threads" => {
+                send(serde_json::json!({
+                    "seq": seq, "type": "response", "request_seq": request_seq,
+                    "success": true, "command": command,
+                    "body": { "threads": [{ "id": 1, "name": "main" }] }
+                }))?;
+                seq += 1;
+            }
+            "evaluate" => {
+                let expr = arguments["expression"].as_str().unwrap_or("").to_owned();
+                // Build an eval source from the current debug frame variables + expression.
+                let ctx_vars: Vec<(String, String)> = session.current_frame()
+                    .map(|f| f.variables.clone())
+                    .unwrap_or_default();
+                let result = evaluate_in_context(&ctx_vars, &expr);
+                send(serde_json::json!({
+                    "seq": seq, "type": "response", "request_seq": request_seq,
+                    "success": true, "command": command,
+                    "body": { "result": result, "variablesReference": 0 }
+                }))?;
+                seq += 1;
+            }
             "disconnect" | "terminate" => {
                 send(serde_json::json!({
                     "seq": seq, "type": "response", "request_seq": request_seq,
@@ -249,4 +271,44 @@ pub fn run_dap_server() -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Evaluates an expression in the context of the current debug frame's variables.
+/// Constructs a synthetic IRIS source with the variable bindings, then compiles and runs it.
+fn evaluate_in_context(vars: &[(String, String)], expr: &str) -> String {
+    if expr.trim().is_empty() {
+        return String::new();
+    }
+
+    // Build val bindings from variable snapshot.
+    let mut bindings = String::new();
+    for (name, val_str) in vars {
+        // Skip names that aren't valid identifiers.
+        if name.chars().all(|c| c.is_alphanumeric() || c == '_') && !name.is_empty() {
+            // Heuristic: if the value looks like a number, use it directly; else wrap as str.
+            let v = if val_str.parse::<i64>().is_ok() {
+                val_str.clone()
+            } else if val_str.parse::<f64>().is_ok() {
+                val_str.clone()
+            } else if val_str == "true" || val_str == "false" {
+                val_str.clone()
+            } else {
+                format!("\"{}\"", val_str.replace('"', "\\\""))
+            };
+            bindings.push_str(&format!("    val {} = {};\n", name, v));
+        }
+    }
+
+    // Try each return type.
+    for ret_ty in &["i64", "f64", "bool", "str"] {
+        let src = format!(
+            "def __dbg_eval__() -> {} {{\n{}\n    {}\n}}\n",
+            ret_ty, bindings, expr
+        );
+        if let Ok(result) = crate::compile(&src, "__dbg__", crate::EmitKind::Eval) {
+            return result.trim_end_matches('\n').to_owned();
+        }
+    }
+
+    format!("(cannot evaluate: {})", expr)
 }

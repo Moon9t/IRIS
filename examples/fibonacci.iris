@@ -1,7 +1,8 @@
-// fibonacci.iris -- recursive Fibonacci
+// fibonacci.iris -- recursive Fibonacci + iterative Fibonacci
 //
 // Run: cargo run -- --emit eval examples/fibonacci.iris
 
+// Recursive Fibonacci (exponential time)
 def fib(n: i64) -> i64 {
     if n <= 1 {
         n
@@ -10,8 +11,47 @@ def fib(n: i64) -> i64 {
     }
 }
 
+// Iterative Fibonacci using a list as a memo table
+def fib_memo(n: i64) -> i64 {
+    if n <= 1 {
+        n
+    } else {
+        var a = 0
+        var b = 1
+        var i = 2
+        while i <= n {
+            val tmp = a + b
+            a = b;
+            b = tmp;
+            i = i + 1
+        }
+        b
+    }
+}
+
+// Print Fibonacci sequence up to n terms
+def print_fib_sequence(n: i64) -> i64 {
+    print("Fibonacci sequence:");
+    var i = 0
+    while i < n {
+        val fi = fib_memo(i)
+        print(f"  fib({i}) = {fi}");
+        i = i + 1
+    }
+    0
+}
+
 def main() -> i64 {
-    val result = fib(8)
-    print(concat("fib(8) = ", to_str(result)));
-    result
+    // Recursive version
+    val r = fib(10)
+    print(concat("fib(10) recursive = ", to_str(r)));
+
+    // Iterative memoized version (much faster)
+    val m = fib_memo(30)
+    print(concat("fib(30) iterative = ", to_str(m)));
+
+    // Print first 10 terms
+    print_fib_sequence(10);
+
+    0
 }

@@ -2531,6 +2531,29 @@ impl<'m> Lowerer<'m> {
             return Ok((result, ret_ty));
         }
 
+        // Phase 97: time_now_ms() -> i64
+        if callee.name == "time_now_ms" {
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::NowMs { result }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+
+        // Phase 97: sleep_ms(n: i64) -> i64
+        if callee.name == "sleep_ms" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "sleep_ms() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (ms, _) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::SleepMs { result, ms }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+
         // Built-in string predicates: contains(s, sub), starts_with(s, p), ends_with(s, p)
         {
             let str_pred: Option<fn(ValueId, ValueId, ValueId) -> IrInstr> = match callee.name.as_str() {

@@ -1,0 +1,68 @@
+// src/stdlib/path.iris -- IRIS standard path manipulation (pure IRIS, no OS calls)
+
+// Joins two path components with "/" separator.
+pub def join_path(a: str, b: str) -> str {
+    concat(concat(a, "/"), b)
+}
+
+// Returns the final component of a path (after the last "/").
+pub def basename(p: str) -> str {
+    val n = len(p)
+    var last_slash = -1
+    var i = 0
+    while i < n {
+        val ch = slice(p, i, i + 1)
+        last_slash = if ch == "/" { i } else { last_slash }
+        i = i + 1
+    }
+    if last_slash < 0 {
+        p
+    } else {
+        slice(p, last_slash + 1, n)
+    }
+}
+
+// Returns the directory part of a path (everything before the last "/").
+pub def dirname(p: str) -> str {
+    val n = len(p)
+    var last_slash = -1
+    var i = 0
+    while i < n {
+        val ch = slice(p, i, i + 1)
+        last_slash = if ch == "/" { i } else { last_slash }
+        i = i + 1
+    }
+    if last_slash < 0 {
+        "."
+    } else {
+        if last_slash == 0 { "/" } else { slice(p, 0, last_slash) }
+    }
+}
+
+// Returns the file extension (part after the last "."), or "" if none.
+pub def extension(p: str) -> str {
+    val b = basename(p)
+    val n = len(b)
+    var last_dot = -1
+    var i = 0
+    while i < n {
+        val ch = slice(b, i, i + 1)
+        last_dot = if ch == "." { i } else { last_dot }
+        i = i + 1
+    }
+    if last_dot < 0 { "" } else { slice(b, last_dot + 1, n) }
+}
+
+// Returns the basename without its extension.
+pub def stem(p: str) -> str {
+    val b = basename(p)
+    val n = len(b)
+    var last_dot = -1
+    var i = 0
+    while i < n {
+        val ch = slice(b, i, i + 1)
+        last_dot = if ch == "." { i } else { last_dot }
+        i = i + 1
+    }
+    if last_dot < 0 { b } else { slice(b, 0, last_dot) }
+}

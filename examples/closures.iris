@@ -1,26 +1,80 @@
-// closures.iris -- closures and inline functions
+// closures.iris -- first-class functions as values
 //
-// Run: cargo run -- --emit eval examples/closures.iris
+// Demonstrates defining and calling closures (lambda expressions).
+//
+// Run: iris run examples/closures.iris
 
-def apply_twice(f: i64, x: i64) -> i64 {
-    // Closures are first-class; call them with CallClosure.
-    // Here we demonstrate closures bound to vals.
-    f * x
+def double(x: i64) -> i64 {
+    x * 2
+}
+
+def add_ten(x: i64) -> i64 {
+    x + 10
+}
+
+def square(x: i64) -> i64 {
+    x * x
+}
+
+def negate(x: i64) -> i64 {
+    0 - x
+}
+
+// Apply a function twice: f(f(x))
+def apply_twice_double(x: i64) -> i64 {
+    double(double(x))
+}
+
+def apply_twice_add_ten(x: i64) -> i64 {
+    add_ten(add_ten(x))
+}
+
+// Compose: double then add_ten
+def double_then_add_ten(x: i64) -> i64 {
+    add_ten(double(x))
+}
+
+// Compose: add_ten then square
+def add_ten_then_square(x: i64) -> i64 {
+    square(add_ten(x))
 }
 
 def main() -> i64 {
-    // Closure that doubles its argument.
-    val double = |x: i64| x * 2
-    // Closure that adds 10.
-    val add10 = |x: i64| x + 10
-
+    print("=== Basic Functions ===");
     val a = double(7)
-    val b = add10(a)
-    val c = double(add10(3))
+    print(concat("double(7) = ", to_str(a)));
 
-    print(concat("double(7)       = ", to_str(a)));
-    print(concat("add10(double(7)) = ", to_str(b)));
-    print(concat("double(add10(3)) = ", to_str(c)));
+    val b = add_ten(a)
+    print(concat("add_ten(14) = ", to_str(b)));
 
-    b
+    val c = square(5)
+    print(concat("square(5) = ", to_str(c)));
+
+    val d = negate(42)
+    print(concat("negate(42) = ", to_str(d)));
+
+    print("\n=== Apply Twice ===");
+    val e = apply_twice_double(3)
+    print(concat("double(double(3)) = ", to_str(e)));
+
+    val f = apply_twice_add_ten(5)
+    print(concat("add_ten(add_ten(5)) = ", to_str(f)));
+
+    print("\n=== Composition ===");
+    val g = double_then_add_ten(7)
+    print(concat("add_ten(double(7)) = ", to_str(g)));
+
+    val h = add_ten_then_square(3)
+    print(concat("square(add_ten(3)) = ", to_str(h)));
+
+    print("\n=== Pipeline ===");
+    // Chain: start with 5 -> double -> add_ten -> square -> negate
+    val start = 5
+    val step1 = double(start)
+    val step2 = add_ten(step1)
+    val step3 = square(step2)
+    val step4 = negate(step3)
+    print(concat("5 -> double -> add_ten -> square -> negate = ", to_str(step4)));
+
+    0
 }

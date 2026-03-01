@@ -1,0 +1,101 @@
+// src/stdlib/table.iris -- IRIS in-memory relational table.
+//
+// A Table has a list of column names and a list of rows.
+// Each row is stored as a tab-joined string (cell values must not contain tabs).
+
+// Encode a row (list<str>) to a single string for internal storage.
+pub def table_encode_row(row: list<str>) -> str {
+    join(row, "\t")
+}
+
+// Decode a stored row string back to list<str>.
+pub def table_decode_row(encoded: str) -> list<str> {
+    split(encoded, "\t")
+}
+
+record Table { columns: list<str>, rows: list<str> }
+
+// Create a new empty table with the given column names.
+pub def table_new(columns: list<str>) -> Table {
+    Table { columns: columns, rows: list() }
+}
+
+// Insert a row (list<str> of values, one per column). Returns updated table.
+pub def table_insert(t: Table, row: list<str>) -> Table {
+    val encoded = table_encode_row(row)
+    val n = list_len(t.rows)
+    var new_rows = list()
+    var i = 0
+    while i < n {
+        push(new_rows, list_get(t.rows, i));
+        i = i + 1
+    }
+    push(new_rows, encoded);
+    Table { columns: t.columns, rows: new_rows }
+}
+
+// Return the number of rows in the table.
+pub def table_len(t: Table) -> i64 {
+    list_len(t.rows)
+}
+
+// Return the index of a column by name, or -1 if not found.
+pub def table_col_idx(t: Table, col: str) -> i64 {
+    val n = list_len(t.columns)
+    var idx = -1
+    var i = 0
+    while i < n {
+        val c = list_get(t.columns, i)
+        idx = if c == col { i } else { idx }
+        i = i + 1
+    }
+    idx
+}
+
+// Extract all values for a named column as list<str>.
+pub def table_select(t: Table, col: str) -> list<str> {
+    val col_i = table_col_idx(t, col)
+    val n = list_len(t.rows)
+    var result = list()
+    var i = 0
+    while i < n {
+        val row = table_decode_row(list_get(t.rows, i))
+        val _ = if col_i >= 0 { push(result, list_get(row, col_i)); 0 } else { 0 }
+        i = i + 1
+    }
+    result
+}
+
+// Filter rows where the named column equals the given value.
+pub def table_where(t: Table, col: str, value: str) -> Table {
+    val col_i = table_col_idx(t, col)
+    val n = list_len(t.rows)
+    var new_rows = list()
+    var i = 0
+    while i < n {
+        val encoded = list_get(t.rows, i)
+        val row = table_decode_row(encoded)
+        val _ = if col_i >= 0 {
+            val cell = list_get(row, col_i)
+            val _ = if cell == value { push(new_rows, encoded); 0 } else { 0 }
+            0
+        } else { 0 }
+        i = i + 1
+    }
+    Table { columns: t.columns, rows: new_rows }
+}
+
+// Emit the table as CSV text (header row + data rows).
+pub def table_to_csv(t: Table) -> str {
+    val header = join(t.columns, ",")
+    val n = list_len(t.rows)
+    var lines = list()
+    push(lines, header);
+    var i = 0
+    while i < n {
+        val row = table_decode_row(list_get(t.rows, i))
+        push(lines, join(row, ","));
+        i = i + 1
+    }
+    join(lines, "\n")
+}

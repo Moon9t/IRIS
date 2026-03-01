@@ -1,0 +1,23 @@
+// src/stdlib/fs.iris -- IRIS standard filesystem library (wraps builtins)
+
+// Reads the entire contents of a file, returning "" on error.
+pub def read_text(path: str) -> str {
+    val r = file_read_all(path)
+    when r { ok(s) => s, err(_) => "" }
+}
+
+// Writes text to a file; returns true on success.
+pub def write_text(path: str, content: str) -> bool {
+    val r = file_write_all(path, content)
+    is_ok(r)
+}
+
+// Returns true if the file or directory exists.
+pub def path_exists(path: str) -> bool {
+    file_exists(path)
+}
+
+// Reads a file and returns its lines as a list<str>.
+pub def read_lines(path: str) -> list<str> {
+    file_lines(path)
+}

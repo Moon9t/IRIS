@@ -1,0 +1,93 @@
+// string_processing.iris — string utilities
+
+def is_palindrome(s: str) -> bool {
+    val chars = split(s, "")
+    val n = len(chars)
+    var left = 0
+    var right = n - 1
+    var result = true
+    while (left < right) {
+        if list_get(chars, left) != list_get(chars, right) {
+            result = false
+        } else {
+            val _noop = 0
+        };
+        left = left + 1;
+        right = right - 1
+    }
+    result
+}
+
+def count_words(s: str) -> i64 {
+    val words = split(s, " ")
+    len(words)
+}
+
+def reverse_string(s: str) -> str {
+    val chars = split(s, "")
+    val n = len(chars)
+    var result = ""
+    var i = n - 1
+    while (i >= 0) {
+        result = concat(result, list_get(chars, i));
+        i = i - 1
+    }
+    result
+}
+
+def starts_vowel(s: str) -> bool {
+    val lower = to_lower(s)
+    val chars = split(lower, "")
+    if len(chars) == 0 {
+        false
+    } else {
+        val first = list_get(chars, 0)
+        if first == "a" { true }
+        else { if first == "e" { true }
+        else { if first == "i" { true }
+        else { if first == "o" { true }
+        else { if first == "u" { true }
+        else { false } } } } }
+    }
+}
+
+def count_vowel_words(sentence: str) -> i64 {
+    val words = split(sentence, " ")
+    val n = len(words)
+    var count = 0
+    var i = 0
+    while (i < n) {
+        val w = list_get(words, i)
+        if starts_vowel(w) {
+            count = count + 1
+        } else {
+            val _noop = 0
+        };
+        i = i + 1
+    }
+    count
+}
+
+def main() -> i64 {
+    // palindrome check
+    print(concat("racecar palindrome? ", to_str(is_palindrome("racecar"))));
+    print(concat("hello palindrome?   ", to_str(is_palindrome("hello"))));
+
+    // reverse
+    print(concat("reverse hello: ", reverse_string("hello")));
+
+    // word count
+    val sentence = "The quick brown fox jumps over a lazy dog"
+    print(concat("word count: ", to_str(count_words(sentence))));
+
+    // vowel word count
+    print(concat("vowel-starting words: ", to_str(count_vowel_words(sentence))));
+
+    // string builtins
+    print(concat("upper: ", to_upper("hello world")));
+    print(concat("lower: ", to_lower("HELLO WORLD")));
+    print(concat("trim : ", trim("  spaces  ")));
+    print(concat("contains fox? ", to_str(contains(sentence, "fox"))));
+    print(concat("starts The?   ", to_str(starts_with(sentence, "The"))));
+    0
+}

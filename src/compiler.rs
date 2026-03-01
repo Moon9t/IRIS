@@ -55,34 +55,65 @@ impl FileCompiler {
         let main_src = std::fs::read_to_string(&canonical)?;
         let main_ast = self.parse_source(&main_src)?;
 
-        // BFS merge.
+        self.resolve_brings(main_ast, &canonical, &base_dir, &search)
+    }
+
+    /// Like [`compile_file_to_ast`] but uses the provided `source` text for the
+    /// main file instead of reading from disk.  Brings are still resolved from
+    /// disk relative to `path`'s directory.
+    pub fn compile_file_to_ast_with_text(
+        &self,
+        path: &Path,
+        source: &str,
+        extra_paths: &[&Path],
+    ) -> Result<AstModule, Error> {
+        let canonical = path.canonicalize()
+            .map_err(|e| Error::Io(e))?;
+        let base_dir = canonical.parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
+
+        let mut search: Vec<PathBuf> = vec![base_dir.clone()];
+        search.extend(extra_paths.iter().map(|p| p.to_path_buf()));
+        search.extend(self.search_paths.iter().cloned());
+
+        let main_ast = self.parse_source(source)?;
+
+        self.resolve_brings(main_ast, &canonical, &base_dir, &search)
+    }
+
+    /// BFS-resolve all `bring` declarations and merge dependencies into `main_ast`.
+    fn resolve_brings(
+        &self,
+        main_ast: AstModule,
+        canonical: &Path,
+        base_dir: &Path,
+        search: &[PathBuf],
+    ) -> Result<AstModule, Error> {
         let mut merged = main_ast;
         let mut visited: HashSet<PathBuf> = HashSet::new();
-        visited.insert(canonical.clone());
+        visited.insert(canonical.to_path_buf());
 
         let mut queue: VecDeque<(BringPath, PathBuf)> = VecDeque::new();
         for bring in &merged.brings.clone() {
-            queue.push_back((bring.path.clone(), base_dir.clone()));
+            queue.push_back((bring.path.clone(), base_dir.to_path_buf()));
         }
 
         while let Some((bring_path, from_dir)) = queue.pop_front() {
             match &bring_path {
                 BringPath::File(rel_path) => {
                     // Resolve relative to `from_dir`, then search_paths.
-                    let resolved = self.resolve_file_path(rel_path, &from_dir, &search)?;
+                    let resolved = self.resolve_file_path(rel_path, &from_dir, search)?;
                     if !visited.contains(&resolved) {
                         visited.insert(resolved.clone());
-                        // Check for circular dependency.
                         let dep_src = std::fs::read_to_string(&resolved)?;
                         let dep_ast = self.parse_source(&dep_src)?;
                         let dep_dir = resolved.parent()
                             .unwrap_or(Path::new("."))
                             .to_path_buf();
-                        // Enqueue dep's own brings.
                         for dep_bring in &dep_ast.brings {
                             queue.push_back((dep_bring.path.clone(), dep_dir.clone()));
                         }
-                        // Merge pub items.
                         self.merge_dep(&mut merged, dep_ast);
                     }
                 }

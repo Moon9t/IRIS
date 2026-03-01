@@ -637,5 +637,7 @@ fn apply_reps(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
         IrInstr::TcpClose { conn } => { replace(conn); }
         IrInstr::StrSplit { str_val, delim, .. } => { replace(str_val); replace(delim); }
         IrInstr::StrJoin { list_val, delim, .. } => { replace(list_val); replace(delim); }
+        IrInstr::NowMs { .. } => {}
+        IrInstr::SleepMs { ms, .. } => { replace(ms); }
     }
 }

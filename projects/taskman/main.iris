@@ -1,0 +1,227 @@
+// main.iris — Taskman: A full-featured interactive task manager
+//
+// Run:   iris run projects/taskman/main.iris
+// Build: iris build projects/taskman/main.iris -o taskman
+//
+// Data is persisted to .taskman.db in the current working directory.
+// Each run picks up where you left off.
+
+bring "storage.iris"   // brings task.iris + std.kv + std.time transitively
+bring "report.iris"    // brings task.iris + std.json + std.fmt transitively
+bring std.string       // pad_left, pad_right, trim_start, trim_end
+
+const VERSION: str = "1.0.0"
+const BANNER_LINE: str = "  ──────────────────────────────────────────────────"
+
+// ── String utilities ──────────────────────────────────────────────────────────
+
+// Return everything after the first space-delimited word.
+// "done 3"   → "3"
+// "add Buy coffee"  → "Buy coffee"
+// "list"     → ""
+def skip_word(s: str) -> str {
+    val parts = split(s, " ");
+    val n     = len(parts);
+    if n <= 1 {
+        ""
+    } else {
+        var result = list_get(parts, 1);
+        var i      = 2;
+        while i < n {
+            result = concat(result, concat(" ", list_get(parts, i)));
+            i = i + 1
+        }
+        result
+    }
+}
+
+// Parse the argument portion of a command line as an i64 task ID.
+def parse_id(s: str) -> option<i64> {
+    parse_i64(trim(s))
+}
+
+// ── UI ────────────────────────────────────────────────────────────────────────
+
+def print_banner() -> i64 {
+    print(BANNER_LINE);
+    print(concat("  TASKMAN v", concat(VERSION, "  —  Task Manager written in IRIS")));
+    print("  Data stored in: .taskman.db");
+    print(BANNER_LINE);
+    0
+}
+
+def print_help() -> i64 {
+    print("");
+    print("  Commands:");
+    print("    add <title>    Add a new task");
+    print("    list           List all tasks");
+    print("    done <id>      Mark a task as done");
+    print("    cancel <id>    Cancel a task");
+    print("    rm <id>        Remove a task permanently");
+    print("    stats          Show statistics");
+    print("    json           Export all tasks as JSON");
+    print("    csv            Export all tasks as CSV");
+    print("    help           Show this help");
+    print("    quit           Exit Taskman");
+    print("");
+    0
+}
+
+// ── Command handlers ──────────────────────────────────────────────────────────
+
+def cmd_add(title: str) -> i64 {
+    val t = trim(title);
+    if t == "" {
+        print("  Error: title cannot be empty.  Usage: add <title>")
+    } else {
+        val task = storage_add_task(t);
+        print(concat("  Added #", concat(to_str(task.id), concat(": ", task.title))))
+    };
+    0
+}
+
+def cmd_list() -> i64 {
+    val tasks = storage_load_all();
+    report_print_list(tasks)
+}
+
+def cmd_done(arg: str) -> i64 {
+    val id_opt = parse_id(arg);
+    if is_some(id_opt) {
+        val id    = unwrap(id_opt);
+        val t_opt = storage_load(id);
+        if is_some(t_opt) {
+            val t = unwrap(t_opt);
+            if task_is_done(t) {
+                print(concat("  Task #", concat(to_str(id), " is already done.")))
+            } else {
+                val updated = task_mark_done(t);
+                val _s      = storage_save(updated);
+                print(concat("  Done: #", concat(to_str(id), concat(" — ", t.title))))
+            }
+        } else {
+            print(concat("  Error: task #", concat(to_str(id), " not found.")))
+        }
+    } else {
+        print("  Error: invalid ID.  Usage: done <id>")
+    };
+    0
+}
+
+def cmd_cancel(arg: str) -> i64 {
+    val id_opt = parse_id(arg);
+    if is_some(id_opt) {
+        val id    = unwrap(id_opt);
+        val t_opt = storage_load(id);
+        if is_some(t_opt) {
+            val t = unwrap(t_opt);
+            if task_is_cancelled(t) {
+                print(concat("  Task #", concat(to_str(id), " is already cancelled.")))
+            } else {
+                val updated = task_mark_cancelled(t);
+                val _s      = storage_save(updated);
+                print(concat("  Cancelled: #", concat(to_str(id), concat(" — ", t.title))))
+            }
+        } else {
+            print(concat("  Error: task #", concat(to_str(id), " not found.")))
+        }
+    } else {
+        print("  Error: invalid ID.  Usage: cancel <id>")
+    };
+    0
+}
+
+def cmd_remove(arg: str) -> i64 {
+    val id_opt = parse_id(arg);
+    if is_some(id_opt) {
+        val id    = unwrap(id_opt);
+        val t_opt = storage_load(id);
+        if is_some(t_opt) {
+            val t  = unwrap(t_opt);
+            val _d = storage_delete(id);
+            print(concat("  Removed: #", concat(to_str(id), concat(" — ", t.title))))
+        } else {
+            print(concat("  Error: task #", concat(to_str(id), " not found.")))
+        }
+    } else {
+        print("  Error: invalid ID.  Usage: rm <id>")
+    };
+    0
+}
+
+def cmd_stats() -> i64 {
+    val tasks = storage_load_all();
+    report_print_stats(tasks)
+}
+
+def cmd_json() -> i64 {
+    val tasks = storage_load_all();
+    report_tasks_to_json(tasks)
+}
+
+def cmd_csv() -> i64 {
+    val tasks = storage_load_all();
+    report_tasks_to_csv(tasks)
+}
+
+// ── Command dispatch ──────────────────────────────────────────────────────────
+
+def dispatch(cmd: str, line: str) -> i64 {
+    val arg = skip_word(line);
+    if cmd == "add" {
+        cmd_add(arg)
+    } else { if cmd == "list" || cmd == "ls" {
+        cmd_list()
+    } else { if cmd == "done" {
+        cmd_done(arg)
+    } else { if cmd == "cancel" {
+        cmd_cancel(arg)
+    } else { if cmd == "rm" || cmd == "remove" || cmd == "del" {
+        cmd_remove(arg)
+    } else { if cmd == "stats" || cmd == "stat" {
+        cmd_stats()
+    } else { if cmd == "json" {
+        cmd_json()
+    } else { if cmd == "csv" {
+        cmd_csv()
+    } else { if cmd == "help" || cmd == "h" || cmd == "?" {
+        print_help()
+    } else {
+        print(concat("  Unknown command: '", concat(cmd, "'.  Type 'help' for commands.")))
+    }}}}}}}}}
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+def main() -> i64 {
+    val _b = print_banner();
+
+    // Show existing tasks on startup
+    val _l = cmd_list();
+
+    print("  Type a command (or 'help' for the command list)");
+    print("");
+
+    var running = true;
+    while running {
+        print("command>");
+        val raw  = read_line();
+        val line = trim(raw);
+        val parts = split(line, " ");
+        val cmd = if len(parts) > 0 { list_get(parts, 0) } else { "" };
+
+        if cmd == "quit" || cmd == "exit" || cmd == "q" || cmd == "bye" {
+            running = false
+        } else {
+            if cmd == "" {
+                val _noop = 0
+            } else {
+                val _r = dispatch(cmd, line)
+            }
+        }
+    }
+
+    print("");
+    print("  Goodbye!");
+    0
+}

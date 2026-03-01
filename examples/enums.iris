@@ -31,6 +31,5 @@ def main() -> i64 {
     val s = Shape.Triangle
     val n = sides(s)
     print(concat("Triangle sides = ", to_str(n)));
-
-    n
+    0
 }

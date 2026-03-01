@@ -1,0 +1,135 @@
+// algorithms.iris — binary search, bubble sort, LCS, primes
+
+def binary_search(arr: list<i64>, target: i64, n: i64) -> i64 {
+    var lo = 0
+    var hi = n - 1
+    var result = -1
+    while (lo <= hi) {
+        val mid = lo + (hi - lo) / 2
+        if list_get(arr, mid) == target {
+            result = mid;
+            lo = hi + 1  // break
+        } else {
+            if list_get(arr, mid) < target {
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+    }
+    result
+}
+
+def bubble_sort(arr: list<i64>, n: i64) -> i64 {
+    var i = 0
+    while (i < (n - 1)) {
+        var j = 0
+        while (j < (n - 1 - i)) {
+            if list_get(arr, j) > list_get(arr, j + 1) {
+                val tmp = list_get(arr, j)
+                list_set(arr, j, list_get(arr, j + 1));
+                list_set(arr, j + 1, tmp)
+            } else {
+                val _noop = 0
+            };
+            j = j + 1
+        }
+        i = i + 1
+    }
+    n
+}
+
+// Longest Common Subsequence length (O(m*n) DP)
+def lcs_len(a: list<str>, m: i64, b: list<str>, n: i64) -> i64 {
+    val dp = list()
+    var fill = 0
+    while (fill < ((m + 1) * (n + 1))) {
+        push(dp, 0);
+        fill = fill + 1
+    }
+    var i = 1
+    while (i <= m) {
+        var j = 1
+        while (j <= n) {
+            val idx = i * (n + 1) + j
+            val prev_diag = list_get(dp, (i - 1) * (n + 1) + (j - 1))
+            val prev_left = list_get(dp, i * (n + 1) + (j - 1))
+            val prev_up   = list_get(dp, (i - 1) * (n + 1) + j)
+            if list_get(a, i - 1) == list_get(b, j - 1) {
+                list_set(dp, idx, prev_diag + 1)
+            } else {
+                list_set(dp, idx, max(prev_left, prev_up))
+            };
+            j = j + 1
+        }
+        i = i + 1
+    }
+    list_get(dp, m * (n + 1) + n)
+}
+
+def is_prime(n: i64) -> bool {
+    if n < 2 { false } else {
+        if n == 2 { true } else {
+            if (n % 2) == 0 { false } else {
+                var d = 3
+                var prime = true
+                while ((d * d) <= n) {
+                    if (n % d) == 0 {
+                        prime = false;
+                        d = n + 1  // break
+                    } else {
+                        d = d + 2
+                    }
+                }
+                prime
+            }
+        }
+    }
+}
+
+def main() -> i64 {
+    print("=== Binary Search ===");
+    val arr = list()
+    push(arr, 2);  push(arr, 5);  push(arr, 8);  push(arr, 12);
+    push(arr, 16); push(arr, 23); push(arr, 38); push(arr, 56);
+    push(arr, 72); push(arr, 91);
+    val n = len(arr)
+    print(concat("search 23: index ", to_str(binary_search(arr, 23, n))));
+    print(concat("search 99: index ", to_str(binary_search(arr, 99, n))));
+    print(concat("search 2:  index ", to_str(binary_search(arr, 2, n))));
+
+    print("\n=== Bubble Sort ===");
+    val unsorted = list()
+    push(unsorted, 64); push(unsorted, 34); push(unsorted, 25);
+    push(unsorted, 12); push(unsorted, 22); push(unsorted, 11); push(unsorted, 90);
+    val _s = bubble_sort(unsorted, len(unsorted))
+    var i = 0
+    var sorted_str = "["
+    while (i < len(unsorted)) {
+        if i > 0 { sorted_str = concat(sorted_str, ", ") } else { val _noop = 0 };
+        sorted_str = concat(sorted_str, to_str(list_get(unsorted, i)));
+        i = i + 1
+    }
+    sorted_str = concat(sorted_str, "]");
+    print(concat("sorted: ", sorted_str));
+
+    print("\n=== Longest Common Subsequence ===");
+    val a_chars = split("ABCBDAB", "")
+    val b_chars = split("BDCABA", "")
+    val lcs = lcs_len(a_chars, len(a_chars), b_chars, len(b_chars))
+    print(concat("LCS('ABCBDAB', 'BDCABA') = ", to_str(lcs)));
+
+    print("\n=== Primes up to 50 ===");
+    var primes_str = ""
+    var p = 2
+    while (p <= 50) {
+        if is_prime(p) {
+            if len(primes_str) > 0 { primes_str = concat(primes_str, " ") } else { val _noop = 0 };
+            primes_str = concat(primes_str, to_str(p))
+        } else { val _noop = 0 };
+        p = p + 1
+    }
+    print(primes_str);
+
+    0
+}

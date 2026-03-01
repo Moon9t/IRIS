@@ -1,0 +1,91 @@
+// src/stdlib/set.iris -- IRIS standard set library (list-backed, no duplicates)
+
+record Set { items: list<str> }
+
+pub def set_new() -> Set {
+    Set { items: list() }
+}
+
+pub def set_len(s: Set) -> i64 {
+    list_len(s.items)
+}
+
+// Returns true if v is in the set.
+pub def set_contains(s: Set, v: str) -> bool {
+    var found = false
+    var i = 0
+    val n = list_len(s.items)
+    while i < n {
+        found = if list_get(s.items, i) == v { true } else { found }
+        i = i + 1
+    }
+    found
+}
+
+// Returns a new set with v added (no-op if already present).
+pub def set_add(s: Set, v: str) -> Set {
+    if set_contains(s, v) {
+        s
+    } else {
+        var new_items = list()
+        var i = 0
+        val n = list_len(s.items)
+        while i < n {
+            push(new_items, list_get(s.items, i));
+            i = i + 1
+        }
+        push(new_items, v);
+        Set { items: new_items }
+    }
+}
+
+// Returns a new set with v removed (no-op if not present).
+pub def set_remove(s: Set, v: str) -> Set {
+    var new_items = list()
+    var i = 0
+    val n = list_len(s.items)
+    while i < n {
+        val cur = list_get(s.items, i)
+        val _ = if cur == v { 0 } else { push(new_items, cur); 0 }
+        i = i + 1
+    }
+    Set { items: new_items }
+}
+
+// Returns a new set containing all elements from both a and b.
+pub def set_union(a: Set, b: Set) -> Set {
+    var result = a
+    var i = 0
+    val n = list_len(b.items)
+    while i < n {
+        result = set_add(result, list_get(b.items, i))
+        i = i + 1
+    }
+    result
+}
+
+// Returns a new set containing only elements present in both a and b.
+pub def set_intersection(a: Set, b: Set) -> Set {
+    var result = set_new()
+    var i = 0
+    val n = list_len(a.items)
+    while i < n {
+        val item = list_get(a.items, i)
+        result = if set_contains(b, item) { set_add(result, item) } else { result }
+        i = i + 1
+    }
+    result
+}
+
+// Returns a new set containing elements in a that are not in b.
+pub def set_difference(a: Set, b: Set) -> Set {
+    var result = set_new()
+    var i = 0
+    val n = list_len(a.items)
+    while i < n {
+        val item = list_get(a.items, i)
+        result = if set_contains(b, item) { result } else { set_add(result, item) }
+        i = i + 1
+    }
+    result
+}

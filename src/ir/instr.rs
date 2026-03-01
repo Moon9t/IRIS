@@ -584,6 +584,12 @@ pub enum IrInstr {
     StrSplit { result: ValueId, str_val: ValueId, delim: ValueId },
     /// Join a list<str> with a delimiter string. Returns str.
     StrJoin { result: ValueId, list_val: ValueId, delim: ValueId },
+
+    // ---- Phase 97: Time / OS ----
+    /// Returns current time in milliseconds since Unix epoch. Returns i64.
+    NowMs { result: ValueId },
+    /// Sleep for the given number of milliseconds. Side-effecting; returns i64 (0).
+    SleepMs { result: ValueId, ms: ValueId },
 }
 
 impl IrInstr {
@@ -707,6 +713,8 @@ impl IrInstr {
             IrInstr::TcpClose { .. } => None,
             IrInstr::StrSplit { result, .. } => Some(*result),
             IrInstr::StrJoin { result, .. } => Some(*result),
+            IrInstr::NowMs { result } => Some(*result),
+            IrInstr::SleepMs { result, .. } => Some(*result),
         }
     }
 
@@ -873,6 +881,8 @@ impl IrInstr {
             IrInstr::TcpClose { conn } => vec![*conn],
             IrInstr::StrSplit { str_val, delim, .. } => vec![*str_val, *delim],
             IrInstr::StrJoin { list_val, delim, .. } => vec![*list_val, *delim],
+            IrInstr::NowMs { .. } => vec![],
+            IrInstr::SleepMs { ms, .. } => vec![*ms],
         }
     }
 }

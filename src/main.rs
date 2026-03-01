@@ -2,11 +2,23 @@ use std::path::PathBuf;
 use std::process;
 
 use iris::cli::{parse_args, ParseArgsResult};
-use iris::diagnostics::render_error;
-use iris::parser::lexer::Lexer;
-use iris::parser::parse::Parser;
+
+/// 64 MB stack — Windows default is only 1 MB, which overflows on deeply
+/// nested IRIS expressions during recursive IR lowering.
+const STACK_SIZE: usize = 64 * 1024 * 1024;
 
 fn main() {
+    let builder = std::thread::Builder::new().stack_size(STACK_SIZE);
+    let handler = builder
+        .spawn(run)
+        .expect("failed to spawn main thread with enlarged stack");
+    if let Err(e) = handler.join() {
+        eprintln!("error: {:?}", e);
+        process::exit(1);
+    }
+}
+
+fn run() {
     let args: Vec<String> = std::env::args().collect();
 
     match parse_args(&args) {
@@ -34,35 +46,11 @@ fn main() {
             }
         }
         Ok(ParseArgsResult::Args(cli)) => {
-            let source = std::fs::read_to_string(&cli.path).unwrap_or_else(|e| {
-                eprintln!("error: cannot read '{}': {}", cli.path.display(), e);
-                process::exit(1);
-            });
-
-            let module_name = cli.path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("module");
-
             if cli.emit == iris::EmitKind::Binary {
-                let tokens = match Lexer::new(&source).tokenize() {
-                    Ok(t) => t,
-                    Err(e) => {
-                        eprintln!("{}", render_error(&source, &e.into()));
-                        process::exit(1);
-                    }
-                };
-                let ast = match Parser::new(&tokens).parse_module() {
-                    Ok(a) => a,
-                    Err(e) => {
-                        eprintln!("{}", render_error(&source, &e.into()));
-                        process::exit(1);
-                    }
-                };
-                let module = match iris::compile_ast_to_module(&ast, module_name, cli.dump_ir_after.as_deref()) {
+                let module = match iris::compile_file_to_module_with_opts(&cli.path, cli.dump_ir_after.as_deref()) {
                     Ok(m) => m,
                     Err(e) => {
-                        eprintln!("{}", render_error(&source, &e));
+                        eprintln!("error: {}", e);
                         process::exit(1);
                     }
                 };
@@ -73,7 +61,12 @@ fn main() {
                     Ok(path) => {
                         eprintln!("wrote binary: {}", path.display());
                         if cli.run_after_build {
-                            let status = std::process::Command::new(&path)
+                            // Canonicalize so Command finds the binary in the
+                            // current directory on Windows (relative paths
+                            // without ".\" are not searched).
+                            let run_path = std::fs::canonicalize(&path)
+                                .unwrap_or_else(|_| path.clone());
+                            let status = std::process::Command::new(&run_path)
                                 .status()
                                 .unwrap_or_else(|e| {
                                     eprintln!("error: could not run binary: {}", e);
@@ -90,7 +83,7 @@ fn main() {
                 return;
             }
 
-            match iris::compile_with_full_opts(&source, module_name, cli.emit, cli.max_steps, cli.max_depth, cli.dump_ir_after.as_deref()) {
+            match iris::compile_file_with_full_opts(&cli.path, cli.emit, cli.max_steps, cli.max_depth, cli.dump_ir_after.as_deref()) {
                 Ok(output) => {
                     if let Some(out_path) = cli.output {
                         if let Err(e) = std::fs::write(&out_path, &output) {
@@ -102,7 +95,7 @@ fn main() {
                     }
                 }
                 Err(e) => {
-                    eprintln!("{}", render_error(&source, &e));
+                    eprintln!("error: {}", e);
                     process::exit(1);
                 }
             }
@@ -118,30 +111,58 @@ fn main() {
 fn run_repl() {
     use std::io::{BufRead, Write};
     let mut repl = iris::ReplState::new();
-    eprintln!("IRIS REPL  (type :quit to exit, :reset to clear state, :help for help)");
+    let version = env!("CARGO_PKG_VERSION");
+    eprintln!("IRIS {} REPL", version);
+    eprintln!("  :help for commands · :quit to exit · Ctrl+D to exit");
+    eprintln!();
     let stdin = std::io::stdin();
+    let mut accumulator = String::new();
+    let mut brace_depth: i32 = 0;
+
     loop {
-        eprint!(">> ");
+        // Show continuation prompt when inside a multi-line block.
+        if brace_depth > 0 {
+            eprint!("... ");
+        } else {
+            eprint!(">> ");
+        }
         let _ = std::io::stderr().flush();
+
         let mut line = String::new();
         match stdin.lock().read_line(&mut line) {
-            Ok(0) | Err(_) => break, // EOF
+            Ok(0) | Err(_) => {
+                // EOF (Ctrl+D) — flush any pending accumulator then exit.
+                if !accumulator.trim().is_empty() {
+                    run_repl_input(&mut repl, accumulator.trim());
+                }
+                break;
+            }
             Ok(_) => {}
         }
-        let trimmed = line.trim();
-        match trimmed {
-            ":quit" | ":q" | ":exit" => break,
-            ":reset" => { repl.reset(); eprintln!("state cleared"); }
-            ":help" => eprintln!(
-                "Commands:\n  :quit  — exit\n  :reset — clear accumulated state\n  :help  — this message\n\
-                 Syntax:\n  val x = expr       — bind variable\n  def f(...) -> T {{ }} — define function\n  expr               — evaluate expression"
-            ),
-            "" => {}
-            input => match repl.eval(input) {
-                Ok(s) if !s.is_empty() => println!("{}", s),
-                Ok(_) => {}
-                Err(e) => eprintln!("error: {}", e),
-            },
+
+        // Track brace depth for multiline input.
+        for ch in line.chars() {
+            if ch == '{' { brace_depth += 1; }
+            if ch == '}' { brace_depth -= 1; }
         }
+        accumulator.push_str(&line);
+
+        // Only evaluate when braces are balanced.
+        if brace_depth <= 0 {
+            brace_depth = 0;
+            let input = accumulator.trim().to_owned();
+            accumulator.clear();
+            if !input.is_empty() {
+                run_repl_input(&mut repl, &input);
+            }
+        }
+    }
+}
+
+fn run_repl_input(repl: &mut iris::ReplState, input: &str) {
+    match repl.eval(input) {
+        Ok(s) if !s.is_empty() => println!("{}", s),
+        Ok(_) => {}
+        Err(e) => eprintln!("error: {}", e),
     }
 }

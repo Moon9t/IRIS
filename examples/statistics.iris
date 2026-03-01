@@ -1,0 +1,74 @@
+// statistics.iris — mean, median, variance, standard deviation
+
+def mean(data: list<f64>, n: i64) -> f64 {
+    var sum = 0.0 to f64
+    var i = 0
+    while (i < n) {
+        sum = sum + list_get(data, i);
+        i = i + 1
+    }
+    sum / (n to f64)
+}
+
+def variance(data: list<f64>, n: i64, m: f64) -> f64 {
+    var acc = 0.0 to f64
+    var i = 0
+    while (i < n) {
+        val diff = list_get(data, i) - m
+        acc = acc + diff * diff;
+        i = i + 1
+    }
+    acc / (n to f64)
+}
+
+def std_dev(data: list<f64>, n: i64, m: f64) -> f64 {
+    sqrt(variance(data, n, m))
+}
+
+def median(data: list<f64>, n: i64) -> f64 {
+    // Bubble sort in place
+    var i = 0
+    while (i < (n - 1)) {
+        var j = 0
+        while (j < (n - 1 - i)) {
+            if list_get(data, j) > list_get(data, j + 1) {
+                val tmp = list_get(data, j)
+                list_set(data, j, list_get(data, j + 1));
+                list_set(data, j + 1, tmp)
+            } else {
+                val _noop = 0
+            };
+            j = j + 1
+        }
+        i = i + 1
+    }
+    if (n % 2) == 0 {
+        (list_get(data, (n / 2) - 1) + list_get(data, n / 2)) / (2.0 to f64)
+    } else {
+        list_get(data, n / 2)
+    }
+}
+
+def main() -> i64 {
+    val data = list()
+    push(data, 4.0 to f64);
+    push(data, 7.0 to f64);
+    push(data, 13.0 to f64);
+    push(data, 2.0 to f64);
+    push(data, 9.0 to f64);
+    push(data, 1.0 to f64);
+    push(data, 15.0 to f64);
+    val n = len(data)
+
+    val m = mean(data, n)
+    val v = variance(data, n, m)
+    val sd = std_dev(data, n, m)
+    val med = median(data, n)
+
+    print(concat("count  : ", to_str(n)));
+    print(concat("mean   : ", to_str(m)));
+    print(concat("median : ", to_str(med)));
+    print(concat("var    : ", to_str(v)));
+    print(concat("std_dev: ", to_str(sd)));
+    0
+}

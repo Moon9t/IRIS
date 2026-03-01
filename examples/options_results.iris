@@ -28,6 +28,5 @@ def main() -> i64 {
     val r4 = safe_sqrt(-4)
     val v4 = if is_some(r4) { unwrap(r4) } else { -1 }
     print(concat("safe_sqrt(-4) = ", to_str(v4)));
-
-    v1
+    0
 }
