@@ -71,6 +71,10 @@ fn is_side_effecting(instr: &IrInstr) -> bool {
             | IrInstr::MapRemove { .. }
             | IrInstr::CallClosure { .. }
             | IrInstr::FileWriteAll { .. }
+            | IrInstr::DbOpen { .. }
+            | IrInstr::DbExec { .. }
+            | IrInstr::DbQuery { .. }
+            | IrInstr::DbClose { .. }
             | IrInstr::ProcessExit { .. }
             | IrInstr::CallExtern { .. }
             | IrInstr::Retain { .. }
@@ -449,6 +453,11 @@ pub(crate) fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, Va
         IrInstr::FileWriteAll { path, content, .. } => { replace(path); replace(content); }
         IrInstr::FileExists { path, .. } => { replace(path); }
         IrInstr::FileLines { path, .. } => { replace(path); }
+        // Database
+        IrInstr::DbOpen { path, .. } => { replace(path); }
+        IrInstr::DbExec { db, sql, .. } => { replace(db); replace(sql); }
+        IrInstr::DbQuery { db, sql, .. } => { replace(db); replace(sql); }
+        IrInstr::DbClose { db, .. } => { replace(db); }
         // Phase 58: Extended collections
         IrInstr::ListContains { list, value, .. } => { replace(list); replace(value); }
         IrInstr::ListSort { list } => { replace(list); }

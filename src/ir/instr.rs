@@ -537,6 +537,16 @@ pub enum IrInstr {
     /// Read file as a list of lines. Returns list<str>.
     FileLines { result: ValueId, path: ValueId },
 
+    // ---- Database operations ----
+    /// Open a SQLite database. Returns handle (i64).
+    DbOpen { result: ValueId, path: ValueId },
+    /// Execute SQL (INSERT/UPDATE/DELETE/CREATE). Returns rows affected (i64).
+    DbExec { result: ValueId, db: ValueId, sql: ValueId },
+    /// Query SQL (SELECT). Returns list<list<str>>.
+    DbQuery { result: ValueId, db: ValueId, sql: ValueId },
+    /// Close a database handle.
+    DbClose { result: ValueId, db: ValueId },
+
     // ---- Extended collection operations (Phase 58) ----
     /// Check if a list contains a value. Returns bool.
     ListContains { result: ValueId, list: ValueId, value: ValueId },
@@ -688,6 +698,11 @@ impl IrInstr {
             IrInstr::FileWriteAll { result, .. } => Some(*result),
             IrInstr::FileExists { result, .. } => Some(*result),
             IrInstr::FileLines { result, .. } => Some(*result),
+            // Database
+            IrInstr::DbOpen { result, .. } => Some(*result),
+            IrInstr::DbExec { result, .. } => Some(*result),
+            IrInstr::DbQuery { result, .. } => Some(*result),
+            IrInstr::DbClose { result, .. } => Some(*result),
             // Phase 58: Extended collections
             IrInstr::ListContains { result, .. } => Some(*result),
             IrInstr::ListSort { .. } => None,
@@ -856,6 +871,11 @@ impl IrInstr {
             IrInstr::FileWriteAll { path, content, .. } => vec![*path, *content],
             IrInstr::FileExists { path, .. } => vec![*path],
             IrInstr::FileLines { path, .. } => vec![*path],
+            // Database
+            IrInstr::DbOpen { path, .. } => vec![*path],
+            IrInstr::DbExec { db, sql, .. } => vec![*db, *sql],
+            IrInstr::DbQuery { db, sql, .. } => vec![*db, *sql],
+            IrInstr::DbClose { db, .. } => vec![*db],
             // Phase 58: Extended collections
             IrInstr::ListContains { list, value, .. } => vec![*list, *value],
             IrInstr::ListSort { list } => vec![*list],

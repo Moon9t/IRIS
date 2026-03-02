@@ -639,5 +639,9 @@ fn apply_reps(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
         IrInstr::StrJoin { list_val, delim, .. } => { replace(list_val); replace(delim); }
         IrInstr::NowMs { .. } => {}
         IrInstr::SleepMs { ms, .. } => { replace(ms); }
+        IrInstr::DbOpen { path, .. } => { replace(path); }
+        IrInstr::DbExec { db, sql, .. } => { replace(db); replace(sql); }
+        IrInstr::DbQuery { db, sql, .. } => { replace(db); replace(sql); }
+        IrInstr::DbClose { db, .. } => { replace(db); }
     }
 }

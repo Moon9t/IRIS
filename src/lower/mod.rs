@@ -2078,6 +2078,50 @@ impl<'m> Lowerer<'m> {
             return Ok((result, ty));
         }
 
+        // ── Database operations ─────────────────────────────────────────────
+        if callee.name == "db_open" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported { detail: "db_open(path) requires 1 argument".into(), span });
+            }
+            let (path, _) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::DbOpen { result, path }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+        if callee.name == "db_exec" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported { detail: "db_exec(db, sql) requires 2 arguments".into(), span });
+            }
+            let (db, _) = self.lower_expr(&args[0])?;
+            let (sql, _) = self.lower_expr(&args[1])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::DbExec { result, db, sql }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+        if callee.name == "db_query" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported { detail: "db_query(db, sql) requires 2 arguments".into(), span });
+            }
+            let (db, _) = self.lower_expr(&args[0])?;
+            let (sql, _) = self.lower_expr(&args[1])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::List(Box::new(IrType::List(Box::new(IrType::Str))));
+            self.builder.push_instr(IrInstr::DbQuery { result, db, sql }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+        if callee.name == "db_close" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported { detail: "db_close(db) requires 1 argument".into(), span });
+            }
+            let (db, _) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(IrInstr::DbClose { result, db }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+
         // ── Phase 89: Mutable cell (for closure captures) ───────────────────
         // cell(v) → list containing one element (shared via Rc)
         // cell_get(c) → read element 0

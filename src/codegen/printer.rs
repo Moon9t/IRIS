@@ -627,6 +627,20 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
             write!(out, "{} = file_lines {}", result, path)?;
         }
 
+        // Database operations
+        IrInstr::DbOpen { result, path } => {
+            write!(out, "{} = db_open {}", result, path)?;
+        }
+        IrInstr::DbExec { result, db, sql } => {
+            write!(out, "{} = db_exec {}, {}", result, db, sql)?;
+        }
+        IrInstr::DbQuery { result, db, sql } => {
+            write!(out, "{} = db_query {}, {}", result, db, sql)?;
+        }
+        IrInstr::DbClose { result, db } => {
+            write!(out, "{} = db_close {}", result, db)?;
+        }
+
         // Phase 58: Extended collections
         IrInstr::ListContains { result, list, value } => {
             write!(out, "{} = list_contains {}, {}", result, list, value)?;

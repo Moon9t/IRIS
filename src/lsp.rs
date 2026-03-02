@@ -28,6 +28,30 @@ pub struct LspDiagnostic {
     pub message: String,
     /// 1 = Error, 2 = Warning, 3 = Information, 4 = Hint.
     pub severity: u8,
+    /// Optional diagnostic code (e.g. "E0001").
+    pub code: Option<String>,
+}
+
+/// A code action (quick fix or refactoring) for the LSP client.
+#[derive(Debug, Clone)]
+pub struct CodeAction {
+    pub title: String,
+    pub kind: String,
+    pub edit_uri: String,
+    /// (start_line, start_col, end_line, end_col) — 0-based.
+    pub edit_range: (u32, u32, u32, u32),
+    pub new_text: String,
+    pub diagnostic_message: Option<String>,
+}
+
+/// An inlay hint displayed inline in the editor.
+#[derive(Debug, Clone)]
+pub struct InlayHint {
+    pub line: u32,
+    pub character: u32,
+    pub label: String,
+    /// 1 = Type, 2 = Parameter.
+    pub kind: u8,
 }
 
 /// Persistent LSP server state: one entry per open document.
@@ -85,21 +109,118 @@ impl LspState {
     /// Returns hover information (type signature) for the identifier at the given position.
     pub fn hover(&self, uri: &str, line: u32, character: u32) -> Option<String> {
         let source = self.documents.get(uri)?;
-        let module_name = uri_to_module_name(uri);
-        let module = crate::compile_to_module(source, &module_name).ok()?;
-
         let byte = line_col_to_byte(source, line, character);
         let ident = ident_at_byte(source, byte)?;
 
-        for func in module.functions() {
-            let bare = func.name.split("__").next().unwrap_or(&func.name);
-            if bare == ident {
-                let params: Vec<String> = func.params.iter()
-                    .map(|p| format!("{}: {:?}", p.name, p.ty))
-                    .collect();
-                return Some(format!("def {}({}) -> {:?}", bare, params.join(", "), func.return_ty));
+        // 1. Try AST-based lookup (works even when lowering / type-check fails)
+        if let Some(ast) = parse_source(source) {
+            // User-defined functions
+            for func in &ast.functions {
+                if func.name.name == ident {
+                    let params: Vec<String> = func.params.iter()
+                        .map(|p| format!("{}: {}", p.name.name, ast_type_str(&p.ty)))
+                        .collect();
+                    let ret = ast_type_str(&func.return_ty);
+                    let vis = if func.is_pub { "pub " } else { "" };
+                    return Some(format!("```iris\n{}def {}({}) -> {}\n```", vis, ident, params.join(", "), ret));
+                }
+            }
+
+            // Struct (record) definitions
+            for s in &ast.structs {
+                if s.name.name == ident {
+                    let fields: Vec<String> = s.fields.iter()
+                        .map(|f| format!("    {}: {}", f.name.name, ast_type_str(&f.ty)))
+                        .collect();
+                    return Some(format!("```iris\nrecord {} {{\n{}\n}}\n```", ident, fields.join(",\n")));
+                }
+            }
+
+            // Enum (choice) definitions
+            for e in &ast.enums {
+                if e.name.name == ident {
+                    let variants: Vec<String> = e.variants.iter()
+                        .map(|v| {
+                            if v.fields.is_empty() {
+                                format!("    {}", v.name.name)
+                            } else {
+                                let tys: Vec<String> = v.fields.iter().map(ast_type_str).collect();
+                                format!("    {}({})", v.name.name, tys.join(", "))
+                            }
+                        })
+                        .collect();
+                    return Some(format!("```iris\nchoice {} {{\n{}\n}}\n```", ident, variants.join(",\n")));
+                }
+                // Also match variant names
+                for v in &e.variants {
+                    if v.name.name == ident {
+                        if v.fields.is_empty() {
+                            return Some(format!("```iris\n{}.{}\n```\nVariant of `{}`", e.name.name, ident, e.name.name));
+                        } else {
+                            let tys: Vec<String> = v.fields.iter().map(ast_type_str).collect();
+                            return Some(format!("```iris\n{}.{}({})\n```\nVariant of `{}`", e.name.name, ident, tys.join(", "), e.name.name));
+                        }
+                    }
+                }
+            }
+
+            // Constants
+            for c in &ast.consts {
+                if c.name.name == ident {
+                    let ty_s = c.ty.as_ref().map(|t| ast_type_str(t)).unwrap_or_else(|| "(inferred)".into());
+                    return Some(format!("```iris\nconst {}: {}\n```", ident, ty_s));
+                }
+            }
+
+            // Type aliases
+            for ta in &ast.type_aliases {
+                if ta.name == ident {
+                    return Some(format!("```iris\ntype {} = {}\n```", ident, ast_type_str(&ta.ty)));
+                }
+            }
+
+            // Extern functions
+            for ef in &ast.extern_fns {
+                if ef.name.name == ident {
+                    let params: Vec<String> = ef.params.iter()
+                        .map(|p| format!("{}: {}", p.name.name, ast_type_str(&p.ty)))
+                        .collect();
+                    return Some(format!("```iris\nextern def {}({}) -> {}\n```", ident, params.join(", "), ast_type_str(&ef.ret_ty)));
+                }
+            }
+
+            // Local variables — walk function bodies to find val/var bindings
+            for func in &ast.functions {
+                if let Some(info) = find_binding_in_block(&func.body, ident, byte) {
+                    return Some(info);
+                }
             }
         }
+
+        // 2. Try IR-based lookup (if file compiles successfully, gives richer type info)
+        let module_name = uri_to_module_name(uri);
+        if let Ok(module) = crate::compile_to_module(source, &module_name) {
+            for func in module.functions() {
+                let bare = func.name.split("__").next().unwrap_or(&func.name);
+                if bare == ident {
+                    let params: Vec<String> = func.params.iter()
+                        .map(|p| format!("{}: {:?}", p.name, p.ty))
+                        .collect();
+                    return Some(format!("```iris\ndef {}({}) -> {:?}\n```", bare, params.join(", "), func.return_ty));
+                }
+            }
+        }
+
+        // 3. Built-in function signatures
+        if let Some(sig) = builtin_hover(ident) {
+            return Some(sig);
+        }
+
+        // 4. Keywords
+        if let Some(kw) = keyword_hover(ident) {
+            return Some(kw);
+        }
+
         None
     }
 
@@ -205,6 +326,186 @@ impl LspState {
     }
 
     // ------------------------------------------------------------------
+    // Code actions (quick fixes)
+    // ------------------------------------------------------------------
+
+    /// Returns code actions (quick fixes) for the given range.
+    /// Each action is (title, range_start_line, range_start_col, range_end_line, range_end_col, newText).
+    pub fn code_actions(&self, uri: &str, range_start_line: u32, range_start_col: u32,
+                        _range_end_line: u32, _range_end_col: u32)
+        -> Vec<CodeAction>
+    {
+        let Some(source) = self.documents.get(uri) else { return Vec::new() };
+        let mut actions = Vec::new();
+
+        // Run diagnostics to find actionable errors/warnings.
+        let diags = self.diagnose(uri);
+
+        for diag in &diags {
+            // Quick fix: suggest adding missing `bring` for undefined variable that looks like a stdlib function
+            if diag.message.contains("cannot find") || diag.message.contains("undefined") {
+                // Extract the name from the error message
+                if let Some(name) = extract_quoted_name(&diag.message) {
+                    // Check if it matches a known stdlib module function
+                    if let Some(bring_stmt) = suggest_bring_for_name(&name) {
+                        actions.push(CodeAction {
+                            title: format!("Add 'bring {}' to imports", bring_stmt.trim_start_matches("bring ")),
+                            kind: "quickfix".to_owned(),
+                            edit_uri: uri.to_owned(),
+                            edit_range: (0, 0, 0, 0),
+                            new_text: format!("{}\n", bring_stmt),
+                            diagnostic_message: Some(diag.message.clone()),
+                        });
+                    }
+                }
+            }
+
+            // Quick fix: remove unused variable
+            if diag.severity == 2 && diag.message.contains("unused") {
+                if let Some(name) = extract_quoted_name(&diag.message) {
+                    actions.push(CodeAction {
+                        title: format!("Prefix with underscore: _{}", name),
+                        kind: "quickfix".to_owned(),
+                        edit_uri: uri.to_owned(),
+                        edit_range: (diag.line, diag.character, diag.end_line, diag.end_character),
+                        new_text: format!("_{}", name),
+                        diagnostic_message: Some(diag.message.clone()),
+                    });
+                }
+            }
+
+            // Quick fix: suggest closing brace for unterminated blocks
+            if diag.message.contains("missing a closing brace") || diag.message.contains("unexpected end of file") {
+                let line_count = source.lines().count() as u32;
+                actions.push(CodeAction {
+                    title: "Add closing '}'".to_owned(),
+                    kind: "quickfix".to_owned(),
+                    edit_uri: uri.to_owned(),
+                    edit_range: (line_count, 0, line_count, 0),
+                    new_text: "}\n".to_owned(),
+                    diagnostic_message: Some(diag.message.clone()),
+                });
+            }
+        }
+
+        // Source action: extract variable at cursor position
+        let byte = line_col_to_byte(source, range_start_line, range_start_col) as usize;
+        if let Some(word) = ident_at_byte(source, byte as u32) {
+            if word.len() > 1 && !is_keyword(word) {
+                actions.push(CodeAction {
+                    title: format!("Extract '{}' to variable", word),
+                    kind: "refactor.extract".to_owned(),
+                    edit_uri: uri.to_owned(),
+                    edit_range: (range_start_line, 0, range_start_line, 0),
+                    new_text: format!("    val extracted_{} = {};\n", word, word),
+                    diagnostic_message: None,
+                });
+            }
+        }
+
+        actions
+    }
+
+    // ------------------------------------------------------------------
+    // Inlay hints
+    // ------------------------------------------------------------------
+
+    /// Returns inlay hints for the document — type annotations on `val`/`var` bindings.
+    /// Each hint is (line, character, label, kind) where kind is 1=Type, 2=Parameter.
+    pub fn inlay_hints(&self, uri: &str) -> Vec<InlayHint> {
+        let Some(source) = self.documents.get(uri) else { return Vec::new() };
+        let Some(ast) = parse_source(source) else { return Vec::new() };
+        let mut hints = Vec::new();
+
+        // Walk all function bodies looking for val/var bindings without explicit types.
+        for func in &ast.functions {
+            self.collect_inlay_hints_from_stmts(&func.body.stmts, source, &mut hints);
+        }
+
+        hints
+    }
+
+    fn collect_inlay_hints_from_stmts(&self, stmts: &[crate::parser::ast::AstStmt], source: &str, hints: &mut Vec<InlayHint>) {
+        use crate::parser::ast::AstStmt;
+        for stmt in stmts {
+            match stmt {
+                AstStmt::Let { name, ty, .. } => {
+                    // Only add hint if no explicit type annotation
+                    if ty.is_none() {
+                        let (line, col) = byte_to_lsp_pos(source, name.span.end.0);
+                        hints.push(InlayHint {
+                            line,
+                            character: col,
+                            label: ": (inferred)".to_owned(),
+                            kind: 1, // Type
+                        });
+                    }
+                }
+                AstStmt::While { body, .. } | AstStmt::Loop { body, .. } => {
+                    self.collect_inlay_hints_from_stmts(&body.stmts, source, hints);
+                }
+                AstStmt::ForRange { body, .. } | AstStmt::ForEach { body, .. } | AstStmt::ParFor { body, .. } => {
+                    self.collect_inlay_hints_from_stmts(&body.stmts, source, hints);
+                }
+                AstStmt::Spawn { body, .. } => {
+                    self.collect_inlay_hints_from_stmts(body, source, hints);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Find references
+    // ------------------------------------------------------------------
+
+    /// Finds all occurrences of the identifier at (line, character) in the document.
+    /// Returns Vec<(start_line, start_col, end_line, end_col)>.
+    pub fn references(&self, uri: &str, line: u32, character: u32) -> Vec<(u32, u32, u32, u32)> {
+        let Some(source) = self.documents.get(uri) else { return Vec::new() };
+        let byte = line_col_to_byte(source, line, character) as u32;
+        let Some(target) = ident_at_byte(source, byte) else { return Vec::new() };
+        let mut refs = Vec::new();
+
+        // Simple text-based reference search: find all occurrences of the identifier
+        // bounded by non-identifier characters.
+        let target_bytes = target.as_bytes();
+        let src_bytes = source.as_bytes();
+        let mut i = 0usize;
+        while i < src_bytes.len() {
+            if i + target_bytes.len() <= src_bytes.len()
+                && &src_bytes[i..i + target_bytes.len()] == target_bytes
+            {
+                // Check boundaries
+                let before_ok = i == 0 || !is_ident_char(src_bytes[i - 1]);
+                let after_ok = i + target_bytes.len() >= src_bytes.len()
+                    || !is_ident_char(src_bytes[i + target_bytes.len()]);
+                if before_ok && after_ok {
+                    let (sl, sc) = byte_to_lsp_pos(source, i as u32);
+                    let (el, ec) = byte_to_lsp_pos(source, (i + target_bytes.len()) as u32);
+                    refs.push((sl, sc, el, ec));
+                }
+            }
+            i += 1;
+        }
+
+        refs
+    }
+
+    // ------------------------------------------------------------------
+    // Rename
+    // ------------------------------------------------------------------
+
+    /// Renames all occurrences of the identifier at (line, character) to `new_name`.
+    /// Returns Vec<(start_line, start_col, end_line, end_col, new_text)>.
+    pub fn rename(&self, uri: &str, line: u32, character: u32, new_name: &str) -> Vec<(u32, u32, u32, u32, String)> {
+        let refs = self.references(uri, line, character);
+        refs.into_iter()
+            .map(|(sl, sc, el, ec)| (sl, sc, el, ec, new_name.to_owned()))
+            .collect()
+    }
+
+    // ------------------------------------------------------------------
     // Private
     // ------------------------------------------------------------------
 
@@ -228,6 +529,7 @@ impl LspState {
             } else {
                 (0, 0)
             };
+            let code = Some(e.diagnostic_code().to_owned());
             diags.push(LspDiagnostic {
                 line,
                 character,
@@ -235,6 +537,7 @@ impl LspState {
                 end_character: character + 1,
                 message: format!("{}", e),
                 severity: 1,
+                code,
             });
         }
 
@@ -255,6 +558,7 @@ impl LspState {
                     end_character: character + 1,
                     message: w.message,
                     severity: 2,
+                    code: Some("W0001".to_owned()),
                 });
             }
         }
@@ -388,6 +692,225 @@ fn find_call_context(source: &str, line: u32, character: u32) -> Option<(String,
     if func_name.is_empty() { return None; }
 
     Some((func_name.to_owned(), active_param))
+}
+
+// ---------------------------------------------------------------------------
+// Hover helpers
+// ---------------------------------------------------------------------------
+
+/// Searches a block (and nested blocks) for a val/var binding matching `name`
+/// whose span encompasses the cursor `byte` position.
+fn find_binding_in_block(block: &crate::parser::ast::AstBlock, name: &str, _byte: u32) -> Option<String> {
+    for stmt in &block.stmts {
+        match stmt {
+            crate::parser::ast::AstStmt::Let { name: ident, ty, .. } => {
+                if ident.name == name {
+                    let ty_str = ty.as_ref().map(|t| ast_type_str(t)).unwrap_or_else(|| "(inferred)".to_owned());
+                    // Detect if it was `val` or `var` by checking the source at the span.
+                    return Some(format!("```iris\nval {}: {}\n```", name, ty_str));
+                }
+            }
+            crate::parser::ast::AstStmt::ForRange { var, body, .. } => {
+                if var.name == name {
+                    return Some(format!("```iris\nfor {}: i64\n```\nLoop variable", name));
+                }
+                if let Some(info) = find_binding_in_block(body, name, _byte) {
+                    return Some(info);
+                }
+            }
+            crate::parser::ast::AstStmt::While { body, .. } => {
+                if let Some(info) = find_binding_in_block(body, name, _byte) {
+                    return Some(info);
+                }
+            }
+            crate::parser::ast::AstStmt::Loop { body, .. } => {
+                if let Some(info) = find_binding_in_block(body, name, _byte) {
+                    return Some(info);
+                }
+            }
+            crate::parser::ast::AstStmt::ParFor { var, body, .. } => {
+                if var.name == name {
+                    return Some(format!("```iris\npar for {}: i64\n```\nParallel loop variable", name));
+                }
+                if let Some(info) = find_binding_in_block(body, name, _byte) {
+                    return Some(info);
+                }
+            }
+            crate::parser::ast::AstStmt::ForEach { var, body, .. } => {
+                if var.name == name {
+                    return Some(format!("```iris\nfor {} in ...\n```\nIterator variable", name));
+                }
+                if let Some(info) = find_binding_in_block(body, name, _byte) {
+                    return Some(info);
+                }
+            }
+            crate::parser::ast::AstStmt::LetTuple { names, .. } => {
+                for n in names {
+                    if n.name == name {
+                        return Some(format!("```iris\nval {} (destructured)\n```", name));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Returns hover info for a built-in function.
+fn builtin_hover(name: &str) -> Option<String> {
+    let sig = match name {
+        // Math
+        "sin"   => "def sin(x: f32) -> f32\nSine of x (radians)",
+        "cos"   => "def cos(x: f32) -> f32\nCosine of x (radians)",
+        "tan"   => "def tan(x: f32) -> f32\nTangent of x (radians)",
+        "exp"   => "def exp(x: f32) -> f32\ne^x",
+        "log"   => "def log(x: f32) -> f32\nNatural logarithm",
+        "log2"  => "def log2(x: f32) -> f32\nBase-2 logarithm",
+        "sqrt"  => "def sqrt(x: f32) -> f32\nSquare root",
+        "abs"   => "def abs(x: f32) -> f32\nAbsolute value",
+        "floor" => "def floor(x: f32) -> f32\nFloor",
+        "ceil"  => "def ceil(x: f32) -> f32\nCeiling",
+        "round" => "def round(x: f32) -> f32\nRound to nearest",
+        "sign"  => "def sign(x: f32) -> f32\nSign: -1, 0, or 1",
+        "pow"   => "def pow(base: f32, exp: f32) -> f32\nPower",
+        "min"   => "def min(a: f32, b: f32) -> f32\nMinimum of two values",
+        "max"   => "def max(a: f32, b: f32) -> f32\nMaximum of two values",
+        "clamp" => "def clamp(x: f32, lo: f32, hi: f32) -> f32\nClamp x to [lo, hi]",
+        // String
+        "len"         => "def len(s: str) -> i64\nByte length of string (or collection size)",
+        "concat"      => "def concat(a: str, b: str) -> str\nConcatenate two strings",
+        "contains"    => "def contains(s: str, sub: str) -> bool\nTest if s contains sub",
+        "starts_with" => "def starts_with(s: str, prefix: str) -> bool\nPrefix test",
+        "ends_with"   => "def ends_with(s: str, suffix: str) -> bool\nSuffix test",
+        "to_upper"    => "def to_upper(s: str) -> str\nConvert to uppercase",
+        "to_lower"    => "def to_lower(s: str) -> str\nConvert to lowercase",
+        "trim"        => "def trim(s: str) -> str\nStrip leading/trailing whitespace",
+        "repeat"      => "def repeat(s: str, n: i64) -> str\nRepeat string n times",
+        "to_str"      => "def to_str(v: T) -> str\nConvert any value to string",
+        "split"       => "def split(s: str, delim: str) -> list<str>\nSplit by delimiter",
+        "join"        => "def join(parts: list<str>, delim: str) -> str\nJoin with delimiter",
+        "slice"       => "def slice(s: str, start: i64, end: i64) -> str\nSubstring [start, end)",
+        "find"        => "def find(s: str, sub: str) -> option<i64>\nFind first occurrence index",
+        "str_replace" => "def str_replace(s: str, old: str, new: str) -> str\nReplace all occurrences",
+        "parse_i64"   => "def parse_i64(s: str) -> option<i64>\nParse integer from string",
+        "parse_f64"   => "def parse_f64(s: str) -> option<f64>\nParse float from string",
+        // I/O
+        "print"     => "def print(v: T) -> ()\nPrint value to stdout with newline",
+        "read_line" => "def read_line() -> str\nRead a line from stdin",
+        "read_i64"  => "def read_i64() -> i64\nRead and parse integer from stdin",
+        "read_f64"  => "def read_f64() -> f64\nRead and parse float from stdin",
+        // List
+        "push"          => "def push(lst: list<T>, v: T) -> ()\nAppend element to list",
+        "pop"           => "def pop(lst: list<T>) -> option<T>\nRemove and return last element",
+        "list_len"      => "def list_len(lst: list<T>) -> i64\nNumber of elements",
+        "list_get"      => "def list_get(lst: list<T>, i: i64) -> T\nGet element by index",
+        "list_set"      => "def list_set(lst: list<T>, i: i64, v: T) -> ()\nSet element by index",
+        "list_contains" => "def list_contains(lst: list<T>, v: T) -> bool\nMembership test",
+        "list_sort"     => "def list_sort(lst: list<T>) -> ()\nSort list in-place",
+        "list_concat"   => "def list_concat(a: list<T>, b: list<T>) -> list<T>\nConcatenate two lists",
+        "list_slice"    => "def list_slice(lst: list<T>, start: i64, end: i64) -> list<T>\nSlice [start, end)",
+        // Map
+        "map_set"      => "def map_set(m: map<K,V>, key: K, val: V) -> ()\nInsert or update entry",
+        "map_get"      => "def map_get(m: map<K,V>, key: K) -> option<V>\nLookup value by key",
+        "map_contains" => "def map_contains(m: map<K,V>, key: K) -> bool\nCheck if key exists",
+        "map_remove"   => "def map_remove(m: map<K,V>, key: K) -> ()\nRemove entry by key",
+        "map_len"      => "def map_len(m: map<K,V>) -> i64\nNumber of entries",
+        "map_keys"     => "def map_keys(m: map<K,V>) -> list<K>\nAll keys",
+        "map_values"   => "def map_values(m: map<K,V>) -> list<V>\nAll values",
+        // Option / Result
+        "some"    => "def some(v: T) -> option<T>\nWrap value in Some",
+        "is_some" => "def is_some(opt: option<T>) -> bool\nTrue if option has a value",
+        "is_ok"   => "def is_ok(r: result<T,E>) -> bool\nTrue if result is Ok",
+        "unwrap"  => "def unwrap(opt: option<T>) -> T\nExtract value (panics on none/err)",
+        "ok"      => "def ok(v: T) -> result<T, E>\nCreate a success result",
+        "err"     => "def err(e: E) -> result<T, E>\nCreate an error result",
+        // Concurrency
+        "channel"      => "def channel() -> channel<T>\nCreate a new channel",
+        "send"         => "def send(ch: channel<T>, v: T) -> ()\nSend value to channel",
+        "recv"         => "def recv(ch: channel<T>) -> T\nReceive value from channel (blocking)",
+        "atomic"       => "def atomic(v: T) -> atomic<T>\nCreate an atomic value",
+        "atomic_load"  => "def atomic_load(a: atomic<T>) -> T\nRead atomically",
+        "atomic_store" => "def atomic_store(a: atomic<T>, v: T) -> ()\nWrite atomically",
+        "atomic_add"   => "def atomic_add(a: atomic<T>, v: T) -> T\nAtomically add and return new value",
+        // Time
+        "time_now_ms"   => "def time_now_ms() -> i64\nCurrent time in milliseconds since epoch",
+        "sleep_ms" => "def sleep_ms(ms: i64) -> i64\nSleep for ms milliseconds",
+        // Database (SQLite)
+        "db_open"  => "def db_open(path: str) -> i64\nOpen a SQLite database, returns handle",
+        "db_exec"  => "def db_exec(db: i64, sql: str) -> i64\nExecute SQL (INSERT/UPDATE/DELETE/CREATE), returns 0 on success",
+        "db_query" => "def db_query(db: i64, sql: str) -> list<list<str>>\nQuery SQL (SELECT), returns rows of string columns",
+        "db_close" => "def db_close(db: i64) -> i64\nClose a database handle",
+        // Control
+        "panic"  => "def panic(msg: str) -> !\nAbort with error message",
+        "assert" => "def assert(cond: bool) -> ()\nAssert condition (panics if false)",
+        // Grad
+        "grad"    => "def grad(value: f64, tangent: f64) -> grad<f64>\nCreate dual number for autodiff",
+        "grad_of" => "def grad_of(g: grad<f64>) -> f64\nExtract gradient (tangent) value",
+        // File I/O
+        "file_read_all"  => "def file_read_all(path: str) -> result<str, str>\nRead entire file",
+        "file_write_all" => "def file_write_all(path: str, content: str) -> result<(), str>\nWrite file",
+        "file_exists"    => "def file_exists(path: str) -> bool\nCheck if file exists",
+        "file_lines"     => "def file_lines(path: str) -> list<str>\nRead file as list of lines",
+        // Process
+        "process_args" => "def process_args() -> list<str>\nGet command-line arguments",
+        "env_var"      => "def env_var(name: str) -> option<str>\nGet environment variable",
+        "process_exit" => "def process_exit(code: i64) -> ()\nExit with code",
+        // TCP
+        "tcp_listen"  => "def tcp_listen(port: i64) -> i64\nBind and listen, returns fd",
+        "tcp_accept"  => "def tcp_accept(fd: i64) -> i64\nAccept connection, returns fd",
+        "tcp_connect" => "def tcp_connect(host: str, port: i64) -> i64\nConnect to server",
+        "tcp_read"    => "def tcp_read(fd: i64) -> str\nRead a line from connection",
+        "tcp_write"   => "def tcp_write(fd: i64, data: str) -> ()\nWrite data to connection",
+        "tcp_close"   => "def tcp_close(fd: i64) -> ()\nClose connection",
+        // Tensor
+        "einsum"   => "def einsum(notation: str, ...) -> tensor<...>\nEinstein summation",
+        "sparsify" => "def sparsify(t: tensor<T, S>) -> sparse<T, S>\nConvert to sparse representation",
+        "densify"  => "def densify(s: sparse<T, S>) -> tensor<T, S>\nConvert sparse to dense",
+        "zeros"    => "def zeros(shape: [i64]) -> tensor<f32, S>\nCreate zero-filled tensor",
+        "ones"     => "def ones(shape: [i64]) -> tensor<f32, S>\nCreate one-filled tensor",
+        "fill"     => "def fill(shape: [i64], v: f32) -> tensor<f32, S>\nCreate tensor filled with v",
+        "linspace" => "def linspace(start: f64, end: f64, n: i64) -> tensor<f64, [N]>\nEvenly-spaced values",
+        _ => return None,
+    };
+    Some(format!("```iris\n{}\n```", sig.split_once('\n').map(|(s, _)| s).unwrap_or(sig)).to_owned()
+        + &sig.split_once('\n').map(|(_, d)| format!("\n\n{}", d)).unwrap_or_default())
+}
+
+/// Returns hover info for a keyword.
+fn keyword_hover(name: &str) -> Option<String> {
+    let info = match name {
+        "def"      => "**def** — Define a function",
+        "pub"      => "**pub** — Export a function or record for use from other files",
+        "val"      => "**val** — Immutable binding (cannot be reassigned)",
+        "var"      => "**var** — Mutable binding (can be reassigned)",
+        "if"       => "**if** — Conditional expression: `if cond { ... } else { ... }`",
+        "else"     => "**else** — Alternative branch of an if expression",
+        "while"    => "**while** — Loop while condition is true",
+        "for"      => "**for** — Range loop: `for i in start..end { ... }`",
+        "loop"     => "**loop** — Infinite loop (break to exit)",
+        "break"    => "**break** — Exit the innermost loop",
+        "continue" => "**continue** — Skip to the next loop iteration",
+        "return"   => "**return** — Early return from a function",
+        "when"     => "**when** — Pattern match expression",
+        "record"   => "**record** — Define a struct type with named fields",
+        "choice"   => "**choice** — Define an enum type with variants",
+        "const"    => "**const** — Compile-time constant",
+        "type"     => "**type** — Type alias",
+        "extern"   => "**extern** — Declare an external C function",
+        "bring"    => "**bring** — Import a module: `bring std.math`",
+        "trait"    => "**trait** — Define a trait (interface)",
+        "impl"     => "**impl** — Implement a trait for a type",
+        "spawn"    => "**spawn** — Launch a concurrent task",
+        "par"      => "**par** — Parallel execution: `par for i in 0..n { ... }`",
+        "async"    => "**async** — Mark a function as asynchronous",
+        "await"    => "**await** — Wait for an async expression to complete",
+        "true"     => "```iris\ntrue: bool\n```",
+        "false"    => "```iris\nfalse: bool\n```",
+        "none"     => "```iris\nnone: option<T>\n```\nAbsent value",
+        _ => return None,
+    };
+    Some(info.to_owned())
 }
 
 // ---------------------------------------------------------------------------
@@ -659,13 +1182,21 @@ pub fn run_lsp_server() -> std::io::Result<()> {
                     "capabilities": {
                         "textDocumentSync": 1,
                         "hoverProvider": true,
-                        "completionProvider": { "triggerCharacters": ["."] },
+                        "completionProvider": { "triggerCharacters": [".", ":"] },
                         "definitionProvider": true,
                         "documentSymbolProvider": true,
                         "signatureHelpProvider": { "triggerCharacters": ["(", ","] },
-                        "documentFormattingProvider": true
+                        "documentFormattingProvider": true,
+                        "codeActionProvider": {
+                            "codeActionKinds": ["quickfix", "refactor.extract"]
+                        },
+                        "inlayHintProvider": true,
+                        "referencesProvider": true,
+                        "renameProvider": {
+                            "prepareProvider": false
+                        }
                     },
-                    "serverInfo": { "name": "iris-lsp", "version": "0.1.0" }
+                    "serverInfo": { "name": "iris-lsp", "version": "0.2.0" }
                 }));
                 write_message(&mut stdout.lock(), &resp)?;
             }
@@ -699,7 +1230,7 @@ pub fn run_lsp_server() -> std::io::Result<()> {
                 let character = params["position"]["character"].as_u64().unwrap_or(0) as u32;
                 let hover_text = state.hover(&uri, line, character);
                 let result = hover_text.map(|t| serde_json::json!({
-                    "contents": { "kind": "markdown", "value": format!("`{}`", t) }
+                    "contents": { "kind": "markdown", "value": t }
                 })).unwrap_or(serde_json::Value::Null);
                 write_message(&mut stdout.lock(), &make_response(request_id.clone(), result))?;
             }
@@ -783,6 +1314,98 @@ pub fn run_lsp_server() -> std::io::Result<()> {
                         }])
                     })
                     .unwrap_or(serde_json::json!([]));
+                write_message(&mut stdout.lock(), &make_response(request_id.clone(), result))?;
+            }
+            "textDocument/codeAction" => {
+                let uri = params["textDocument"]["uri"].as_str().unwrap_or("").to_owned();
+                let range = &params["range"];
+                let sl = range["start"]["line"].as_u64().unwrap_or(0) as u32;
+                let sc = range["start"]["character"].as_u64().unwrap_or(0) as u32;
+                let el = range["end"]["line"].as_u64().unwrap_or(0) as u32;
+                let ec = range["end"]["character"].as_u64().unwrap_or(0) as u32;
+                let actions = state.code_actions(&uri, sl, sc, el, ec);
+                let result: Vec<serde_json::Value> = actions.into_iter().map(|a| {
+                    let mut action = serde_json::json!({
+                        "title": a.title,
+                        "kind": a.kind,
+                        "edit": {
+                            "changes": {
+                                &a.edit_uri: [{
+                                    "range": {
+                                        "start": { "line": a.edit_range.0, "character": a.edit_range.1 },
+                                        "end":   { "line": a.edit_range.2, "character": a.edit_range.3 }
+                                    },
+                                    "newText": a.new_text
+                                }]
+                            }
+                        }
+                    });
+                    if let Some(msg) = &a.diagnostic_message {
+                        action["diagnostics"] = serde_json::json!([{
+                            "message": msg,
+                            "source": "iris"
+                        }]);
+                    }
+                    action
+                }).collect();
+                write_message(&mut stdout.lock(), &make_response(
+                    request_id.clone(),
+                    serde_json::json!(result),
+                ))?;
+            }
+            "textDocument/inlayHint" => {
+                let uri = params["textDocument"]["uri"].as_str().unwrap_or("").to_owned();
+                let hints = state.inlay_hints(&uri);
+                let result: Vec<serde_json::Value> = hints.into_iter().map(|h| {
+                    serde_json::json!({
+                        "position": { "line": h.line, "character": h.character },
+                        "label": h.label,
+                        "kind": h.kind,
+                        "paddingLeft": true,
+                    })
+                }).collect();
+                write_message(&mut stdout.lock(), &make_response(
+                    request_id.clone(),
+                    serde_json::json!(result),
+                ))?;
+            }
+            "textDocument/references" => {
+                let uri = params["textDocument"]["uri"].as_str().unwrap_or("").to_owned();
+                let line = params["position"]["line"].as_u64().unwrap_or(0) as u32;
+                let character = params["position"]["character"].as_u64().unwrap_or(0) as u32;
+                let refs = state.references(&uri, line, character);
+                let result: Vec<serde_json::Value> = refs.into_iter().map(|(sl, sc, el, ec)| {
+                    serde_json::json!({
+                        "uri": &uri,
+                        "range": {
+                            "start": { "line": sl, "character": sc },
+                            "end":   { "line": el, "character": ec }
+                        }
+                    })
+                }).collect();
+                write_message(&mut stdout.lock(), &make_response(
+                    request_id.clone(),
+                    serde_json::json!(result),
+                ))?;
+            }
+            "textDocument/rename" => {
+                let uri = params["textDocument"]["uri"].as_str().unwrap_or("").to_owned();
+                let line = params["position"]["line"].as_u64().unwrap_or(0) as u32;
+                let character = params["position"]["character"].as_u64().unwrap_or(0) as u32;
+                let new_name = params["newName"].as_str().unwrap_or("").to_owned();
+                let edits = state.rename(&uri, line, character, &new_name);
+                let text_edits: Vec<serde_json::Value> = edits.into_iter().map(|(sl, sc, el, ec, text)| {
+                    serde_json::json!({
+                        "range": {
+                            "start": { "line": sl, "character": sc },
+                            "end":   { "line": el, "character": ec }
+                        },
+                        "newText": text
+                    })
+                }).collect();
+                let result = serde_json::json!({
+                    "changes": { &uri: text_edits }
+                });
                 write_message(&mut stdout.lock(), &make_response(request_id.clone(), result))?;
             }
             "shutdown" => {
@@ -884,15 +1507,21 @@ fn make_response(id: Option<serde_json::Value>, result: serde_json::Value) -> St
 }
 
 fn make_diagnostics_notification(uri: &str, diags: &[LspDiagnostic]) -> String {
-    let json_diags: Vec<serde_json::Value> = diags.iter().map(|d| serde_json::json!({
-        "range": {
-            "start": { "line": d.line, "character": d.character },
-            "end":   { "line": d.end_line, "character": d.end_character },
-        },
-        "severity": d.severity,
-        "message": d.message,
-        "source": "iris",
-    })).collect();
+    let json_diags: Vec<serde_json::Value> = diags.iter().map(|d| {
+        let mut diag = serde_json::json!({
+            "range": {
+                "start": { "line": d.line, "character": d.character },
+                "end":   { "line": d.end_line, "character": d.end_character },
+            },
+            "severity": d.severity,
+            "message": d.message,
+            "source": "iris",
+        });
+        if let Some(code) = &d.code {
+            diag["code"] = serde_json::json!(code);
+        }
+        diag
+    }).collect();
     serde_json::to_string(&serde_json::json!({
         "jsonrpc": "2.0",
         "method": "textDocument/publishDiagnostics",
@@ -903,4 +1532,75 @@ fn make_diagnostics_notification(uri: &str, diags: &[LspDiagnostic]) -> String {
 fn write_message(writer: &mut impl std::io::Write, body: &str) -> std::io::Result<()> {
     write!(writer, "Content-Length: {}\r\n\r\n{}", body.len(), body)?;
     writer.flush()
+}
+
+// ---------------------------------------------------------------------------
+// Code action helpers
+// ---------------------------------------------------------------------------
+
+/// Extracts a single-quoted name from an error message like "cannot find 'foo'".
+fn extract_quoted_name(msg: &str) -> Option<String> {
+    let start = msg.find('\'')?;
+    let rest = &msg[start + 1..];
+    let end = rest.find('\'')?;
+    Some(rest[..end].to_owned())
+}
+
+/// Suggests a `bring` statement if `name` matches a known stdlib function or module.
+fn suggest_bring_for_name(name: &str) -> Option<String> {
+    // Map well-known function names to their stdlib modules.
+    let stdlib_map: &[(&str, &str)] = &[
+        // std.math
+        ("sqrt", "std.math"), ("abs", "std.math"), ("sin", "std.math"),
+        ("cos", "std.math"), ("tan", "std.math"), ("log", "std.math"),
+        ("exp", "std.math"), ("pow", "std.math"), ("ceil", "std.math"),
+        ("floor", "std.math"), ("round", "std.math"), ("min", "std.math"),
+        ("max", "std.math"), ("pi", "std.math"),
+        // std.string
+        ("split", "std.string"), ("join", "std.string"), ("trim", "std.string"),
+        ("replace", "std.string"), ("contains", "std.string"), ("starts_with", "std.string"),
+        ("ends_with", "std.string"), ("to_upper", "std.string"), ("to_lower", "std.string"),
+        ("len", "std.string"), ("substring", "std.string"), ("char_at", "std.string"),
+        // std.fmt
+        ("format", "std.fmt"), ("to_string", "std.fmt"), ("println", "std.fmt"),
+        // std.json
+        ("parse_json", "std.json"), ("to_json", "std.json"),
+        // std.fs
+        ("read_file", "std.fs"), ("write_file", "std.fs"), ("file_exists", "std.fs"),
+        // std.time
+        ("now", "std.time"), ("sleep", "std.time"),
+        // std.http
+        ("http_get", "std.http"), ("http_post", "std.http"),
+        // std.kv
+        ("kv_set", "std.kv"), ("kv_get", "std.kv"), ("kv_delete", "std.kv"),
+        // std.csv
+        ("parse_csv", "std.csv"), ("to_csv", "std.csv"),
+        // std.set
+        ("set_new", "std.set"), ("set_add", "std.set"), ("set_contains", "std.set"),
+        // std.path
+        ("path_join", "std.path"), ("path_parent", "std.path"), ("path_ext", "std.path"),
+    ];
+
+    for (func, module) in stdlib_map {
+        if name == *func {
+            return Some(format!("bring {}", module));
+        }
+    }
+    None
+}
+
+/// Checks if a byte value is a valid identifier character.
+fn is_ident_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Checks if a word is a language keyword.
+fn is_keyword(word: &str) -> bool {
+    matches!(word,
+        "def" | "val" | "var" | "for" | "while" | "loop" | "if" | "else" | "when"
+        | "return" | "break" | "continue" | "bring" | "record" | "choice" | "const"
+        | "type" | "extern" | "trait" | "impl" | "pub" | "in" | "to" | "true" | "false"
+        | "async" | "await" | "spawn" | "par"
+        | "i64" | "i32" | "f64" | "f32" | "bool" | "str" | "u8" | "i8" | "u32" | "u64" | "usize"
+    )
 }

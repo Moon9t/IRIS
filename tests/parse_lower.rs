@@ -146,7 +146,7 @@ fn test_lower_error_on_undefined_variable() {
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
-        msg.contains("lowering") || msg.contains("undefined"),
+        msg.contains("lowering") || msg.contains("undefined") || msg.contains("cannot find"),
         "error message was: {}",
         msg
     );

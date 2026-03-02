@@ -168,7 +168,7 @@ model Bad {
     assert!(result.is_err(), "should fail on undefined output");
     let msg = result.unwrap_err().to_string();
     assert!(
-        msg.contains("undefined") || msg.contains("lowering"),
+        msg.contains("undefined") || msg.contains("lowering") || msg.contains("cannot find"),
         "error was: {}",
         msg
     );

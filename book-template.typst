@@ -1,0 +1,151 @@
+// IRIS Book — Custom Typst template for Pandoc
+// Used via: pandoc --template=book-template.typst
+
+#let conf(
+  title: none,
+  subtitle: none,
+  authors: (),
+  keywords: (),
+  date: none,
+  abstract: none,
+  lang: "en",
+  region: "US",
+  margin: (:),
+  paper: "a4",
+  font: (),
+  fontsize: 11pt,
+  sectionnumbering: none,
+  pagenumbering: none,
+  cols: 1,
+  doc,
+) = {
+  // ------- page settings -------
+  set page(
+    paper: paper,
+    margin: (top: 2.5cm, bottom: 2.5cm, left: 2.5cm, right: 2.5cm),
+    numbering: "1",
+    header: context {
+      if counter(page).get().first() > 1 {
+        set text(size: 9pt, fill: luma(120))
+        emph[The IRIS Programming Language]
+        h(1fr)
+        emph[v0.2.0]
+      }
+    },
+  )
+
+  set text(font: ("New Computer Modern", "Segoe UI", "Arial"), size: fontsize, lang: lang, region: region)
+
+  set heading(numbering: "1.1")
+  show heading.where(level: 1): it => {
+    pagebreak(weak: true)
+    set text(size: 22pt, weight: "bold")
+    block(spacing: 1.5em)[#it]
+  }
+  show heading.where(level: 2): it => {
+    set text(size: 16pt, weight: "bold")
+    block(spacing: 1.2em)[#it]
+  }
+  show heading.where(level: 3): it => {
+    set text(size: 13pt, weight: "bold")
+    block(spacing: 1em)[#it]
+  }
+
+  // Code blocks
+  show raw.where(block: true): it => {
+    set text(size: 9pt)
+    block(
+      fill: luma(245),
+      inset: 10pt,
+      radius: 4pt,
+      width: 100%,
+      it,
+    )
+  }
+
+  // Inline code
+  show raw.where(block: false): it => {
+    box(
+      fill: luma(240),
+      inset: (x: 3pt, y: 0pt),
+      outset: (y: 3pt),
+      radius: 2pt,
+      it,
+    )
+  }
+
+  // Block quotes
+  show quote.where(block: true): it => {
+    block(
+      inset: (left: 12pt, top: 8pt, bottom: 8pt, right: 8pt),
+      stroke: (left: 3pt + luma(180)),
+      fill: luma(250),
+      radius: 2pt,
+      it,
+    )
+  }
+
+  // Tables
+  set table(
+    inset: 8pt,
+    stroke: 0.5pt + luma(180),
+  )
+  show table: set text(size: 10pt)
+
+  // ===== TITLE PAGE =====
+  page(
+    numbering: none,
+    header: none,
+    margin: (top: 3cm, bottom: 3cm, left: 3cm, right: 3cm),
+  )[
+    #align(center)[
+      #v(2cm)
+
+      // Logo
+      #image("logo/iris-logo.png", width: 40%)
+
+      #v(1.5cm)
+
+      // Title
+      #text(size: 32pt, weight: "bold")[
+        The IRIS Programming Language
+      ]
+
+      #v(0.5cm)
+
+      // Subtitle
+      #text(size: 18pt, fill: luma(80))[
+        A Complete Guide
+      ]
+
+      #v(2cm)
+
+      // Horizontal rule
+      #line(length: 60%, stroke: 1pt + luma(160))
+
+      #v(1cm)
+
+      // Author / project info
+      #text(size: 14pt, fill: luma(100))[
+        IRIS Language Project
+      ]
+
+      #v(0.5cm)
+
+      #text(size: 12pt, fill: luma(140))[
+        Version 0.2.0 — 2025
+      ]
+
+      #v(3cm)
+
+      #text(size: 10pt, fill: luma(140), style: "italic")[
+        A practical guide to writing fast, expressive programs in IRIS — \
+        from your first hello world to neural networks and native binaries.
+      ]
+    ]
+  ]
+
+  // ===== BODY =====
+  counter(page).update(1)
+  doc
+}

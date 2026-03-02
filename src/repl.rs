@@ -15,6 +15,10 @@ pub struct ReplState {
     top_level: Vec<String>,
     context: Vec<String>,
     eval_counter: usize,
+    /// History of inputs for `:history` command.
+    history: Vec<String>,
+    /// Elapsed time of last evaluation.
+    last_elapsed: Option<std::time::Duration>,
 }
 
 impl Default for ReplState {
@@ -24,7 +28,13 @@ impl Default for ReplState {
 impl ReplState {
     /// Creates an empty REPL session.
     pub fn new() -> Self {
-        Self { top_level: Vec::new(), context: Vec::new(), eval_counter: 0 }
+        Self {
+            top_level: Vec::new(),
+            context: Vec::new(),
+            eval_counter: 0,
+            history: Vec::new(),
+            last_elapsed: None,
+        }
     }
 
     /// Clears all accumulated state, returning the session to its initial empty form.
@@ -32,6 +42,7 @@ impl ReplState {
         self.top_level.clear();
         self.context.clear();
         self.eval_counter = 0;
+        self.last_elapsed = None;
     }
 
     /// Evaluates one line (or a multi-line block) of IRIS input.
@@ -44,14 +55,18 @@ impl ReplState {
             return Ok(String::new());
         }
 
+        // Record in history.
+        self.history.push(trimmed.to_owned());
+
         // REPL meta-commands start with `:`.
         if let Some(cmd) = trimmed.strip_prefix(':') {
             return Ok(self.run_command(cmd.trim()));
         }
 
         let first_word = trimmed.split_whitespace().next().unwrap_or("");
+        let start = std::time::Instant::now();
 
-        match first_word {
+        let result = match first_word {
             "def" | "record" | "choice" | "const" | "type"
             | "extern" | "trait" | "impl" => {
                 self.add_top_level(trimmed)
@@ -62,7 +77,10 @@ impl ReplState {
             _ => {
                 self.eval_expression(trimmed)
             }
-        }
+        };
+
+        self.last_elapsed = Some(start.elapsed());
+        result
     }
 
     /// Returns the list of active top-level definitions (for `:env`).
@@ -70,6 +88,9 @@ impl ReplState {
 
     /// Returns the list of active context bindings (for `:env`).
     pub fn context_bindings(&self) -> &[String] { &self.context }
+
+    /// Returns the elapsed time of the last evaluation.
+    pub fn last_elapsed(&self) -> Option<std::time::Duration> { self.last_elapsed }
 
     // ------------------------------------------------------------------
     // REPL meta-command dispatch
@@ -81,32 +102,42 @@ impl ReplState {
             .unwrap_or((cmd, ""));
 
         match name {
-            "help" => concat!(
+            "help" | "h" => concat!(
                 "IRIS REPL commands:\n",
-                "  :help          — show this message\n",
+                "  :help, :h      — show this message\n",
                 "  :env           — list all active bindings and definitions\n",
                 "  :type <expr>   — show the inferred type of an expression\n",
                 "  :bring <mod>   — load a stdlib module (e.g. :bring std.math)\n",
+                "  :time          — show elapsed time of the last evaluation\n",
+                "  :history       — show input history for this session\n",
+                "  :clear         — clear the terminal screen\n",
+                "  :ir <expr>     — show the compiled IR for an expression\n",
                 "  :reset         — clear all session state\n",
-                "  :quit          — exit the REPL",
+                "  :quit, :q      — exit the REPL",
             ).to_owned(),
 
-            "env" => {
+            "env" | "e" => {
                 let mut out = String::new();
                 if self.top_level.is_empty() && self.context.is_empty() {
                     return "(empty session)".to_owned();
                 }
-                for def in &self.top_level {
-                    let first_line = def.lines().next().unwrap_or(def);
-                    out.push_str(&format!("  {}\n", first_line));
+                if !self.top_level.is_empty() {
+                    out.push_str("  Definitions:\n");
+                    for def in &self.top_level {
+                        let first_line = def.lines().next().unwrap_or(def);
+                        out.push_str(&format!("    {}\n", first_line));
+                    }
                 }
-                for binding in &self.context {
-                    out.push_str(&format!("  {}\n", binding));
+                if !self.context.is_empty() {
+                    out.push_str("  Bindings:\n");
+                    for binding in &self.context {
+                        out.push_str(&format!("    {}\n", binding));
+                    }
                 }
                 out.trim_end().to_owned()
             }
 
-            "type" => {
+            "type" | "t" => {
                 if arg.is_empty() {
                     return "usage: :type <expr>".to_owned();
                 }
@@ -121,7 +152,7 @@ impl ReplState {
                 ": (unknown)".to_owned()
             }
 
-            "bring" => {
+            "bring" | "b" => {
                 // Accept both `bring std.math` and `std.math` forms.
                 let mod_spec = if arg.starts_with("std.") { arg.to_owned() }
                     else { format!("std.{}", arg) };
@@ -141,16 +172,58 @@ impl ReplState {
                 }
             }
 
+            "time" => {
+                match self.last_elapsed {
+                    Some(d) => format!("last evaluation took {:.3}ms", d.as_secs_f64() * 1000.0),
+                    None => "no evaluation has been performed yet".to_owned(),
+                }
+            }
+
+            "history" => {
+                if self.history.is_empty() {
+                    return "(no history)".to_owned();
+                }
+                let mut out = String::new();
+                for (i, h) in self.history.iter().enumerate() {
+                    let first_line = h.lines().next().unwrap_or(h);
+                    out.push_str(&format!("  [{}] {}\n", i + 1, first_line));
+                }
+                out.trim_end().to_owned()
+            }
+
+            "clear" => {
+                // Print ANSI clear screen sequence.
+                "\x1b[2J\x1b[H".to_owned()
+            }
+
+            "ir" => {
+                if arg.is_empty() {
+                    return "usage: :ir <expr>".to_owned();
+                }
+                let n = self.eval_counter;
+                let ctx = self.context.join("\n    ");
+                let eval_fn = if ctx.is_empty() {
+                    format!("def __eval_{n}() -> i64 {{\n    {arg}\n}}")
+                } else {
+                    format!("def __eval_{n}() -> i64 {{\n    {ctx}\n    {arg}\n}}")
+                };
+                let src = self.full_source_for_eval(&eval_fn);
+                match crate::compile(&src, "repl", EmitKind::Ir) {
+                    Ok(ir) => ir.trim_end().to_owned(),
+                    Err(e) => format!("error: {}", e),
+                }
+            }
+
             "reset" => {
                 self.reset();
                 "session cleared".to_owned()
             }
 
-            "quit" | "exit" => {
+            "quit" | "exit" | "q" => {
                 std::process::exit(0);
             }
 
-            _ => format!("unknown command: :{} (try :help)", name),
+            _ => format!("unknown command: :{} — try :help for available commands", name),
         }
     }
 

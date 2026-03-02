@@ -6,6 +6,10 @@
 !README.md
 # Ignore build and target directories
 /target/
+
+# Installer build artifacts
+installer/_stage/
+installer/dist/
 # Ignore other common files
 *.log
 *.bak

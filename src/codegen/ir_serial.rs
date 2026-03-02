@@ -135,6 +135,12 @@ const OP_TCP_READ: u8          = 0x6C;
 const OP_TCP_WRITE: u8         = 0x6D;
 const OP_TCP_CLOSE: u8         = 0x6E;
 
+// Database operations
+const OP_DB_OPEN: u8           = 0x6F;
+const OP_DB_EXEC: u8           = 0x70;
+const OP_DB_QUERY: u8          = 0x71;
+const OP_DB_CLOSE: u8          = 0x72;
+
 const MAGIC: &[u8; 4] = b"IRIS";
 const VERSION: u8 = 1;
 
@@ -521,6 +527,19 @@ impl Writer {
             }
             IrInstr::FileLines { result, path } => {
                 self.u8(OP_FILE_LINES); self.vid(*result); self.vid(*path);
+            }
+            // Database
+            IrInstr::DbOpen { result, path } => {
+                self.u8(OP_DB_OPEN); self.vid(*result); self.vid(*path);
+            }
+            IrInstr::DbExec { result, db, sql } => {
+                self.u8(OP_DB_EXEC); self.vid(*result); self.vid(*db); self.vid(*sql);
+            }
+            IrInstr::DbQuery { result, db, sql } => {
+                self.u8(OP_DB_QUERY); self.vid(*result); self.vid(*db); self.vid(*sql);
+            }
+            IrInstr::DbClose { result, db } => {
+                self.u8(OP_DB_CLOSE); self.vid(*result); self.vid(*db);
             }
             IrInstr::ListContains { result, list, value } => {
                 self.u8(OP_LIST_CONTAINS); self.vid(*result); self.vid(*list); self.vid(*value);
@@ -988,6 +1007,11 @@ impl<'a> Reader<'a> {
             OP_FILE_WRITE_ALL => { let result = self.vid()?; let path = self.vid()?; let content = self.vid()?; IrInstr::FileWriteAll { result, path, content } }
             OP_FILE_EXISTS    => { let result = self.vid()?; let path = self.vid()?; IrInstr::FileExists { result, path } }
             OP_FILE_LINES     => { let result = self.vid()?; let path = self.vid()?; IrInstr::FileLines { result, path } }
+            // Database
+            OP_DB_OPEN   => { let result = self.vid()?; let path = self.vid()?; IrInstr::DbOpen { result, path } }
+            OP_DB_EXEC   => { let result = self.vid()?; let db = self.vid()?; let sql = self.vid()?; IrInstr::DbExec { result, db, sql } }
+            OP_DB_QUERY  => { let result = self.vid()?; let db = self.vid()?; let sql = self.vid()?; IrInstr::DbQuery { result, db, sql } }
+            OP_DB_CLOSE  => { let result = self.vid()?; let db = self.vid()?; IrInstr::DbClose { result, db } }
             OP_LIST_CONTAINS => { let result = self.vid()?; let list = self.vid()?; let value = self.vid()?; IrInstr::ListContains { result, list, value } }
             OP_LIST_SORT     => { let list = self.vid()?; IrInstr::ListSort { list } }
             OP_MAP_KEYS      => { let result = self.vid()?; let map = self.vid()?; IrInstr::MapKeys { result, map } }

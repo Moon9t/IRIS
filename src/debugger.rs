@@ -117,6 +117,16 @@ impl DebugSession {
         }
     }
 
+    /// Steps backwards by one step. Returns `false` if already at the beginning.
+    pub fn step_back(&mut self) -> bool {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Advances the cursor to the next frame that matches a registered breakpoint.
     ///
     /// Returns a reference to that frame, or `None` if no breakpoint is hit before the end.
@@ -135,6 +145,29 @@ impl DebugSession {
     /// Returns all recorded trace entries.
     pub fn all_frames(&self) -> &[TraceEntry] {
         &self.trace
+    }
+
+    /// Returns a simulated call stack from the current cursor position.
+    /// Walks backwards through the trace to find distinct function frames.
+    pub fn all_visible_frames(&self) -> Vec<&TraceEntry> {
+        if self.cursor >= self.trace.len() {
+            return Vec::new();
+        }
+        let current = &self.trace[self.cursor];
+        let mut frames = vec![current];
+
+        // Walk backward to find caller frames (different function names)
+        let mut seen_funcs = std::collections::HashSet::new();
+        seen_funcs.insert(&current.func_name);
+
+        for i in (0..self.cursor).rev() {
+            let entry = &self.trace[i];
+            if !seen_funcs.contains(&entry.func_name) {
+                seen_funcs.insert(&entry.func_name);
+                frames.push(entry);
+            }
+        }
+        frames
     }
 
     /// Returns `true` when the cursor is at or past the last trace entry.

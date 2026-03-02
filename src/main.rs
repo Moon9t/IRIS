@@ -115,8 +115,7 @@ fn run_repl() {
     use std::io::{BufRead, Write};
     let mut repl = iris::ReplState::new();
     let version = env!("CARGO_PKG_VERSION");
-    eprintln!("IRIS {} REPL", version);
-    eprintln!("  :help for commands · :quit to exit · Ctrl+D to exit");
+    eprintln!("\x1b[1;36mIRIS {}\x1b[0m REPL  (type \x1b[1m:help\x1b[0m for commands, \x1b[1m:quit\x1b[0m to exit)", version);
     eprintln!();
     let stdin = std::io::stdin();
     let mut accumulator = String::new();
@@ -125,9 +124,9 @@ fn run_repl() {
     loop {
         // Show continuation prompt when inside a multi-line block.
         if brace_depth > 0 {
-            eprint!("... ");
+            eprint!("\x1b[90m...\x1b[0m ");
         } else {
-            eprint!(">> ");
+            eprint!("\x1b[1;32m>>\x1b[0m ");
         }
         let _ = std::io::stderr().flush();
 
@@ -138,6 +137,7 @@ fn run_repl() {
                 if !accumulator.trim().is_empty() {
                     run_repl_input(&mut repl, accumulator.trim());
                 }
+                eprintln!();
                 break;
             }
             Ok(_) => {}
@@ -164,8 +164,25 @@ fn run_repl() {
 
 fn run_repl_input(repl: &mut iris::ReplState, input: &str) {
     match repl.eval(input) {
-        Ok(s) if !s.is_empty() => println!("{}", s),
+        Ok(s) if !s.is_empty() => {
+            println!("{}", s);
+            // Show timing for expressions (not for meta-commands which start with :).
+            if !input.trim_start().starts_with(':') {
+                if let Some(d) = repl.last_elapsed() {
+                    eprintln!("\x1b[90m  ({:.3}ms)\x1b[0m", d.as_secs_f64() * 1000.0);
+                }
+            }
+        }
         Ok(_) => {}
-        Err(e) => eprintln!("error: {}", e),
+        Err(e) => {
+            // Use the rich diagnostic renderer when possible.
+            // In the REPL the "source" is the input line itself.
+            let rendered = render_error(input, &e);
+            if rendered.trim().is_empty() {
+                eprintln!("\x1b[1;31merror\x1b[0m: {}", e);
+            } else {
+                eprint!("{}", rendered);
+            }
+        }
     }
 }

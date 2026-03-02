@@ -13,6 +13,7 @@ import {
 let client: LanguageClient | undefined;
 let statusBar: vscode.StatusBarItem;
 let outputChannel: vscode.OutputChannel;
+let serverOutputChannel: vscode.OutputChannel;
 
 // ---------------------------------------------------------------------------
 // Activation
@@ -20,12 +21,13 @@ let outputChannel: vscode.OutputChannel;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     outputChannel = vscode.window.createOutputChannel('IRIS');
-    context.subscriptions.push(outputChannel);
+    serverOutputChannel = vscode.window.createOutputChannel('IRIS Language Server');
+    context.subscriptions.push(outputChannel, serverOutputChannel);
 
-    // Status bar
+    // Status bar — click opens a pick menu with server actions
     statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
-    statusBar.command = 'iris.openRepl';
-    statusBar.tooltip = 'IRIS — Click to open REPL';
+    statusBar.command = 'iris.serverMenu';
+    statusBar.tooltip = 'IRIS Language Server — Click for options';
     updateStatusBar('starting');
     statusBar.show();
     context.subscriptions.push(statusBar);
@@ -36,10 +38,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand('iris.buildFile',  () => runIrisFile(context, 'build')),
         vscode.commands.registerCommand('iris.openRepl',   () => openRepl(context)),
         vscode.commands.registerCommand('iris.restartLsp', () => restartLsp(context)),
+        vscode.commands.registerCommand('iris.stopLsp',    () => stopLsp()),
         vscode.commands.registerCommand('iris.showIR',     () => showEmit('ir')),
         vscode.commands.registerCommand('iris.showLLVM',   () => showEmit('llvm')),
         vscode.commands.registerCommand('iris.runFunction', (uri: string, fnName: string) =>
             runNamedFunction(uri, fnName)),
+        vscode.commands.registerCommand('iris.serverMenu', () => showServerMenu(context)),
     );
 
     // Code lens provider — inline ▷ Run / ⬡ Debug buttons on zero-arg functions
@@ -70,6 +74,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }),
     );
 
+    // Respond to inlayHint setting changes by toggling the editor setting
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('iris.inlayHints.enabled')) {
+                const enabled = vscode.workspace.getConfiguration('iris').get<boolean>('inlayHints.enabled', true);
+                if (!enabled && client) {
+                    // Clear inlay hints by restarting the client (simplest approach)
+                    // The server will not send hints when the setting is off
+                }
+            }
+        }),
+    );
+
     // Start LSP
     await startLspClient(context);
 }
@@ -81,13 +98,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 function updateStatusBar(state: 'starting' | 'running' | 'stopped' | 'error'): void {
     const icons: Record<string, string> = {
         starting: '$(loading~spin)',
-        running:  '$(circle-filled)',
+        running:  '$(check)',
         stopped:  '$(circle-outline)',
         error:    '$(error)',
     };
+    const colors: Record<string, string | undefined> = {
+        starting: undefined,
+        running:  undefined,
+        stopped:  new vscode.ThemeColor('statusBarItem.warningBackground') as any,
+        error:    new vscode.ThemeColor('statusBarItem.errorBackground') as any,
+    };
     const version = getIrisVersion();
-    const label = version ? `IRIS ${version}` : 'IRIS';
+    const label = version ? `IRIS v${version}` : 'IRIS';
     statusBar.text = `${icons[state]} ${label}`;
+    statusBar.backgroundColor = colors[state] as any;
+    statusBar.tooltip = `IRIS Language Server: ${state}\nClick for server options`;
 }
 
 function getIrisVersion(): string | null {
@@ -98,6 +123,39 @@ function getIrisVersion(): string | null {
         return m ? m[0] : null;
     } catch {
         return null;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Server action menu (like rust-analyzer status bar click)
+// ---------------------------------------------------------------------------
+
+async function showServerMenu(context: vscode.ExtensionContext): Promise<void> {
+    const isRunning = client !== undefined;
+    const items: vscode.QuickPickItem[] = [
+        { label: '$(debug-restart) Restart Language Server', description: 'Restart the IRIS LSP server' },
+        { label: isRunning ? '$(debug-stop) Stop Language Server' : '$(play) Start Language Server',
+          description: isRunning ? 'Stop the IRIS LSP server' : 'Start the IRIS LSP server' },
+        { label: '$(output) Show Server Output', description: 'Open the language server output channel' },
+        { label: '$(terminal) Open REPL', description: 'Open an interactive IRIS session' },
+        { label: '$(gear) Open Settings', description: 'Configure IRIS extension settings' },
+    ];
+
+    const pick = await vscode.window.showQuickPick(items, { placeHolder: 'IRIS Language Server' });
+    if (!pick) { return; }
+
+    if (pick.label.includes('Restart')) {
+        await restartLsp(context);
+    } else if (pick.label.includes('Stop')) {
+        await stopLsp();
+    } else if (pick.label.includes('Start')) {
+        await startLspClient(context);
+    } else if (pick.label.includes('Output')) {
+        serverOutputChannel.show();
+    } else if (pick.label.includes('REPL')) {
+        openRepl(context);
+    } else if (pick.label.includes('Settings')) {
+        vscode.commands.executeCommand('workbench.action.openSettings', 'iris');
     }
 }
 
@@ -144,7 +202,11 @@ async function startLspClient(context: vscode.ExtensionContext): Promise<void> {
         synchronize: {
             fileEvents: vscode.workspace.createFileSystemWatcher('**/*.iris'),
         },
-        outputChannel: vscode.window.createOutputChannel('IRIS Language Server'),
+        outputChannel: serverOutputChannel,
+        initializationOptions: {
+            inlayHintsEnabled: vscode.workspace.getConfiguration('iris').get<boolean>('inlayHints.enabled', true),
+            inlayHintsTypeHints: vscode.workspace.getConfiguration('iris').get<boolean>('inlayHints.typeHints', true),
+        },
     };
 
     client = new LanguageClient('iris', 'IRIS Language Server', serverOptions, clientOptions);
@@ -164,26 +226,44 @@ async function startLspClient(context: vscode.ExtensionContext): Promise<void> {
         context.subscriptions.push(client);
     } catch (err) {
         updateStatusBar('error');
-        vscode.window.showErrorMessage(
-            `IRIS: Could not start language server using '${exe}'. ` +
-            `Set iris.executablePath in settings to the full path of iris.exe.`,
+        const choice = await vscode.window.showErrorMessage(
+            `IRIS: Could not start language server using '${exe}'.`,
             'Open Settings',
-        ).then(choice => {
-            if (choice === 'Open Settings') {
-                vscode.commands.executeCommand('workbench.action.openSettings', 'iris.executablePath');
-            }
-        });
+            'Retry',
+        );
+        if (choice === 'Open Settings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'iris.executablePath');
+        } else if (choice === 'Retry') {
+            await startLspClient(context);
+        }
     }
 }
 
 async function restartLsp(context: vscode.ExtensionContext): Promise<void> {
     if (client) {
-        await client.stop();
-        client.dispose();
+        updateStatusBar('starting');
+        try {
+            await client.stop();
+            client.dispose();
+        } catch { /* ignore stop errors */ }
         client = undefined;
     }
     await startLspClient(context);
-    vscode.window.showInformationMessage('IRIS language server restarted.');
+    vscode.window.showInformationMessage('IRIS: Language server restarted.');
+}
+
+async function stopLsp(): Promise<void> {
+    if (client) {
+        try {
+            await client.stop();
+            client.dispose();
+        } catch { /* ignore stop errors */ }
+        client = undefined;
+        updateStatusBar('stopped');
+        vscode.window.showInformationMessage('IRIS: Language server stopped.');
+    } else {
+        vscode.window.showInformationMessage('IRIS: Language server is not running.');
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -214,14 +294,17 @@ function runNamedFunction(uriStr: string, _fnName: string): void {
 
 function runFileAtPath(filePath: string, subcommand: 'run' | 'build'): void {
     const exe = getIrisExe();
+    const showTiming = vscode.workspace.getConfiguration('iris').get<boolean>('showTimingOnRun', true);
     outputChannel.clear();
     outputChannel.show(true);
-    outputChannel.appendLine(`$ iris ${subcommand} "${filePath}"`);
+    outputChannel.appendLine(`$ iris ${subcommand} "${path.basename(filePath)}"`);
     outputChannel.appendLine('');
 
     const args = subcommand === 'build'
         ? ['build', filePath, '-o', filePath.replace(/\.iris$/, '')]
         : ['run', filePath];
+
+    const startTime = Date.now();
 
     const proc = child_process.spawn(`"${exe}"`, args, {
         shell: true,
@@ -234,15 +317,24 @@ function runFileAtPath(filePath: string, subcommand: 'run' | 'build'): void {
     proc.stderr.on('data', (data: Buffer) => {
         const text = data.toString();
         outputChannel.append(text);
-        // Parse error lines: "error: message" or "at line X"
         parseAndShowErrors(text, filePath);
     });
     proc.on('close', (code: number | null) => {
+        const elapsed = Date.now() - startTime;
         outputChannel.appendLine('');
         if (code === 0) {
-            outputChannel.appendLine(`✓ Done (exit 0)`);
+            const timingStr = showTiming ? ` in ${elapsed}ms` : '';
+            outputChannel.appendLine(`✓ Done (exit 0)${timingStr}`);
+            // Clear run diagnostics on success
+            runDiagCollection.delete(vscode.Uri.file(filePath));
         } else {
             outputChannel.appendLine(`✗ Failed (exit ${code})`);
+            vscode.window.showErrorMessage(
+                `IRIS ${subcommand} failed — check the output panel for details.`,
+                'Show Output',
+            ).then(choice => {
+                if (choice === 'Show Output') { outputChannel.show(); }
+            });
         }
     });
     proc.on('error', (err: Error) => {
@@ -265,18 +357,62 @@ function runFileAtPath(filePath: string, subcommand: 'run' | 'build'): void {
 const runDiagCollection = vscode.languages.createDiagnosticCollection('iris-run');
 
 function parseAndShowErrors(stderr: string, filePath: string): void {
-    // Match: "error: <msg> at line N" or "error: <msg>"
     const uri = vscode.Uri.file(filePath);
     const diags: vscode.Diagnostic[] = [];
-    const lineMatch = /line (\d+)/i;
-    for (const line of stderr.split('\n')) {
-        if (line.toLowerCase().startsWith('error:')) {
-            const lm = line.match(lineMatch);
-            const lineNum = lm ? parseInt(lm[1]) - 1 : 0;
-            const range = new vscode.Range(lineNum, 0, lineNum, 999);
-            diags.push(new vscode.Diagnostic(range, line.replace(/^error:\s*/i, ''), vscode.DiagnosticSeverity.Error));
+
+    // New rich format: "error[E0100]: message" followed by " --> file:line:col"
+    const richErrorPattern = /error(?:\[(\w+)\])?\s*:\s*(.+)/g;
+    const locationPattern = /-->\s*[^:]+:(\d+):(\d+)/;
+
+    let match: RegExpExecArray | null;
+    richErrorPattern.lastIndex = 0;
+    const lines = stderr.split('\n');
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        richErrorPattern.lastIndex = 0;
+        match = richErrorPattern.exec(line);
+        if (match) {
+            const errorCode = match[1] || undefined;
+            const message = match[2].trim();
+            // Look ahead for location line
+            let lineNum = 0;
+            let colNum = 0;
+            if (i + 1 < lines.length) {
+                const locMatch = lines[i + 1].match(locationPattern);
+                if (locMatch) {
+                    lineNum = Math.max(0, parseInt(locMatch[1]) - 1);
+                    colNum = Math.max(0, parseInt(locMatch[2]) - 1);
+                }
+            }
+            const range = new vscode.Range(lineNum, colNum, lineNum, colNum + 20);
+            const diag = new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Error);
+            if (errorCode) {
+                diag.code = errorCode;
+            }
+            diag.source = 'iris';
+            diags.push(diag);
         }
     }
+
+    // Fallback: simple "error: msg at line N" pattern
+    if (diags.length === 0) {
+        const simplePattern = /error:\s*(.+)/gi;
+        const lineMatch = /line (\d+)/i;
+        for (const line of lines) {
+            simplePattern.lastIndex = 0;
+            const m = simplePattern.exec(line);
+            if (m) {
+                const lm = line.match(lineMatch);
+                const lineNum = lm ? parseInt(lm[1]) - 1 : 0;
+                const range = new vscode.Range(lineNum, 0, lineNum, 999);
+                const diag = new vscode.Diagnostic(range, m[1].trim(), vscode.DiagnosticSeverity.Error);
+                diag.source = 'iris';
+                diags.push(diag);
+            }
+        }
+    }
+
     if (diags.length > 0) {
         runDiagCollection.set(uri, diags);
     } else {

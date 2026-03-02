@@ -2,7 +2,7 @@
   "name": "iris-lang",
   "displayName": "IRIS Language",
   "description": "IRIS compiler: syntax highlighting, LSP, debugging, and REPL — Go-like developer experience",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "iris-lang",
   "engines": {
     "vscode": "^1.85.0"
@@ -104,7 +104,13 @@
       },
       {
         "command": "iris.restartLsp",
-        "title": "IRIS: Restart Language Server"
+        "title": "IRIS: Restart Language Server",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "iris.stopLsp",
+        "title": "IRIS: Stop Language Server",
+        "icon": "$(debug-stop)"
       },
       {
         "command": "iris.showIR",
@@ -139,6 +145,9 @@
         },
         {
           "command": "iris.restartLsp"
+        },
+        {
+          "command": "iris.stopLsp"
         },
         {
           "command": "iris.showIR",
@@ -186,6 +195,21 @@
             "Log messages only",
             "Log messages and their contents"
           ]
+        },
+        "iris.inlayHints.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable inlay hints (type annotations on bindings)."
+        },
+        "iris.inlayHints.typeHints": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show type hints on val/var bindings."
+        },
+        "iris.showTimingOnRun": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show elapsed compile+run time in the output channel."
         }
       }
     },

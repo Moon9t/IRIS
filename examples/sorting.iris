@@ -1,103 +1,121 @@
-// sorting.iris — Bubble sort, insertion sort, selection sort
-
-def print_list(arr: list<i64>, n: i64) -> i64 {
-    var i = 0
-    var s = "["
-    while (i < n) {
+def print_list(arr : list<i64>, n : i64) -> i64 {
+    var i = 0 var s = "[" while(i<n) {
         s = concat(s, to_str(list_get(arr, i)));
-        s = concat(s, if (i + 1) < n { ", " } else { "" })
-        i = i + 1
+        s = concat(s, if(i + 1)<n {
+            ", "
+        }
+        else {
+            ""
+        }
+       )i = i + 1
     }
     print(concat(s, "]"));
     0
 }
-
-// Bubble sort: compare adjacent pairs and swap
-def bubble_sort(arr: list<i64>, n: i64) -> i64 {
-    var pass = 0
-    while (pass < (n - 1)) {
-        var j = 0
-        while (j < (n - 1 - pass)) {
-            val a = list_get(arr, j)
-            val b = list_get(arr, j + 1)
-            val do_swap = if a > b { 1 } else { 0 }
+def bubble_sort(arr : list<i64>, n : i64) -> i64 {
+    var pass = 0 while(pass<(n - 1)) {
+        var j = 0 while(j<(n - 1 - pass)) {
+            val a = list_get(arr, j)val b = list_get(arr, j + 1)val do_swap = if a>b {
+                1
+            }
+            else {
+                0
+            }
             val _r = if do_swap == 1 {
                 list_set(arr, j, b);
                 list_set(arr, j + 1, a);
                 0
-            } else { 0 };
+            }
+            else {
+                0
+            }
+            ;
             j = j + 1
         }
         pass = pass + 1
     }
     0
 }
-
-// Selection sort: find minimum and put in place
-def selection_sort(arr: list<i64>, n: i64) -> i64 {
-    var i = 0
-    while (i < (n - 1)) {
-        var min_idx = i
-        var j = i + 1
-        while (j < n) {
-            min_idx = if list_get(arr, j) < list_get(arr, min_idx) { j } else { min_idx }
+def selection_sort(arr : list<i64>, n : i64) -> i64 {
+    var i = 0 while(i<(n - 1)) {
+        var min_idx = i var j = i + 1 while(j<n) {
+            min_idx = if list_get(arr, j)<list_get(arr, min_idx) {
+                j
+            }
+            else {
+                min_idx
+            }
             j = j + 1
         }
-        val tmp = list_get(arr, i)
-        list_set(arr, i, list_get(arr, min_idx));
+        val tmp = list_get(arr, i)list_set(arr, i, list_get(arr, min_idx));
         list_set(arr, min_idx, tmp);
         i = i + 1
     }
     0
 }
-
-// Insertion sort: shift elements to insert each in correct position
-def insertion_sort(arr: list<i64>, n: i64) -> i64 {
-    var i = 1
-    while (i < n) {
-        val key = list_get(arr, i)
-        var j = i - 1
-        var insert_at = i
-        // Shift larger elements right
-        while (j >= 0) {
-            val should_shift = if list_get(arr, j) > key { 1 } else { 0 }
+def insertion_sort(arr : list<i64>, n : i64) -> i64 {
+    var i = 1 while(i<n) {
+        val key = list_get(arr, i)var j = i - 1 var insert_at = i while(j >= 0) {
+            val should_shift = if list_get(arr, j)>key {
+                1
+            }
+            else {
+                0
+            }
             val _r = if should_shift == 1 {
                 list_set(arr, j + 1, list_get(arr, j));
                 0
-            } else { 0 };
-            insert_at = if should_shift == 1 { j } else { j + 1 }
-            j = if should_shift == 1 { j - 1 } else { -1 }
+            }
+            else {
+                0
+            }
+            ;
+            insert_at = if should_shift == 1 {
+                j
+            }
+            else {
+                j + 1
+            }
+            j = if should_shift == 1 {
+                j - 1
+            }
+            else {
+                - 1
+            }
+            
         }
         list_set(arr, insert_at, key);
         i = i + 1
     }
     0
 }
-
-def make_list7(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64) -> list<i64> {
-    val lst = list()
-    push(lst, a); push(lst, b); push(lst, c); push(lst, d);
-    push(lst, e); push(lst, f); push(lst, g);
+def make_list7(a : i64, b : i64, c : i64, d : i64, e : i64, f : i64, g : i64) -> list<i64> {
+    val lst = list()push(lst, a);
+    push(lst, b);
+    push(lst, c);
+    push(lst, d);
+    push(lst, e);
+    push(lst, f);
+    push(lst, g);
     lst
 }
-
 def main() -> i64 {
     print("=== Bubble Sort ===");
-    val arr1 = make_list7(64, 34, 25, 12, 22, 11, 90)
-    print("Before:"); val _p1 = print_list(arr1, 7);
-    val _s1 = bubble_sort(arr1, 7)
-    print("After: "); val _p2 = print_list(arr1, 7);
-
-    print("\n=== Selection Sort ===");
-    val arr2 = make_list7(29, 10, 14, 37, 13, 5, 31)
-    print("Before:"); val _p3 = print_list(arr2, 7);
-    val _s2 = selection_sort(arr2, 7)
-    print("After: "); val _p4 = print_list(arr2, 7);
-
-    print("\n=== Insertion Sort ===");
-    val arr3 = make_list7(42, 17, 3, 99, 5, 31, 8)
-    print("Before:"); val _p5 = print_list(arr3, 7);
-    val _s3 = insertion_sort(arr3, 7)
-    print("After: "); val _p6 = print_list(arr3, 7);
+    val arr1 = make_list7(64, 34, 25, 12, 22, 11, 90)print("Before:");
+    val _p1 = print_list(arr1, 7);
+    val _s1 = bubble_sort(arr1, 7)print("After: ");
+    val _p2 = print_list(arr1, 7);
+    print("
+=== Selection Sort ===");
+    val arr2 = make_list7(29, 10, 14, 37, 13, 5, 31)print("Before:");
+    val _p3 = print_list(arr2, 7);
+    val _s2 = selection_sort(arr2, 7)print("After: ");
+    val _p4 = print_list(arr2, 7);
+    print("
+=== Insertion Sort ===");
+    val arr3 = make_list7(42, 17, 3, 99, 5, 31, 8)print("Before:");
+    val _p5 = print_list(arr3, 7);
+    val _s3 = insertion_sort(arr3, 7)print("After: ");
+    val _p6 = print_list(arr3, 7);
     0
 }

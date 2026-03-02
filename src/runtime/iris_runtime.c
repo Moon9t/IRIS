@@ -743,6 +743,117 @@ IrisList* iris_file_lines(const char* path) {
 }
 
 // ---------------------------------------------------------------------------
+// Database operations (SQLite via dynamic loading)
+// ---------------------------------------------------------------------------
+
+#ifdef _WIN32
+#include <windows.h>
+static HMODULE sqlite3_lib = NULL;
+#else
+#include <dlfcn.h>
+static void* sqlite3_lib = NULL;
+#endif
+
+// SQLite3 type definitions (avoid requiring sqlite3.h)
+typedef struct sqlite3 sqlite3;
+typedef struct sqlite3_stmt sqlite3_stmt;
+#define SQLITE_OK    0
+#define SQLITE_ROW   100
+#define SQLITE_DONE  101
+
+// Function pointer types
+typedef int (*fn_sqlite3_open)(const char*, sqlite3**);
+typedef int (*fn_sqlite3_close)(sqlite3*);
+typedef int (*fn_sqlite3_exec)(sqlite3*, const char*, void*, void*, char**);
+typedef int (*fn_sqlite3_prepare_v2)(sqlite3*, const char*, int, sqlite3_stmt**, const char**);
+typedef int (*fn_sqlite3_step)(sqlite3_stmt*);
+typedef int (*fn_sqlite3_finalize)(sqlite3_stmt*);
+typedef int (*fn_sqlite3_column_count)(sqlite3_stmt*);
+typedef const unsigned char* (*fn_sqlite3_column_text)(sqlite3_stmt*, int);
+typedef void (*fn_sqlite3_free)(void*);
+
+// Loaded function pointers
+static fn_sqlite3_open         p_sqlite3_open = NULL;
+static fn_sqlite3_close        p_sqlite3_close = NULL;
+static fn_sqlite3_exec         p_sqlite3_exec = NULL;
+static fn_sqlite3_prepare_v2   p_sqlite3_prepare_v2 = NULL;
+static fn_sqlite3_step         p_sqlite3_step = NULL;
+static fn_sqlite3_finalize     p_sqlite3_finalize = NULL;
+static fn_sqlite3_column_count p_sqlite3_column_count = NULL;
+static fn_sqlite3_column_text  p_sqlite3_column_text = NULL;
+static fn_sqlite3_free         p_sqlite3_free = NULL;
+
+static int iris_load_sqlite3(void) {
+    if (p_sqlite3_open) return 1; // already loaded
+#ifdef _WIN32
+    sqlite3_lib = LoadLibraryA("sqlite3.dll");
+    if (!sqlite3_lib) return 0;
+    #define LOAD(name) p_##name = (fn_##name)GetProcAddress(sqlite3_lib, #name)
+#else
+    sqlite3_lib = dlopen("libsqlite3.so", 1 /* RTLD_LAZY */);
+    if (!sqlite3_lib) sqlite3_lib = dlopen("libsqlite3.dylib", 1);
+    if (!sqlite3_lib) return 0;
+    #define LOAD(name) p_##name = (fn_##name)dlsym(sqlite3_lib, #name)
+#endif
+    LOAD(sqlite3_open);
+    LOAD(sqlite3_close);
+    LOAD(sqlite3_exec);
+    LOAD(sqlite3_prepare_v2);
+    LOAD(sqlite3_step);
+    LOAD(sqlite3_finalize);
+    LOAD(sqlite3_column_count);
+    LOAD(sqlite3_column_text);
+    LOAD(sqlite3_free);
+    #undef LOAD
+    return p_sqlite3_open ? 1 : 0;
+}
+
+int64_t iris_db_open(const char* path) {
+    if (!iris_load_sqlite3()) return 0;
+    sqlite3* db = NULL;
+    if (p_sqlite3_open(path, &db) != SQLITE_OK) return 0;
+    return (int64_t)(intptr_t)db;
+}
+
+int64_t iris_db_exec(int64_t db, const char* sql) {
+    if (!db || !p_sqlite3_exec) return -1;
+    sqlite3* conn = (sqlite3*)(intptr_t)db;
+    char* err = NULL;
+    int rc = p_sqlite3_exec(conn, sql, NULL, NULL, &err);
+    if (err) p_sqlite3_free(err);
+    return rc == SQLITE_OK ? 0 : -1;
+}
+
+IrisList* iris_db_query(int64_t db, const char* sql) {
+    IrisList* rows = iris_list_new();
+    if (!db || !p_sqlite3_prepare_v2) return rows;
+    sqlite3* conn = (sqlite3*)(intptr_t)db;
+    sqlite3_stmt* stmt = NULL;
+    if (p_sqlite3_prepare_v2(conn, sql, -1, &stmt, NULL) != SQLITE_OK) return rows;
+    int ncols = p_sqlite3_column_count(stmt);
+    while (p_sqlite3_step(stmt) == SQLITE_ROW) {
+        IrisList* row = iris_list_new();
+        for (int i = 0; i < ncols; i++) {
+            const unsigned char* txt = p_sqlite3_column_text(stmt, i);
+            iris_list_push(row, iris_box_str(txt ? (const char*)txt : ""));
+        }
+        // Box the inner list as an IrisVal with LIST tag
+        IrisVal* row_val = (IrisVal*)xmalloc(sizeof(IrisVal));
+        row_val->tag = IRIS_TAG_LIST;
+        row_val->ptr = row;
+        iris_list_push(rows, row_val);
+    }
+    p_sqlite3_finalize(stmt);
+    return rows;
+}
+
+int64_t iris_db_close(int64_t db) {
+    if (!db || !p_sqlite3_close) return -1;
+    sqlite3* conn = (sqlite3*)(intptr_t)db;
+    return p_sqlite3_close(conn) == SQLITE_OK ? 0 : -1;
+}
+
+// ---------------------------------------------------------------------------
 // Process and environment
 // ---------------------------------------------------------------------------
 

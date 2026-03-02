@@ -1587,6 +1587,73 @@ impl<'m> Interpreter<'m> {
                         self.values.insert(*result, IrValue::List(std::rc::Rc::new(std::cell::RefCell::new(lines))));
                     }
 
+                    // ── Database operations ─────────────────────────────────
+                    IrInstr::DbOpen { result, path } => {
+                        let p = self.get(*path)?;
+                        let path_str = if let IrValue::Str(s) = p { s } else { String::new() };
+                        match rusqlite::Connection::open(&path_str) {
+                            Ok(conn) => {
+                                let handle = Box::into_raw(Box::new(conn)) as i64;
+                                self.values.insert(*result, IrValue::I64(handle));
+                            }
+                            Err(_) => {
+                                self.values.insert(*result, IrValue::I64(0));
+                            }
+                        }
+                    }
+                    IrInstr::DbExec { result, db, sql } => {
+                        let db_handle = if let IrValue::I64(h) = self.get(*db)? { h } else { 0 };
+                        let sql_str = if let IrValue::Str(s) = self.get(*sql)? { s } else { String::new() };
+                        if db_handle != 0 {
+                            let conn = unsafe { &*(db_handle as *const rusqlite::Connection) };
+                            match conn.execute_batch(&sql_str) {
+                                Ok(()) => self.values.insert(*result, IrValue::I64(0)),
+                                Err(_) => self.values.insert(*result, IrValue::I64(-1)),
+                            };
+                        } else {
+                            self.values.insert(*result, IrValue::I64(-1));
+                        }
+                    }
+                    IrInstr::DbQuery { result, db, sql } => {
+                        let db_handle = if let IrValue::I64(h) = self.get(*db)? { h } else { 0 };
+                        let sql_str = if let IrValue::Str(s) = self.get(*sql)? { s } else { String::new() };
+                        let rows: Vec<IrValue> = if db_handle != 0 {
+                            let conn = unsafe { &*(db_handle as *const rusqlite::Connection) };
+                            match conn.prepare(&sql_str) {
+                                Ok(mut stmt) => {
+                                    let col_count = stmt.column_count();
+                                    let mut all_rows = Vec::new();
+                                    if let Ok(iter) = stmt.query_map([], |row| {
+                                        let mut cols = Vec::new();
+                                        for i in 0..col_count {
+                                            let val: String = row.get::<_, String>(i).unwrap_or_default();
+                                            cols.push(IrValue::Str(val));
+                                        }
+                                        Ok(cols)
+                                    }) {
+                                        for row_result in iter {
+                                            if let Ok(cols) = row_result {
+                                                all_rows.push(IrValue::List(std::rc::Rc::new(std::cell::RefCell::new(cols))));
+                                            }
+                                        }
+                                    }
+                                    all_rows
+                                }
+                                Err(_) => vec![],
+                            }
+                        } else {
+                            vec![]
+                        };
+                        self.values.insert(*result, IrValue::List(std::rc::Rc::new(std::cell::RefCell::new(rows))));
+                    }
+                    IrInstr::DbClose { result, db } => {
+                        let db_handle = if let IrValue::I64(h) = self.get(*db)? { h } else { 0 };
+                        if db_handle != 0 {
+                            unsafe { drop(Box::from_raw(db_handle as *mut rusqlite::Connection)); }
+                        }
+                        self.values.insert(*result, IrValue::I64(0));
+                    }
+
                     // ── Phase 58: Extended collections ─────────────────────
                     IrInstr::ListContains { result, list, value } => {
                         let v = self.get(*value)?;

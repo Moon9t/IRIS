@@ -259,6 +259,14 @@ int      iris_file_exists(const char* path);
 IrisList* iris_file_lines(const char* path);
 
 // ---------------------------------------------------------------------------
+// Database operations (SQLite via embedded sqlite3)
+// ---------------------------------------------------------------------------
+int64_t  iris_db_open(const char* path);
+int64_t  iris_db_exec(int64_t db, const char* sql);
+IrisList* iris_db_query(int64_t db, const char* sql);
+int64_t  iris_db_close(int64_t db);
+
+// ---------------------------------------------------------------------------
 // Process and environment
 // ---------------------------------------------------------------------------
 void     iris_set_argv(int argc, char** argv);  /* call from generated main before user main */

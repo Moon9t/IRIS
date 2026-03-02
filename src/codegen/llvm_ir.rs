@@ -1683,6 +1683,20 @@ fn emit_instr_ir(
             writeln!(out, "  %v{} = call ptr @iris_file_lines(ptr {})", result.0, val(*path))?;
         }
 
+        // Database operations
+        IrInstr::DbOpen { result, path } => {
+            writeln!(out, "  %v{} = call i64 @iris_db_open(ptr {})", result.0, val(*path))?;
+        }
+        IrInstr::DbExec { result, db, sql } => {
+            writeln!(out, "  %v{} = call i64 @iris_db_exec(i64 {}, ptr {})", result.0, val(*db), val(*sql))?;
+        }
+        IrInstr::DbQuery { result, db, sql } => {
+            writeln!(out, "  %v{} = call ptr @iris_db_query(i64 {}, ptr {})", result.0, val(*db), val(*sql))?;
+        }
+        IrInstr::DbClose { result, db } => {
+            writeln!(out, "  %v{} = call i64 @iris_db_close(i64 {})", result.0, val(*db))?;
+        }
+
         // ── Phase 58: Extended collections ────────────────────────────────
         IrInstr::ListContains { result, list, value } => {
             let vv = val(*value);
@@ -1920,6 +1934,8 @@ fn is_side_effecting(instr: &IrInstr) -> bool {
             | IrInstr::ParFor { .. }
             | IrInstr::Barrier
             | IrInstr::FileWriteAll { .. }
+            | IrInstr::DbExec { .. }
+            | IrInstr::DbClose { .. }
             | IrInstr::ProcessExit { .. }
     )
 }
@@ -2042,6 +2058,11 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_file_write_all(ptr, ptr)",
         "declare i1 @iris_file_exists(ptr)",
         "declare ptr @iris_file_lines(ptr)",
+        // Database
+        "declare i64 @iris_db_open(ptr)",
+        "declare i64 @iris_db_exec(i64, ptr)",
+        "declare ptr @iris_db_query(i64, ptr)",
+        "declare i64 @iris_db_close(i64)",
         // Process / environment (Phase 59)
         "declare void @exit(i32)",
         "declare ptr @malloc(i64)",

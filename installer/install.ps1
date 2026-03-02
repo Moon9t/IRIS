@@ -25,7 +25,7 @@ function Write-Banner {
     Write-Host "  ██║██║  ██║██║███████║" -ForegroundColor Cyan
     Write-Host "  ╚═╝╚═╝  ╚═╝╚═╝╚══════╝" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  IRIS Language Installer  v0.1.0" -ForegroundColor White
+    Write-Host "  IRIS Language Installer  v0.2.0" -ForegroundColor White
     Write-Host "  Intermediate Representation for Intelligent Systems" -ForegroundColor DarkGray
     Write-Host ""
 }
@@ -225,7 +225,7 @@ if ($codeCmd) {
             Write-Ok "VSCode extension installed."
         } catch {
             Write-Warn "Could not install VSCode extension automatically."
-            Write-Warn "You can install it manually: code --install-extension iris-lang-0.1.0.vsix"
+            Write-Warn "You can install it manually: code --install-extension iris-lang-0.2.0.vsix"
         }
     } else {
         Write-Info "No .vsix found next to installer — skipping VSCode extension."
@@ -236,25 +236,85 @@ if ($codeCmd) {
     Write-Info "Install VSCode from https://code.visualstudio.com/ for syntax highlighting."
 }
 
-# --- Step 6: LLVM / clang detection ---
+# --- Step 6: Install bundled LLVM (clang + lld) ---
 Write-Host ""
-Write-Step "Checking for LLVM/clang (needed for 'iris build')..."
-$clangPath = Test-ClangInstalled
+Write-Step "Installing bundled LLVM (clang + lld)..."
 
+$scriptDir = $PSScriptRoot
+if (-not $scriptDir) { $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
+
+$BundledLlvmDir = Join-Path $scriptDir "toolchain\llvm\bin"
+$LlvmInstallDir = "C:\Program Files\LLVM\bin"
+
+$clangPath = Test-ClangInstalled
 if ($clangPath) {
-    Write-Ok "clang found: $clangPath"
-    Write-Info "'iris build' and 'iris run' will work for native compilation."
+    Write-Ok "clang already present: $clangPath"
+} elseif (Test-Path (Join-Path $BundledLlvmDir "clang.exe")) {
+    try {
+        New-Item -ItemType Directory -Force -Path $LlvmInstallDir | Out-Null
+        Copy-Item "$BundledLlvmDir\*" $LlvmInstallDir -Force
+        Write-Ok "Installed clang.exe + ld.lld.exe -> $LlvmInstallDir"
+    } catch {
+        Write-Warn "Could not copy to Program Files (may need admin)."
+        Write-Info "Try running this installer as Administrator, or copy manually."
+        $UserLlvm = Join-Path $env:USERPROFILE ".iris\llvm\bin"
+        New-Item -ItemType Directory -Force -Path $UserLlvm | Out-Null
+        Copy-Item "$BundledLlvmDir\*" $UserLlvm -Force
+        $LlvmInstallDir = $UserLlvm
+        Write-Ok "Installed clang + lld -> $UserLlvm (user-local fallback)"
+    }
 } else {
-    Write-Warn "clang not found on this machine."
-    Write-Host ""
-    Write-Host "  IRIS can interpret .iris files without clang ('iris --emit ir file.iris')." -ForegroundColor White
-    Write-Host "  To compile native binaries with 'iris build', install LLVM:" -ForegroundColor White
-    Write-Host "    https://releases.llvm.org/" -ForegroundColor Cyan
-    Write-Host "  Recommended: LLVM 17 Windows x64 installer from the above URL." -ForegroundColor White
-    Write-Host ""
+    Write-Warn "Bundled LLVM tools not found in installer package."
+    Write-Info "Install LLVM manually from: https://releases.llvm.org/"
 }
 
-# --- Step 7: Verify installation ---
+# --- Step 7: Install bundled MinGW sysroot (headers + libs) ---
+Write-Host ""
+Write-Step "Installing MinGW sysroot (headers + libraries)..."
+
+$BundledUcrt64 = Join-Path $scriptDir "toolchain\ucrt64"
+$Ucrt64InstallDir = "C:\msys64\ucrt64"
+
+# Check if ucrt64 sysroot is already present (lib + include directories)
+$existingSysroot = (Test-Path "$Ucrt64InstallDir\lib") -and (Test-Path "$Ucrt64InstallDir\include")
+
+if ($existingSysroot) {
+    Write-Ok "MinGW sysroot already present: $Ucrt64InstallDir"
+} elseif (Test-Path $BundledUcrt64) {
+    try {
+        New-Item -ItemType Directory -Force -Path "$Ucrt64InstallDir\lib"     | Out-Null
+        New-Item -ItemType Directory -Force -Path "$Ucrt64InstallDir\include" | Out-Null
+
+        # Copy lib (CRT objects, static libs, GCC internal libs)
+        if (Test-Path "$BundledUcrt64\lib") {
+            Copy-Item "$BundledUcrt64\lib\*" "$Ucrt64InstallDir\lib\" -Force -Recurse
+            Write-Ok "Copied MinGW libraries"
+        }
+
+        # Copy include (C headers)
+        if (Test-Path "$BundledUcrt64\include") {
+            Copy-Item "$BundledUcrt64\include\*" "$Ucrt64InstallDir\include\" -Force -Recurse
+            Write-Ok "Copied MinGW headers"
+        }
+    } catch {
+        Write-Warn "Could not install MinGW sysroot to $Ucrt64InstallDir (may need admin)."
+        $UserUcrt64 = Join-Path $env:USERPROFILE ".iris\ucrt64"
+        New-Item -ItemType Directory -Force -Path "$UserUcrt64\lib"     | Out-Null
+        New-Item -ItemType Directory -Force -Path "$UserUcrt64\include" | Out-Null
+        if (Test-Path "$BundledUcrt64\lib")     { Copy-Item "$BundledUcrt64\lib\*"     "$UserUcrt64\lib\"     -Force -Recurse }
+        if (Test-Path "$BundledUcrt64\include") { Copy-Item "$BundledUcrt64\include\*" "$UserUcrt64\include\" -Force -Recurse }
+        $Ucrt64InstallDir = $UserUcrt64
+        Write-Ok "Installed MinGW sysroot -> $UserUcrt64 (user-local fallback)"
+    }
+} else {
+    Write-Warn "Bundled MinGW sysroot not found in installer package."
+    Write-Info "Install MSYS2 manually from: https://www.msys2.org/"
+}
+
+# Ensure LLVM bin dir is in user PATH (no need for ucrt64\bin — no GCC executables)
+if (Test-Path $LlvmInstallDir)             { Add-ToUserPath -Dir $LlvmInstallDir }
+
+# --- Step 8: Verify installation ---
 Write-Host ""
 Write-Step "Verifying installation..."
 try {

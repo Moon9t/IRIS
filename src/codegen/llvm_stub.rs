@@ -953,6 +953,20 @@ fn emit_llvm_instr(
             writeln!(out, "  %v{} = call ptr @iris_file_lines(ptr {})", result.0, val(*path))?;
         }
 
+        // Database operations
+        IrInstr::DbOpen { result, path } => {
+            writeln!(out, "  %v{} = call i64 @iris_db_open(ptr {})", result.0, val(*path))?;
+        }
+        IrInstr::DbExec { result, db, sql } => {
+            writeln!(out, "  %v{} = call i64 @iris_db_exec(i64 {}, ptr {})", result.0, val(*db), val(*sql))?;
+        }
+        IrInstr::DbQuery { result, db, sql } => {
+            writeln!(out, "  %v{} = call ptr @iris_db_query(i64 {}, ptr {})", result.0, val(*db), val(*sql))?;
+        }
+        IrInstr::DbClose { result, db } => {
+            writeln!(out, "  %v{} = call i64 @iris_db_close(i64 {})", result.0, val(*db))?;
+        }
+
         // Phase 58: Extended collections
         IrInstr::ListContains { result, list, value } => {
             writeln!(out, "  %v{} = call i1 @iris_list_contains(ptr {}, ptr {})", result.0, val(*list), val(*value))?;

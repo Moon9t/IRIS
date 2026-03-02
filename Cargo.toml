@@ -1,6 +1,6 @@
 [package]
 name = "iris"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.75"
 description = "IRIS: Intermediate Representation for Intelligent Systems — an ML compiler DSL"
@@ -17,6 +17,7 @@ path = "src/lib.rs"
 [dependencies]
 thiserror = "1.0"
 serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [profile.release]
 opt-level = 3
