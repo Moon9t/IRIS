@@ -13,7 +13,7 @@
 
 ---
 
-## Quick Start
+## Quick Start :
 
 ```sh
 # Install (or download from Releases)
