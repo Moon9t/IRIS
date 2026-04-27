@@ -2,9 +2,9 @@ cargo:rerun-if-changed=src/runtime/iris_runtime.c
 cargo:rerun-if-changed=src/runtime/iris_runtime.h
 cargo:rerun-if-changed=.git/HEAD
 cargo:rerun-if-changed=.git/refs
-cargo:rustc-env=IRIS_BUILD_DATE=2026-03-08
-cargo:rustc-env=IRIS_GIT_HASH_SHORT=fce991c
-cargo:rustc-env=IRIS_GIT_HASH=fce991c869f03087f5241879e6a0545a56065705
+cargo:rustc-env=IRIS_BUILD_DATE=2026-04-18
+cargo:rustc-env=IRIS_GIT_HASH_SHORT=09f28b3
+cargo:rustc-env=IRIS_GIT_HASH=09f28b3671af4d1568aee45e45ea155cf78dc238
 cargo:rustc-env=IRIS_GIT_BRANCH=master
 cargo:rustc-env=IRIS_GIT_DIRTY=true
 cargo:rustc-env=IRIS_RUSTC_VERSION=rustc 1.91.1 (ed61e7d7e 2025-11-07)

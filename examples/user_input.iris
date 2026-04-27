@@ -1,0 +1,6 @@
+def main() -> i64 {
+    print("What is your name?");
+    val name = read_line();
+    print(concat("Hello, ", concat(name, "!")));
+    0
+}

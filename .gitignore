@@ -45,3 +45,13 @@ test_output*.txt
 # Test output
 test_results.txt
 tests/_all_tests.txt
+
+# ── Miscellaneous ──
+*.env
+*.local
+*.ll
+*.typst
+.typst_cache/
+.typst
+*.pdb
+*.json

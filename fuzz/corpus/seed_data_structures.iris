@@ -1,15 +1,14 @@
-record Node { value: i64, next: i64 }
-choice Shape {
-    Circle(f64),
-    Rect(f64, f64),
-    Empty,
+record Node {
+    value : i64, next : i64
 }
-def area(s: Shape) -> f64 {
+choice Shape {
+    Circle(f64), Rect(f64, f64), Empty, 
+}
+def area(s : Shape) -> f64 {
     when s {
-        Shape.Circle(r) => 3.14159 * r * r,
-        Shape.Rect(w, h) => w * h,
-        Shape.Empty => 0.0,
+        Shape.Circle(r) => 3.14159 * r * r, Shape.Rect(w, h) => w * h, Shape.Empty => 0.0, 
     }
+    
 }
 def main() -> i64 {
     val c = Shape.Circle(5.0);
@@ -17,10 +16,12 @@ def main() -> i64 {
     val _a1 = area(c);
     val _a2 = area(r);
     val _xs = [10, 20, 30];
-    val m = map()
-    map_set(m, "a", 1);
+    val m = map()map_set(m, "a", 1);
     map_set(m, "b", 2);
-    val n = Node { value: 1, next: 0 };
+    val n = Node {
+        value : 1, next : 0
+    }
+    ;
     print(n.value);
     0
 }

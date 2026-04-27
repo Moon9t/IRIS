@@ -174,3 +174,59 @@ def sum_to_five() -> i64 {
     // 1 + 2 + 3 + 4 + 5 = 15
     assert_eq!(out.trim(), "15", "sum 1..5 = 15, got: {}", out.trim());
 }
+
+// ---------------------------------------------------------------------------
+// 9. Nested if-expression mutations inside a while loop are threaded as loop vars
+// ---------------------------------------------------------------------------
+#[test]
+fn test_nested_if_mutations_threaded_through_while_ir() {
+    let src = r#"
+def search(limit: i64) -> i64 {
+    var lo = 0
+    var hi = limit
+    var result = -1
+    while lo <= hi {
+        val mid = lo + (hi - lo) / 2
+        if mid == 3 {
+            result = mid
+            lo = hi + 1
+        } else {
+            if mid < 3 {
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+    }
+    result
+}
+"#;
+    let ir = compile(src, "test", EmitKind::Ir).expect("should compile");
+    let header = ir
+        .lines()
+        .find(|line| line.contains("while_header"))
+        .unwrap_or("");
+    let merge6 = ir
+        .lines()
+        .find(|line| line.contains("merge6("))
+        .unwrap_or("");
+    let merge9 = ir
+        .lines()
+        .find(|line| line.contains("merge9("))
+        .unwrap_or("");
+    assert!(
+        header.contains("lo") && header.contains("hi") && header.contains("result"),
+        "expected loop-carried params for nested mutations, got header line:\n{}",
+        header
+    );
+    assert!(
+        merge6.contains("result") && merge6.contains("lo") && merge6.contains("hi"),
+        "expected outer rebinds to be merged after the nested if, got merge6 line:\n{}",
+        merge6
+    );
+    assert!(
+        merge9.contains("lo") && merge9.contains("hi"),
+        "expected inner branch updates to thread lo/hi through merge9, got line:\n{}",
+        merge9
+    );
+}

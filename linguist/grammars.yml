@@ -1,5 +1,8 @@
-# Add this entry to lib/linguist/grammars.yml
-# Points to the TextMate grammar in the IRIS repository submodule
+# Reference snippet for `grammars.yml`.
+#
+# The final vendor path is determined by the repository name passed to
+# `script/add-grammar`. This example assumes a dedicated permissively licensed
+# grammar repository named `iris-tmLanguage`.
 
-vendor/grammars/iris:
+vendor/grammars/iris-tmLanguage:
   - source.iris

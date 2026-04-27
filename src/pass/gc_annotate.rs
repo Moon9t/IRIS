@@ -116,6 +116,8 @@ impl Pass for GcAnnotatePass {
                 continue;
             }
 
+            let block_param_sources = build_block_param_sources(func);
+
             // ------------------------------------------------------------------
             // 3. Per-block: insert Retain after creation, Release before Return.
             //    Only release values whose defining block dominates this block.
@@ -138,9 +140,8 @@ impl Pass for GcAnnotatePass {
                     }
                     if let IrInstr::Return { values } = instr {
                         return_pos = Some(i);
-                        for value in values {
-                            returned_heap_vals.insert(*value);
-                        }
+                        returned_heap_vals =
+                            collect_return_escape_values(func, values, &block_param_sources);
                     }
                 }
 
@@ -205,6 +206,133 @@ impl Pass for GcAnnotatePass {
         }
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Escape / alias helpers
+// ---------------------------------------------------------------------------
+
+fn build_block_param_sources(func: &crate::ir::function::IrFunction) -> HashMap<ValueId, Vec<ValueId>> {
+    let mut sources: HashMap<ValueId, Vec<ValueId>> = HashMap::new();
+
+    for block in &func.blocks {
+        for instr in &block.instrs {
+            match instr {
+                IrInstr::Br { target, args } => {
+                    extend_block_param_sources(func, &mut sources, *target, args);
+                }
+                IrInstr::CondBr {
+                    then_block,
+                    then_args,
+                    else_block,
+                    else_args,
+                    ..
+                } => {
+                    extend_block_param_sources(func, &mut sources, *then_block, then_args);
+                    extend_block_param_sources(func, &mut sources, *else_block, else_args);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    sources
+}
+
+fn extend_block_param_sources(
+    func: &crate::ir::function::IrFunction,
+    sources: &mut HashMap<ValueId, Vec<ValueId>>,
+    target: BlockId,
+    args: &[ValueId],
+) {
+    let Some(block) = func.block(target) else {
+        return;
+    };
+
+    for (param, arg) in block.params.iter().zip(args.iter()) {
+        let entry = sources.entry(param.id).or_default();
+        if !entry.contains(arg) {
+            entry.push(*arg);
+        }
+    }
+}
+
+fn collect_return_escape_values(
+    func: &crate::ir::function::IrFunction,
+    values: &[ValueId],
+    block_param_sources: &HashMap<ValueId, Vec<ValueId>>,
+) -> HashSet<ValueId> {
+    let mut escaped_heap_vals: HashSet<ValueId> = HashSet::new();
+    let mut seen: HashSet<ValueId> = HashSet::new();
+    let mut worklist: Vec<ValueId> = values.to_vec();
+
+    while let Some(value) = worklist.pop() {
+        if !seen.insert(value) {
+            continue;
+        }
+
+        if func.value_types.get(&value).is_some_and(is_heap_ty) {
+            escaped_heap_vals.insert(value);
+        }
+
+        worklist.extend(escape_sources_for_value(
+            func,
+            value,
+            block_param_sources,
+        ));
+    }
+
+    escaped_heap_vals
+}
+
+fn escape_sources_for_value(
+    func: &crate::ir::function::IrFunction,
+    value: ValueId,
+    block_param_sources: &HashMap<ValueId, Vec<ValueId>>,
+) -> Vec<ValueId> {
+    if let Some(sources) = block_param_sources.get(&value) {
+        return sources.clone();
+    }
+
+    let Some(instr) = defining_instr(func, value) else {
+        return Vec::new();
+    };
+
+    match instr {
+        IrInstr::MakeStruct { fields, .. } => fields.clone(),
+        IrInstr::MakeTuple { elements, .. } => elements.clone(),
+        IrInstr::MakeVariant { fields, .. } => fields.clone(),
+        IrInstr::MakeSome { value, .. }
+        | IrInstr::MakeOk { value, .. }
+        | IrInstr::MakeErr { value, .. } => vec![*value],
+        IrInstr::MakeClosure { captures, .. } => captures.clone(),
+        IrInstr::GetField { base, .. } | IrInstr::GetElement { base, .. } => vec![*base],
+        IrInstr::OptionUnwrap { operand, .. }
+        | IrInstr::ResultUnwrap { operand, .. }
+        | IrInstr::ResultUnwrapErr { operand, .. } => vec![*operand],
+        _ => Vec::new(),
+    }
+}
+
+fn defining_instr<'a>(
+    func: &'a crate::ir::function::IrFunction,
+    value: ValueId,
+) -> Option<&'a IrInstr> {
+    for block in &func.blocks {
+        if block.params.iter().any(|param| param.id == value) {
+            return None;
+        }
+
+        if let Some(instr) = block
+            .instrs
+            .iter()
+            .find(|instr| instr.result().is_some_and(|result| result == value))
+        {
+            return Some(instr);
+        }
+    }
+
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +452,45 @@ mod tests {
         assert!(
             !ir.contains("release"),
             "scalar fn should not have release: {}",
+            ir
+        );
+    }
+
+    #[test]
+    fn returned_heap_alias_is_not_released() {
+        let src = r#"
+            def keep(flag: bool) -> list<i64> {
+                val xs: list<i64> = list()
+                val _ = list_push(xs, 1)
+                val alias = if flag { xs } else { xs }
+                alias
+            }
+        "#;
+        let ir = compile(src, "test", EmitKind::Ir).expect("should compile");
+        assert!(
+            !ir.contains("release %"),
+            "returned heap alias should not be released before return:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn returned_struct_heap_field_is_not_released() {
+        let src = r#"
+            record Boxed {
+                xs: list<i64>,
+            }
+
+            def build() -> Boxed {
+                val xs: list<i64> = list()
+                val _ = list_push(xs, 1)
+                Boxed { xs: xs }
+            }
+        "#;
+        let ir = compile(src, "test", EmitKind::Ir).expect("should compile");
+        assert!(
+            !ir.contains("release %"),
+            "returned struct field should keep heap members alive:\n{}",
             ir
         );
     }

@@ -1,0 +1,42 @@
+// http_server_smoke.iris -- one-shot TCP/HTTP roundtrip for CI smoke coverage
+//
+// Demonstrates: tcp_listen/tcp_accept/tcp_connect, spawn, HTTP request parsing,
+// and HTTP response construction in a deterministic single-request flow.
+
+bring std.http
+bring std.time
+
+def main() -> i64 {
+    val port = 20000 + (pid() % 1000)
+    val listener = tcp_listen(port)
+
+    spawn {
+        val conn = tcp_accept(listener)
+        val req = tcp_read(conn)
+        val path = http_request_path(req)
+        val resp = if path == "/health" {
+            http_response(200, "OK", "ready")
+        } else {
+            http_response(404, "Not Found", "missing")
+        }
+        val _ = tcp_write(conn, resp)
+        val _close_conn = tcp_close(conn)
+        val _close_listener = tcp_close(listener)
+    };
+
+    val _ = sleep(50)
+
+    val conn = tcp_connect("127.0.0.1", port)
+    val req = http_get_request("127.0.0.1", "/health")
+    val _send = tcp_write(conn, req)
+    val raw = tcp_read(conn)
+    val _close = tcp_close(conn)
+
+    val status = http_status_code(raw)
+    val body = http_body(raw)
+
+    print(concat("status: ", to_str(status)));
+    print(concat("body: ", body));
+
+    if status == 200 && body == "ready" { 0 } else { 1 }
+}

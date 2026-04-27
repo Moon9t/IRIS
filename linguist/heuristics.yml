@@ -1,8 +1,20 @@
-# Add this to lib/linguist/heuristics.yml under the .iris extension
-# Disambiguates IRIS source files from other uses of .iris extension
+# Candidate block for `lib/linguist/heuristics.yml`.
+#
+# `.iris` is noisy on GitHub, so this tries to match distinctive IRIS syntax
+# instead of claiming every `.iris` file unconditionally.
 
 disambiguations:
   - extensions: ['.iris']
     rules:
       - language: IRIS
-        pattern: '\b(def|val|var|choice|record|bring|when)\b'
+        and:
+          - pattern: '\bdef\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\('
+          - pattern:
+              - '\b(val|var|bring|record|choice|spawn)\b'
+              - '->\s*[A-Za-z_][A-Za-z0-9_<>, ]*'
+              - '\blist<[^>]+>'
+              - '\boption<[^>]+>'
+              - '\bresult<[^>]+>'
+          - negative_pattern:
+              - '^\s*#include\b'
+              - '^\s*<\?xml\b'

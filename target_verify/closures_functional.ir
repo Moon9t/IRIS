@@ -1,0 +1,302 @@
+// IRIS module: closures_functional
+
+def map_double(lst: list<i64>, n: i64) -> list<i64> {
+  entry0(%0 lst, %1 n):
+    %2 = list_new<i64>
+    retain %2
+    %3 = const.i 0 : i64
+    %13 = const.i 1 : i64
+    br bb1(%3)
+  while_header1(%4 i):
+    %6 = cmplt %4, %1
+    condbr %6, bb2(), bb3(%4)
+  while_body2():
+    %7 = list_get %0, %4
+    %9 = shl %7, %13
+    list_push %2, %9
+    %12 = add %4, %13
+    br bb1(%12)
+  while_merge3(%5 i):
+    return %2
+}
+
+def map_square(lst: list<i64>, n: i64) -> list<i64> {
+  entry0(%0 lst, %1 n):
+    %2 = list_new<i64>
+    retain %2
+    %3 = const.i 0 : i64
+    %10 = const.i 1 : i64
+    br bb1(%3)
+  while_header1(%4 i):
+    %6 = cmplt %4, %1
+    condbr %6, bb2(), bb3(%4)
+  while_body2():
+    %7 = list_get %0, %4
+    %8 = mul %7, %7
+    list_push %2, %8
+    %11 = add %4, %10
+    br bb1(%11)
+  while_merge3(%5 i):
+    return %2
+}
+
+def filter_even(lst: list<i64>, n: i64) -> list<i64> {
+  entry0(%0 lst, %1 n):
+    %2 = list_new<i64>
+    retain %2
+    %3 = const.i 0 : i64
+    %22 = const.i 1 : i64
+    br bb1(%2, %3)
+  while_header1(%4 result, %5 i):
+    %8 = cmplt %5, %1
+    condbr %8, bb2(), bb3(%4, %5)
+  while_body2():
+    %9 = list_get %0, %5
+    %11 = shr %9, %22
+    %13 = shl %11, %22
+    %14 = sub %9, %13
+    %16 = cmpeq %14, %3
+    condbr %16, bb4(), bb5()
+  while_merge3(%6 result, %7 i):
+    release %2, List(Scalar(I64))
+    return %6
+  then4():
+    list_push %4, %9
+    br bb6(%4)
+  else5():
+    br bb6(%4)
+  merge6(%19 if_result):
+    %21 = add %5, %22
+    br bb1(%19, %21)
+}
+
+def filter_positive(lst: list<i64>, n: i64) -> list<i64> {
+  entry0(%0 lst, %1 n):
+    %2 = list_new<i64>
+    retain %2
+    %3 = const.i 0 : i64
+    %15 = const.i 1 : i64
+    br bb1(%2, %3)
+  while_header1(%4 result, %5 i):
+    %8 = cmplt %5, %1
+    condbr %8, bb2(), bb3(%4, %5)
+  while_body2():
+    %9 = list_get %0, %5
+    %11 = cmpgt %9, %3
+    condbr %11, bb4(), bb5()
+  while_merge3(%6 result, %7 i):
+    release %2, List(Scalar(I64))
+    return %6
+  then4():
+    list_push %4, %9
+    br bb6(%4)
+  else5():
+    br bb6(%4)
+  merge6(%14 if_result):
+    %16 = add %5, %15
+    br bb1(%14, %16)
+}
+
+def reduce_sum(lst: list<i64>, n: i64) -> i64 {
+  entry0(%0 lst, %1 n):
+    %2 = const.i 0 : i64
+    %11 = const.i 1 : i64
+    br bb1(%2, %2)
+  while_header1(%4 acc, %5 i):
+    %8 = cmplt %5, %1
+    condbr %8, bb2(), bb3(%4, %5)
+  while_body2():
+    %9 = list_get %0, %5
+    %10 = add %4, %9
+    %12 = add %5, %11
+    br bb1(%10, %12)
+  while_merge3(%6 acc, %7 i):
+    return %6
+}
+
+def reduce_product(lst: list<i64>, n: i64) -> i64 {
+  entry0(%0 lst, %1 n):
+    %2 = const.i 1 : i64
+    %3 = const.i 0 : i64
+    br bb1(%2, %3)
+  while_header1(%4 acc, %5 i):
+    %8 = cmplt %5, %1
+    condbr %8, bb2(), bb3(%4, %5)
+  while_body2():
+    %9 = list_get %0, %5
+    %10 = mul %4, %9
+    %12 = add %5, %2
+    br bb1(%10, %12)
+  while_merge3(%6 acc, %7 i):
+    return %6
+}
+
+def reduce_max(lst: list<i64>, n: i64) -> i64 {
+  entry0(%0 lst, %1 n):
+    %2 = const.i 0 : i64
+    %3 = list_get %0, %2
+    %4 = const.i 1 : i64
+    br bb1(%3, %4)
+  while_header1(%5 best, %6 i):
+    %9 = cmplt %6, %1
+    condbr %9, bb2(), bb3(%5, %6)
+  while_body2():
+    %10 = list_get %0, %6
+    %11 = cmpgt %10, %5
+    condbr %11, bb4(), bb5()
+  while_merge3(%7 best, %8 i):
+    return %7
+  then4():
+    br bb6(%10)
+  else5():
+    br bb6(%5)
+  merge6(%13 if_result):
+    %15 = add %6, %4
+    br bb1(%13, %15)
+}
+
+def reduce_min(lst: list<i64>, n: i64) -> i64 {
+  entry0(%0 lst, %1 n):
+    %2 = const.i 0 : i64
+    %3 = list_get %0, %2
+    %4 = const.i 1 : i64
+    br bb1(%3, %4)
+  while_header1(%5 best, %6 i):
+    %9 = cmplt %6, %1
+    condbr %9, bb2(), bb3(%5, %6)
+  while_body2():
+    %10 = list_get %0, %6
+    %11 = cmplt %10, %5
+    condbr %11, bb4(), bb5()
+  while_merge3(%7 best, %8 i):
+    return %7
+  then4():
+    br bb6(%10)
+  else5():
+    br bb6(%5)
+  merge6(%13 if_result):
+    %15 = add %6, %4
+    br bb1(%13, %15)
+}
+
+def print_list(label: str, lst: list<i64>, n: i64) -> i64 {
+  entry0(%0 label, %1 lst, %2 n):
+    %3 = const.str "["
+    %4 = const.i 0 : i64
+    %13 = const.i 1 : i64
+    %17 = const.str ", "
+    br bb1(%3, %4)
+  while_header1(%5 s, %6 i):
+    %9 = cmplt %6, %2
+    condbr %9, bb2(), bb3(%5, %6)
+  while_body2():
+    %10 = list_get %1, %6
+    %11 = to_str %10
+    %12 = str_concat %5, %11
+    %14 = add %6, %13
+    %15 = cmplt %14, %2
+    condbr %15, bb4(), bb5()
+  while_merge3(%7 s, %8 i):
+    %22 = const.str "]"
+    %23 = str_concat %7, %22
+    %24 = str_concat %0, %23
+    print %24
+    return %4
+  then4():
+    %18 = str_concat %12, %17
+    br bb6(%18)
+  else5():
+    br bb6(%12)
+  merge6(%19 if_result):
+    %21 = add %6, %13
+    br bb1(%19, %21)
+}
+
+def main() -> i64 {
+  entry0():
+    %0 = list_new<i64>
+    retain %0
+    %1 = const.i 1 : i64
+    %4 = const.i 11 : i64
+    br bb1(%1)
+  while_header1(%2 i):
+    %5 = cmplt %2, %4
+    condbr %5, bb2(), bb3(%2)
+  while_body2():
+    list_push %0, %2
+    %8 = add %2, %1
+    br bb1(%8)
+  while_merge3(%3 i):
+    %9 = const.i 10 : i64
+    %10 = const.str "Source:    "
+    %11 = call @print_list(%10, %0, %9)
+    %12 = call @map_double(%0, %9)
+    retain %12
+    %13 = const.str "Doubled:   "
+    %14 = call @print_list(%13, %12, %9)
+    %15 = call @map_square(%0, %9)
+    retain %15
+    %16 = const.str "Squared:   "
+    %17 = call @print_list(%16, %15, %9)
+    %18 = call @filter_even(%0, %9)
+    retain %18
+    %19 = list_len %18
+    %20 = const.str "Evens:     "
+    %21 = call @print_list(%20, %18, %19)
+    %22 = list_new<i64>
+    retain %22
+    %24 = const.i -3 : i64
+    list_push %22, %24
+    %26 = const.i 5 : i64
+    list_push %22, %26
+    %29 = const.i -1 : i64
+    list_push %22, %29
+    %31 = const.i 7 : i64
+    list_push %22, %31
+    %33 = const.i 0 : i64
+    list_push %22, %33
+    %36 = const.i -8 : i64
+    list_push %22, %36
+    %38 = const.i 2 : i64
+    list_push %22, %38
+    %41 = call @filter_positive(%22, %31)
+    retain %41
+    %42 = list_len %41
+    %43 = const.str "Positives: "
+    %44 = call @print_list(%43, %41, %42)
+    %45 = call @reduce_sum(%0, %9)
+    %46 = const.str "Sum:     "
+    %47 = to_str %45
+    %48 = str_concat %46, %47
+    print %48
+    %50 = call @reduce_product(%0, %9)
+    %51 = const.str "Product: "
+    %52 = to_str %50
+    %53 = str_concat %51, %52
+    print %53
+    %55 = call @reduce_max(%0, %9)
+    %56 = call @reduce_min(%0, %9)
+    %57 = const.str "Max:     "
+    %58 = to_str %55
+    %59 = str_concat %57, %58
+    print %59
+    %61 = const.str "Min:     "
+    %62 = to_str %56
+    %63 = str_concat %61, %62
+    print %63
+    %65 = call @map_square(%18, %19)
+    retain %65
+    %66 = call @reduce_sum(%65, %19)
+    %67 = const.str "Sum of squares of evens: "
+    %68 = to_str %66
+    %69 = str_concat %67, %68
+    print %69
+    release %0, List(Scalar(I64))
+    release %12, List(Scalar(I64))
+    release %15, List(Scalar(I64))
+    release %18, List(Scalar(I64))
+    release %22, List(Scalar(I64))
+    release %41, List(Scalar(I64))
+    release %65, List(Scalar(I64))
+    return %33
+}

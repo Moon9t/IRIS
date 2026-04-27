@@ -1,0 +1,443 @@
+// IRIS module: matrix_ops
+
+def mat_new(rows: i64, cols: i64) -> %Matrix {
+  entry0(%0 rows, %1 cols):
+    %2 = list_new<i64>
+    retain %2
+    %3 = const.i 0 : i64
+    %6 = mul %0, %1
+    %8 = const.f 0 : f64
+    %9 = cast f64 %8 : f64 -> f64
+    %11 = const.i 1 : i64
+    br bb1(%3)
+  while_header1(%4 i):
+    %7 = cmplt %4, %6
+    condbr %7, bb2(), bb3(%4)
+  while_body2():
+    list_push %2, %9
+    %12 = add %4, %11
+    br bb1(%12)
+  while_merge3(%5 i):
+    %13 = make_struct {%2, %0, %1} : %Matrix
+    release %2, List(Scalar(I64))
+    return %13
+}
+
+def mat_get(m: %Matrix, r: i64, c: i64) -> f64 {
+  entry0(%0 m, %1 r, %2 c):
+    %3 = get_field %0[0] : list<f64>
+    retain %3
+    %4 = get_field %0[2] : i64
+    %5 = mul %1, %4
+    %6 = add %5, %2
+    %7 = list_get %3, %6
+    release %3, List(Scalar(F64))
+    return %7
+}
+
+def mat_set(m: %Matrix, r: i64, c: i64, v: f64) -> i64 {
+  entry0(%0 m, %1 r, %2 c, %3 v):
+    %4 = get_field %0[0] : list<f64>
+    retain %4
+    %5 = get_field %0[2] : i64
+    %6 = mul %1, %5
+    %7 = add %6, %2
+    list_set %4, %7, %3
+    %8 = const.i 0 : i64
+    release %4, List(Scalar(F64))
+    return %8
+}
+
+def mat_identity(n: i64) -> %Matrix {
+  entry0(%0 n):
+    %1 = call @mat_new(%0, %0)
+    %2 = const.i 0 : i64
+    %6 = const.f 1 : f64
+    %7 = cast f64 %6 : f64 -> f64
+    %9 = const.i 1 : i64
+    br bb1(%2)
+  while_header1(%3 i):
+    %5 = cmplt %3, %0
+    condbr %5, bb2(), bb3(%3)
+  while_body2():
+    %11 = get_field %1[0] : list<f64>
+    retain %11
+    %12 = get_field %1[2] : i64
+    %13 = mul %3, %12
+    %14 = add %13, %3
+    list_set %11, %14, %7
+    %10 = add %3, %9
+    br bb1(%10)
+  while_merge3(%4 i):
+    return %1
+}
+
+def mat_from(rows: i64, cols: i64, vals: list<f64>) -> %Matrix {
+  entry0(%0 rows, %1 cols, %2 vals):
+    %3 = make_struct {%2, %0, %1} : %Matrix
+    return %3
+}
+
+def mat_mul(a: %Matrix, b: %Matrix) -> %Matrix {
+  entry0(%0 a, %1 b):
+    %2 = get_field %0[1] : i64
+    %3 = get_field %0[2] : i64
+    %4 = get_field %1[2] : i64
+    %5 = call @mat_new(%2, %4)
+    %6 = const.i 0 : i64
+    %14 = const.f 0 : f64
+    %15 = cast f64 %14 : f64 -> f64
+    %31 = const.i 1 : i64
+    br bb1(%6)
+  while_header1(%7 r):
+    %9 = cmplt %7, %2
+    condbr %9, bb2(), bb3(%7)
+  while_body2():
+    br bb4(%6)
+  while_merge3(%8 r):
+    return %5
+  while_header4(%11 c):
+    %13 = cmplt %11, %4
+    condbr %13, bb5(), bb6(%11)
+  while_body5():
+    br bb7(%15, %6)
+  while_merge6(%12 c):
+    %32 = add %7, %31
+    br bb1(%32)
+  while_header7(%17 sum, %18 i):
+    %21 = cmplt %18, %3
+    condbr %21, bb8(), bb9(%17, %18)
+  while_body8():
+    %33 = get_field %0[0] : list<f64>
+    retain %33
+    %34 = get_field %0[2] : i64
+    %35 = mul %7, %34
+    %36 = add %35, %18
+    %37 = list_get %33, %36
+    %38 = get_field %1[0] : list<f64>
+    retain %38
+    %39 = get_field %1[2] : i64
+    %40 = mul %18, %39
+    %41 = add %40, %11
+    %42 = list_get %38, %41
+    %24 = mul %37, %42
+    %25 = add %17, %24
+    %27 = add %18, %31
+    br bb7(%25, %27)
+  while_merge9(%19 sum, %20 i):
+    %43 = get_field %5[0] : list<f64>
+    retain %43
+    %44 = get_field %5[2] : i64
+    %45 = mul %7, %44
+    %46 = add %45, %11
+    list_set %43, %46, %19
+    %30 = add %11, %31
+    br bb4(%30)
+}
+
+def mat_transpose(m: %Matrix) -> %Matrix {
+  entry0(%0 m):
+    %1 = get_field %0[2] : i64
+    %2 = get_field %0[1] : i64
+    %3 = call @mat_new(%1, %2)
+    %4 = const.i 0 : i64
+    %7 = get_field %0[1] : i64
+    %12 = get_field %0[2] : i64
+    %16 = const.i 1 : i64
+    br bb1(%4)
+  while_header1(%5 r):
+    %8 = cmplt %5, %7
+    condbr %8, bb2(), bb3(%5)
+  while_body2():
+    br bb4(%4)
+  while_merge3(%6 r):
+    return %3
+  while_header4(%10 c):
+    %13 = cmplt %10, %12
+    condbr %13, bb5(), bb6(%10)
+  while_body5():
+    %20 = get_field %0[0] : list<f64>
+    retain %20
+    %21 = get_field %0[2] : i64
+    %22 = mul %5, %21
+    %23 = add %22, %10
+    %24 = list_get %20, %23
+    %25 = get_field %3[0] : list<f64>
+    retain %25
+    %26 = get_field %3[2] : i64
+    %27 = mul %10, %26
+    %28 = add %27, %5
+    list_set %25, %28, %24
+    %17 = add %10, %16
+    br bb4(%17)
+  while_merge6(%11 c):
+    %19 = add %5, %16
+    br bb1(%19)
+}
+
+def mat_trace(m: %Matrix) -> f64 {
+  entry0(%0 m):
+    %1 = get_field %0[1] : i64
+    %2 = get_field %0[2] : i64
+    %3 = cmplt %1, %2
+    %4 = const.i 0 : i64
+    condbr %3, bb1(), bb2()
+  then1():
+    %5 = get_field %0[1] : i64
+    br bb3(%5)
+  else2():
+    %6 = get_field %0[2] : i64
+    br bb3(%6)
+  merge3(%7 if_result):
+    %8 = const.f 0 : f64
+    %9 = cast f64 %8 : f64 -> f64
+    %18 = const.i 1 : i64
+    br bb4(%9, %4)
+  while_header4(%11 sum, %12 i):
+    %15 = cmplt %12, %7
+    condbr %15, bb5(), bb6(%11, %12)
+  while_body5():
+    %20 = get_field %0[0] : list<f64>
+    retain %20
+    %21 = get_field %0[2] : i64
+    %22 = mul %12, %21
+    %23 = add %22, %12
+    %24 = list_get %20, %23
+    %17 = add %11, %24
+    %19 = add %12, %18
+    br bb4(%17, %19)
+  while_merge6(%13 sum, %14 i):
+    return %13
+}
+
+def mat_add(a: %Matrix, b: %Matrix) -> %Matrix {
+  entry0(%0 a, %1 b):
+    %2 = get_field %0[1] : i64
+    %3 = get_field %0[2] : i64
+    %4 = call @mat_new(%2, %3)
+    %5 = get_field %0[1] : i64
+    %6 = get_field %0[2] : i64
+    %7 = mul %5, %6
+    %8 = const.i 0 : i64
+    %12 = get_field %4[0] : list<f64>
+    retain %12
+    %13 = get_field %0[0] : list<f64>
+    retain %13
+    %15 = get_field %1[0] : list<f64>
+    retain %15
+    %19 = const.i 1 : i64
+    br bb1(%8)
+  while_header1(%9 i):
+    %11 = cmplt %9, %7
+    condbr %11, bb2(), bb3(%9)
+  while_body2():
+    %14 = list_get %13, %9
+    %16 = list_get %15, %9
+    %17 = add %14, %16
+    list_set %12, %9, %17
+    %20 = add %9, %19
+    br bb1(%20)
+  while_merge3(%10 i):
+    release %12, List(Scalar(F64))
+    release %13, List(Scalar(F64))
+    release %15, List(Scalar(F64))
+    return %4
+}
+
+def mat_scale(m: %Matrix, s: f64) -> %Matrix {
+  entry0(%0 m, %1 s):
+    %2 = get_field %0[1] : i64
+    %3 = get_field %0[2] : i64
+    %4 = call @mat_new(%2, %3)
+    %5 = get_field %0[1] : i64
+    %6 = get_field %0[2] : i64
+    %7 = mul %5, %6
+    %8 = const.i 0 : i64
+    %12 = get_field %4[0] : list<f64>
+    retain %12
+    %13 = get_field %0[0] : list<f64>
+    retain %13
+    %17 = const.i 1 : i64
+    br bb1(%8)
+  while_header1(%9 i):
+    %11 = cmplt %9, %7
+    condbr %11, bb2(), bb3(%9)
+  while_body2():
+    %14 = list_get %13, %9
+    %15 = mul %14, %1
+    list_set %12, %9, %15
+    %18 = add %9, %17
+    br bb1(%18)
+  while_merge3(%10 i):
+    release %12, List(Scalar(F64))
+    release %13, List(Scalar(F64))
+    return %4
+}
+
+def mat_norm(m: %Matrix) -> f64 {
+  entry0(%0 m):
+    %1 = get_field %0[1] : i64
+    %2 = get_field %0[2] : i64
+    %3 = mul %1, %2
+    %4 = const.f 0 : f64
+    %5 = cast f64 %4 : f64 -> f64
+    %6 = const.i 0 : i64
+    %12 = get_field %0[0] : list<f64>
+    retain %12
+    %16 = const.i 1 : i64
+    br bb1(%5, %6)
+  while_header1(%7 sum, %8 i):
+    %11 = cmplt %8, %3
+    condbr %11, bb2(), bb3(%7, %8)
+  while_body2():
+    %13 = list_get %12, %8
+    %14 = mul %13, %13
+    %15 = add %7, %14
+    %17 = add %8, %16
+    br bb1(%15, %17)
+  while_merge3(%9 sum, %10 i):
+    %18 = sqrt %9
+    release %12, List(Scalar(F64))
+    return %18
+}
+
+def mat_print(m: %Matrix, name: str) -> i64 {
+  entry0(%0 m, %1 name):
+    %2 = const.str " ("
+    %3 = get_field %0[1] : i64
+    %4 = to_str %3
+    %5 = const.str "x"
+    %6 = get_field %0[2] : i64
+    %7 = to_str %6
+    %8 = const.str "):"
+    %9 = str_concat %7, %8
+    %10 = str_concat %5, %9
+    %11 = str_concat %4, %10
+    %12 = str_concat %2, %11
+    %13 = str_concat %1, %12
+    print %13
+    %14 = const.i 0 : i64
+    %18 = get_field %0[1] : i64
+    %20 = const.str "  ["
+    %26 = get_field %0[2] : i64
+    %31 = const.i 1 : i64
+    %33 = get_field %0[2] : i64
+    %43 = const.str "]"
+    br bb1(%14)
+  while_header1(%16 r):
+    %19 = cmplt %16, %18
+    condbr %19, bb2(), bb3(%16)
+  while_body2():
+    br bb4(%20, %14)
+  while_merge3(%17 r):
+    return %14
+  while_header4(%22 row_str, %23 c):
+    %27 = cmplt %23, %26
+    condbr %27, bb5(), bb6(%22, %23)
+  while_body5():
+    %49 = get_field %0[0] : list<f64>
+    retain %49
+    %50 = get_field %0[2] : i64
+    %51 = mul %16, %50
+    %52 = add %51, %23
+    %53 = list_get %49, %52
+    %29 = to_str %53
+    %30 = str_concat %22, %29
+    %32 = add %23, %31
+    %34 = cmplt %32, %33
+    condbr %34, bb7(), bb8()
+  while_merge6(%24 row_str, %25 c):
+    %44 = str_concat %24, %43
+    print %44
+    %47 = add %16, %31
+    br bb1(%47)
+  then7():
+    br bb9(%14)
+  else8():
+    br bb9(%14)
+  merge9(%40 if_result):
+    %42 = add %23, %31
+    br bb4(%30, %42)
+}
+
+def main() -> i64 {
+  entry0():
+    %0 = list_new<i64>
+    retain %0
+    %1 = const.f 1 : f64
+    %2 = cast f64 %1 : f64 -> f64
+    list_push %0, %2
+    %3 = const.i 0 : i64
+    %4 = const.f 2 : f64
+    %5 = cast f64 %4 : f64 -> f64
+    list_push %0, %5
+    %7 = const.f 3 : f64
+    %8 = cast f64 %7 : f64 -> f64
+    list_push %0, %8
+    %10 = const.f 4 : f64
+    %11 = cast f64 %10 : f64 -> f64
+    list_push %0, %11
+    %13 = const.f 5 : f64
+    %14 = cast f64 %13 : f64 -> f64
+    list_push %0, %14
+    %16 = const.f 6 : f64
+    %17 = cast f64 %16 : f64 -> f64
+    list_push %0, %17
+    %19 = const.i 2 : i64
+    %20 = const.i 3 : i64
+    %77 = make_struct {%0, %19, %20} : %Matrix
+    %22 = const.str "A"
+    %23 = call @mat_print(%77, %22)
+    %24 = list_new<i64>
+    retain %24
+    %25 = const.f 7 : f64
+    %26 = cast f64 %25 : f64 -> f64
+    list_push %24, %26
+    %28 = const.f 8 : f64
+    %29 = cast f64 %28 : f64 -> f64
+    list_push %24, %29
+    %31 = const.f 9 : f64
+    %32 = cast f64 %31 : f64 -> f64
+    list_push %24, %32
+    %34 = const.f 10 : f64
+    %35 = cast f64 %34 : f64 -> f64
+    list_push %24, %35
+    %37 = const.f 11 : f64
+    %38 = cast f64 %37 : f64 -> f64
+    list_push %24, %38
+    %40 = const.f 12 : f64
+    %41 = cast f64 %40 : f64 -> f64
+    list_push %24, %41
+    %78 = make_struct {%24, %20, %19} : %Matrix
+    %46 = const.str "B"
+    %47 = call @mat_print(%78, %46)
+    %48 = call @mat_mul(%77, %78)
+    %49 = const.str "A @ B"
+    %50 = call @mat_print(%48, %49)
+    %51 = call @mat_transpose(%77)
+    %52 = const.str "A^T"
+    %53 = call @mat_print(%51, %52)
+    %55 = call @mat_identity(%20)
+    %56 = const.str "I_3"
+    %57 = call @mat_print(%55, %56)
+    %58 = const.str "trace(I_3) = "
+    %59 = call @mat_trace(%55)
+    %60 = to_str %59
+    %61 = str_concat %58, %60
+    print %61
+    %64 = cast f64 %4 : f64 -> f64
+    %65 = call @mat_scale(%77, %64)
+    %66 = const.str "2 * A"
+    %67 = call @mat_print(%65, %66)
+    %68 = call @mat_add(%77, %77)
+    %69 = const.str "A + A"
+    %70 = call @mat_print(%68, %69)
+    %71 = const.str "||A||_F = "
+    %72 = call @mat_norm(%77)
+    %73 = to_str %72
+    %74 = str_concat %71, %73
+    print %74
+    release %0, List(Scalar(I64))
+    release %24, List(Scalar(I64))
+    return %3
+}

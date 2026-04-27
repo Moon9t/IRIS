@@ -1,0 +1,146 @@
+name: Native Smoke
+
+on:
+  push:
+    branches: [master, main, dev]
+  pull_request:
+    branches: [master, main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native-smoke:
+    name: Native Smoke (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x64
+            runner: ubuntu-latest
+            shell_family: unix
+            timeout_cmd: timeout
+          - label: linux-arm64
+            runner: ubuntu-24.04-arm
+            shell_family: unix
+            timeout_cmd: timeout
+          - label: windows-x64
+            runner: windows-latest
+            shell_family: windows
+          - label: macos-x64
+            runner: macos-13
+            shell_family: unix
+            timeout_cmd: gtimeout
+          - label: macos-arm64
+            runner: macos-14
+            shell_family: unix
+            timeout_cmd: gtimeout
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config clang lld
+          echo "IRIS_CLANG=/usr/bin/clang" >> "$GITHUB_ENV"
+
+      - name: Install LLVM toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          choco install llvm --version=18.1.8 --no-progress -y
+          $llvmBin = Join-Path $env:ProgramFiles 'LLVM\bin'
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "IRIS_CLANG=$llvmBin\clang.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install LLVM toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm coreutils
+          LLVM_PREFIX="$(brew --prefix llvm)"
+          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
+          echo "IRIS_CLANG=$LLVM_PREFIX/bin/clang" >> "$GITHUB_ENV"
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: native-smoke-${{ matrix.label }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: native-smoke-${{ matrix.label }}-
+
+      - name: Build debug compiler
+        run: cargo build --verbose
+
+      - name: Native regression tests
+        run: |
+          cargo test --test phase16 test_nested_if_mutations_threaded_through_while_ir
+          cargo test --test phase134 native_returned_
+
+      - name: Native example smoke (Unix)
+        if: matrix.shell_family == 'unix'
+        run: |
+          ${{ matrix.timeout_cmd }} 120s ./target/debug/iris run examples/algorithms.iris
+          ${{ matrix.timeout_cmd }} 120s ./target/debug/iris run examples/closures_functional.iris
+          ${{ matrix.timeout_cmd }} 120s ./target/debug/iris run examples/matrix_ops.iris
+          ${{ matrix.timeout_cmd }} 120s ./target/debug/iris run examples/concurrency.iris
+          ${{ matrix.timeout_cmd }} 120s ./target/debug/iris run examples/http_server_smoke.iris
+          IRIS_SOAK_DURATION_MS=5000 IRIS_SOAK_REPORT_MS=1000 ${{ matrix.timeout_cmd }} 60s ./target/debug/iris run examples/runtime_soak.iris
+
+      - name: Native example smoke (Windows)
+        if: matrix.shell_family == 'windows'
+        shell: powershell
+        run: |
+          function Invoke-IrisRun {
+            param(
+              [string]$Example,
+              [int]$TimeoutMs = 120000,
+              [hashtable]$ExtraEnv = @{}
+            )
+
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = (Resolve-Path '.\target\debug\iris.exe').Path
+            $psi.Arguments = "run `"$((Resolve-Path $Example).Path)`""
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+
+            foreach ($key in $ExtraEnv.Keys) {
+              $psi.Environment[$key] = [string]$ExtraEnv[$key]
+            }
+
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            if (-not $proc.WaitForExit($TimeoutMs)) {
+              try { $proc.Kill() } catch {}
+              throw "Timed out while running $Example"
+            }
+
+            $stdout = $proc.StandardOutput.ReadToEnd()
+            $stderr = $proc.StandardError.ReadToEnd()
+
+            if ($stdout) { Write-Host $stdout }
+            if ($stderr) { Write-Host $stderr }
+
+            if ($proc.ExitCode -ne 0) {
+              throw "Native smoke failed for $Example with exit code $($proc.ExitCode)"
+            }
+          }
+
+          Invoke-IrisRun -Example 'examples/algorithms.iris'
+          Invoke-IrisRun -Example 'examples/closures_functional.iris'
+          Invoke-IrisRun -Example 'examples/matrix_ops.iris'
+          Invoke-IrisRun -Example 'examples/concurrency.iris'
+          Invoke-IrisRun -Example 'examples/http_server_smoke.iris'
+          Invoke-IrisRun -Example 'examples/runtime_soak.iris' -TimeoutMs 60000 -ExtraEnv @{
+            IRIS_SOAK_DURATION_MS = '5000'
+            IRIS_SOAK_REPORT_MS = '1000'
+          }

@@ -1,0 +1,26 @@
+def produce_squares(n: i64) -> list<i64> {
+    val queue = list()
+    var i = 0
+    while i < n {
+        push(queue, i * i);
+        i = i + 1
+    }
+    queue
+}
+
+def consume_sum(queue: list<i64>, n: i64) -> i64 {
+    var total = 0
+    var i = 0
+    while i < n {
+        total = total + list_get(queue, i)
+        i = i + 1
+    }
+    total
+}
+
+def main() -> i64 {
+    val queue = produce_squares(10)
+    val total = consume_sum(queue, len(queue))
+    print(concat("sum_of_squares=", to_str(total)));
+    0
+}

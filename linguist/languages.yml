@@ -1,11 +1,14 @@
-# Add this entry alphabetically under "I" in lib/linguist/languages.yml
-# See: https://github.com/github/linguist/blob/main/lib/linguist/languages.yml
+# Add this entry alphabetically under "I" in lib/linguist/languages.yml.
+# Leave `language_id` out here; Linguist generates it with `script/update-ids`.
 
 IRIS:
   type: programming
-  color: "#6a0dad"
+  color: "#6A0DAD"
+  aliases:
+    - iris-lang
   extensions:
     - ".iris"
   tm_scope: source.iris
   ace_mode: text
-  language_id: 1174939200  # Randomly generated; must be unique across linguist
+  interpreters:
+    - iris

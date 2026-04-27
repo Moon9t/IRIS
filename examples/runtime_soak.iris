@@ -1,0 +1,77 @@
+// runtime_soak.iris -- configurable long-running compiled runtime soak target
+//
+// Environment variables:
+//   IRIS_SOAK_DURATION_MS   total runtime budget in milliseconds
+//   IRIS_SOAK_WIDTH         per-iteration allocation width
+//   IRIS_SOAK_REPORT_MS     heartbeat interval in milliseconds
+//   IRIS_SOAK_SLEEP_MS      optional sleep per iteration
+
+bring std.time
+
+def env_i64(key: str, fallback: i64) -> i64 {
+    val raw = env_get(key)
+    if len(raw) > 0 {
+        val parsed = parse_i64(raw)
+        if is_some(parsed) { unwrap(parsed) } else { fallback }
+    } else {
+        fallback
+    }
+}
+
+def allocate_batch(seed: i64, width: i64) -> i64 {
+    val xs: list<i64> = list()
+    var i = 0
+    var acc = seed
+    while i < width {
+        val v = acc + i
+        val _ = push(xs, v)
+        acc = acc + (v % 17)
+        i = i + 1
+    }
+
+    var sum = 0
+    var j = 0
+    while j < len(xs) {
+        sum = sum + list_get(xs, j)
+        j = j + 1
+    }
+    sum
+}
+
+def main() -> i64 {
+    val duration_ms = env_i64("IRIS_SOAK_DURATION_MS", 2000)
+    val width = env_i64("IRIS_SOAK_WIDTH", 128)
+    val report_ms = env_i64("IRIS_SOAK_REPORT_MS", 500)
+    val sleep_ms_per_iter = env_i64("IRIS_SOAK_SLEEP_MS", 0)
+
+    val start = now_ms()
+    var next_report = report_ms
+    var iteration = 0
+    var checksum = 0
+
+    while elapsed_ms(start) < duration_ms {
+        val batch_sum = allocate_batch(iteration, width)
+        checksum = checksum + batch_sum
+
+        if sleep_ms_per_iter > 0 {
+            val _ = sleep(sleep_ms_per_iter)
+        } else {
+            val _noop = 0
+        };
+
+        val elapsed = elapsed_ms(start)
+        if elapsed >= next_report {
+            print(concat("soak_ms=", to_str(elapsed)));
+            print(concat("iterations=", to_str(iteration + 1)));
+            next_report = next_report + report_ms
+        } else {
+            val _noop = 0
+        };
+
+        iteration = iteration + 1
+    }
+
+    print(concat("final_iterations=", to_str(iteration)));
+    print(concat("checksum=", to_str(checksum)));
+    0
+}

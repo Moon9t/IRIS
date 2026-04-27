@@ -190,6 +190,45 @@ def main() -> i64 {
     assert_eq!(eval(src), "9");
 }
 
+#[test]
+fn native_returned_list_alias_survives_call_boundary() {
+    let src = r#"
+def choose(flag: bool) -> list<i64> {
+    val xs: list<i64> = list()
+    val _ = list_push(xs, 4)
+    val _ = list_push(xs, 8)
+    val alias = if flag { xs } else { xs }
+    alias
+}
+
+def main() -> i64 {
+    list_get(choose(true), 1)
+}
+"#;
+    assert_eq!(eval(src), "8");
+}
+
+#[test]
+fn native_returned_struct_with_heap_field_survives_call_boundary() {
+    let src = r#"
+record Boxed {
+    xs: list<i64>,
+}
+
+def build() -> Boxed {
+    val xs: list<i64> = list()
+    val _ = list_push(xs, 5)
+    val _ = list_push(xs, 12)
+    Boxed { xs: xs }
+}
+
+def main() -> i64 {
+    list_get(build().xs, 1)
+}
+"#;
+    assert_eq!(eval(src), "12");
+}
+
 // ── HTTP server stdlib ────────────────────────────────────────────────────────
 
 #[test]

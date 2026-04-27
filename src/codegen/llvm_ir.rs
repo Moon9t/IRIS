@@ -950,6 +950,18 @@ fn emit_function_body(
                             stack.push(*then_block);
                             stack.push(*else_block);
                         }
+                        IrInstr::SwitchVariant {
+                            arms,
+                            default_block,
+                            ..
+                        } => {
+                            for (_, bb) in arms {
+                                stack.push(*bb);
+                            }
+                            if let Some(def_bb) = default_block {
+                                stack.push(*def_bb);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -1431,6 +1443,11 @@ fn box_to_ptr(
             }
             _ => {
                 // Not a scalar — already a ptr. No boxing needed.
+                if emitted_ty == Some("ptr") && value_ty != Some(&IrType::Infer) {
+                    // Just debug the type
+                    // println!("box_to_ptr fallback for type {:?}", value_ty);
+                }
+                let _ = value_ty;
                 Ok(value_str.to_owned())
             }
         },

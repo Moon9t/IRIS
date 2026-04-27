@@ -1,0 +1,150 @@
+name: Runtime Soak
+
+on:
+  schedule:
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      duration_ms:
+        description: 'Soak duration per job in milliseconds'
+        required: false
+        default: '7200000'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  soak:
+    name: Runtime Soak (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 210
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x64
+            runner: ubuntu-latest
+            shell_family: unix
+            timeout_cmd: timeout
+          - label: linux-arm64
+            runner: ubuntu-24.04-arm
+            shell_family: unix
+            timeout_cmd: timeout
+          - label: windows-x64
+            runner: windows-latest
+            shell_family: windows
+          - label: macos-arm64
+            runner: macos-14
+            shell_family: unix
+            timeout_cmd: gtimeout
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config clang lld
+          echo "IRIS_CLANG=/usr/bin/clang" >> "$GITHUB_ENV"
+
+      - name: Install LLVM toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          choco install llvm --version=18.1.8 --no-progress -y
+          $llvmBin = Join-Path $env:ProgramFiles 'LLVM\bin'
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "IRIS_CLANG=$llvmBin\clang.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install LLVM toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm coreutils
+          LLVM_PREFIX="$(brew --prefix llvm)"
+          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
+          echo "IRIS_CLANG=$LLVM_PREFIX/bin/clang" >> "$GITHUB_ENV"
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: runtime-soak-${{ matrix.label }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: runtime-soak-${{ matrix.label }}-
+
+      - name: Build debug compiler
+        run: cargo build --verbose
+
+      - name: Build soak binary (Unix)
+        if: matrix.shell_family == 'unix'
+        run: ./target/debug/iris build examples/runtime_soak.iris -o runtime_soak
+
+      - name: Build soak binary (Windows)
+        if: matrix.shell_family == 'windows'
+        shell: powershell
+        run: .\target\debug\iris.exe build examples/runtime_soak.iris -o runtime_soak.exe
+
+      - name: Run soak binary (Unix)
+        if: matrix.shell_family == 'unix'
+        run: |
+          DURATION="${{ github.event.inputs.duration_ms }}"
+          if [ -z "$DURATION" ]; then
+            DURATION=7200000
+          fi
+          IRIS_SOAK_DURATION_MS="$DURATION" \
+          IRIS_SOAK_REPORT_MS=300000 \
+          IRIS_SOAK_WIDTH=256 \
+          ${{ matrix.timeout_cmd }} 150m ./runtime_soak | tee runtime-soak.log
+
+      - name: Run soak binary (Windows)
+        if: matrix.shell_family == 'windows'
+        shell: powershell
+        run: |
+          $duration = '${{ github.event.inputs.duration_ms }}'
+          if ([string]::IsNullOrWhiteSpace($duration)) {
+            $duration = '7200000'
+          }
+
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = (Resolve-Path '.\runtime_soak.exe').Path
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $psi.Environment['IRIS_SOAK_DURATION_MS'] = $duration
+          $psi.Environment['IRIS_SOAK_REPORT_MS'] = '300000'
+          $psi.Environment['IRIS_SOAK_WIDTH'] = '256'
+
+          $proc = [System.Diagnostics.Process]::Start($psi)
+          if (-not $proc.WaitForExit(9000000)) {
+            try { $proc.Kill() } catch {}
+            throw 'Runtime soak timed out'
+          }
+
+          $stdout = $proc.StandardOutput.ReadToEnd()
+          $stderr = $proc.StandardError.ReadToEnd()
+
+          $stdout | Out-File -FilePath runtime-soak.log -Encoding utf8
+          if ($stderr) {
+            $stderr | Out-File -FilePath runtime-soak.stderr.log -Encoding utf8
+            Write-Host $stderr
+          }
+          if ($stdout) { Write-Host $stdout }
+
+          if ($proc.ExitCode -ne 0) {
+            throw "Runtime soak failed with exit code $($proc.ExitCode)"
+          }
+
+      - name: Upload soak logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-soak-${{ matrix.label }}
+          path: |
+            runtime-soak.log
+            runtime-soak.stderr.log

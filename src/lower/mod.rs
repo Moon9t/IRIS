@@ -842,7 +842,11 @@ impl<'m> Lowerer<'m> {
                                 detail: format!("missing field '{}' in struct literal", field_name),
                                 span: *span,
                             })?;
+                    // Propagate the struct field type down as binding_ty so `list()` can infer its type.
+                    let prev_binding_ty = self.binding_ty.take();
+                    self.binding_ty = Some(_field_ty.clone());
                     let (val, _) = self.lower_expr(&provided.1)?;
+                    self.binding_ty = prev_binding_ty;
                     field_vals.push(val);
                 }
 
@@ -4490,6 +4494,16 @@ impl<'m> Lowerer<'m> {
 
         // 1. Evaluate condition in the current block.
         let (cond_val, _) = self.lower_expr(cond)?;
+        let outer_scope = self.scope.clone();
+        let mut rebound_names = find_rebound_vars(then_blk);
+        if let Some(else_blk) = else_blk {
+            for name in find_rebound_vars(else_blk) {
+                if !rebound_names.contains(&name) {
+                    rebound_names.push(name);
+                }
+            }
+        }
+        rebound_names.retain(|name| outer_scope.contains_key(name));
 
         if let Some(else_blk) = else_blk {
             // Full if/else: three-block CFG (then / else / merge).
@@ -4522,18 +4536,27 @@ impl<'m> Lowerer<'m> {
             );
 
             // Lower THEN branch.
-            let outer_scope = self.scope.clone();
             self.builder.set_current_block(then_bb);
+            self.scope = outer_scope.clone();
             let then_result = self.lower_block(then_blk)?;
+            let then_scope = self.scope.clone();
             if !self.builder.is_current_block_terminated() {
-                let then_arg = then_result
+                let mut then_args = vec![then_result
                     .as_ref()
                     .map(|(then_val, _)| *then_val)
-                    .unwrap_or(unit_val);
+                    .unwrap_or(unit_val)];
+                for name in &rebound_names {
+                    let rebound_val = then_scope
+                        .get(name)
+                        .or_else(|| outer_scope.get(name))
+                        .map(|(val, _)| *val)
+                        .expect("rebound variable missing from then-scope");
+                    then_args.push(rebound_val);
+                }
                 self.builder.push_instr(
                     IrInstr::Br {
                         target: merge_bb,
-                        args: vec![then_arg],
+                        args: then_args,
                     },
                     None,
                 );
@@ -4542,21 +4565,31 @@ impl<'m> Lowerer<'m> {
 
             // Lower ELSE branch.
             self.builder.set_current_block(else_bb);
+            self.scope = outer_scope.clone();
             let else_result = self.lower_block(else_blk)?;
+            let else_scope = self.scope.clone();
             if !self.builder.is_current_block_terminated() {
-                let else_arg = else_result
+                let mut else_args = vec![else_result
                     .as_ref()
                     .map(|(else_val, _)| *else_val)
-                    .unwrap_or(unit_val);
+                    .unwrap_or(unit_val)];
+                for name in &rebound_names {
+                    let rebound_val = else_scope
+                        .get(name)
+                        .or_else(|| outer_scope.get(name))
+                        .map(|(val, _)| *val)
+                        .expect("rebound variable missing from else-scope");
+                    else_args.push(rebound_val);
+                }
                 self.builder.push_instr(
                     IrInstr::Br {
                         target: merge_bb,
-                        args: vec![else_arg],
+                        args: else_args,
                     },
                     None,
                 );
             }
-            self.scope = outer_scope;
+            self.scope = outer_scope.clone();
 
             // Merge block parameter type = type of whichever branch produced a value.
             let result_ty = match (&then_result, &else_result) {
@@ -4565,10 +4598,21 @@ impl<'m> Lowerer<'m> {
                 (None, None) => unit_ty,
             };
 
-            let result =
-                self.builder
-                    .add_block_param(merge_bb, Some("if_result"), result_ty.clone());
+            let result = self
+                .builder
+                .add_block_param(merge_bb, Some("if_result"), result_ty.clone());
+            let mut rebound_params = Vec::new();
+            for name in &rebound_names {
+                let Some((_, ty)) = outer_scope.get(name) else {
+                    continue;
+                };
+                let param = self.builder.add_block_param(merge_bb, Some(name), ty.clone());
+                rebound_params.push((name.clone(), param, ty.clone()));
+            }
             self.builder.set_current_block(merge_bb);
+            for (name, param, ty) in rebound_params {
+                self.scope.insert(name, (param, ty));
+            }
             Ok((result, result_ty))
         } else {
             // if-without-else: two-block CFG (then / merge).
@@ -4594,31 +4638,56 @@ impl<'m> Lowerer<'m> {
                     then_block: then_bb,
                     then_args: vec![],
                     else_block: merge_bb,
-                    else_args: vec![unit_val],
+                    else_args: std::iter::once(unit_val)
+                        .chain(rebound_names.iter().filter_map(|name| {
+                            outer_scope.get(name).map(|(val, _)| *val)
+                        }))
+                        .collect(),
                 },
                 None,
             );
 
             // Lower THEN branch (side effects only; result is discarded).
-            let outer_scope = self.scope.clone();
             self.builder.set_current_block(then_bb);
+            self.scope = outer_scope.clone();
             let _then_result = self.lower_block(then_blk)?;
+            let then_scope = self.scope.clone();
             if !self.builder.is_current_block_terminated() {
                 // Branch didn't return early: jump to merge with unit.
+                let mut then_args = vec![unit_val];
+                for name in &rebound_names {
+                    let rebound_val = then_scope
+                        .get(name)
+                        .or_else(|| outer_scope.get(name))
+                        .map(|(val, _)| *val)
+                        .expect("rebound variable missing from then-scope");
+                    then_args.push(rebound_val);
+                }
                 self.builder.push_instr(
                     IrInstr::Br {
                         target: merge_bb,
-                        args: vec![unit_val],
+                        args: then_args,
                     },
                     None,
                 );
             }
-            self.scope = outer_scope;
+            self.scope = outer_scope.clone();
 
             let merge_param =
                 self.builder
                     .add_block_param(merge_bb, Some("if_result"), unit_ty.clone());
+            let mut rebound_params = Vec::new();
+            for name in &rebound_names {
+                let Some((_, ty)) = outer_scope.get(name) else {
+                    continue;
+                };
+                let param = self.builder.add_block_param(merge_bb, Some(name), ty.clone());
+                rebound_params.push((name.clone(), param, ty.clone()));
+            }
             self.builder.set_current_block(merge_bb);
+            for (name, param, ty) in rebound_params {
+                self.scope.insert(name, (param, ty));
+            }
             Ok((merge_param, unit_ty))
         }
     }
@@ -12006,61 +12075,169 @@ fn derive_einsum_result_type(notation: &str, input_tys: &[IrType]) -> IrType {
 /// variables modified inside inner loops are threaded through as SSA params.
 fn find_rebound_vars(block: &AstBlock) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
-    for stmt in &block.stmts {
-        match stmt {
-            AstStmt::Let { name, .. } => {
-                if !names.contains(&name.name) {
-                    names.push(name.name.clone());
-                }
-            }
-            AstStmt::Assign { target, .. } => {
-                if let AstExpr::Ident(ident) = target.as_ref() {
-                    if !names.contains(&ident.name) {
-                        names.push(ident.name.clone());
-                    }
-                }
-            }
-            AstStmt::ForRange { var, body, .. } => {
-                if !names.contains(&var.name) {
-                    names.push(var.name.clone());
-                }
-                // Recurse into the for body to collect mutations of outer vars.
-                collect_nested_mutations(body, &mut names);
-            }
-            AstStmt::ForEach { var, body, .. } => {
-                if !names.contains(&var.name) {
-                    names.push(var.name.clone());
-                }
-                collect_nested_mutations(body, &mut names);
-            }
-            AstStmt::While { body, .. } | AstStmt::Loop { body, .. } => {
-                collect_nested_mutations(body, &mut names);
-            }
-            _ => {}
-        }
-    }
+    collect_rebound_vars_in_block(block, &mut names, true);
     names
 }
 
-/// Recursively collects `x = expr` assignment targets from nested blocks.
-/// Does NOT add `Let`/`var` names (new local bindings, not outer mutations).
-fn collect_nested_mutations(block: &AstBlock, names: &mut Vec<String>) {
+fn collect_rebound_vars_in_block(block: &AstBlock, names: &mut Vec<String>, include_lets: bool) {
     for stmt in &block.stmts {
-        match stmt {
-            AstStmt::Assign { target, .. } => {
-                if let AstExpr::Ident(ident) = target.as_ref() {
-                    if !names.contains(&ident.name) {
-                        names.push(ident.name.clone());
+        collect_rebound_vars_in_stmt(stmt, names, include_lets);
+    }
+    if let Some(tail) = &block.tail {
+        collect_rebound_vars_in_expr(tail, names);
+    }
+}
+
+fn collect_rebound_vars_in_stmt(stmt: &AstStmt, names: &mut Vec<String>, include_lets: bool) {
+    match stmt {
+        AstStmt::Let { name, init, .. } => {
+            if include_lets && !names.contains(&name.name) {
+                names.push(name.name.clone());
+            }
+            collect_rebound_vars_in_expr(init, names);
+        }
+        AstStmt::Expr(expr) => collect_rebound_vars_in_expr(expr, names),
+        AstStmt::While { cond, body, .. } => {
+            collect_rebound_vars_in_expr(cond, names);
+            collect_rebound_vars_in_block(body, names, false);
+        }
+        AstStmt::Loop { body, .. } => {
+            collect_rebound_vars_in_block(body, names, false);
+        }
+        AstStmt::Break { .. } | AstStmt::Continue { .. } => {}
+        AstStmt::ForRange {
+            var,
+            start,
+            end,
+            body,
+            ..
+        }
+        | AstStmt::ParFor {
+            var,
+            start,
+            end,
+            body,
+            ..
+        } => {
+            if include_lets && !names.contains(&var.name) {
+                names.push(var.name.clone());
+            }
+            collect_rebound_vars_in_expr(start, names);
+            collect_rebound_vars_in_expr(end, names);
+            collect_rebound_vars_in_block(body, names, false);
+        }
+        AstStmt::Assign { target, value, .. } => {
+            if let AstExpr::Ident(ident) = target.as_ref() {
+                if !names.contains(&ident.name) {
+                    names.push(ident.name.clone());
+                }
+            }
+            collect_rebound_vars_in_expr(target, names);
+            collect_rebound_vars_in_expr(value, names);
+        }
+        AstStmt::LetTuple { names: tuple_names, init, .. } => {
+            if include_lets {
+                for name in tuple_names {
+                    if !names.contains(&name.name) {
+                        names.push(name.name.clone());
                     }
                 }
             }
-            AstStmt::ForRange { body, .. }
-            | AstStmt::ForEach { body, .. }
-            | AstStmt::While { body, .. }
-            | AstStmt::Loop { body, .. } => {
-                collect_nested_mutations(body, names);
+            collect_rebound_vars_in_expr(init, names);
+        }
+        AstStmt::Return { value, .. } => {
+            if let Some(value) = value {
+                collect_rebound_vars_in_expr(value, names);
             }
-            _ => {}
+        }
+        AstStmt::Spawn { body, .. } => {
+            for stmt in body {
+                collect_rebound_vars_in_stmt(stmt, names, false);
+            }
+        }
+        AstStmt::ForEach {
+            var, iter, body, ..
+        } => {
+            if include_lets && !names.contains(&var.name) {
+                names.push(var.name.clone());
+            }
+            collect_rebound_vars_in_expr(iter, names);
+            collect_rebound_vars_in_block(body, names, false);
+        }
+    }
+}
+
+fn collect_rebound_vars_in_expr(expr: &AstExpr, names: &mut Vec<String>) {
+    match expr {
+        AstExpr::Ident(_)
+        | AstExpr::IntLit { .. }
+        | AstExpr::FloatLit { .. }
+        | AstExpr::BoolLit { .. }
+        | AstExpr::StringLit { .. } => {}
+        AstExpr::BinOp { lhs, rhs, .. } => {
+            collect_rebound_vars_in_expr(lhs, names);
+            collect_rebound_vars_in_expr(rhs, names);
+        }
+        AstExpr::Call { args, .. } | AstExpr::Tuple { elements: args, .. } => {
+            for arg in args {
+                collect_rebound_vars_in_expr(arg, names);
+            }
+        }
+        AstExpr::UnaryOp { expr, .. }
+        | AstExpr::Cast { expr, .. }
+        | AstExpr::Await { expr, .. }
+        | AstExpr::Try { expr, .. }
+        | AstExpr::Lambda { body: expr, .. } => {
+            collect_rebound_vars_in_expr(expr, names);
+        }
+        AstExpr::If {
+            cond,
+            then_block,
+            else_block,
+            ..
+        } => {
+            collect_rebound_vars_in_expr(cond, names);
+            collect_rebound_vars_in_block(then_block, names, false);
+            if let Some(else_block) = else_block {
+                collect_rebound_vars_in_block(else_block, names, false);
+            }
+        }
+        AstExpr::Block(block) => collect_rebound_vars_in_block(block, names, false),
+        AstExpr::Index { base, indices, .. } => {
+            collect_rebound_vars_in_expr(base, names);
+            for index in indices {
+                collect_rebound_vars_in_expr(index, names);
+            }
+        }
+        AstExpr::StructLit { fields, .. } => {
+            for (_, value) in fields {
+                collect_rebound_vars_in_expr(value, names);
+            }
+        }
+        AstExpr::FieldAccess { base, .. } | AstExpr::TupleIndex { base, .. } => {
+            collect_rebound_vars_in_expr(base, names);
+        }
+        AstExpr::When {
+            scrutinee, arms, ..
+        } => {
+            collect_rebound_vars_in_expr(scrutinee, names);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    collect_rebound_vars_in_expr(guard, names);
+                }
+                collect_rebound_vars_in_expr(&arm.body, names);
+            }
+        }
+        AstExpr::ArrayLit { elems, .. } => {
+            for elem in elems {
+                collect_rebound_vars_in_expr(elem, names);
+            }
+        }
+        AstExpr::MethodCall { base, args, .. } => {
+            collect_rebound_vars_in_expr(base, names);
+            for arg in args {
+                collect_rebound_vars_in_expr(arg, names);
+            }
         }
     }
 }

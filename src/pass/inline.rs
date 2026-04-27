@@ -154,12 +154,18 @@ fn inline_call(
         })
         .unwrap_or_default();
 
+    let callee_vt = module.functions[callee_idx].value_types.clone();
     let mut emitted: Vec<IrInstr> = Vec::new();
     for mut ci in callee_instrs {
         if let Some(old_result) = ci.result() {
             let fresh = module.functions[caller_idx].fresh_value();
             val_map.insert(old_result, fresh);
             set_result(&mut ci, fresh);
+            if let Some(ty) = callee_vt.get(&old_result) {
+                module.functions[caller_idx]
+                    .value_types
+                    .insert(fresh, ty.clone());
+            }
         }
         apply_replacements(&mut ci, &val_map);
         emitted.push(ci);

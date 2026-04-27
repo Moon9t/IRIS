@@ -1,68 +1,91 @@
 # GitHub Linguist Submission for IRIS
 
-This directory contains the materials needed to submit a pull request to
-[github/linguist](https://github.com/github/linguist) to get IRIS recognized
-and syntax-highlighted on GitHub.
+This directory contains a PR-prep bundle for adding IRIS to
+[github-linguist/linguist](https://github.com/github-linguist/linguist).
 
-## How to Submit
+It is intentionally split into copy-ready snippets plus a short reality check
+about the remaining blockers, so we do not lose time rediscovering the same
+constraints during submission.
 
-### Prerequisites
+## Current Status
 
-1. Fork [github/linguist](https://github.com/github/linguist)
-2. Clone your fork:
+What is ready here:
+
+- `languages.yml` contains the language entry snippet for `lib/linguist/languages.yml`.
+- `heuristics.yml` contains a candidate `.iris` disambiguation block for
+  `lib/linguist/heuristics.yml`.
+- `samples/` contains stronger IRIS programs that are more representative than
+  tutorial snippets.
+- `pr_body.md` is a draft PR body based on Linguist's current template.
+
+What is not fully unblocked yet:
+
+1. The current GitHub session does not have a writable fork of
+   `github-linguist/linguist`, and `gh auth status` reports an invalid token for
+   `Moon9t` as of April 26, 2026.
+2. Linguist only accepts grammars from a permissively licensed source.
+   `IRIS` is currently licensed `GPL-2.0-or-later`, so the syntax grammar needs
+   either:
+   - a dedicated permissively licensed grammar repository, or
+   - an explicit dual-license / re-license decision for the grammar assets.
+3. The `.iris` extension is shared with unrelated files on GitHub, so the PR
+   needs good search evidence and likely a stronger disambiguation story than a
+   simple extension mapping.
+
+## Upstream Process
+
+Linguist's current `CONTRIBUTING.md` flow is:
+
+1. Add the language entry to `lib/linguist/languages.yml`.
+2. Vendor the TextMate grammar with:
+
    ```bash
-   git clone https://github.com/<your-username>/linguist.git
-   cd linguist
+   script/add-grammar https://github.com/<owner>/<permissive-grammar-repo>
    ```
 
-### Steps
+3. Add real-world samples to `samples/IRIS/`.
+4. Update `lib/linguist/heuristics.yml` if the extension is shared or noisy.
+5. Run:
 
-1. **Add the language entry** to `lib/linguist/languages.yml`:
-
-   Copy the contents of `languages.yml` from this directory and insert it
-   alphabetically under the "I" section.
-
-2. **Add the TextMate grammar** as a submodule:
-
-   The grammar lives in the IRIS repository. Add it as a submodule:
    ```bash
-   git submodule add https://github.com/moon9t/iris.git vendor/grammars/iris
-   ```
-
-   Then add the grammar mapping to `grammars.yml`:
-   ```yaml
-   vendor/grammars/iris:
-     - source.iris
-   ```
-
-3. **Add sample files** to `samples/IRIS/`:
-   ```bash
-   mkdir -p samples/IRIS
-   cp /path/to/iris/linguist/samples/* samples/IRIS/
-   ```
-
-4. **Run the tests**:
-   ```bash
-   bundle install
+   script/update-ids
    bundle exec rake test
    ```
 
-5. **Submit the PR** with title: "Add IRIS language"
+6. Open a PR using Linguist's template and include GitHub code search evidence.
 
-## Files in This Directory
+## Recommended Submission Plan
 
-- `languages.yml` — The entry to add to linguist's languages.yml
-- `grammars.yml` — The entry to add to linguist's grammars.yml
-- `heuristics.yml` — Disambiguation heuristic (IRIS vs other .iris extensions)
-- `samples/` — Sample .iris files for language detection
-- `iris.tmLanguage.json` — Symlink/copy reference to the TextMate grammar
+1. Create a dedicated permissively licensed grammar repo for `source.iris`.
+   Reusing `vscode-iris/syntaxes/iris.tmLanguage.json` is fine, but the grammar
+   repository itself needs a license Linguist accepts.
+2. Fork `github-linguist/linguist`.
+3. Apply the snippets from this directory into the fork.
+4. Vendor the grammar with `script/add-grammar`.
+5. Copy the sample files from `linguist/samples/` into `samples/IRIS/`.
+6. Run `script/update-ids` and the test suite.
+7. Use `pr_body.md` as the starting point for the pull request text.
 
-## Requirements for Linguist Acceptance
+## Search Evidence
 
-Per [linguist's CONTRIBUTING.md](https://github.com/github/linguist/blob/main/CONTRIBUTING.md):
+Linguist requires public GitHub usage evidence. A good starting query for IRIS
+syntax is:
 
-- [x] Language has a unique file extension (`.iris`)
-- [x] Language has a TextMate grammar (`source.iris`)
-- [x] Language has sample files demonstrating real usage
-- [x] Language is used in repositories on GitHub (the main IRIS repo)
-- [x] Language has documentation (BOOK.md, README.md)
+```text
+NOT is:fork path:*.iris ("bring std" OR "def main" OR "record " OR "val ")
+```
+
+Because `.iris` is reused by unrelated projects, expect to refine this query and
+manually validate repository diversity before submission.
+
+## Sample Notes
+
+The current sample set is intentionally skewed toward representative IRIS code:
+
+- algorithms and control flow
+- concurrency and pipelines
+- machine-learning style numeric code
+- network / service style code
+
+Avoid submitting `hello world` style samples to Linguist. Their current
+contributing guide explicitly calls that out as insufficient.

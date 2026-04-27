@@ -9,6 +9,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 ## [0.6.0] — Performance & Security
 
 ### Added
+
 - **Security audit infrastructure** (`src/security.rs`) — `SecurityPolicy` with
   per-capability allow/deny flags (fs_read, fs_write, network, ffi, process),
   allowlists and blocklists, resource limits (max_file_write_bytes, max_open_files,
@@ -38,12 +39,14 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
   sandbox is active.
 
 ### Changed
+
 - **Compiler pipeline** — now includes `CopyPropPass` (after `StrengthReducePass`)
   and `LicmPass` (after `OpExpandPass`) in all pipeline paths including
   `compile_to_module`.
 - **CLI** — added `profile` subcommand.
 
 ### Tests
+
 - 36 new integration tests in `phase132.rs` covering security policy, path
   validation, audit logging, profiler lifecycle / flame graphs / edge cases,
   CopyPropPass constant dedup, LicmPass safety, full pipeline integration,
@@ -54,6 +57,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 ## [0.5.0] — ML & Compute
 
 ### Added
+
 - **Real tensor runtime** — `IrisTensor` struct in C runtime with 30+ functions:
   create, reshape, transpose, element-wise ops, matrix multiply, reductions
   (sum, mean, max, min), unary ops (relu, sigmoid, tanh, exp, log, sqrt, abs),
@@ -77,6 +81,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
   (phase130), 7 sparse tensor tests (phase131).
 
 ### Improved
+
 - **ONNX binary export** — already functional from prior work; verified with
   8 passing tests.
 - **GPU/CUDA backend** — updated codegen dispatch for all tensor op variants.
@@ -87,6 +92,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 ## [Unreleased] — targeting v0.3.0
 
 ### Fixed
+
 - **Closure codegen** — rewrote lambda calling convention in LLVM backend: all
   lambdas now use uniform `(ptr %env, params...)` signature with capture
   extraction preamble at entry, fixing crashes for basic closures, captured
@@ -108,6 +114,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
   `read`, `write`, `close`) via the existing `tcp_store` module.
 
 ### Added
+
 - `ROADMAP.md` with milestones v0.3.0 through v1.0.0 and beyond.
 - `STABILITY.md` — feature-tier classification (Tier 1 Stable through Tier 4
   Experimental) and 12 stability milestones for v1.0 gate.
@@ -131,6 +138,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
   `assert`, `assert_eq`, etc.).
 
 ### Improved
+
 - **Error diagnostics** — `render_error` now includes:
   - Error codes (`[E0001]`, `[E0100]`, etc.) in every diagnostic.
   - Full span underlines (`^^^^^^^^`) instead of single-character carets.
@@ -149,6 +157,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 ### Added
 
 #### Builtins (60+)
+
 - **HTTP** — `http_get`, `http_post`
 - **JSON** — `json_stringify`, `json_parse`
 - **Regex** — `regex_match`, `regex_find_all`, `regex_replace`
@@ -170,10 +179,12 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
   `thread_count`, `atomic_load`, `atomic_store`, `atomic_add`
 
 #### SQLite
+
 - Full-stack database operations: `db_open`, `db_exec`, `db_query`, `db_close`
   — parser, interpreter, LLVM codegen, C runtime (bundled via rusqlite).
 
 #### FFI
+
 - **C FFI** — `ffi_open`, `ffi_call_i64`, `ffi_call_f64`, `ffi_call_str`,
   `ffi_call_void`, `ffi_close`
 - **Python FFI** — `python_eval`, `python_exec`, `python_call`,
@@ -182,16 +193,19 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
   `rust_call_void`
 
 #### Standard Library (25 modules)
+
 - `math`, `string`, `fmt`, `fs`, `json`, `csv`, `http`, `time`, `crypto`,
   `ffi`, `os`, `testing`, `log`, `iter`, `set`, `queue`, `heap`, `deque`,
   `kv` (SQLite-backed), `table`, `dataset`, `dataframe`, `path`, `async`,
   `bitset`
 
 #### Package Manager
+
 - `iris pkg init/add/remove/install/build/run/list` — project scaffolding,
   dependency management, registry interaction.
 
 #### LSP Enhancements
+
 - AST-based hover (works even when compilation fails).
 - Built-in and keyword hover documentation.
 - Code actions: missing-semicolon quickfix, type-mismatch cast, add doc
@@ -202,6 +216,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 - Inlay hints, find references, rename support, diagnostic codes.
 
 #### DAP Debugger Enhancements
+
 - Step-back, step-over/into/out.
 - Conditional breakpoints, hit counts, log-points.
 - Richer stack traces with source info, loaded sources, exception info.
@@ -209,10 +224,12 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 - Debug-console completions, exception breakpoint filters.
 
 #### REPL Enhancements
+
 - Colored prompts, timing display, input history.
 - Commands: `:ir`, `:time`, `:history`, `:clear`, `:reset`, `:bring`.
 
 #### Tooling & Infrastructure
+
 - Verbose `iris --version` — GCC-style output with git commit, branch, build
   date, target, host, profile, rustc version.
 - Binary output naming — `hello.iris` → `hello.exe` / `./hello`.
@@ -221,12 +238,14 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 - ARM64 CI — cross-platform CI on x86_64 + ARM64 (Linux, Windows, macOS).
 
 #### Installers
+
 - **Windows** — portable `.zip`, WiX `.msi`, Inno Setup `.exe` (bundles
   LLVM/clang, lld, MinGW ucrt64 sysroot).
 - **Linux** — curl one-liner, `.deb`, `.rpm`, AppImage.
 - **macOS** — curl one-liner, `.pkg`, `.dmg`.
 
 #### VS Code Extension 0.2.0
+
 - Status bar with version tooltip, Show Version Info command.
 - Server menu (restart/stop LSP).
 - LSP best-practice diagnostics and code actions.
@@ -235,6 +254,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 - New snippets for FFI, concurrency, error handling.
 
 ### Changed
+
 - **C runtime rewrite** — now uses clang + lld exclusively (removed GCC/MSYS2
   dependency).
 - **Build metadata** — `build.rs` captures git hash, branch, dirty flag, build
@@ -242,6 +262,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 - Error recovery improvements in parser.
 
 ### Changed (license)
+
 - License changed from MIT to GPL-2.0-or-later.
 
 ---
@@ -251,6 +272,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 ### Added
 
 #### Core Language
+
 - **Lexer** — tokenizer for `.iris` source files.
 - **Parser** — recursive-descent parser producing AST.
 - **SSA IR** — block-parameter SSA (MLIR-style), no phi nodes.
@@ -260,6 +282,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 - **Tree-walking interpreter** — `iris run` / `--emit eval`.
 
 #### Type System
+
 - Primitives: `i32`, `i64`, `f32`, `f64`, `bool`, `str`.
 - Composite: `tensor<T, shape>`, `list<T>`, `map<K,V>`, tuples, arrays.
 - Records (`record`), enums (`choice`) with variant payloads.
@@ -270,49 +293,60 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 - `option<T>`, `result<T,E>`, `?` operator.
 
 #### Control Flow & Pattern Matching
+
 - `if/elif/else`, `for`, `while`, `break`, `continue`, `return`.
 - `when` (pattern matching) with guards, range patterns, tuple destructuring.
 
 #### Closures & Functions
+
 - Lambda expressions — `|x: i64| x * 2`.
 - Default parameters — `def greet(name: str = "world")`.
 - Global constants — `const PI: f64 = 3.14`.
 
 #### Concurrency
+
 - `channel<T>`, `spawn`, `par for`.
 - `async/await`, `atomic<T>`, `mutex<T>`.
 
 #### ML Features
+
 - Automatic differentiation — `grad<T>` dual numbers, `@differentiable`.
 - Sparse tensors — `sparse<T>`, `sparsify`, `densify`.
 
 #### Strings
+
 - F-string interpolation — `f"Hello, {name}!"`.
 - Builtins: `len`, `concat`, `split`, `join`, `contains`, `starts_with`,
   `ends_with`, `trim`, `to_upper`, `to_lower`, `repeat`, `find`, `slice`,
   `str_replace`, `str_reverse`.
 
 #### Math Builtins
+
 - `sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `abs`, `pow`, `min`, `max`,
   `clamp`, `floor`, `ceil`, `round`.
 
 #### I/O
+
 - `print`, `read_line`, `read_i64`, `read_f64`.
 - TCP/network instruction lowering (interpreter).
 
 #### Code Generation
+
 - `--emit ir|llvm|eval|binary|onnx|cuda|simd` (stubs for ONNX/CUDA/SIMD).
 - LLVM IR codegen — target triples, string globals, 70+ runtime declarations.
 - Native binary compilation — `iris build` via clang.
 
 #### Module System
+
 - `bring std.math`, `pub def`, multi-file compilation.
 
 #### FFI
+
 - `extern def` for C function declarations.
 - GC refcounting basics.
 
 #### Tooling
+
 - **REPL** — `:help`, `:env`, `:type`, `:quit`.
 - **LSP** — hover, completions, diagnostics, go-to-definition, document
   symbols, signature help, formatting.
@@ -320,6 +354,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 - **CLI** — `iris run`, `iris build`, `iris repl`, `iris lsp`, `iris dap`.
 
 #### VS Code Extension 0.1.0
+
 - Syntax highlighting (TextMate grammar).
 - LSP integration, DAP debugger integration.
 - Commands: Run File (Ctrl+F5), Build Binary, Open REPL.

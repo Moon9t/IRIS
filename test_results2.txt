@@ -1,8 +1,0 @@
-warning: struct `CountPass` is never constructed
-   --> src\pass\mod.rs:141:12
-    |
-141 |     struct CountPass {
-    |            ^^^^^^^^^
-    |
-    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
