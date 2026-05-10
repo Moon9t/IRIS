@@ -1,0 +1,103 @@
+bring std.string
+
+const SEP : str = "--------------------------------------------------"
+
+// Count the number of non-empty tokens in a space-separated line.
+def word_count(line : str) -> i64 {
+    val trimmed = trim(line);
+    if trimmed == "" {
+        0
+    }
+    else {
+        val parts = split(trimmed, " ");
+        var count = 0;
+        var i = 0;
+        while i < len(parts) {
+            val part = list_get(parts, i);
+            if part != "" {
+                count = count + 1
+            }
+            else {
+                0
+            }
+            ;
+            i = i + 1
+        }
+        count
+    }
+}
+
+// Find the longest non-empty token in a line.
+def longest_word(line : str) -> str {
+    val parts = split(trim(line), " ");
+    val n = len(parts);
+    if n == 0 {
+        ""
+    }
+    else {
+        var best = "";
+        var i = 0;
+        while i < n {
+            val cur = list_get(parts, i);
+            if cur != "" && len(cur) > len(best) {
+                best = cur
+            }
+            else {
+                val _noop = 0
+            }
+            ;
+            i = i + 1
+        }
+        best
+    }
+}
+
+// Count occurrences of a one-character string inside s.
+def char_count(s : str, needle : str) -> i64 {
+    val n = len(s);
+    var i = 0;
+    var count = 0;
+    while i < n {
+        val ch = slice(s, i, i + 1);
+        if ch == needle {
+            count = count + 1
+        }
+        else {
+            0
+        }
+        ;
+        i = i + 1
+    }
+    count
+}
+
+// Build a normalized summary line.
+def summarize(line : str) -> str {
+    val trimmed = trim(line);
+    val wc = word_count(trimmed);
+    val longest = longest_word(trimmed);
+    val part1 = concat("words=", to_str(wc));
+    val part2 = concat(part1, concat(", longest=", longest));
+    val excls = to_str(char_count(trimmed, "!"));
+    concat(part2, concat(", exclamations=", excls))
+}
+
+def main() -> i64 {
+    print(SEP);
+    print("TEXTLAB");
+    print(SEP);
+
+    val samples : list<str> = list();
+    push(samples, "IRIS is fast, expressive, and surprisingly capable!");
+    push(samples, "  multi-file modules + native compilation + runtime fallback  ");
+    push(samples, "strings, lists, records, and loops");
+
+    var i = 0;
+    while i < len(samples) {
+        val line = list_get(samples, i);
+        print(concat("input: ", line));
+        print(concat("summary: ", summarize(line)));
+        i = i + 1
+    }
+    0
+}

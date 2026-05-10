@@ -1,76 +1,70 @@
-// neural_net.iris -- a simple neural network forward pass
+// neural_net.iris -- small XOR-style network using current IRIS syntax.
 //
-// Demonstrates: activation functions, weighted sums, loss computation.
-//
-// Run: iris run examples/neural_net.iris
+// This example intentionally uses unannotated val/var declarations to show
+// inferred immutable and inferred mutable bindings.
 
 def sigmoid(x: f64) -> f64 {
-    val neg_x = (0.0 to f64) - x
-    val e_neg = exp(neg_x)
-    (1.0 to f64) / ((1.0 to f64) + e_neg)
+    1.0 / (1.0 + exp(0.0 - x))
 }
 
 def relu(x: f64) -> f64 {
-    if x > (0.0 to f64) { x } else { 0.0 to f64 }
+    if x > 0.0 {
+        x
+    } else {
+        0.0
+    }
 }
 
-// Single neuron: weighted sum + bias + sigmoid
-def neuron3(w0: f64, w1: f64, w2: f64,
-            x0: f64, x1: f64, x2: f64, b: f64) -> f64 {
-    val z = w0 * x0 + w1 * x1 + w2 * x2 + b
-    sigmoid(z)
+def xor_net(x1: f64, x2: f64) -> f64 {
+    val h1 = sigmoid(0.9 * x1 + 0.9 * x2 - 0.2);
+    val h2 = sigmoid(0.9 * x1 + 0.9 * (1.0 - x2) - 0.2);
+    relu(1.8 * h1 + 1.8 * h2 - 1.0)
 }
 
-// Two-neuron hidden layer + one output neuron
-def forward_net(x0: f64, x1: f64) -> f64 {
-    // Hidden neuron 1: weights [0.5, -0.3], bias 0.1
-    val h1 = sigmoid((0.5 to f64) * x0 + (-0.3 to f64) * x1 + (0.1 to f64))
+def mse(pred: f64, target: f64) -> f64 {
+    val diff = pred - target;
+    diff * diff
+}
 
-    // Hidden neuron 2: weights [-0.2, 0.8], bias -0.1
-    val h2 = sigmoid((-0.2 to f64) * x0 + (0.8 to f64) * x1 + (-0.1 to f64))
-
-    // Output neuron: weights [0.6, 0.4], bias 0.0
-    sigmoid((0.6 to f64) * h1 + (0.4 to f64) * h2)
+def add_case(xs1: list<f64>, xs2: list<f64>, targets: list<f64>, x1: f64, x2: f64, target: f64) -> i64 {
+    push(xs1, x1);
+    push(xs2, x2);
+    push(targets, target);
+    0
 }
 
 def main() -> i64 {
-    print("=== Single Neuron ===");
-    val out1 = neuron3(0.2 to f64, 0.4 to f64, -0.1 to f64,
-                       0.5 to f64, -0.3 to f64, 0.8 to f64, 0.1 to f64)
-    print(concat("output = ", to_str(out1)));
+    print("=== XOR Network ===");
 
-    // MSE loss inline: (predicted - target)^2
-    val diff1 = out1 - (1.0 to f64)
-    val loss1 = diff1 * diff1
-    print(concat("MSE loss (target=1.0): ", to_str(loss1)));
+    val p00 = xor_net(0.0, 0.0);
+    val p01 = xor_net(0.0, 1.0);
+    val p10 = xor_net(1.0, 0.0);
+    val p11 = xor_net(1.0, 1.0);
 
-    print("\n=== ReLU Activation ===");
-    val r1 = relu(-2.5 to f64)
-    val r2 = relu(0.0 to f64)
-    val r3 = relu(3.7 to f64)
-    print(concat("relu(-2.5) = ", to_str(r1)));
-    print(concat("relu(0.0)  = ", to_str(r2)));
-    print(concat("relu(3.7)  = ", to_str(r3)));
+    print(concat("pred(0,0) = ", to_str(p00)));
+    print(concat("pred(0,1) = ", to_str(p01)));
+    print(concat("pred(1,0) = ", to_str(p10)));
+    print(concat("pred(1,1) = ", to_str(p11)));
 
-    print("\n=== Two-Layer Network ===");
-    val p1 = forward_net(0.0 to f64, 0.0 to f64)
-    val p2 = forward_net(1.0 to f64, 0.0 to f64)
-    val p3 = forward_net(0.0 to f64, 1.0 to f64)
-    val p4 = forward_net(1.0 to f64, 1.0 to f64)
-    print(concat("net(0,0) = ", to_str(p1)));
-    print(concat("net(1,0) = ", to_str(p2)));
-    print(concat("net(0,1) = ", to_str(p3)));
-    print(concat("net(1,1) = ", to_str(p4)));
+    val xs1 = list();
+    val xs2 = list();
+    val targets = list();
+    val _a = add_case(xs1, xs2, targets, 0.0, 0.0, 0.0);
+    val _b = add_case(xs1, xs2, targets, 0.0, 1.0, 1.0);
+    val _c = add_case(xs1, xs2, targets, 1.0, 0.0, 1.0);
+    val _d = add_case(xs1, xs2, targets, 1.0, 1.0, 0.0);
 
-    print("\n=== Batch XOR Loss ===");
-    // Compute sum of squared errors against XOR targets
-    val d1 = p1 - (0.0 to f64)
-    val d2 = p2 - (1.0 to f64)
-    val d3 = p3 - (1.0 to f64)
-    val d4 = p4 - (0.0 to f64)
-    val total_loss = d1 * d1 + d2 * d2 + d3 * d3 + d4 * d4
-    val avg_loss = total_loss / (4.0 to f64)
-    print(concat("Average MSE loss: ", to_str(avg_loss)));
+    var total = 0.0;
+    var i = 0;
+    while i < list_len(xs1) {
+        val x1 = list_get(xs1, i);
+        val x2 = list_get(xs2, i);
+        val target = list_get(targets, i);
+        total = total + mse(xor_net(x1, x2), target);
+        i = i + 1
+    }
 
+    val avg = total / 4.0;
+    print(concat("xor loss = ", to_str(avg)));
     0
 }

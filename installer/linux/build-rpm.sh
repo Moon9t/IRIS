@@ -3,7 +3,7 @@
 # build-rpm.sh — Build an .rpm package for IRIS Language
 # ──────────────────────────────────────────────────────────────────────────
 # Usage:
-#   ./installer/linux/build-rpm.sh [--version 0.2.0] [--arch x86_64]
+#   ./installer/linux/build-rpm.sh [--version 0.3.0] [--arch x86_64]
 #
 # Produces: installer/dist/iris-<version>-1.<arch>.rpm
 # Requires: rpmbuild (from rpm or rpm-build package)
@@ -14,7 +14,7 @@
 # ──────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-VERSION="0.2.0"
+VERSION="0.3.0"
 ARCH="x86_64"
 RELEASE="1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -113,7 +113,7 @@ AutoReqProv:    no
 %description
 IRIS (Intermediate Representation for Intelligent Systems) is a
 programming language designed for machine learning and systems
-programming. Includes compiler, interpreter, REPL, LSP server,
+programming. Includes compiler, REPL, LSP server,
 and DAP server.
 
 # Binary package — files are staged directly into BUILDROOT by the build

@@ -2104,11 +2104,14 @@ fn emit_iris_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_mutex_new()",
         "declare ptr @iris_mutex_lock(ptr)",
         "declare void @iris_mutex_unlock(ptr)",
-        // Structs / Tuples / Closures
+        // Structs / Tuples / Closures / Variants
         "declare ptr @iris_make_struct(...)",
         "declare ptr @iris_get_field(ptr, i32)",
         "declare ptr @iris_make_tuple(...)",
         "declare ptr @iris_get_element(ptr, i32)",
+        "declare ptr @iris_make_variant(i64, i32, ...)",
+        "declare i64 @iris_get_variant_tag(ptr)",
+        "declare ptr @iris_extract_variant_field(ptr, i32)",
         "declare ptr @iris_make_closure()",
         "declare ptr @iris_call_closure(ptr, ...)",
         "declare void @iris_call_closure_void(ptr, ...)",

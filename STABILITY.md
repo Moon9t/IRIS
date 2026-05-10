@@ -1,6 +1,8 @@
 # IRIS Stability Policy
 
 > **Current version: 0.3.0** — IRIS is pre-1.0 and evolving rapidly.
+> The current locked language/tooling surface is tracked in
+> [`docs/current-language-lock.md`](docs/current-language-lock.md).
 
 This document defines the stability guarantees, deprecation process, and
 versioning discipline the project follows on the path to 1.0 and beyond.
@@ -49,7 +51,7 @@ Every language feature and API surface is categorized into one of three tiers:
 These features have been extensively tested, are covered by the specification,
 and will not change in backward-incompatible ways without a major version bump.
 
-- Core syntax: `def`, `val`, `var`, `if/else`, `while`, `for`, `when`
+- Core syntax: `def`, inferred `val`/`var`, `if/else`, `while`, `for`, `when`
 - Scalar types: `i32`, `i64`, `f32`, `f64`, `bool`, `str`
 - Records (`record`) and enums (`choice`)
 - `option<T>` and `result<T,E>` with `?` operator

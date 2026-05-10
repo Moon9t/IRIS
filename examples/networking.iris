@@ -1,0 +1,55 @@
+bring std.http
+bring std.http_server
+bring std.time
+
+def build_response(req: str) -> str {
+    val method = http_request_method(req)
+    val path = http_request_path(req)
+
+    if method == "GET" && path == "/health" {
+        text_ok("ready")
+    } else {
+        if method == "POST" && path == "/echo" {
+            val body = http_body(req)
+            http_response(200, "OK", concat("echo: ", body))
+        } else {
+            bad_request("unknown route")
+        }
+    }
+}
+
+def main() -> i64 {
+    val port = 21000 + (pid() % 1000)
+
+    val preview_req = http_post_request("127.0.0.1", "/echo", "hello")
+    val preview_resp = build_response(preview_req)
+    print(concat("preview status = ", to_str(http_status_code(preview_resp))));
+    print(concat("preview body = ", http_body(preview_resp)));
+
+    val listener = tcp_listen(port)
+
+    spawn {
+        val conn = tcp_accept(listener)
+        val req = tcp_read(conn)
+        val resp = build_response(req)
+        val _write = tcp_write(conn, resp)
+        val _close_conn = tcp_close(conn)
+        val _close_listener = tcp_close(listener)
+    };
+
+    val _pause = sleep(50)
+
+    val conn = tcp_connect("127.0.0.1", port)
+    val req = http_get_request("127.0.0.1", "/health")
+    val _send = tcp_write(conn, req)
+    val raw = tcp_read(conn)
+    val _close = tcp_close(conn)
+
+    val status = http_status_code(raw)
+    val body = http_body(raw)
+
+    print(concat("status = ", to_str(status)));
+    print(concat("body = ", body));
+
+    if status == 200 && body == "ready" { 0 } else { 1 }
+}

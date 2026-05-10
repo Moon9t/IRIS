@@ -23,6 +23,11 @@
         {
           "name": "comment.line.double-slash.iris",
           "match": "//.*$"
+        },
+        {
+          "name": "comment.block.iris",
+          "begin": "/\\*",
+          "end": "\\*/"
         }
       ]
     },
@@ -68,7 +73,7 @@
         },
         {
           "name": "keyword.declaration.iris",
-          "match": "\\b(def|record|choice|type|const|extern|trait|impl|async|await|spawn|par|where)\\b"
+          "match": "\\b(def|record|choice|model|layer|input|output|type|const|extern|trait|impl|async|await|spawn|par|where)\\b"
         },
         {
           "name": "keyword.operator.iris",
@@ -87,8 +92,8 @@
           }
         },
         {
-          "name": "meta.record.definition.iris",
-          "match": "\\b(record|choice)\\s+([A-Z][a-zA-Z0-9_]*)\\b",
+          "name": "meta.type.definition.iris",
+          "match": "\\b(record|choice|model)\\s+([A-Z][a-zA-Z0-9_]*)\\b",
           "captures": {
             "1": { "name": "keyword.declaration.iris" },
             "2": { "name": "entity.name.type.iris" }

@@ -1,0 +1,10 @@
+bring std.string
+
+def main() -> i64 {
+    val xs = ["alpha", "beta", "gamma"];
+    val n = len(xs);
+    val joined = concat(concat(list_get(xs, 0), "-"), list_get(xs, 1));
+    print(joined);
+    print(n);
+    0
+}

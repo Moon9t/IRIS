@@ -567,14 +567,25 @@ pub fn run_dap_server() -> std::io::Result<()> {
             }
             "completions" => {
                 let text = arguments["text"].as_str().unwrap_or("");
-                let all_vars = session.completions();
-                let items: Vec<serde_json::Value> = all_vars
+                let frame_vars = session.completions();
+                let mut all_items: Vec<(String, &'static str)> = frame_vars
+                    .into_iter()
+                    .map(|name| (name, "variable"))
+                    .collect();
+                all_items.extend(
+                    DEBUG_STATIC_COMPLETIONS
+                        .iter()
+                        .map(|(label, kind)| ((*label).to_owned(), *kind)),
+                );
+                all_items.sort_by(|a, b| a.0.cmp(&b.0));
+                all_items.dedup_by(|a, b| a.0 == b.0);
+                let items: Vec<serde_json::Value> = all_items
                     .iter()
-                    .filter(|n| text.is_empty() || n.starts_with(text))
+                    .filter(|(n, _)| text.is_empty() || n.starts_with(text))
                     .map(|n| {
                         serde_json::json!({
-                            "label": n,
-                            "type": "variable",
+                            "label": n.0,
+                            "type": n.1,
                         })
                     })
                     .collect();
@@ -683,6 +694,39 @@ pub fn run_dap_server() -> std::io::Result<()> {
     }
     Ok(())
 }
+
+const DEBUG_STATIC_COMPLETIONS: &[(&str, &str)] = &[
+    ("print", "function"),
+    ("to_str", "function"),
+    ("len", "function"),
+    ("concat", "function"),
+    ("sqrt", "function"),
+    ("abs", "function"),
+    ("min", "function"),
+    ("max", "function"),
+    ("some", "function"),
+    ("none", "value"),
+    ("ok", "function"),
+    ("err", "function"),
+    ("is_some", "function"),
+    ("is_ok", "function"),
+    ("unwrap", "function"),
+    ("list", "function"),
+    ("list_len", "function"),
+    ("list_get", "function"),
+    ("map", "function"),
+    ("map_get", "function"),
+    ("channel", "function"),
+    ("send", "function"),
+    ("recv", "function"),
+    ("true", "value"),
+    ("false", "value"),
+    ("val", "keyword"),
+    ("var", "keyword"),
+    ("if", "keyword"),
+    ("else", "keyword"),
+    ("when", "keyword"),
+];
 
 /// Evaluates an expression in the context of the current debug frame's variables.
 /// Constructs a synthetic IRIS source with the variable bindings, then compiles and runs it.

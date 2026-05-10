@@ -1,0 +1,99 @@
+// constants.iris -- compile-time constant declarations
+//
+// Demonstrates the `const` keyword for defining named constants
+// that are evaluated at compile time.
+//
+// Run: iris run examples/constants.iris
+
+// =====================
+//  Mathematical constants
+// =====================
+
+const PI: f64 = 3.14159265358979
+const E: f64 = 2.71828182845905
+const TAU: f64 = 6.28318530717959
+const GOLDEN_RATIO: f64 = 1.61803398874989
+
+// =====================
+//  Application constants
+// =====================
+
+const MAX_ITERATIONS: i64 = 100
+const TOLERANCE: f64 = 0.000001
+const BOARD_SIZE: i64 = 8
+const VERSION: str = "0.3.0"
+
+// =====================
+//  Use constants in calculations
+// =====================
+
+def circle_area(radius: f64) -> f64 {
+    PI * radius * radius
+}
+
+def circle_circumference(radius: f64) -> f64 {
+    TAU * radius
+}
+
+def sphere_volume(radius: f64) -> f64 {
+    (4.0 to f64) / (3.0 to f64) * PI * radius * radius * radius
+}
+
+// Newton's method using constants for iteration bounds
+def newton_sqrt(x: f64) -> f64 {
+    if x <= (0.0 to f64) {
+        0.0 to f64
+    } else {
+        var guess = x / (2.0 to f64)
+        var i = 0
+        while i < MAX_ITERATIONS {
+            val next = (guess + x / guess) / (2.0 to f64)
+            // Check convergence using TOLERANCE
+            val diff = next - guess
+            val abs_diff = if diff < (0.0 to f64) { (0.0 to f64) - diff } else { diff }
+            guess = next;
+            if abs_diff < TOLERANCE {
+                i = MAX_ITERATIONS   // break out
+            } else {
+                i = i + 1
+            }
+        }
+        guess
+    }
+}
+
+// Use BOARD_SIZE to build an 8x8 checkerboard count
+def checkerboard_cells() -> i64 {
+    BOARD_SIZE * BOARD_SIZE
+}
+
+def main() -> i64 {
+    print(concat("IRIS version: ", VERSION));
+    print("");
+
+    print("=== Mathematical Constants ===");
+    print(concat("PI           = ", to_str(PI)));
+    print(concat("E            = ", to_str(E)));
+    print(concat("TAU          = ", to_str(TAU)));
+    print(concat("GOLDEN_RATIO = ", to_str(GOLDEN_RATIO)));
+
+    print("\n=== Circle (r=5) ===");
+    val r = 5.0 to f64
+    print(concat("Area:          ", to_str(circle_area(r))));
+    print(concat("Circumference: ", to_str(circle_circumference(r))));
+
+    print("\n=== Sphere (r=3) ===");
+    print(concat("Volume: ", to_str(sphere_volume(3.0 to f64))));
+
+    print("\n=== Newton's sqrt ===");
+    print(concat("sqrt(2)   = ", to_str(newton_sqrt(2.0 to f64))));
+    print(concat("sqrt(144) = ", to_str(newton_sqrt(144.0 to f64))));
+    print(concat("MAX_ITERATIONS = ", to_str(MAX_ITERATIONS)));
+    print(concat("TOLERANCE      = ", to_str(TOLERANCE)));
+
+    print("\n=== Board ===");
+    print(concat("Board size:  ", to_str(BOARD_SIZE)));
+    print(concat("Total cells: ", to_str(checkerboard_cells())));
+
+    0
+}

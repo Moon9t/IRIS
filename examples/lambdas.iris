@@ -1,0 +1,101 @@
+// lambdas.iris -- first-class functions, closures, and higher-order patterns
+//
+// Demonstrates lambda expressions (|params| body), passing functions
+// as arguments, returning functions, and building pipelines.
+//
+// Run: iris run examples/lambdas.iris
+
+// Higher-order functions: accept a function as a parameter
+// Note: function type syntax is (ParamTypes) -> ReturnType
+
+def apply(f: (i64) -> i64, x: i64) -> i64 {
+    f(x)
+}
+
+def apply_twice(f: (i64) -> i64, x: i64) -> i64 {
+    f(f(x))
+}
+
+// Transform a list using a function
+def transform(lst: list<i64>, f: (i64) -> i64) -> list<i64> {
+    val result = list()
+    for item in lst {
+        push(result, f(item))
+    }
+    result
+}
+
+def print_list(label: str, lst: list<i64>) -> i64 {
+    var s = "["
+    var i = 0
+    while i < list_len(lst) {
+        s = concat(s, to_str(list_get(lst, i)));
+        s = if (i + 1) < list_len(lst) { concat(s, ", ") } else { s };
+        i = i + 1
+    }
+    print(concat(label, concat(s, "]")));
+    0
+}
+
+// Compose two functions: g(f(x))
+def compose(f: (i64) -> i64, g: (i64) -> i64, x: i64) -> i64 {
+    g(f(x))
+}
+
+def main() -> i64 {
+    print("=== Lambda Expressions ===");
+
+    // Inline lambda definitions
+    val double  = |x: i64| x * 2
+    val square  = |x: i64| x * x
+    val negate  = |x: i64| 0 - x
+    val add_one = |x: i64| x + 1
+
+    print(concat("double(7)  = ", to_str(double(7))));
+    print(concat("square(5)  = ", to_str(square(5))));
+    print(concat("negate(42) = ", to_str(negate(42))));
+
+    print("\n=== Higher-Order Functions ===");
+
+    // Pass lambdas to higher-order functions
+    print(concat("apply(double, 21)        = ", to_str(apply(double, 21))));
+    print(concat("apply(square, 6)         = ", to_str(apply(square, 6))));
+    print(concat("apply_twice(double, 3)   = ", to_str(apply_twice(double, 3))));
+    print(concat("apply_twice(add_one, 10) = ", to_str(apply_twice(add_one, 10))));
+
+    print("\n=== Composition ===");
+
+    // double then add_one = 2*x + 1
+    print(concat("add_one(double(10)) = ", to_str(compose(double, add_one, 10))));
+
+    // add_one then square = (x+1)^2
+    print(concat("square(add_one(4))  = ", to_str(compose(add_one, square, 4))));
+
+    print("\n=== Transforming Lists ===");
+
+    val src = list()
+    var i = 1
+    while i <= 5 { push(src, i); i = i + 1 }
+
+    print_list("Source:   ", src);
+    print_list("Doubled:  ", transform(src, double));
+    print_list("Squared:  ", transform(src, square));
+    print_list("Negated:  ", transform(src, negate));
+
+    print("\n=== Pipeline ===");
+
+    // Chain: source -> double -> add_one -> square
+    val step1 = transform(src, double)
+    val step2 = transform(step1, add_one)
+    val step3 = transform(step2, square)
+    print_list("double -> +1 -> square: ", step3);
+
+    print("\n=== Closure Capture ===");
+
+    val base = 100
+    val add_base = |x: i64| x + base
+    print(concat("add_base(50) = ", to_str(add_base(50))));
+    print(concat("apply(add_base, 25) = ", to_str(apply(add_base, 25))));
+
+    0
+}

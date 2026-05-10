@@ -470,7 +470,21 @@ fn emit_llvm_ir_impl(
                 }
             })
             .collect();
-        writeln!(out, "  call i64 @{}({})", func.name, call_args.join(", "))?;
+        let spawn_ret_ty = fn_sigs
+            .get(&func.name)
+            .map(|(ret_s, _)| ret_s.as_str())
+            .unwrap_or("i64");
+        if spawn_ret_ty == "void" {
+            writeln!(out, "  call void @{}({})", func.name, call_args.join(", "))?;
+        } else {
+            writeln!(
+                out,
+                "  %spawn_ret = call {} @{}({})",
+                spawn_ret_ty,
+                func.name,
+                call_args.join(", ")
+            )?;
+        }
         writeln!(out, "  call void @free(ptr %arg)")?;
         writeln!(out, "  ret ptr null")?;
         writeln!(out, "}}\n")?;
@@ -729,6 +743,13 @@ fn emit_function_body(
                 | IrInstr::MakeErr { result, .. } => {
                     emitted_types.insert(*result, "ptr".to_owned());
                 }
+                IrInstr::MakeVariant { result, fields, .. } => {
+                    if fields.is_empty() {
+                        emitted_types.insert(*result, "i64".to_owned());
+                    } else {
+                        emitted_types.insert(*result, "ptr".to_owned());
+                    }
+                }
                 IrInstr::TapeRecord { result, .. } => {
                     emitted_types.insert(*result, "ptr".to_owned());
                 }
@@ -781,16 +802,8 @@ fn emit_function_body(
                     };
                     emitted_types.insert(*result, s);
                 }
-                IrInstr::MapGet { result, val_ty, .. } => {
-                    let s = match val_ty {
-                        IrType::Scalar(DType::I64) => "i64".to_owned(),
-                        IrType::Scalar(DType::I32) => "i32".to_owned(),
-                        IrType::Scalar(DType::F64) => "double".to_owned(),
-                        IrType::Scalar(DType::F32) => "float".to_owned(),
-                        IrType::Scalar(DType::Bool) => "i1".to_owned(),
-                        _ => "ptr".to_owned(),
-                    };
-                    emitted_types.insert(*result, s);
+                IrInstr::MapGet { result, .. } => {
+                    emitted_types.insert(*result, "ptr".to_owned());
                 }
                 IrInstr::GetField {
                     result, result_ty, ..
@@ -1032,6 +1045,13 @@ fn emit_function_body(
                         )?;
                         writeln!(out, "  %{} = trunc i32 %__cap_i32_{} to i1", p.name, i)?;
                     }
+                    crate::ir::types::IrType::Str => {
+                        writeln!(
+                            out,
+                            "  %{} = call ptr @iris_unbox_str(ptr %__cap_raw_{})",
+                            p.name, i
+                        )?;
+                    }
                     _ => {
                         writeln!(
                             out,
@@ -1052,6 +1072,7 @@ fn emit_function_body(
                     .get(&(block.id, i))
                     .map(|srcs| {
                         srcs.iter()
+                            .filter(|(pred_id, _)| reachable.contains(pred_id))
                             .map(|(pred_id, v)| {
                                 // Use the coerced value name if a phi cast was needed.
                                 let vstr = if let Some(cast_name) =
@@ -1280,7 +1301,7 @@ fn box_to_ptr(
             )?;
             Ok(boxed)
         }
-        Some(IrType::Scalar(DType::U64 | DType::USize)) | Some(IrType::Enum { .. }) => {
+        Some(IrType::Scalar(DType::U64 | DType::USize)) => {
             *counter += 1;
             let boxed = format!("%box{}", idx);
             writeln!(
@@ -1464,7 +1485,8 @@ fn unbox_ptr_to_result(
     counter: &mut u32,
 ) -> Result<(), CodegenError> {
     match result_ty {
-        IrType::Scalar(DType::I64) | IrType::Scalar(DType::U64 | DType::USize) | IrType::Enum { .. } => {
+        IrType::Scalar(DType::I64)
+        | IrType::Scalar(DType::U64 | DType::USize) => {
             writeln!(
                 out,
                 "  %v{} = call i64 @iris_unbox_i64(ptr {})",
@@ -1817,7 +1839,7 @@ fn emit_instr_ir(
                     (BinOp::Mul, true) => format!("fmul {} {}, {}", ty_s, lv, rv),
                     (BinOp::Div, true) => format!("fdiv {} {}, {}", ty_s, lv, rv),
                     (BinOp::Add, false) => format!("add nsw {} {}, {}", ty_s, lv, rv),
-                    (BinOp::Sub, false) => format!("sub nsw {} {}, {}", ty_s, lv, rv),
+                    (BinOp::Sub, false) => format!("sub {} {}, {}", ty_s, lv, rv),
                     (BinOp::Mul, false) => format!("mul nsw {} {}, {}", ty_s, lv, rv),
                     (BinOp::Div, false) | (BinOp::FloorDiv, _) => {
                         format!("sdiv {} {}, {}", ty_s, lv, rv)
@@ -1898,7 +1920,7 @@ fn emit_instr_ir(
                     writeln!(out, "  %v{} = fneg {} {}", result.0, ty_s, ov)?;
                 }
                 ScalarUnaryOp::Neg => {
-                    writeln!(out, "  %v{} = sub nsw {} 0, {}", result.0, ty_s, ov)?;
+                    writeln!(out, "  %v{} = sub {} 0, {}", result.0, ty_s, ov)?;
                 }
                 ScalarUnaryOp::Not => {
                     writeln!(out, "  %v{} = xor i1 {}, true", result.0, ov)?;
@@ -2356,9 +2378,37 @@ fn emit_instr_ir(
         IrInstr::MakeVariant {
             result,
             variant_idx,
+            fields,
             ..
         } => {
-            writeln!(out, "  %v{} = add i64 0, {}", result.0, variant_idx)?;
+            if fields.is_empty() {
+                // Tag-only variants are represented as immediate tags.
+                writeln!(out, "  %v{} = add i64 0, {}", result.0, variant_idx)?;
+            } else {
+                let mut args_str = Vec::new();
+                for f in fields {
+                    let fv = val(*f);
+                    let fty = func.value_type(*f);
+                    let ptr_f = box_to_ptr(
+                        out,
+                        func,
+                        *f,
+                        &fv,
+                        fty,
+                        emitted_types.get(f).map(|s| s.as_str()),
+                        gep_counter,
+                    )?;
+                    args_str.push(format!("ptr {}", ptr_f));
+                }
+                writeln!(
+                    out,
+                    "  %v{} = call ptr (i64, i32, ...) @iris_make_variant(i64 {}, i32 {}, {})",
+                    result.0,
+                    variant_idx,
+                    fields.len(),
+                    args_str.join(", ")
+                )?;
+            }
         }
 
         IrInstr::SwitchVariant {
@@ -2367,6 +2417,16 @@ fn emit_instr_ir(
             default_block,
         } => {
             let sv = val(*scrutinee);
+            let scrutinee_emitted_ty = emitted_types.get(scrutinee).map(|s| s.as_str());
+            let tag_val = if scrutinee_emitted_ty == Some("ptr") {
+                let raw_tag = format!("%tag_{}", gep_counter);
+                *gep_counter += 1;
+                writeln!(out, "  {} = call i64 @iris_get_variant_tag(ptr {})", raw_tag, sv)?;
+                raw_tag
+            } else {
+                sv
+            };
+
             let blocks = func.blocks();
             let default = default_block
                 .map(|bb| format!("label %{}", block_label_by_id(blocks, bb)))
@@ -2375,7 +2435,7 @@ fn emit_instr_ir(
                         .map(|(_, bb)| format!("label %{}", block_label_by_id(blocks, *bb)))
                         .unwrap_or_else(|| "label %unreachable".to_owned())
                 });
-            write!(out, "  switch i64 {}, {} [", sv, default)?;
+            write!(out, "  switch i64 {}, {} [", tag_val, default)?;
             for (idx, bb) in arms {
                 write!(
                     out,
@@ -2391,15 +2451,19 @@ fn emit_instr_ir(
             result,
             operand,
             field_idx,
+            result_ty,
             ..
         } => {
+            let raw = format!("%raw_evf_{}", gep_counter);
+            *gep_counter += 1;
             writeln!(
                 out,
-                "  %v{} = call i64 @iris_extract_variant_field({}, i64 {})",
-                result.0,
+                "  {} = call ptr @iris_extract_variant_field(ptr {}, i64 {})",
+                raw,
                 val(*operand),
                 field_idx
             )?;
+            unbox_ptr_to_result(out, raw, result.0, result_ty, gep_counter)?;
         }
 
         // ── Tuple ops ──────────────────────────────────────────────────────
@@ -3016,65 +3080,34 @@ fn emit_instr_ir(
             atomic,
             result_ty,
         } => {
-            if matches!(result_ty, IrType::Scalar(_)) {
-                let ty_s = llvm_type_complete(result_ty)?;
-                writeln!(
-                    out,
-                    "  %v{} = load atomic {} , ptr {} seq_cst, align 8",
-                    result.0,
-                    ty_s,
-                    val(*atomic)
-                )?;
-            } else {
-                let tmp = format!("%raw_atomic{}", gep_counter);
-                *gep_counter += 1;
-                writeln!(
-                    out,
-                    "  {} = call ptr @iris_atomic_load(ptr {})",
-                    tmp,
-                    val(*atomic)
-                )?;
-                unbox_ptr_to_result(out, tmp, result.0, result_ty, gep_counter)?;
-            }
+            let tmp = format!("%raw_atomic{}", gep_counter);
+            *gep_counter += 1;
+            writeln!(
+                out,
+                "  {} = call ptr @iris_atomic_load(ptr {})",
+                tmp,
+                val(*atomic)
+            )?;
+            unbox_ptr_to_result(out, tmp, result.0, result_ty, gep_counter)?;
         }
         IrInstr::AtomicStore { atomic, value } => {
+            let vv = val(*value);
             let vty = func.value_type(*value);
-            if let Some(ty) = vty {
-                if matches!(ty, IrType::Scalar(_)) {
-                    let ty_s = llvm_type_complete(ty)?;
-                    writeln!(
-                        out,
-                        "  store atomic {} {}, ptr {} seq_cst, align 8",
-                        ty_s,
-                        val(*value),
-                        val(*atomic)
-                    )?;
-                } else {
-                    let vv = val(*value);
-                    let ptr_v = box_to_ptr(
-                        out,
-                        func,
-                        *value,
-                        &vv,
-                        Some(ty),
-                        emitted_types.get(value).map(|s| s.as_str()),
-                        gep_counter,
-                    )?;
-                    writeln!(
-                        out,
-                        "  call void @iris_atomic_store(ptr {}, ptr {})",
-                        val(*atomic),
-                        ptr_v
-                    )?;
-                }
-            } else {
-                writeln!(
-                    out,
-                    "  call void @iris_atomic_store(ptr {}, ptr {})",
-                    val(*atomic),
-                    val(*value)
-                )?;
-            }
+            let ptr_v = box_to_ptr(
+                out,
+                func,
+                *value,
+                &vv,
+                vty,
+                emitted_types.get(value).map(|s| s.as_str()),
+                gep_counter,
+            )?;
+            writeln!(
+                out,
+                "  call void @iris_atomic_store(ptr {}, ptr {})",
+                val(*atomic),
+                ptr_v
+            )?;
         }
         IrInstr::AtomicAdd {
             result,
@@ -3082,25 +3115,27 @@ fn emit_instr_ir(
             value,
             result_ty,
         } => {
-            if matches!(result_ty, IrType::Scalar(DType::I32 | DType::I64)) {
-                let ty_s = llvm_type_complete(result_ty)?;
-                writeln!(
-                    out,
-                    "  %v{} = atomicrmw add ptr {}, {} {} seq_cst",
-                    result.0,
-                    val(*atomic),
-                    ty_s,
-                    val(*value)
-                )?;
-            } else {
-                writeln!(
-                    out,
-                    "  %v{} = call ptr @iris_atomic_add(ptr {}, ptr {})",
-                    result.0,
-                    val(*atomic),
-                    val(*value)
-                )?;
-            }
+            let vv = val(*value);
+            let vty = func.value_type(*value);
+            let ptr_v = box_to_ptr(
+                out,
+                func,
+                *value,
+                &vv,
+                vty,
+                emitted_types.get(value).map(|s| s.as_str()),
+                gep_counter,
+            )?;
+            let tmp = format!("%raw_atomic_add{}", gep_counter);
+            *gep_counter += 1;
+            writeln!(
+                out,
+                "  {} = call ptr @iris_atomic_add(ptr {}, ptr {})",
+                tmp,
+                val(*atomic),
+                ptr_v
+            )?;
+            unbox_ptr_to_result(out, tmp, result.0, result_ty, gep_counter)?;
         }
         IrInstr::MutexNew { result, .. } => {
             writeln!(out, "  %v{} = call ptr @iris_mutex_new()", result.0)?;
@@ -3475,10 +3510,25 @@ fn emit_instr_ir(
             index,
             elem_ty,
         } => {
+            // If elem_ty is Infer, resolve from the list's value type
+            let resolved_elem_ty = if matches!(elem_ty, IrType::Infer) {
+                if let Some(list_ty) = func.value_type(*list) {
+                    if let IrType::List(inner) = list_ty {
+                        (**inner).clone()
+                    } else {
+                        elem_ty.clone()
+                    }
+                } else {
+                    elem_ty.clone()
+                }
+            } else {
+                elem_ty.clone()
+            };
+            
             let idx_v =
                 coerce_to_type(*index, "i64", consts, func, emitted_types, gep_counter, out)?;
             // iris_list_get returns IrisVal* (boxed); unbox to the element type.
-            match elem_ty {
+            match &resolved_elem_ty {
                 IrType::Scalar(DType::I64) => {
                     let tmp = format!("%raw_get{}", gep_counter);
                     *gep_counter += 1;
@@ -3582,7 +3632,7 @@ fn emit_instr_ir(
                         val(*list),
                         idx_v
                     )?;
-                    unbox_ptr_to_result(out, tmp, result.0, elem_ty, gep_counter)?;
+                    unbox_ptr_to_result(out, tmp, result.0, &resolved_elem_ty, gep_counter)?;
                 }
             }
         }
@@ -3613,8 +3663,23 @@ fn emit_instr_ir(
             list,
             elem_ty,
         } => {
+            // If elem_ty is Infer, resolve from the list's value type
+            let resolved_elem_ty = if matches!(elem_ty, IrType::Infer) {
+                if let Some(list_ty) = func.value_type(*list) {
+                    if let IrType::List(inner) = list_ty {
+                        (**inner).clone()
+                    } else {
+                        elem_ty.clone()
+                    }
+                } else {
+                    elem_ty.clone()
+                }
+            } else {
+                elem_ty.clone()
+            };
+            
             // iris_list_pop returns IrisVal* (boxed); unbox to the element type.
-            match elem_ty {
+            match &resolved_elem_ty {
                 IrType::Scalar(DType::I64) => {
                     let tmp = format!("%raw_pop{}", gep_counter);
                     *gep_counter += 1;
@@ -3677,8 +3742,13 @@ fn emit_instr_ir(
                 _ => {
                     let tmp = format!("%raw_pop{}", gep_counter);
                     *gep_counter += 1;
-                    writeln!(out, "  {} = call ptr @iris_list_pop(ptr {})", tmp, val(*list))?;
-                    unbox_ptr_to_result(out, tmp, result.0, elem_ty, gep_counter)?;
+                    writeln!(
+                        out,
+                        "  {} = call ptr @iris_list_pop(ptr {})",
+                        tmp,
+                        val(*list)
+                    )?;
+                    unbox_ptr_to_result(out, tmp, result.0, &resolved_elem_ty, gep_counter)?;
                 }
             }
         }
@@ -3720,7 +3790,7 @@ fn emit_instr_ir(
             result,
             map,
             key,
-            val_ty,
+            val_ty: _val_ty,
         } => {
             let kv = val(*key);
             let kty = func.value_type(*key);
@@ -3733,84 +3803,15 @@ fn emit_instr_ir(
                 emitted_types.get(key).map(|s| s.as_str()),
                 gep_counter,
             )?;
-            // iris_map_get returns IrisVal* (boxed); unbox to the value type.
-            match val_ty {
-                IrType::Scalar(DType::I64) => {
-                    let tmp = format!("%raw_mg{}", gep_counter);
-                    *gep_counter += 1;
-                    writeln!(
-                        out,
-                        "  {} = call ptr @iris_map_get(ptr {}, ptr {})",
-                        tmp,
-                        val(*map),
-                        ptr_k
-                    )?;
-                    writeln!(
-                        out,
-                        "  %v{} = call i64 @iris_unbox_i64(ptr {})",
-                        result.0, tmp
-                    )?;
-                }
-                IrType::Scalar(DType::F64) => {
-                    let tmp = format!("%raw_mg{}", gep_counter);
-                    *gep_counter += 1;
-                    writeln!(
-                        out,
-                        "  {} = call ptr @iris_map_get(ptr {}, ptr {})",
-                        tmp,
-                        val(*map),
-                        ptr_k
-                    )?;
-                    writeln!(
-                        out,
-                        "  %v{} = call double @iris_unbox_f64(ptr {})",
-                        result.0, tmp
-                    )?;
-                }
-                IrType::Scalar(DType::Bool) => {
-                    let tmp = format!("%raw_mg{}", gep_counter);
-                    *gep_counter += 1;
-                    let tmp2 = format!("%raw_mgbool{}", gep_counter);
-                    *gep_counter += 1;
-                    writeln!(
-                        out,
-                        "  {} = call ptr @iris_map_get(ptr {}, ptr {})",
-                        tmp,
-                        val(*map),
-                        ptr_k
-                    )?;
-                    writeln!(out, "  {} = call i32 @iris_unbox_bool(ptr {})", tmp2, tmp)?;
-                    writeln!(out, "  %v{} = trunc i32 {} to i1", result.0, tmp2)?;
-                }
-                IrType::Str => {
-                    let tmp = format!("%raw_mg{}", gep_counter);
-                    *gep_counter += 1;
-                    writeln!(
-                        out,
-                        "  {} = call ptr @iris_map_get(ptr {}, ptr {})",
-                        tmp,
-                        val(*map),
-                        ptr_k
-                    )?;
-                    writeln!(
-                        out,
-                        "  %v{} = call ptr @iris_unbox_str(ptr {})",
-                        result.0, tmp
-                    )?;
-                }
-                _ => {
-                    let tmp = format!("%raw_mg{}", gep_counter);
-                    *gep_counter += 1;
-                    writeln!(
-                        out,
-                        "  {} = call ptr @iris_map_get(ptr {}, ptr {})",
-                        tmp,
-                        val(*map),
-                        ptr_k
-                    )?;
-                    unbox_ptr_to_result(out, tmp, result.0, val_ty, gep_counter)?;
-                }
-            }
+            // iris_map_get returns an option<T> as an IrisVal*; keep as ptr.
+            // IsSome/OptionUnwrap will handle unboxing.
+            writeln!(
+                out,
+                "  %v{} = call ptr @iris_map_get(ptr {}, ptr {})",
+                result.0,
+                val(*map),
+                ptr_k
+            )?;
         }
         IrInstr::MapContains { result, map, key } => {
             let kv = val(*key);
@@ -4403,11 +4404,49 @@ fn emit_instr_ir(
 
         // ── Phase 56: File I/O ─────────────────────────────────────────────
         IrInstr::FileReadAll { result, path } => {
+            let raw = format!("%raw_file_read{}", gep_counter);
+            *gep_counter += 1;
+            let ok_cond = format!("%file_read_ok{}", gep_counter);
+            *gep_counter += 1;
+            let ok_lbl = format!("file_read_ok_{}", result.0);
+            let err_lbl = format!("file_read_err_{}", result.0);
+            let merge_lbl = format!("file_read_merge_{}", result.0);
+            let ok_box = format!("%file_read_ok_box{}", gep_counter);
+            *gep_counter += 1;
+            let ok_res = format!("%file_read_ok_res{}", gep_counter);
+            *gep_counter += 1;
+            let err_msg = format!("%file_read_err_msg{}", gep_counter);
+            *gep_counter += 1;
+            let err_box = format!("%file_read_err_box{}", gep_counter);
+            *gep_counter += 1;
+            let err_res = format!("%file_read_err_res{}", gep_counter);
+            *gep_counter += 1;
             writeln!(
                 out,
-                "  %v{} = call ptr @iris_file_read_all(ptr {})",
-                result.0,
+                "  {} = call ptr @iris_file_read_all(ptr {})",
+                raw,
                 val(*path)
+            )?;
+            writeln!(out, "  {} = icmp ne ptr {}, null", ok_cond, raw)?;
+            writeln!(
+                out,
+                "  br i1 {}, label %{}, label %{}",
+                ok_cond, ok_lbl, err_lbl
+            )?;
+            writeln!(out, "{}:", ok_lbl)?;
+            writeln!(out, "  {} = call ptr @iris_box_str(ptr {})", ok_box, raw)?;
+            writeln!(out, "  {} = call ptr @iris_make_ok(ptr {})", ok_res, ok_box)?;
+            writeln!(out, "  br label %{}", merge_lbl)?;
+            writeln!(out, "{}:", err_lbl)?;
+            writeln!(out, "  {} = call ptr @iris_const_str()", err_msg)?;
+            writeln!(out, "  {} = call ptr @iris_box_str(ptr {})", err_box, err_msg)?;
+            writeln!(out, "  {} = call ptr @iris_make_err(ptr {})", err_res, err_box)?;
+            writeln!(out, "  br label %{}", merge_lbl)?;
+            writeln!(out, "{}:", merge_lbl)?;
+            writeln!(
+                out,
+                "  %v{} = phi ptr [ {}, %{} ], [ {}, %{} ]",
+                result.0, ok_res, ok_lbl, err_res, err_lbl
             )?;
         }
         IrInstr::FileWriteAll {
@@ -4415,12 +4454,50 @@ fn emit_instr_ir(
             path,
             content,
         } => {
+            let raw = format!("%raw_file_write{}", gep_counter);
+            *gep_counter += 1;
+            let ok_cond = format!("%file_write_ok{}", gep_counter);
+            *gep_counter += 1;
+            let ok_lbl = format!("file_write_ok_{}", result.0);
+            let err_lbl = format!("file_write_err_{}", result.0);
+            let merge_lbl = format!("file_write_merge_{}", result.0);
+            let ok_box = format!("%file_write_ok_box{}", gep_counter);
+            *gep_counter += 1;
+            let ok_res = format!("%file_write_ok_res{}", gep_counter);
+            *gep_counter += 1;
+            let err_msg = format!("%file_write_err_msg{}", gep_counter);
+            *gep_counter += 1;
+            let err_box = format!("%file_write_err_box{}", gep_counter);
+            *gep_counter += 1;
+            let err_res = format!("%file_write_err_res{}", gep_counter);
+            *gep_counter += 1;
             writeln!(
                 out,
-                "  %v{} = call ptr @iris_file_write_all(ptr {}, ptr {})",
-                result.0,
+                "  {} = call ptr @iris_file_write_all(ptr {}, ptr {})",
+                raw,
                 val(*path),
                 val(*content)
+            )?;
+            writeln!(out, "  {} = icmp ne ptr {}, null", ok_cond, raw)?;
+            writeln!(
+                out,
+                "  br i1 {}, label %{}, label %{}",
+                ok_cond, ok_lbl, err_lbl
+            )?;
+            writeln!(out, "{}:", ok_lbl)?;
+            writeln!(out, "  {} = call ptr @iris_box_i64(i64 0)", ok_box)?;
+            writeln!(out, "  {} = call ptr @iris_make_ok(ptr {})", ok_res, ok_box)?;
+            writeln!(out, "  br label %{}", merge_lbl)?;
+            writeln!(out, "{}:", err_lbl)?;
+            writeln!(out, "  {} = call ptr @iris_const_str()", err_msg)?;
+            writeln!(out, "  {} = call ptr @iris_box_str(ptr {})", err_box, err_msg)?;
+            writeln!(out, "  {} = call ptr @iris_make_err(ptr {})", err_res, err_box)?;
+            writeln!(out, "  br label %{}", merge_lbl)?;
+            writeln!(out, "{}:", merge_lbl)?;
+            writeln!(
+                out,
+                "  %v{} = phi ptr [ {}, %{} ], [ {}, %{} ]",
+                result.0, ok_res, ok_lbl, err_res, err_lbl
             )?;
         }
         IrInstr::FileExists { result, path } => {
@@ -4581,10 +4658,7 @@ fn emit_instr_ir(
         }
         // Phase 83: GC retain/release
         IrInstr::Retain { ptr } => {
-            let emitted_ptr = emitted_types
-                .get(ptr)
-                .map(|s| s == "ptr")
-                .unwrap_or(false);
+            let emitted_ptr = emitted_types.get(ptr).map(|s| s == "ptr").unwrap_or(false);
             if emitted_ptr {
                 if let Some(kind) = func.value_type(*ptr).and_then(runtime_rc_kind_for_type) {
                     writeln!(
@@ -4597,10 +4671,7 @@ fn emit_instr_ir(
             }
         }
         IrInstr::Release { ptr, ty } => {
-            let emitted_ptr = emitted_types
-                .get(ptr)
-                .map(|s| s == "ptr")
-                .unwrap_or(false);
+            let emitted_ptr = emitted_types.get(ptr).map(|s| s == "ptr").unwrap_or(false);
             if emitted_ptr {
                 let kind = runtime_rc_kind_for_type(ty)
                     .or_else(|| func.value_type(*ptr).and_then(runtime_rc_kind_for_type));
@@ -4776,8 +4847,8 @@ pub fn llvm_type_complete(ty: &IrType) -> Result<String, CodegenError> {
         IrType::Scalar(DType::USize) => Ok("i64".to_owned()),
         // Named struct → pointer to named struct type.
         IrType::Struct { .. } => Ok("ptr".to_owned()), // pass by pointer
-        // Enum → integer tag.
-        IrType::Enum { .. } => Ok("i64".to_owned()),
+        // Enum -> ptr (heap-allocated variant)
+        IrType::Enum { .. } => Ok("ptr".to_owned()),
         // Fixed scalar arrays → LLVM array type (via pointer for args).
         IrType::Array { .. } => Ok("ptr".to_owned()), // arrays passed as ptr to [N x T]
         IrType::Tuple(_) => Ok("ptr".to_owned()),
@@ -4848,28 +4919,41 @@ fn inferred_value_type(
                 | IrInstr::Densify { ty, .. }
                 | IrInstr::CallExtern { ret_ty: ty, .. } => Some(ty.clone()),
                 IrInstr::ListNew { elem_ty, .. } => Some(IrType::List(Box::new(elem_ty.clone()))),
-                IrInstr::ListGet { elem_ty, .. }
-                | IrInstr::ListPop { elem_ty, .. }
-                | IrInstr::ChanRecv { elem_ty, .. } => Some(elem_ty.clone()),
+                IrInstr::ListGet { elem_ty, list, .. } => {
+                    // If elem_ty is Infer, try to resolve it from the list's inferred type.
+                    if matches!(elem_ty, IrType::Infer) {
+                        if let Some(IrType::List(inner)) = func.value_type(*list) {
+                            return Some((**inner).clone());
+                        }
+                    }
+                    Some(elem_ty.clone())
+                }
+                IrInstr::ListPop { elem_ty, list, .. } => {
+                    // If elem_ty is Infer, try to resolve it from the list's inferred type.
+                    if matches!(elem_ty, IrType::Infer) {
+                        if let Some(IrType::List(inner)) = func.value_type(*list) {
+                            return Some((**inner).clone());
+                        }
+                    }
+                    Some(elem_ty.clone())
+                }
                 IrInstr::MapNew { key_ty, val_ty, .. } => Some(IrType::Map(
                     Box::new(key_ty.clone()),
                     Box::new(val_ty.clone()),
                 )),
                 IrInstr::MapGet { val_ty, .. } => Some(val_ty.clone()),
-                IrInstr::MapKeys { map, .. } => inferred_value_type(func, *map, func.value_type(*map))
-                    .and_then(|ty| match ty {
+                IrInstr::MapKeys { map, .. } => {
+                    inferred_value_type(func, *map, func.value_type(*map)).and_then(|ty| match ty {
                         IrType::Map(key_ty, _) => Some(IrType::List(key_ty)),
                         _ => None,
-                    }),
-                IrInstr::MapValues { map, .. } => inferred_value_type(
-                    func,
-                    *map,
-                    func.value_type(*map),
-                )
-                .and_then(|ty| match ty {
-                    IrType::Map(_, val_ty) => Some(IrType::List(val_ty)),
-                    _ => None,
-                }),
+                    })
+                }
+                IrInstr::MapValues { map, .. } => {
+                    inferred_value_type(func, *map, func.value_type(*map)).and_then(|ty| match ty {
+                        IrType::Map(_, val_ty) => Some(IrType::List(val_ty)),
+                        _ => None,
+                    })
+                }
                 IrInstr::ListConcat { lhs, .. } | IrInstr::ListSlice { list: lhs, .. } => {
                     inferred_value_type(func, *lhs, func.value_type(*lhs))
                 }
@@ -5139,6 +5223,10 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare void @iris_call_closure_void(ptr, ...)",
         "declare ptr @iris_closure_fn(ptr)",
         "declare ptr @iris_closure_get_capture(ptr, i32)",
+        // Variants
+        "declare ptr @iris_make_variant(i64, i32, ...)",
+        "declare i64 @iris_get_variant_tag(ptr)",
+        "declare ptr @iris_extract_variant_field(ptr, i64)",
         // Atomics / Mutex
         "declare ptr @iris_atomic_new(ptr)",
         "declare ptr @iris_atomic_load(ptr)",

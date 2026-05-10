@@ -1,80 +1,123 @@
-// closures.iris -- first-class functions as values
+// closures.iris -- lambdas, closures, and higher-order functions
 //
-// Demonstrates defining and calling closures (lambda expressions).
+// Demonstrates actual lambda syntax (|params| body), passing
+// closures as function arguments, and function composition.
 //
 // Run: iris run examples/closures.iris
 
-def double(x: i64) -> i64 {
-    x * 2
-}
-
-def add_ten(x: i64) -> i64 {
-    x + 10
-}
-
-def square(x: i64) -> i64 {
-    x * x
-}
-
-def negate(x: i64) -> i64 {
-    0 - x
+// Higher-order function: apply a function to a value
+def apply(f: (i64) -> i64, x: i64) -> i64 {
+    f(x)
 }
 
 // Apply a function twice: f(f(x))
-def apply_twice_double(x: i64) -> i64 {
-    double(double(x))
+def apply_twice(f: (i64) -> i64, x: i64) -> i64 {
+    f(f(x))
 }
 
-def apply_twice_add_ten(x: i64) -> i64 {
-    add_ten(add_ten(x))
+// Apply a function n times
+def apply_n(f: (i64) -> i64, x: i64, n: i64) -> i64 {
+    var result = x
+    var i = 0
+    while i < n {
+        result = f(result);
+        i = i + 1
+    }
+    result
 }
 
-// Compose: double then add_ten
-def double_then_add_ten(x: i64) -> i64 {
-    add_ten(double(x))
+// Transform every element in a list
+def map_list_fn(lst: list<i64>, f: (i64) -> i64) -> list<i64> {
+    val result = list()
+    for item in lst {
+        push(result, f(item))
+    }
+    result
 }
 
-// Compose: add_ten then square
-def add_ten_then_square(x: i64) -> i64 {
-    square(add_ten(x))
+// Filter elements that satisfy a predicate
+def filter_fn(lst: list<i64>, pred: (i64) -> bool) -> list<i64> {
+    val result = list()
+    for item in lst {
+        if pred(item) { push(result, item) } else { val _n = 0 }
+    }
+    result
+}
+
+// Fold/reduce a list
+def fold_fn(lst: list<i64>, init: i64, f: (i64, i64) -> i64) -> i64 {
+    var acc = init
+    for item in lst {
+        acc = f(acc, item)
+    }
+    acc
+}
+
+def print_list(label: str, lst: list<i64>) -> i64 {
+    var s = "["
+    var i = 0
+    while i < list_len(lst) {
+        s = concat(s, to_str(list_get(lst, i)));
+        s = if (i + 1) < list_len(lst) { concat(s, ", ") } else { s };
+        i = i + 1
+    }
+    print(concat(label, concat(s, "]")));
+    0
 }
 
 def main() -> i64 {
-    print("=== Basic Functions ===");
-    val a = double(7)
-    print(concat("double(7) = ", to_str(a)));
+    print("=== Lambda Expressions ===");
 
-    val b = add_ten(a)
-    print(concat("add_ten(14) = ", to_str(b)));
+    val double  = |x: i64| x * 2
+    val square  = |x: i64| x * x
+    val negate  = |x: i64| 0 - x
+    val add_one = |x: i64| x + 1
 
-    val c = square(5)
-    print(concat("square(5) = ", to_str(c)));
+    print(concat("double(7)  = ", to_str(double(7))));
+    print(concat("square(5)  = ", to_str(square(5))));
+    print(concat("negate(3)  = ", to_str(negate(3))));
 
-    val d = negate(42)
-    print(concat("negate(42) = ", to_str(d)));
+    print("\n=== Passing Lambdas ===");
+    print(concat("apply(double, 21)        = ", to_str(apply(double, 21))));
+    print(concat("apply(square, 6)         = ", to_str(apply(square, 6))));
+    print(concat("apply_twice(double, 3)   = ", to_str(apply_twice(double, 3))));
+    print(concat("apply_n(add_one, 0, 10)  = ", to_str(apply_n(add_one, 0, 10))));
 
-    print("\n=== Apply Twice ===");
-    val e = apply_twice_double(3)
-    print(concat("double(double(3)) = ", to_str(e)));
+    print("\n=== Map / Filter / Fold ===");
+    val nums = list()
+    push(nums, 1); push(nums, 2); push(nums, 3);
+    push(nums, 4); push(nums, 5);
 
-    val f = apply_twice_add_ten(5)
-    print(concat("add_ten(add_ten(5)) = ", to_str(f)));
+    print_list("Source:   ", nums);
 
-    print("\n=== Composition ===");
-    val g = double_then_add_ten(7)
-    print(concat("add_ten(double(7)) = ", to_str(g)));
+    val doubled = map_list_fn(nums, double)
+    print_list("Doubled:  ", doubled);
 
-    val h = add_ten_then_square(3)
-    print(concat("square(add_ten(3)) = ", to_str(h)));
+    val squared = map_list_fn(nums, square)
+    print_list("Squared:  ", squared);
 
-    print("\n=== Pipeline ===");
-    // Chain: start with 5 -> double -> add_ten -> square -> negate
-    val start = 5
-    val step1 = double(start)
-    val step2 = add_ten(step1)
-    val step3 = square(step2)
-    val step4 = negate(step3)
-    print(concat("5 -> double -> add_ten -> square -> negate = ", to_str(step4)));
+    val evens = filter_fn(nums, |x: i64| (x % 2) == 0)
+    print_list("Evens:    ", evens);
+
+    val big = filter_fn(nums, |x: i64| x > 3)
+    print_list("x > 3:    ", big);
+
+    val sum = fold_fn(nums, 0, |a: i64, b: i64| a + b)
+    print(concat("Sum:      ", to_str(sum)));
+
+    val product = fold_fn(nums, 1, |a: i64, b: i64| a * b)
+    print(concat("Product:  ", to_str(product)));
+
+    // Compose: sum of squares of evens
+    val even_squares = map_list_fn(filter_fn(nums, |x: i64| (x % 2) == 0), square)
+    val result = fold_fn(even_squares, 0, |a: i64, b: i64| a + b)
+    print(concat("Sum of squares of evens: ", to_str(result)));
+
+    print("\n=== Closure Capture ===");
+    val base = 100
+    val add_base = |x: i64| x + base
+    print(concat("add_base(50) = ", to_str(add_base(50))));
+    print(concat("apply(add_base, 25) = ", to_str(apply(add_base, 25))));
 
     0
 }

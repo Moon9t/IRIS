@@ -16,6 +16,7 @@
 #include <stdarg.h>
 #include <errno.h>
 #include <time.h>
+#include <inttypes.h>
 
 #ifdef _WIN32
   #include <winsock2.h>
@@ -218,7 +219,11 @@ static void print_val_inline(IrisVal* v) {
         case IRIS_TAG_BOOL: printf("%s",   v->boolean ? "true" : "false"); break;
         case IRIS_TAG_STR:  printf("%s",   v->str);                    break;
         case IRIS_TAG_UNIT: printf("unit");                            break;
-        case IRIS_TAG_ENUM: printf("variant(%ld)", (long)v->i64);      break;
+        case IRIS_TAG_ENUM: {
+            IrisEnum* e = (IrisEnum*)v->ptr;
+            printf("variant(%" PRId64 ")", e ? e->tag : 0);
+            break;
+        }
         case IRIS_TAG_OPTION: {
             IrisOption* o = (IrisOption*)v->ptr;
             if (o && o->has_value) { printf("some("); print_val_inline(o->value); printf(")"); }
@@ -254,8 +259,8 @@ void iris_print(void* v) {
     print_val_inline((IrisVal*)v);
     printf("\n");
 }
-void iris_print_i64(int64_t v)  { printf("%ld\n",  (long)v); }
-void iris_print_i32(int32_t v)  { printf("%d\n",   v); }
+void iris_print_i64(int64_t v)  { printf("%" PRId64 "\n", v); }
+void iris_print_i32(int32_t v)  { printf("%d\n", v); }
 void iris_print_f64(double v) {
     /* Print integer-valued doubles without decimal to match interpreter output */
     if (v == (double)(long long)v && v > -1e15 && v < 1e15)
@@ -312,7 +317,9 @@ double iris_read_f64(void) {
 // String operations
 // ---------------------------------------------------------------------------
 
-int64_t iris_str_len(const char* s) { return (int64_t)strlen(s); }
+int64_t iris_str_len(const char* s) { 
+    return (int64_t)strlen(s); 
+}
 
 char* iris_str_concat(const char* a, const char* b) {
     size_t la = strlen(a), lb = strlen(b);
@@ -693,16 +700,16 @@ void iris_map_set(IrisMap* m, IrisVal* key, IrisVal* val) {
     e->next = m->buckets[h];
     m->buckets[h] = e;  m->len++;
 }
-IrisVal* iris_map_get(IrisMap* m, IrisVal* key) {
+IrisOption* iris_map_get(IrisMap* m, IrisVal* key) {
     char* key_str = iris_value_to_str(key);
     size_t h = hash_str(key_str) % m->n_buckets;
     for (IrisMapEntry* e = m->buckets[h]; e; e = e->next)
         if (strcmp(e->key, key_str) == 0) {
             free(key_str);
-            return e->val;
+            return iris_make_some(e->val);
         }
     free(key_str);
-    return NULL;
+    return iris_make_none();
 }
 int iris_map_contains(IrisMap* m, IrisVal* key) {
     char* key_str = iris_value_to_str(key);
@@ -4267,6 +4274,73 @@ int iris_sandbox_check_network(const char* host) {
     (void)host;
     return sandbox_allow_net ? 0 : 1;
 }
+
+/* ---------------------------------------------------------------------------
+ * Enum Variant Helpers
+ * --------------------------------------------------------------------------- */
+
+IrisVal* iris_make_variant(int64_t tag, int32_t nfields, ...) {
+    IrisVal* v = (IrisVal*)xmalloc(sizeof(IrisVal));
+    v->tag = IRIS_TAG_ENUM;
+
+    if (nfields == 0) {
+        v->ptr = NULL;
+    } else {
+        IrisVal** fields = (IrisVal**)xmalloc(nfields * sizeof(IrisVal*));
+        va_list args;
+        va_start(args, nfields);
+        for (int i = 0; i < nfields; i++) {
+            fields[i] = va_arg(args, IrisVal*);
+        }
+        va_end(args);
+        IrisEnum* e = (IrisEnum*)xmalloc(sizeof(IrisEnum));
+        e->tag = tag;
+        e->fields = fields;
+        e->len = (size_t)nfields;
+        v->ptr = e;
+    }
+    return v;
+}
+
+int64_t iris_get_variant_tag(IrisVal* v) {
+    if (!v) return 0;
+
+    // Hybrid enum representation:
+    // 1) unit/tag-only enums may be passed as immediate tags cast to pointers
+    // 2) payload enums are boxed IRIS_TAG_ENUM values
+    uintptr_t raw = (uintptr_t)v;
+    if (raw <= (uintptr_t)0xFFFF) {
+        return (int64_t)raw;
+    }
+
+    if (v->tag == IRIS_TAG_ENUM) {
+        IrisEnum* e = (IrisEnum*)v->ptr;
+        return e ? e->tag : 0;
+    }
+
+    // Boxed integer fallback for tag-only values that traveled through containers.
+    if (v->tag == IRIS_TAG_I64) {
+        return v->i64;
+    }
+    if (v->tag == IRIS_TAG_I32) {
+        return (int64_t)v->i32;
+    }
+
+    return 0;
+}
+
+IrisVal* iris_extract_variant_field(IrisVal* v, int64_t field_idx) {
+    if (!v) return NULL;
+
+    // Immediate tag-only variants carry no payload fields.
+    if ((uintptr_t)v <= (uintptr_t)0xFFFF) return NULL;
+
+    if (v->tag != IRIS_TAG_ENUM || !v->ptr) return NULL;
+    IrisEnum* e = (IrisEnum*)v->ptr;
+    if ((size_t)field_idx >= e->len) return NULL;
+    return e->fields[field_idx];
+}
+
 
 int iris_sandbox_check_ffi(const char* lib_path) {
     (void)lib_path;

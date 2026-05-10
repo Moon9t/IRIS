@@ -135,6 +135,33 @@ fn test_parse_error_on_unexpected_token() {
 }
 
 #[test]
+fn test_parse_recovery_collects_errors() {
+    let src = r#"
+def ok() -> i64 { 1 }
+
+def bad(x: i64) -> i64 {
+    y +
+}
+
+def also_ok() -> i64 { 2 }
+"#;
+
+    let (ast, errors) = iris::compile_with_recovery(src);
+    assert!(
+        errors.len() >= 1,
+        "recovery mode should report at least one parse error"
+    );
+    assert!(
+        ast.functions.iter().any(|f| f.name.name == "ok"),
+        "recovery should preserve earlier valid functions"
+    );
+    assert!(
+        ast.functions.iter().any(|f| f.name.name == "also_ok"),
+        "recovery should preserve later valid functions"
+    );
+}
+
+#[test]
 fn test_parse_error_on_missing_return_type() {
     let src = "def no_ret(x: f32) { x }";
     let result = compile(src, "bad", EmitKind::Ir);
@@ -174,4 +201,21 @@ def bad(x: f32, y: i64) -> f32 {
 fn test_module_name_in_ir_output() {
     let output = compile(ADD_SRC, "my_custom_module", EmitKind::Ir).unwrap();
     assert!(output.contains("my_custom_module"));
+}
+
+#[test]
+fn test_llvm_emit_includes_runtime_release_decl() {
+    let src = r#"
+def main() -> i64 {
+    val xs = [1, 2, 3];
+    print(len(xs));
+    0
+}
+"#;
+
+    let output = compile(src, "release_module", EmitKind::Llvm).expect("llvm compile");
+    assert!(
+        output.contains("declare void @iris_release") || output.contains("@iris_release"),
+        "LLVM output should declare or reference the runtime release helper"
+    );
 }

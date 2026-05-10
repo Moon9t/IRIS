@@ -11,7 +11,7 @@
 # ──────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-VERSION="0.2.0"
+VERSION="0.3.0"
 INSTALL_DIR="${IRIS_INSTALL_DIR:-$HOME/.iris}"
 BIN_DIR="$INSTALL_DIR/bin"
 
@@ -190,7 +190,7 @@ check_clang() {
         ver="$(clang --version 2>/dev/null | head -1)"
         ok "clang detected: $ver"
     else
-        info "clang not found. Install it for native compilation:"
+        info "clang not found. Install it for iris run/build/eval/jit:"
         info "  Ubuntu/Debian: sudo apt install clang lld"
         info "  Fedora:        sudo dnf install clang lld"
         info "  Arch:          sudo pacman -S clang lld"

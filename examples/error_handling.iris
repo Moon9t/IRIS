@@ -1,72 +1,164 @@
-// error_handling.iris — Safe division, sqrt, option types, chained operations
+// error_handling.iris -- option, result, and pattern matching on errors
+//
+// Demonstrates the built-in option<T> and result<T, E> types,
+// when-matching on some/none/ok/err, unwrap with defaults,
+// and chained fallible operations.
+//
+// Run: iris run examples/error_handling.iris
 
-def safe_divide(a : f64, b : f64) -> f64 {
-    if b == (0.0 to f64) {
-        -999.0 to f64
+// =====================
+//  Option type
+// =====================
+
+def safe_divide(a: i64, b: i64) -> option<i64> {
+    if b == 0 { none } else { some(a / b) }
+}
+
+def safe_sqrt(x: f64) -> option<f64> {
+    if x < 0.0 { none } else { some(sqrt(x)) }
+}
+
+def first_positive(lst: list<i64>) -> option<i64> {
+    var i = 0
+    var found = none
+    while i < list_len(lst) {
+        val v = list_get(lst, i)
+        if v > 0 {
+            if !is_some(found) {
+                found = some(v)
+            } else {
+                val _n = 0
+            }
+        } else {
+            val _n = 0
+        };
+        i = i + 1
+    }
+    found
+}
+
+// =====================
+//  Result type
+// =====================
+
+def parse_age(s: str) -> result<i64, str> {
+    val parsed = parse_i64(s)
+    if is_some(parsed) {
+        val n = unwrap(parsed)
+        if n < 0 { err("age cannot be negative") }
+        else {
+            if n > 150 { err("age too large") }
+            else { ok(n) }
+        }
     } else {
-        a / b
+        err(concat("invalid number: ", s))
     }
 }
 
-def safe_sqrt(x : f64) -> f64 {
-    if x < (0.0 to f64) {
-        -1.0 to f64
-    } else {
-        sqrt(x)
-    }
-}
+// =====================
+//  Pattern matching on option/result
+// =====================
 
-def show_option(label : str, opt : option<i64>) -> i64 {
-    val _r = if is_some(opt) {
-        print(concat(label, " is some"));
-        0
-    } else {
-        print(concat(label, " is none"));
-        0
+def show_option(label: str, opt: option<i64>) -> i64 {
+    when opt {
+        some(v) => print(concat(label, concat(" = Some(", concat(to_str(v), ")")))),
+        none    => print(concat(label, " = None")),
     };
     0
 }
 
+def show_option_f(label: str, opt: option<f64>) -> i64 {
+    when opt {
+        some(v) => print(concat(label, concat(" = Some(", concat(to_str(v), ")")))),
+        none    => print(concat(label, " = None")),
+    };
+    0
+}
+
+def show_result(label: str, res: result<i64, str>) -> i64 {
+    when res {
+        ok(v)  => print(concat(label, concat(" = Ok(", concat(to_str(v), ")")))),
+        err(e) => print(concat(label, concat(" = Err(", concat(e, ")")))),
+    };
+    0
+}
+
+// =====================
+//  Chained fallible operations (manual propagation)
+// =====================
+
+def compute(a: i64, b: i64) -> option<i64> {
+    val divided = safe_divide(a, b)
+    if is_some(divided) {
+        val dval = unwrap(divided)
+        val root = safe_sqrt(dval to f64)
+        if is_some(root) {
+            some(unwrap(root) to i64)
+        } else {
+            none
+        }
+    } else {
+        none
+    }
+}
+
+def validate_and_double(s: str) -> result<i64, str> {
+    val res = parse_age(s)
+    if is_ok(res) {
+        val age = unwrap(res)
+        ok(age * 2)
+    } else {
+        res
+    }
+}
+
+// =====================
+//  Main
+// =====================
+
 def main() -> i64 {
-    print("=== Safe Division ===");
-    val a = safe_divide(10.0 to f64, 2.0 to f64);
-    print(concat("10 / 2 = ", to_str(a)));
-    val b = safe_divide(5.0 to f64, 0.0 to f64);
-    print(concat("5 / 0  = ", to_str(b)));
+    print("=== Option Type ===");
+    show_option("10 / 2", safe_divide(10, 2));
+    show_option("7 / 0", safe_divide(7, 0));
+    show_option("100 / 4", safe_divide(100, 4));
 
-    print("");
-    print("=== Safe Square Root ===");
-    val c = safe_sqrt(16.0 to f64);
-    print(concat("sqrt(16) = ", to_str(c)));
-    val d = safe_sqrt(-4.0 to f64);
-    print(concat("sqrt(-4) = ", to_str(d)));
+    print("\n=== Option with Floats ===");
+    show_option_f("sqrt(16)", safe_sqrt(16.0));
+    show_option_f("sqrt(-4)", safe_sqrt(-4.0));
 
-    print("");
-    print("=== Option Types ===");
-    val x = some(42);
-    val y = none;
-    show_option("some(42)", x);
-    show_option("none", y);
+    print("\n=== Unwrap with Default ===");
+    val r1 = safe_divide(10, 2)
+    val v1 = if is_some(r1) { unwrap(r1) } else { -1 }
+    print(concat("unwrap_or(10/2, -1) = ", to_str(v1)));
 
-    print("");
-    print("=== Chained Operations ===");
-    val inp = 9.0 to f64;
-    val divisor = 3.0 to f64;
-    val sq = safe_sqrt(inp);
-    val result = if sq < (0.0 to f64) {
-        -1.0 to f64
-    } else {
-        safe_divide(sq, divisor)
-    };
-    print(concat("sqrt(9)/3 = ", to_str(result)));
+    val r2 = safe_divide(10, 0)
+    val v2 = if is_some(r2) { unwrap(r2) } else { -1 }
+    print(concat("unwrap_or(10/0, -1) = ", to_str(v2)));
 
-    val bad_inp = -1.0 to f64;
-    val sq2 = safe_sqrt(bad_inp);
-    val result2 = if sq2 < (0.0 to f64) {
-        -1.0 to f64
-    } else {
-        safe_divide(sq2, 3.0 to f64)
-    };
-    print(concat("sqrt(-1)/3 = ", to_str(result2)));
+    print("\n=== Result Type ===");
+    show_result("parse '25'", parse_age("25"));
+    show_result("parse '-5'", parse_age("-5"));
+    show_result("parse 'abc'", parse_age("abc"));
+    show_result("parse '200'", parse_age("200"));
+
+    print("\n=== Chained Operations (Option) ===");
+    show_option("compute(100, 4)", compute(100, 4));
+    show_option("compute(100, 0)", compute(100, 0));
+
+    print("\n=== Chained Operations (Result) ===");
+    show_result("validate '30'", validate_and_double("30"));
+    show_result("validate '-1'", validate_and_double("-1"));
+    show_result("validate 'x'", validate_and_double("x"));
+
+    print("\n=== First Positive ===");
+    val nums = list()
+    push(nums, -3); push(nums, -1); push(nums, 0);
+    push(nums, 7); push(nums, 2);
+    show_option("first positive", first_positive(nums));
+
+    val all_neg = list()
+    push(all_neg, -5); push(all_neg, -2);
+    show_option("all negative", first_positive(all_neg));
+
     0
 }

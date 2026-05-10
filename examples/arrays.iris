@@ -1,0 +1,23 @@
+bring std.string
+def sum_array() -> i64 {
+    val nums = [10, 20, 30, 40, 50]
+    var total = 0
+    for i in 0 .. 5 {
+        total = total + nums[i]
+    }
+    total
+}
+def fill_array() -> i64 {
+    var slots = [0, 0, 0, 0]
+    for i in 0 .. 4 {
+        slots[i] = i * 3
+    }
+    slots[3]
+}
+def main() -> i64 {
+    val total = sum_array();
+    print(concat("sum = ", to_str(total)));
+    val last = fill_array();
+    print(concat("last = ", to_str(last)));
+    0
+}

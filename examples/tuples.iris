@@ -1,0 +1,64 @@
+// tuples.iris -- tuple creation, access, and destructuring
+//
+// Run: iris run examples/tuples.iris
+
+def swap(a: i64, b: i64) -> (i64, i64) {
+    (b, a)
+}
+
+def min_max(lst: list<i64>) -> (i64, i64) {
+    var lo = list_get(lst, 0)
+    var hi = list_get(lst, 0)
+    var i = 1
+    while i < list_len(lst) {
+        val v = list_get(lst, i)
+        lo = if v < lo { v } else { lo };
+        hi = if v > hi { v } else { hi };
+        i = i + 1
+    }
+    (lo, hi)
+}
+
+def divmod(a: i64, b: i64) -> (i64, i64) {
+    (a / b, a % b)
+}
+
+def main() -> i64 {
+    print("=== Tuple Basics ===");
+    val pair = (42, "hello")
+    print(concat("pair.0 = ", to_str(pair.0)));
+    print(concat("pair.1 = ", pair.1));
+
+    val triple = (1, 2.0, true)
+    print(concat("triple.0 = ", to_str(triple.0)));
+    print(concat("triple.1 = ", to_str(triple.1)));
+    print(concat("triple.2 = ", to_str(triple.2)));
+
+    print("\n=== Tuple Destructuring ===");
+    val (a, b) = swap(10, 20);
+    print(concat("swap(10,20) = (", concat(to_str(a), concat(", ", concat(to_str(b), ")")))));
+
+    val (lo, hi) = min_max({
+        val nums = list()
+        push(nums, 5); push(nums, -3); push(nums, 12);
+        push(nums, 1); push(nums, 8);
+        nums
+    });
+    print(concat("min = ", to_str(lo)));
+    print(concat("max = ", to_str(hi)));
+
+    print("\n=== Divmod ===");
+    val (q, r) = divmod(17, 5);
+    print(concat("17 / 5 = ", to_str(q)));
+    print(concat("17 % 5 = ", to_str(r)));
+
+    print("\n=== Nested Tuples ===");
+    val nested = ((1, 2), (3, 4))
+    // Access inner tuples first, then their fields
+    val inner0 = nested.0
+    val inner1 = nested.1
+    print(concat("nested.0 = (", concat(to_str(inner0.0), concat(", ", concat(to_str(inner0.1), ")")))));
+    print(concat("nested.1 = (", concat(to_str(inner1.0), concat(", ", concat(to_str(inner1.1), ")")))));
+
+    0
+}

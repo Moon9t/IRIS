@@ -25,18 +25,18 @@ Powered by the IRIS compiler's built-in language server:
 - **Document Symbols** — outline view and breadcrumbs
 - **Signature Help** — parameter hints as you type
 - **Formatting** — format on save (configurable)
-- **Inlay Hints** — inline type annotations on `val` / `var` bindings
+- **Inlay Hints** — inline inferred binding hints on `val` / `var`
 - **Code Actions** — auto-fix missing semicolons, type casts, naming conventions, and more
 
 ### Debug Adapter Protocol (DAP)
 
 Step-through debugging with the built-in IRIS debugger:
 
-- Breakpoints (line and conditional)
-- Step In / Step Over / Step Out / Continue
-- Variables inspector (locals, globals)
+- Breakpoints (line, conditional, logpoint, and hit-count)
+- Step In / Step Over / Step Out / Step Back / Continue / Restart / Pause
+- Variables inspector (locals)
 - Watch expressions
-- Debug Console evaluation
+- Debug Console evaluation and completions
 
 ### Commands
 
@@ -44,6 +44,7 @@ Step-through debugging with the built-in IRIS debugger:
 |---------|------------|-------------|
 | **IRIS: Run File** | `Ctrl+F5` | Run the current `.iris` file |
 | **IRIS: Build Binary** | — | Compile to a native executable |
+| **IRIS: Debug File** | `F5` | Launch the current `.iris` file under the DAP debugger |
 | **IRIS: Open REPL** | — | Launch an interactive IRIS session |
 | **IRIS: Restart Language Server** | — | Restart the LSP server |
 | **IRIS: Stop Language Server** | — | Stop the LSP server |
@@ -85,7 +86,8 @@ cargo build --release
 | `iris.formatOnSave` | `true` | Auto-format `.iris` files on save |
 | `iris.trace.server` | `"off"` | Trace LSP communication (`off` / `messages` / `verbose`) |
 | `iris.inlayHints.enabled` | `true` | Enable inlay hints |
-| `iris.inlayHints.typeHints` | `true` | Show type hints on `val` / `var` bindings |
+| `iris.inlayHints.typeHints` | `true` | Show inferred binding hints on `val` / `var` bindings |
+| `iris.debug.stopOnEntry` | `false` | Stop at the first executable trace point when debugging |
 | `iris.showTimingOnRun` | `true` | Show compile + run elapsed time |
 
 ---
@@ -100,7 +102,7 @@ cargo build --release
 ```iris
 // hello.iris
 def main() -> i64 {
-    println("Hello, IRIS!")
+    print("Hello, IRIS!");
     0
 }
 ```
@@ -126,10 +128,10 @@ def area(s: Shape) -> f64 {
 }
 
 def main() -> i64 {
-    val shapes = [Shape.Circle(5.0), Shape.Rect(3.0, 4.0)]
-    for s in shapes {
-        println(f"Area: {area(s)}")
-    }
+    val c = Shape.Circle(5.0);
+    val r = Shape.Rect(3.0, 4.0);
+    print(concat("Circle area: ", to_str(area(c))));
+    print(concat("Rect area: ", to_str(area(r))));
     0
 }
 ```
@@ -141,7 +143,7 @@ IRIS features strong static typing, algebraic data types, closures, generics, pa
 ## Known Issues
 
 - Native concurrency (`spawn` / `channel`) is under active development.
-- Recursion depth in interpreter/eval mode is limited (~100 frames).
+- `iris run` uses the LLVM/native pipeline, so a working clang/sysroot setup is required.
 
 ---
 

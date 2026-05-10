@@ -4,7 +4,7 @@
 # Detects the current OS/arch and builds all applicable installer formats.
 #
 # Usage:
-#   ./installer/build-all.sh [--version 0.2.0] [--skip-build] [--format deb|rpm|appimage|pkg|dmg|all]
+#   ./installer/build-all.sh [--version 0.3.0] [--skip-build] [--format deb|rpm|appimage|pkg|dmg|all]
 #
 # Produces all outputs in installer/dist/
 # ─────────────────────────────────────────────────────────────────────

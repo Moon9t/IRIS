@@ -54,6 +54,15 @@ pub struct InlayHint {
     pub kind: u8,
 }
 
+/// A completion item ready to serialize to LSP.
+#[derive(Debug, Clone)]
+pub struct CompletionItem {
+    pub label: String,
+    /// LSP CompletionItemKind.
+    pub kind: u8,
+    pub detail: Option<String>,
+}
+
 /// Persistent LSP server state: one entry per open document.
 #[derive(Default)]
 pub struct LspState {
@@ -69,6 +78,10 @@ static STATIC_COMPLETIONS: &[&str] = &[
     "def",
     "val",
     "var",
+    "model",
+    "layer",
+    "input",
+    "output",
     "for",
     "while",
     "loop",
@@ -92,6 +105,31 @@ static STATIC_COMPLETIONS: &[&str] = &[
     "spawn",
     "par",
     "in",
+    "to",
+    "true",
+    "false",
+    // types
+    "i64",
+    "i32",
+    "i8",
+    "u8",
+    "u32",
+    "u64",
+    "usize",
+    "f64",
+    "f32",
+    "bool",
+    "str",
+    "tensor",
+    "option",
+    "result",
+    "list",
+    "map",
+    "chan",
+    "atomic",
+    "mutex",
+    "grad",
+    "sparse",
     // builtins
     "print",
     "panic",
@@ -119,7 +157,21 @@ static STATIC_COMPLETIONS: &[&str] = &[
     "unwrap",
     "list",
     "push",
+    "pop",
+    "list_len",
+    "list_get",
+    "list_set",
+    "list_pop",
+    "list_contains",
+    "list_slice",
     "map",
+    "map_get",
+    "map_set",
+    "map_contains",
+    "map_remove",
+    "map_keys",
+    "map_values",
+    "map_len",
     "cell",
     "cell_get",
     "cell_set",
@@ -134,6 +186,12 @@ static STATIC_COMPLETIONS: &[&str] = &[
     "ones",
     "fill",
     "linspace",
+    "channel",
+    "send",
+    "recv",
+    "atomic_load",
+    "atomic_store",
+    "atomic_add",
     "split",
     "join",
     "contains",
@@ -166,6 +224,25 @@ static STATIC_COMPLETIONS: &[&str] = &[
     "base64_decode",
     "char_at",
     "str_reverse",
+    "time_now_ms",
+    "sleep_ms",
+    "db_open",
+    "db_exec",
+    "db_query",
+    "db_close",
+    "file_read_all",
+    "file_write_all",
+    "file_exists",
+    "file_lines",
+    "process_args",
+    "env_var",
+    "process_exit",
+    "tcp_listen",
+    "tcp_accept",
+    "tcp_connect",
+    "tcp_read",
+    "tcp_write",
+    "tcp_close",
     // Phase 105 builtins
     "chan_try_recv",
     "chan_len",
@@ -240,6 +317,37 @@ static STATIC_COMPLETIONS: &[&str] = &[
     "list_count",
     "list_take",
     "list_drop",
+    // stdlib module bring targets
+    "std.math",
+    "std.string",
+    "std.fmt",
+    "std.set",
+    "std.queue",
+    "std.heap",
+    "std.time",
+    "std.path",
+    "std.fs",
+    "std.json",
+    "std.csv",
+    "std.http",
+    "std.kv",
+    "std.table",
+    "std.dataset",
+    "std.dataframe",
+    "std.iter",
+    "std.deque",
+    "std.bitset",
+    "std.crypto",
+    "std.os",
+    "std.ffi",
+    "std.async",
+    "std.testing",
+    "std.log",
+    "std.ml",
+    "std.nn",
+    "std.tensor",
+    "std.tensorx",
+    "std.http_server",
 ];
 
 // ---------------------------------------------------------------------------
@@ -439,21 +547,45 @@ impl LspState {
 
     /// Returns completion candidates for the given position.
     pub fn completions(&self, uri: &str) -> Vec<String> {
-        let mut items: Vec<String> = STATIC_COMPLETIONS.iter().map(|s| s.to_string()).collect();
+        self.completion_items(uri)
+            .into_iter()
+            .map(|item| item.label)
+            .collect()
+    }
+
+    /// Returns rich completion candidates for the given document.
+    pub fn completion_items(&self, uri: &str) -> Vec<CompletionItem> {
+        let mut items: Vec<CompletionItem> = STATIC_COMPLETIONS
+            .iter()
+            .map(|label| CompletionItem {
+                label: (*label).to_owned(),
+                kind: completion_kind_for(label),
+                detail: completion_detail_for(label).map(str::to_owned),
+            })
+            .collect();
 
         if let Some(source) = self.documents.get(uri) {
+            if let Some(ast) = parse_source(source) {
+                collect_completion_items_from_ast(&ast, &mut items);
+            }
+
             let module_name = uri_to_module_name(uri);
             if let Ok(module) = crate::compile_to_module(source, &module_name) {
                 for func in module.functions() {
                     let bare = func.name.split("__").next().unwrap_or(&func.name);
                     if !bare.starts_with("__") {
-                        items.push(bare.to_owned());
+                        push_completion(
+                            &mut items,
+                            bare.to_owned(),
+                            3,
+                            Some(format!("def {}(...)", bare)),
+                        );
                     }
                 }
             }
         }
-        items.sort();
-        items.dedup();
+        items.sort_by(|a, b| a.label.cmp(&b.label));
+        items.dedup_by(|a, b| a.label == b.label);
         items
     }
 
@@ -568,6 +700,37 @@ impl LspState {
             let (sl, sc) = byte_to_lsp_pos(source, ta.span.start.0);
             let (el, ec) = (sl, sc + ta.name.len() as u32);
             symbols.push((ta.name.clone(), 26u32, sl, sc, el, ec));
+        }
+        for tr in &ast.traits {
+            let (sl, sc) = byte_to_lsp_pos(source, tr.name.span.start.0);
+            let end_byte = tr.span.end.0.min(source.len() as u32);
+            let (el, ec) = byte_to_lsp_pos(source, end_byte);
+            symbols.push((tr.name.name.clone(), 11u32, sl, sc, el, ec));
+        }
+        for imp in &ast.impls {
+            let (sl, sc) = byte_to_lsp_pos(source, imp.span.start.0);
+            let end_byte = imp.span.end.0.min(source.len() as u32);
+            let (el, ec) = byte_to_lsp_pos(source, end_byte);
+            symbols.push((
+                format!("impl {} for {}", imp.trait_name, imp.type_name),
+                19u32,
+                sl,
+                sc,
+                el,
+                ec,
+            ));
+        }
+        for m in &ast.models {
+            let (sl, sc) = byte_to_lsp_pos(source, m.name.span.start.0);
+            let end_byte = m.span.end.0.min(source.len() as u32);
+            let (el, ec) = byte_to_lsp_pos(source, end_byte);
+            symbols.push((m.name.name.clone(), 5u32, sl, sc, el, ec));
+        }
+        for ef in &ast.extern_fns {
+            let (sl, sc) = byte_to_lsp_pos(source, ef.name.span.start.0);
+            let end_byte = ef.span.end.0.min(source.len() as u32);
+            let (el, ec) = byte_to_lsp_pos(source, end_byte);
+            symbols.push((ef.name.name.clone(), 12u32, sl, sc, el, ec));
         }
 
         // Sort by line for a predictable outline order.
@@ -860,7 +1023,7 @@ impl LspState {
                         hints.push(InlayHint {
                             line,
                             character: col,
-                            label: ": (inferred)".to_owned(),
+                            label: ": inferred".to_owned(),
                             kind: 1, // Type
                         });
                     }
@@ -1518,6 +1681,314 @@ fn parse_source(source: &str) -> Option<crate::parser::ast::AstModule> {
     Parser::new(&tokens).parse_module().ok()
 }
 
+fn push_completion(
+    items: &mut Vec<CompletionItem>,
+    label: String,
+    kind: u8,
+    detail: Option<String>,
+) {
+    if !items.iter().any(|item| item.label == label) {
+        items.push(CompletionItem {
+            label,
+            kind,
+            detail,
+        });
+    }
+}
+
+fn completion_kind_for(label: &str) -> u8 {
+    if matches!(
+        label,
+        "def"
+            | "val"
+            | "var"
+            | "model"
+            | "layer"
+            | "input"
+            | "output"
+            | "for"
+            | "while"
+            | "loop"
+            | "if"
+            | "else"
+            | "when"
+            | "return"
+            | "break"
+            | "continue"
+            | "choice"
+            | "record"
+            | "const"
+            | "type"
+            | "extern"
+            | "trait"
+            | "impl"
+            | "bring"
+            | "pub"
+            | "async"
+            | "await"
+            | "spawn"
+            | "par"
+            | "in"
+            | "to"
+    ) {
+        14 // Keyword
+    } else if matches!(
+        label,
+        "i64"
+            | "i32"
+            | "i8"
+            | "u8"
+            | "u32"
+            | "u64"
+            | "usize"
+            | "f64"
+            | "f32"
+            | "bool"
+            | "str"
+            | "tensor"
+            | "option"
+            | "result"
+            | "list"
+            | "map"
+            | "chan"
+            | "atomic"
+            | "mutex"
+            | "grad"
+            | "sparse"
+    ) {
+        7 // Class / type
+    } else if matches!(label, "true" | "false" | "none") {
+        12 // Value
+    } else if label.starts_with("std.") {
+        9 // Module
+    } else {
+        3 // Function
+    }
+}
+
+fn completion_detail_for(label: &str) -> Option<&'static str> {
+    let detail = match label {
+        "val" => "inferred immutable binding",
+        "var" => "inferred mutable binding",
+        "model" => "model DSL declaration",
+        "layer" => "model layer declaration",
+        "input" => "model input declaration",
+        "output" => "model output declaration",
+        "bring" => "import a file or stdlib module",
+        "chan" => "channel type: chan<T>",
+        "channel" => "channel constructor",
+        "tensor" => "tensor type: tensor<dtype, [dims]>",
+        "option" => "optional type: option<T>",
+        "result" => "result type: result<T, E>",
+        "list" => "list<T> type or list() constructor",
+        "map" => "map<K, V> type or map() constructor",
+        "std.math" => "bring std.math",
+        "std.string" => "bring std.string",
+        "std.fmt" => "bring std.fmt",
+        "std.set" => "bring std.set",
+        "std.queue" => "bring std.queue",
+        "std.heap" => "bring std.heap",
+        "std.time" => "bring std.time",
+        "std.path" => "bring std.path",
+        "std.fs" => "bring std.fs",
+        "std.json" => "bring std.json",
+        "std.csv" => "bring std.csv",
+        "std.http" => "bring std.http",
+        "std.ffi" => "bring std.ffi",
+        "std.ml" => "bring std.ml",
+        "std.nn" => "bring std.nn",
+        "std.tensor" => "bring std.tensor",
+        "std.tensorx" => "bring std.tensorx",
+        _ => return None,
+    };
+    Some(detail)
+}
+
+fn collect_completion_items_from_ast(
+    ast: &crate::parser::ast::AstModule,
+    items: &mut Vec<CompletionItem>,
+) {
+    for func in &ast.functions {
+        push_completion(
+            items,
+            func.name.name.clone(),
+            3,
+            Some(format!("def {}(...)", func.name.name)),
+        );
+        for param in &func.params {
+            push_completion(
+                items,
+                param.name.name.clone(),
+                6,
+                Some(format!("parameter: {}", ast_type_str(&param.ty))),
+            );
+        }
+        collect_completion_items_from_stmts(&func.body.stmts, items);
+    }
+    for s in &ast.structs {
+        push_completion(
+            items,
+            s.name.name.clone(),
+            22,
+            Some(format!("record {}", s.name.name)),
+        );
+        for field in &s.fields {
+            push_completion(
+                items,
+                field.name.name.clone(),
+                5,
+                Some(format!("field: {}", ast_type_str(&field.ty))),
+            );
+        }
+    }
+    for e in &ast.enums {
+        push_completion(
+            items,
+            e.name.name.clone(),
+            13,
+            Some(format!("choice {}", e.name.name)),
+        );
+        for variant in &e.variants {
+            push_completion(
+                items,
+                variant.name.name.clone(),
+                20,
+                Some(format!("variant of {}", e.name.name)),
+            );
+        }
+    }
+    for c in &ast.consts {
+        push_completion(
+            items,
+            c.name.name.clone(),
+            21,
+            Some(
+                c.ty.as_ref()
+                    .map(ast_type_str)
+                    .unwrap_or_else(|| "inferred const".to_owned()),
+            ),
+        );
+    }
+    for ta in &ast.type_aliases {
+        push_completion(
+            items,
+            ta.name.clone(),
+            7,
+            Some(format!("type = {}", ast_type_str(&ta.ty))),
+        );
+    }
+    for tr in &ast.traits {
+        push_completion(
+            items,
+            tr.name.name.clone(),
+            8,
+            Some(format!("trait {}", tr.name.name)),
+        );
+        for method in &tr.methods {
+            push_completion(
+                items,
+                method.name.name.clone(),
+                2,
+                Some(format!("trait method {}(...)", method.name.name)),
+            );
+        }
+    }
+    for imp in &ast.impls {
+        for method in &imp.methods {
+            push_completion(
+                items,
+                method.name.name.clone(),
+                2,
+                Some(format!("impl method {}(...)", method.name.name)),
+            );
+        }
+    }
+    for m in &ast.models {
+        push_completion(
+            items,
+            m.name.name.clone(),
+            7,
+            Some(format!("model {}", m.name.name)),
+        );
+        for input in &m.inputs {
+            push_completion(
+                items,
+                input.name.name.clone(),
+                6,
+                Some(format!("model input: {}", ast_type_str(&input.ty))),
+            );
+        }
+        for layer in &m.layers {
+            push_completion(
+                items,
+                layer.name.name.clone(),
+                5,
+                Some(format!("model layer: {}", layer.op.name)),
+            );
+        }
+        for output in &m.outputs {
+            push_completion(
+                items,
+                output.name.name.clone(),
+                5,
+                Some("model output".to_owned()),
+            );
+        }
+    }
+    for ef in &ast.extern_fns {
+        push_completion(
+            items,
+            ef.name.name.clone(),
+            3,
+            Some(format!("extern def {}(...)", ef.name.name)),
+        );
+    }
+}
+
+fn collect_completion_items_from_stmts(
+    stmts: &[crate::parser::ast::AstStmt],
+    items: &mut Vec<CompletionItem>,
+) {
+    use crate::parser::ast::AstStmt;
+    for stmt in stmts {
+        match stmt {
+            AstStmt::Let { name, ty, .. } => {
+                push_completion(
+                    items,
+                    name.name.clone(),
+                    6,
+                    Some(
+                        ty.as_ref()
+                            .map(ast_type_str)
+                            .unwrap_or_else(|| "inferred binding".to_owned()),
+                    ),
+                );
+            }
+            AstStmt::LetTuple { names, .. } => {
+                for name in names {
+                    push_completion(
+                        items,
+                        name.name.clone(),
+                        6,
+                        Some("inferred tuple binding".to_owned()),
+                    );
+                }
+            }
+            AstStmt::ForRange { var, body, .. }
+            | AstStmt::ForEach { var, body, .. }
+            | AstStmt::ParFor { var, body, .. } => {
+                push_completion(items, var.name.clone(), 6, Some("loop variable".to_owned()));
+                collect_completion_items_from_stmts(&body.stmts, items);
+            }
+            AstStmt::While { body, .. } | AstStmt::Loop { body, .. } => {
+                collect_completion_items_from_stmts(&body.stmts, items);
+            }
+            AstStmt::Spawn { body, .. } => collect_completion_items_from_stmts(body, items),
+            _ => {}
+        }
+    }
+}
+
 /// Finds the byte offset of the definition of `name` in the AST.
 fn definition_byte_of(ast: &crate::parser::ast::AstModule, name: &str) -> Option<u32> {
     for func in &ast.functions {
@@ -1543,6 +2014,48 @@ fn definition_byte_of(ast: &crate::parser::ast::AstModule, name: &str) -> Option
     for ta in &ast.type_aliases {
         if ta.name == name {
             return Some(ta.span.start.0);
+        }
+    }
+    for tr in &ast.traits {
+        if tr.name.name == name {
+            return Some(tr.name.span.start.0);
+        }
+        for method in &tr.methods {
+            if method.name.name == name {
+                return Some(method.name.span.start.0);
+            }
+        }
+    }
+    for imp in &ast.impls {
+        for method in &imp.methods {
+            if method.name.name == name {
+                return Some(method.name.span.start.0);
+            }
+        }
+    }
+    for model in &ast.models {
+        if model.name.name == name {
+            return Some(model.name.span.start.0);
+        }
+        for input in &model.inputs {
+            if input.name.name == name {
+                return Some(input.name.span.start.0);
+            }
+        }
+        for layer in &model.layers {
+            if layer.name.name == name {
+                return Some(layer.name.span.start.0);
+            }
+        }
+        for output in &model.outputs {
+            if output.name.name == name {
+                return Some(output.name.span.start.0);
+            }
+        }
+    }
+    for ef in &ast.extern_fns {
+        if ef.name.name == name {
+            return Some(ef.name.span.start.0);
         }
     }
     None
@@ -1583,15 +2096,42 @@ fn ast_type_str(ty: &crate::parser::ast::AstType) -> String {
             let inner: Vec<String> = ts.iter().map(ast_type_str).collect();
             format!("({})", inner.join(", "))
         }
+        AstType::Tensor { dtype, dims, .. } => {
+            let dtype = match dtype {
+                AstScalarKind::I64 => "i64",
+                AstScalarKind::I32 => "i32",
+                AstScalarKind::F64 => "f64",
+                AstScalarKind::F32 => "f32",
+                AstScalarKind::Bool => "bool",
+                AstScalarKind::U8 => "u8",
+                AstScalarKind::I8 => "i8",
+                AstScalarKind::U32 => "u32",
+                AstScalarKind::U64 => "u64",
+                AstScalarKind::USize => "usize",
+            };
+            let dims: Vec<String> = dims
+                .iter()
+                .map(|dim| match dim {
+                    crate::parser::ast::AstDim::Literal(n) => n.to_string(),
+                    crate::parser::ast::AstDim::Symbol(s) => s.name.clone(),
+                })
+                .collect();
+            format!("tensor<{}, [{}]>", dtype, dims.join(", "))
+        }
+        AstType::Array { elem, len, .. } => format!("[{}; {}]", ast_type_str(elem), len),
         AstType::List(t, _) => format!("list<{}>", ast_type_str(t)),
         AstType::Map(k, v, _) => format!("map<{}, {}>", ast_type_str(k), ast_type_str(v)),
         AstType::Option(t, _) => format!("option<{}>", ast_type_str(t)),
         AstType::Result(t, e, _) => format!("result<{}, {}>", ast_type_str(t), ast_type_str(e)),
+        AstType::Chan(t, _) => format!("chan<{}>", ast_type_str(t)),
+        AstType::Atomic(t, _) => format!("atomic<{}>", ast_type_str(t)),
+        AstType::Mutex(t, _) => format!("mutex<{}>", ast_type_str(t)),
+        AstType::Grad(t, _) => format!("grad<{}>", ast_type_str(t)),
+        AstType::Sparse(t, _) => format!("sparse<{}>", ast_type_str(t)),
         AstType::Fn { params, ret, .. } => {
             let ps: Vec<String> = params.iter().map(ast_type_str).collect();
             format!("({}) -> {}", ps.join(", "), ast_type_str(ret))
         }
-        _ => "?".to_owned(),
     }
 }
 
@@ -1670,8 +2210,7 @@ fn find_binding_in_block(
                         .as_ref()
                         .map(ast_type_str)
                         .unwrap_or_else(|| "(inferred)".to_owned());
-                    // Detect if it was `val` or `var` by checking the source at the span.
-                    return Some(format!("```iris\nval {}: {}\n```", name, ty_str));
+                    return Some(format!("```iris\ninferred {}: {}\n```", name, ty_str));
                 }
             }
             crate::parser::ast::AstStmt::ForRange { var, body, .. } => {
@@ -1717,7 +2256,7 @@ fn find_binding_in_block(
             crate::parser::ast::AstStmt::LetTuple { names, .. } => {
                 for n in names {
                     if n.name == name {
-                        return Some(format!("```iris\nval {} (destructured)\n```", name));
+                        return Some(format!("```iris\ninferred {} (destructured)\n```", name));
                     }
                 }
             }
@@ -1960,8 +2499,8 @@ fn keyword_hover(name: &str) -> Option<String> {
     let info = match name {
         "def" => "**def** — Define a function",
         "pub" => "**pub** — Export a function or record for use from other files",
-        "val" => "**val** — Immutable binding (cannot be reassigned)",
-        "var" => "**var** — Mutable binding (can be reassigned)",
+        "val" => "**val** - inferred immutable binding (cannot be reassigned)",
+        "var" => "**var** - inferred mutable binding (can be reassigned)",
         "if" => "**if** — Conditional expression: `if cond { ... } else { ... }`",
         "else" => "**else** — Alternative branch of an if expression",
         "while" => "**while** — Loop while condition is true",
@@ -1973,6 +2512,10 @@ fn keyword_hover(name: &str) -> Option<String> {
         "when" => "**when** — Pattern match expression",
         "record" => "**record** — Define a struct type with named fields",
         "choice" => "**choice** — Define an enum type with variants",
+        "model" => "**model** - Define a model DSL graph",
+        "layer" => "**layer** - Add an operation inside a model",
+        "input" => "**input** - Declare a model input",
+        "output" => "**output** - Declare a model output",
         "const" => "**const** — Compile-time constant",
         "type" => "**type** — Type alias",
         "extern" => "**extern** — Declare an external C function",
@@ -1983,6 +2526,8 @@ fn keyword_hover(name: &str) -> Option<String> {
         "par" => "**par** — Parallel execution: `par for i in 0..n { ... }`",
         "async" => "**async** — Mark a function as asynchronous",
         "await" => "**await** — Wait for an async expression to complete",
+        "in" => "**in** - Introduce a range or iterator source in a loop",
+        "to" => "**to** - Cast expression to a target type",
         "true" => "```iris\ntrue: bool\n```",
         "false" => "```iris\nfalse: bool\n```",
         "none" => "```iris\nnone: option<T>\n```\nAbsent value",
@@ -2021,6 +2566,7 @@ fn format_iris(source: &str) -> String {
             Token::Def
                 | Token::Record
                 | Token::Choice
+                | Token::Model
                 | Token::Const
                 | Token::Type
                 | Token::Extern
@@ -2042,6 +2588,8 @@ fn format_iris(source: &str) -> String {
                 | Token::Return
                 | Token::Break
                 | Token::Continue
+                | Token::Spawn
+                | Token::Par
         )
     };
 
@@ -2207,11 +2755,16 @@ fn token_to_str(tok: &crate::parser::lexer::Token, _source: &str) -> String {
         Token::Return => "return".into(),
         Token::Record => "record".into(),
         Token::Choice => "choice".into(),
+        Token::Model => "model".into(),
+        Token::Layer => "layer".into(),
+        Token::Input => "input".into(),
+        Token::Output => "output".into(),
         Token::Const => "const".into(),
         Token::Type => "type".into(),
         Token::Extern => "extern".into(),
         Token::Trait => "trait".into(),
         Token::Impl => "impl".into(),
+        Token::Mod => "mod".into(),
         Token::Pub => "pub".into(),
         Token::Bring => "bring".into(),
         Token::Async => "async".into(),
@@ -2279,7 +2832,6 @@ fn token_to_str(tok: &crate::parser::lexer::Token, _source: &str) -> String {
         Token::StringLit(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
         Token::FStringLit(s) => format!("f\"{}\"", s),
         Token::Eof => String::new(),
-        _ => String::new(),
     }
 }
 
@@ -2291,12 +2843,6 @@ fn token_to_str(tok: &crate::parser::lexer::Token, _source: &str) -> String {
 /// responses to stdout. Blocks until the client sends `exit`.
 pub fn run_lsp_server() -> std::io::Result<()> {
     use std::io::Read;
-    use std::thread;
-    use std::time::Duration;
-
-    // Cold-start delay: wait 5 seconds to allow editor/client to fully initialize
-    // and avoid race conditions with file system and other initialization tasks.
-    thread::sleep(Duration::from_secs(5));
 
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -2371,7 +2917,7 @@ pub fn run_lsp_server() -> std::io::Result<()> {
                                 "prepareProvider": false
                             }
                         },
-                        "serverInfo": { "name": "iris-lsp", "version": "0.2.0" }
+                        "serverInfo": { "name": "iris-lsp", "version": env!("CARGO_PKG_VERSION") }
                     }),
                 );
                 write_message(&mut stdout.lock(), &resp)?;
@@ -2440,9 +2986,18 @@ pub fn run_lsp_server() -> std::io::Result<()> {
                     .unwrap_or("")
                     .to_owned();
                 let items: Vec<serde_json::Value> = state
-                    .completions(&uri)
+                    .completion_items(&uri)
                     .into_iter()
-                    .map(|label| serde_json::json!({ "label": label, "kind": 1 }))
+                    .map(|item| {
+                        let mut value = serde_json::json!({
+                            "label": item.label,
+                            "kind": item.kind
+                        });
+                        if let Some(detail) = item.detail {
+                            value["detail"] = serde_json::json!(detail);
+                        }
+                        value
+                    })
                     .collect();
                 write_message(
                     &mut stdout.lock(),
@@ -2960,6 +3515,10 @@ fn is_keyword(word: &str) -> bool {
             | "extern"
             | "trait"
             | "impl"
+            | "model"
+            | "layer"
+            | "input"
+            | "output"
             | "pub"
             | "in"
             | "to"
@@ -2980,6 +3539,16 @@ fn is_keyword(word: &str) -> bool {
             | "u32"
             | "u64"
             | "usize"
+            | "tensor"
+            | "option"
+            | "result"
+            | "list"
+            | "map"
+            | "chan"
+            | "atomic"
+            | "mutex"
+            | "grad"
+            | "sparse"
     )
 }
 

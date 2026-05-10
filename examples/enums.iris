@@ -1,35 +1,158 @@
 // enums.iris -- algebraic data types (choice) and pattern matching
 //
-// Run: cargo run -- --emit eval examples/enums.iris
+// Demonstrates tag-only variants, pattern matching with when,
+// and using enums to model domain logic.
+//
+// Run: iris run examples/enums.iris
+
+// =====================
+//  Tag-only enum
+// =====================
 
 choice Direction { North, South, East, West }
 
-choice Shape { Circle, Square, Triangle }
-
-def direction_num(d: Direction) -> i64 {
+def direction_name(d: Direction) -> str {
     when d {
-        Direction.North => 1
-        Direction.South => 2
-        Direction.East  => 3
-        Direction.West  => 4
+        Direction.North => "North"
+        Direction.South => "South"
+        Direction.East  => "East"
+        Direction.West  => "West"
     }
 }
 
-def sides(s: Shape) -> i64 {
-    when s {
-        Shape.Circle   => 0
-        Shape.Square   => 4
-        Shape.Triangle => 3
+def is_horizontal(d: Direction) -> bool {
+    when d {
+        Direction.East  => true
+        Direction.West  => true
+        Direction.North => false
+        Direction.South => false
     }
 }
+
+// =====================
+//  Card suits with derived properties
+// =====================
+
+choice Suit { Hearts, Diamonds, Clubs, Spades }
+
+choice Color { Red, Black }
+
+def suit_color(s: Suit) -> Color {
+    when s {
+        Suit.Hearts   => Color.Red
+        Suit.Diamonds => Color.Red
+        Suit.Clubs    => Color.Black
+        Suit.Spades   => Color.Black
+    }
+}
+
+def suit_name(s: Suit) -> str {
+    when s {
+        Suit.Hearts   => "Hearts"
+        Suit.Diamonds => "Diamonds"
+        Suit.Clubs    => "Clubs"
+        Suit.Spades   => "Spades"
+    }
+}
+
+def color_name(c: Color) -> str {
+    when c {
+        Color.Red   => "Red"
+        Color.Black => "Black"
+    }
+}
+
+// =====================
+//  Calculator operations
+// =====================
+
+choice Op { Add, Sub, Mul, Div }
+
+record Expr {
+    left: f64,
+    right: f64,
+}
+
+def calculate(e: Expr, op: Op) -> f64 {
+    when op {
+        Op.Add => e.left + e.right,
+        Op.Sub => e.left - e.right,
+        Op.Mul => e.left * e.right,
+        Op.Div => e.left / e.right,
+    }
+}
+
+def op_symbol(op: Op) -> str {
+    when op {
+        Op.Add => "+",
+        Op.Sub => "-",
+        Op.Mul => "*",
+        Op.Div => "/",
+    }
+}
+
+// =====================
+//  Traffic light state machine
+// =====================
+
+choice Light { Red, Yellow, Green }
+
+def next_light(l: Light) -> Light {
+    when l {
+        Light.Red    => Light.Green
+        Light.Green  => Light.Yellow
+        Light.Yellow => Light.Red
+    }
+}
+
+def light_name(l: Light) -> str {
+    when l {
+        Light.Red    => "Red"
+        Light.Green  => "Green"
+        Light.Yellow => "Yellow"
+    }
+}
+
+// =====================
+//  Main
+// =====================
 
 def main() -> i64 {
-    val d = Direction.East
-    val dn = direction_num(d)
-    print(concat("East = ", to_str(dn)));
+    print("=== Directions ===");
+    print(direction_name(Direction.North));
+    print(direction_name(Direction.East));
+    print(concat("East horizontal? ", to_str(is_horizontal(Direction.East))));
+    print(concat("North horizontal? ", to_str(is_horizontal(Direction.North))));
 
-    val s = Shape.Triangle
-    val n = sides(s)
-    print(concat("Triangle sides = ", to_str(n)));
+    print("\n=== Card Suits ===");
+    val suits = list()
+    push(suits, Suit.Hearts); push(suits, Suit.Diamonds);
+    push(suits, Suit.Clubs); push(suits, Suit.Spades);
+    for s in suits {
+        val sn = suit_name(s)
+        val cn = color_name(suit_color(s))
+        print(concat("  ", concat(sn, concat(" -> ", cn))))
+    }
+
+    print("\n=== Calculator ===");
+    val e = Expr { left: 10.0, right: 3.0 }
+    val ops = list()
+    push(ops, Op.Add); push(ops, Op.Sub);
+    push(ops, Op.Mul); push(ops, Op.Div);
+    for op in ops {
+        val result = calculate(e, op)
+        val sym = op_symbol(op)
+        print(concat("  10 ", concat(sym, concat(" 3 = ", to_str(result)))))
+    }
+
+    print("\n=== Traffic Light State Machine ===");
+    var light = Light.Red
+    var cycle = 0
+    while cycle < 6 {
+        print(concat("  ", light_name(light)));
+        light = next_light(light);
+        cycle = cycle + 1
+    }
+
     0
 }

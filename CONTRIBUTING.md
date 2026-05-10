@@ -1,3 +1,35 @@
+Contributing to IRIS — notes for Linguist submissions
+=====================================================
+
+If you're updating the TextMate grammar, language metadata, or preparing another submission to GitHub Linguist, follow these steps to keep the process reproducible.
+
+Local preparation (recommended via Docker)
+1. Update the grammar source in this repository: `iris-tmLanguage/syntaxes/iris.tmLanguage.json`.
+2. Regenerate the unified diff for Linguist:
+
+```sh
+python tools/generate_iris_linguist_patch.py --out iris-linguist.patch
+```
+
+3. Prepare a local checkout of `github-linguist/linguist` (fork if needed).
+4. Apply the generated patch to your local Linguist checkout and add the vendored grammar under `vendor/grammars/iris-tmLanguage`.
+
+Using Docker to run Linguist helpers (recommended)
+1. Build the helper image and run a container that mounts your local Linguist checkout (example helper included under `tools/linguist-docker/`).
+2. Inside the container, run:
+
+```sh
+bundle install
+script/update-ids
+# optionally: rake test
+```
+
+Notes
+- `script/update-ids` generates the `language_id` used by `languages.yml`; run it after adding your language block.
+- Forked PRs to Linguist will not run Actions until a repository maintainer approves and triggers them; be prepared to ask maintainers to "Approve and run" Actions for your PR.
+- Keep vendor licenses and README files with the grammar when vendoring.
+
+If you want me to run the Docker helper locally or create the patch for you, say so and I will proceed.
 # Contributing to IRIS
 
 Thank you for your interest in contributing to IRIS! This guide will help you get started.

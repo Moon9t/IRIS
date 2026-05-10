@@ -1,0 +1,163 @@
+// traits.iris -- trait definitions and implementations
+//
+// Demonstrates defining traits with required methods, implementing
+// traits for different record types, and calling trait methods.
+//
+// Run: iris run examples/traits.iris
+
+// =====================
+//  Define records
+// =====================
+
+record Circle {
+    radius: f64,
+}
+
+record Rectangle {
+    width: f64,
+    height: f64,
+}
+
+record Triangle {
+    base: f64,
+    height: f64,
+}
+
+// =====================
+//  Define traits
+// =====================
+
+trait Area {
+    def area(self: Self) -> f64
+}
+
+trait Perimeter {
+    def perimeter(self: Self) -> f64
+}
+
+trait Describe {
+    def describe(self: Self) -> str
+}
+
+// =====================
+//  Implement traits for Circle
+// =====================
+
+impl Area for Circle {
+    def area(self: Circle) -> f64 {
+        3.14159265 * self.radius * self.radius
+    }
+}
+
+impl Perimeter for Circle {
+    def perimeter(self: Circle) -> f64 {
+        (2.0 to f64) * 3.14159265 * self.radius
+    }
+}
+
+impl Describe for Circle {
+    def describe(self: Circle) -> str {
+        val r = to_str(self.radius)
+        concat("Circle(r=", concat(r, ")"))
+    }
+}
+
+// =====================
+//  Implement traits for Rectangle
+// =====================
+
+impl Area for Rectangle {
+    def area(self: Rectangle) -> f64 {
+        self.width * self.height
+    }
+}
+
+impl Perimeter for Rectangle {
+    def perimeter(self: Rectangle) -> f64 {
+        (2.0 to f64) * (self.width + self.height)
+    }
+}
+
+impl Describe for Rectangle {
+    def describe(self: Rectangle) -> str {
+        val w = to_str(self.width)
+        val h = to_str(self.height)
+        concat("Rectangle(", concat(w, concat("x", concat(h, ")"))))
+    }
+}
+
+// =====================
+//  Implement traits for Triangle
+// =====================
+
+impl Area for Triangle {
+    def area(self: Triangle) -> f64 {
+        (0.5 to f64) * self.base * self.height
+    }
+}
+
+impl Describe for Triangle {
+    def describe(self: Triangle) -> str {
+        val b = to_str(self.base)
+        val h = to_str(self.height)
+        concat("Triangle(b=", concat(b, concat(", h=", concat(h, ")"))))
+    }
+}
+
+// =====================
+//  Helper to show shape info
+// =====================
+
+def show_circle(c: Circle) -> i64 {
+    print(concat("  Shape:     ", c.describe()));
+    print(concat("  Area:      ", to_str(c.area())));
+    print(concat("  Perimeter: ", to_str(c.perimeter())));
+    0
+}
+
+def show_rectangle(r: Rectangle) -> i64 {
+    print(concat("  Shape:     ", r.describe()));
+    print(concat("  Area:      ", to_str(r.area())));
+    print(concat("  Perimeter: ", to_str(r.perimeter())));
+    0
+}
+
+def show_triangle(t: Triangle) -> i64 {
+    print(concat("  Shape:     ", t.describe()));
+    print(concat("  Area:      ", to_str(t.area())));
+    0
+}
+
+// =====================
+//  Main
+// =====================
+
+def main() -> i64 {
+    print("=== Traits: Shape Hierarchy ===");
+
+    print("\nCircle:");
+    val c = Circle { radius: 5.0 }
+    show_circle(c);
+
+    print("\nRectangle:");
+    val r = Rectangle { width: 8.0, height: 3.0 }
+    show_rectangle(r);
+
+    print("\nTriangle:");
+    val t = Triangle { base: 10.0, height: 6.0 }
+    show_triangle(t);
+
+    print("\n=== Comparing Areas ===");
+    val ca = c.area()
+    val ra = r.area()
+    val ta = t.area()
+
+    val largest = if ca >= ra {
+        if ca >= ta { c.describe() } else { t.describe() }
+    } else {
+        if ra >= ta { r.describe() } else { t.describe() }
+    };
+    print(concat("Largest area: ", largest));
+
+    0
+}

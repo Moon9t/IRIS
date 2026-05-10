@@ -22,12 +22,12 @@
   "Val binding": {
     "prefix": "val",
     "body": ["val ${1:name} = $0"],
-    "description": "Immutable value binding"
+    "description": "Inferred immutable binding"
   },
   "Var binding": {
     "prefix": "var",
     "body": ["var ${1:name} = $0"],
-    "description": "Mutable variable binding"
+    "description": "Inferred mutable binding"
   },
   "If-else": {
     "prefix": "if",
@@ -204,7 +204,7 @@
   },
   "Bring ML stdlib": {
     "prefix": "bring ml",
-    "body": ["bring ml"],
+    "body": ["bring std.ml"],
     "description": "Import the IRIS ML standard library"
   },
   "MLP create and train": {

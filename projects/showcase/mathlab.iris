@@ -1,0 +1,154 @@
+bring std.string
+const SEP : str = "--------------------------------------------------"
+def gcd(a : i64, b : i64) -> i64 {
+    var x = a;
+    var y = b;
+    while y != 0 {
+        val r = x % y;
+        x = y;
+        y = r
+    }
+    if x<0 {
+        - x
+    }
+    else {
+        x
+    }
+    
+}
+def factorial(n : i64) -> i64 {
+    if n <= 1 {
+        1
+    }
+    else {
+        n * factorial(n - 1)
+    }
+    
+}
+def fib(n : i64) -> i64 {
+    if n <= 1 {
+        n
+    }
+    else {
+        fib(n - 1) + fib(n - 2)
+    }
+    
+}
+def prime_count(limit : i64) -> i64 {
+    val flags = list();
+    var i = 0;
+    while i <= limit {
+        push(flags, 1);
+        i = i + 1
+    }
+    if limit >= 0 {
+        list_set(flags, 0, 0)
+    }
+    else {
+        0
+    }
+    ;
+    if limit >= 1 {
+        list_set(flags, 1, 0)
+    }
+    else {
+        0
+    }
+    ;
+    var p = 2;
+    while(p * p) <= limit {
+        if list_get(flags, p) == 1 {
+            var multiple = p * p;
+            while multiple <= limit {
+                list_set(flags, multiple, 0);
+                multiple = multiple + p
+            }
+            
+        }
+        else {
+            val _noop = 0
+        }
+        ;
+        p = p + 1
+    }
+    var count = 0;
+    var n = 2;
+    while n <= limit {
+        if list_get(flags, n) == 1 {
+            count = count + 1
+        }
+        else {
+            0
+        }
+        ;
+        n = n + 1
+    }
+    count
+}
+def row3(a : i64, b : i64, c : i64) -> list<i64> {
+    val row = list();
+    push(row, a);
+    push(row, b);
+    push(row, c);
+    row
+}
+def mat_mul3(a : list<list<i64>>, b : list<list<i64>>) -> list<list<i64>> {
+    val result : list<list<i64>> = list();
+    var i = 0;
+    while i<3 {
+        val out_row = list();
+        var j = 0;
+        while j<3 {
+            var sum = 0;
+            var k = 0;
+            while k<3 {
+                val aik = list_get(list_get(a, i), k);
+                val bkj = list_get(list_get(b, k), j);
+                sum = sum + (aik * bkj);
+                k = k + 1
+            }
+            push(out_row, sum);
+            j = j + 1
+        }
+        push(result, out_row);
+        i = i + 1
+    }
+    result
+}
+def list_sum(values : list<i64>) -> i64 {
+    var total = 0;
+    var i = 0;
+    while i<len(values) {
+        total = total + list_get(values, i);
+        i = i + 1
+    }
+    total
+}
+def main() -> i64 {
+    print(SEP);
+    print("MATHLAB");
+    print(SEP);
+    val nums = list();
+    push(nums, 12);
+    push(nums, 18);
+    push(nums, 30);
+    push(nums, 42);
+    push(nums, 90);
+    print(concat("gcd(nums) = ", to_str(gcd(list_get(nums, 0), list_get(nums, 1)))));
+    print(concat("factorial(10) = ", to_str(factorial(10))));
+    print(concat("fib(20) = ", to_str(fib(20))));
+    print(concat("prime_count(1000) = ", to_str(prime_count(1000))));
+    print(concat("sum(nums) = ", to_str(list_sum(nums))));
+    val a : list<list<i64>> = list();
+    push(a, row3(1, 2, 3));
+    push(a, row3(4, 5, 6));
+    push(a, row3(7, 8, 9));
+    val b : list<list<i64>> = list();
+    push(b, row3(9, 8, 7));
+    push(b, row3(6, 5, 4));
+    push(b, row3(3, 2, 1));
+    val c = mat_mul3(a, b);
+    print(concat("mat[0][0] = ", to_str(list_get(list_get(c, 0), 0))));
+    print(concat("mat[1][1] = ", to_str(list_get(list_get(c, 1), 1))));
+    0
+}

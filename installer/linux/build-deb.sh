@@ -3,13 +3,13 @@
 # build-deb.sh — Build a .deb package for IRIS Language
 # ──────────────────────────────────────────────────────────────────────────
 # Usage:
-#   ./installer/linux/build-deb.sh [--version 0.2.0] [--arch amd64]
+#   ./installer/linux/build-deb.sh [--version 0.3.0] [--arch amd64]
 #
 # Produces: installer/dist/iris_<version>_<arch>.deb
 # ──────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-VERSION="0.2.0"
+VERSION="0.3.0"
 ARCH="amd64"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -89,7 +89,7 @@ cp "$ROOT/README.md" "$PKG_DIR/usr/share/doc/iris/"
 # ── Generate man page ────────────────────────────────────────────────────
 echo "[3/5] Generating man page..."
 cat > "$PKG_DIR/usr/share/man/man1/iris.1" << 'MANEOF'
-.TH IRIS 1 "2026" "iris 0.2.0" "IRIS Language"
+.TH IRIS 1 "2026" "iris 0.3.0" "IRIS Language"
 .SH NAME
 iris \- IRIS programming language compiler and toolchain
 .SH SYNOPSIS
@@ -98,12 +98,12 @@ iris \- IRIS programming language compiler and toolchain
 .SH DESCRIPTION
 IRIS (Intermediate Representation for Intelligent Systems) is a
 programming language designed for machine learning and systems
-programming. The \fBiris\fR command provides a compiler, interpreter,
+programming. The \fBiris\fR command provides a compiler, REPL,
 REPL, language server (LSP), and debug adapter (DAP).
 .SH COMMANDS
 .TP
 .B run \fIFILE\fR
-Run an IRIS source file using the interpreter.
+Compile and run an IRIS source file through the LLVM/native pipeline.
 .TP
 .B build \fIFILE\fR \-o \fIOUTPUT\fR
 Compile an IRIS source file to a native binary.
@@ -165,7 +165,7 @@ Homepage: https://github.com/moon9t/iris
 Description: IRIS programming language compiler and toolchain
  IRIS (Intermediate Representation for Intelligent Systems) is a
  programming language designed for machine learning and systems
- programming. Includes compiler, interpreter, REPL, LSP server,
+ programming. Includes compiler, REPL, LSP server,
  and DAP server.
 Depends: libc6
 EOF

@@ -1,0 +1,42 @@
+// maps.iris -- hash map operations
+//
+// Demonstrates creating maps, inserting key-value pairs,
+// membership checks, removing keys, and map_len.
+//
+// Run: iris run examples/maps.iris
+
+def main() -> i64 {
+    print("=== Map Basics ===");
+
+    // Create and populate
+    val m = map()
+    map_set(m, "a", 10);
+    map_set(m, "b", 20);
+    map_set(m, "c", 30);
+    print(concat("size: ", to_str(map_len(m))));
+
+    print("\n=== Membership ===");
+    print(concat("Contains a? ", to_str(map_contains(m, "a"))));
+    print(concat("Contains d? ", to_str(map_contains(m, "d"))));
+
+    print("\n=== Update ===");
+    map_set(m, "b", 99);
+    print(concat("Updated b, size: ", to_str(map_len(m))));
+
+    print("\n=== Remove ===");
+    map_remove(m, "c");
+    print(concat("After remove c, size: ", to_str(map_len(m))));
+    print(concat("Contains c? ", to_str(map_contains(m, "c"))));
+
+    print("\n=== Larger Map ===");
+    val sq = map()
+    var i = 1
+    while i <= 10 {
+        map_set(sq, to_str(i), i * i);
+        i = i + 1
+    }
+    print(concat("Squares map size: ", to_str(map_len(sq))));
+    print(concat("Contains '5'? ", to_str(map_contains(sq, "5"))));
+
+    0
+}

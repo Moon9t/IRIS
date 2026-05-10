@@ -1,0 +1,9 @@
+bring std.string
+bring std.io
+
+def main() -> i64 {
+    val s = concat("iris", "-lang");
+    print(to_upper(s));
+    print(len(s));
+    0
+}

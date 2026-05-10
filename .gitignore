@@ -1,5 +1,11 @@
 # ── Build artifacts ──
 /target/
+/fuzz/target/
+/target_verify/
+
+# ── Generated project outputs ──
+projects/taskman/*.exe
+projects/taskman/.taskman.db
 
 # ── IDE / Editor ──
 .vscode/

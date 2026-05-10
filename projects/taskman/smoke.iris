@@ -1,0 +1,18 @@
+bring "storage.iris"
+bring "report.iris"
+
+// Non-interactive smoke for CI/dev terminals.
+def main() -> i64 {
+    val a = storage_add_task("smoke: write docs");
+    val b = storage_add_task("smoke: ship cli");
+
+    val _done = storage_save(task_mark_done(a));
+    val _cancel = storage_save(task_mark_cancelled(b));
+
+    val ids = storage_load_all();
+    val _list = report_print_list(ids);
+    val _stats = report_print_stats(ids);
+    val _json = report_tasks_to_json(ids);
+    val _csv = report_tasks_to_csv(ids);
+    0
+}

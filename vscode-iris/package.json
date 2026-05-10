@@ -93,12 +93,13 @@
             "description": "Debug the currently open .iris file",
             "body": {
               "type": "iris",
-              "request": "launch",
-              "name": "Debug ${1:File}",
-              "program": "^\"\\${file}\""
-            }
+            "request": "launch",
+            "name": "Debug ${1:File}",
+            "program": "${file}",
+            "stopOnEntry": false
           }
-        ]
+        }
+      ]
       }
     ],
     "commands": [
@@ -111,6 +112,11 @@
         "command": "iris.buildFile",
         "title": "IRIS: Build Binary",
         "icon": "$(package)"
+      },
+      {
+        "command": "iris.debugFile",
+        "title": "IRIS: Debug File",
+        "icon": "$(debug-alt)"
       },
       {
         "command": "iris.openRepl",
@@ -149,6 +155,11 @@
           "command": "iris.runFile",
           "when": "resourceExtname == .iris",
           "group": "navigation"
+        },
+        {
+          "command": "iris.debugFile",
+          "when": "resourceExtname == .iris",
+          "group": "navigation@2"
         }
       ],
       "commandPalette": [
@@ -158,6 +169,10 @@
         },
         {
           "command": "iris.buildFile",
+          "when": "resourceExtname == .iris"
+        },
+        {
+          "command": "iris.debugFile",
           "when": "resourceExtname == .iris"
         },
         {
@@ -227,7 +242,12 @@
         "iris.inlayHints.typeHints": {
           "type": "boolean",
           "default": true,
-          "description": "Show type hints on val/var bindings."
+          "description": "Show inferred binding hints on val/var bindings."
+        },
+        "iris.debug.stopOnEntry": {
+          "type": "boolean",
+          "default": false,
+          "description": "Stop at the first executable trace point when debugging an IRIS file."
         },
         "iris.showTimingOnRun": {
           "type": "boolean",

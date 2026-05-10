@@ -76,10 +76,14 @@ type Matrix = list<list<f64>>
 ## Bindings
 
 ```iris
-val x = 42          // immutable
-var y = 0           // mutable — can be reassigned
+val x = 42          // inferred immutable binding
+var y = 0           // inferred mutable binding; can be reassigned
 val z: f64 = 3.14   // with explicit type annotation
 ```
+
+In tooling and docs, unannotated `val` and `var` declarations are both treated
+as inferred bindings. Use an explicit annotation when the type should be part of
+the source contract.
 
 Reassigning a `var`:
 ```iris
@@ -525,7 +529,7 @@ bring "path/to/other.iris"
 ## CLI Reference
 
 ```
-iris run file.iris              # compile + run via interpreter
+iris run file.iris              # compile + run through the LLVM/native pipeline
 iris build file.iris -o out     # compile to native binary
 iris test [file.iris]           # run test_ functions
 iris --emit ir file.iris        # print IR

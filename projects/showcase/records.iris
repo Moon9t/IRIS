@@ -1,0 +1,86 @@
+bring std.string
+record Person {
+    name : str, age : i64, score : i64, 
+}
+const SEP : str = "--------------------------------------------------"
+def person(name : str, age : i64, score : i64) -> Person {
+    Person {
+        name : name, age : age, score : score, 
+    }
+    
+}
+def grade(score : i64) -> str {
+    if score >= 90 {
+        "A"
+    }
+    else {
+        if score >= 80 {
+            "B"
+        }
+        else {
+            if score >= 70 {
+                "C"
+            }
+            else {
+                if score >= 60 {
+                    "D"
+                }
+                else {
+                    "F"
+                }
+                
+            }
+            
+        }
+        
+    }
+    
+}
+def average4(a : Person, b : Person, c : Person, d : Person) -> i64 {
+    (a.score + b.score + c.score + d.score) / 4
+}
+def best_name(a : Person, b : Person, c : Person, d : Person) -> str {
+    var best = a;
+    if b.score>best.score {
+        best = b
+    }
+    else {
+        0
+    }
+    ;
+    if c.score>best.score {
+        best = c
+    }
+    else {
+        0
+    }
+    ;
+    if d.score>best.score {
+        best = d
+    }
+    else {
+        0
+    }
+    ;
+    best.name
+}
+def print_person(p : Person) -> i64 {
+    print(concat(concat(concat(p.name, " | age="), to_str(p.age)), concat(", score=", concat(to_str(p.score), concat(", grade=", grade(p.score))))));
+    0
+}
+def main() -> i64 {
+    print(SEP);
+    print("RECORDS");
+    print(SEP);
+    val ada = person("Ada", 31, 98);
+    val grace = person("Grace", 36, 94);
+    val linus = person("Linus", 29, 87);
+    val barbara = person("Barbara", 42, 91);
+    val _ = print_person(ada);
+    val __ = print_person(grace);
+    val ___ = print_person(linus);
+    val ____ = print_person(barbara);
+    print(concat("average = ", to_str(average4(ada, grace, linus, barbara))));
+    print(concat("best = ", best_name(ada, grace, linus, barbara)));
+    0
+}

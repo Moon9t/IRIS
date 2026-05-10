@@ -1,94 +1,168 @@
+// type_system.iris -- IRIS type system showcase
+//
+// Demonstrates records, nested records, choice types, type casting,
+// explicit type annotations, option/result types, and type inference.
+//
+// Run: iris run examples/type_system.iris
+
+// =====================
+//  Records with explicit types
+// =====================
+
 record Point {
-    x : f64, y : f64, 
+    x: f64,
+    y: f64,
 }
-record Rectangle {
-    origin : Point, width : f64, height : f64, 
+
+record Color {
+    r: i64,
+    g: i64,
+    b: i64,
 }
-record Person {
-    name : str, age : i64, 
+
+record Particle {
+    pos: Point,
+    vel: Point,
+    color: Color,
+    mass: f64,
 }
-choice Direction {
-    North, South, East, West, 
-}
+
+// =====================
+//  Choice types (enums)
+// =====================
+
 choice Shape {
-    Circle, Rect, Triangle, 
+    Circle,
+    Rect,
+    Triangle,
 }
-def distance(a : Point, b : Point) -> f64 {
-    val dx = a.x - b.x
-    val dy = a.y - b.y 
+
+def shape_sides(s: Shape) -> i64 {
+    when s {
+        Shape.Circle   => 0
+        Shape.Rect     => 4
+        Shape.Triangle => 3
+    }
+}
+
+// =====================
+//  Functions with type annotations
+// =====================
+
+def distance(a: Point, b: Point) -> f64 {
+    val dx: f64 = a.x - b.x
+    val dy: f64 = a.y - b.y
     sqrt(dx * dx + dy * dy)
 }
-def rect_area(r : Rectangle) -> f64 {
-    r.width * r.height
+
+def color_brightness(c: Color) -> i64 {
+    (c.r + c.g + c.b) / 3
 }
-def rect_perimeter(r : Rectangle) -> f64 {
-    (2.0 to f64) * (r.width + r.height)
-}
-def direction_name(d : Direction) -> str {
-    when d {
-        Direction.North => "North" Direction.South => "South" Direction.East => "East" Direction.West => "West"
+
+def move_particle(p: Particle, dt: f64) -> Particle {
+    Particle {
+        pos: Point {
+            x: p.pos.x + p.vel.x * dt,
+            y: p.pos.y + p.vel.y * dt,
+        },
+        vel: p.vel,
+        color: p.color,
+        mass: p.mass,
     }
-    
 }
-def shape_sides(s : Shape) -> i64 {
-    when s {
-        Shape.Circle => 0 Shape.Rect => 4 Shape.Triangle => 3
-    }
-    
+
+// =====================
+//  Type casting
+// =====================
+
+def demo_casting() -> i64 {
+    print("=== Type Casting ===");
+
+    val i: i64 = 42
+    val f: f64 = i to f64
+    print(concat("i64 -> f64: ", to_str(f)));
+
+    val pi: f64 = 3.14159
+    val truncated: i64 = pi to i64
+    print(concat("f64 -> i64: ", to_str(truncated)));
+
+    val big: i64 = 1000
+    val small: i32 = big to i32
+    print(concat("i64 -> i32: ", to_str(small)));
+
+    0
 }
-def greet(p : Person) -> str {
-    concat(concat("Hello, ", p.name), concat("! Age: ", to_str(p.age)))
+
+// =====================
+//  Type inference vs explicit
+// =====================
+
+def demo_inference() -> i64 {
+    print("\n=== Type Inference ===");
+
+    // Inferred types
+    val inferred_int = 42           // i64
+    val inferred_float = 3.14       // f64
+    val inferred_bool = true        // bool
+    val inferred_str = "hello"      // str
+
+    // Explicit types (same values)
+    val explicit_int: i64 = 42
+    val explicit_float: f64 = 3.14
+    val explicit_bool: bool = true
+    val explicit_str: str = "hello"
+
+    print(concat("inferred int:   ", to_str(inferred_int)));
+    print(concat("inferred float: ", to_str(inferred_float)));
+    print(concat("inferred bool:  ", to_str(inferred_bool)));
+    print(concat("inferred str:   ", inferred_str));
+
+    // Mutable with explicit type
+    var counter: i64 = 0
+    counter = counter + 1;
+    print(concat("counter: ", to_str(counter)));
+
+    0
 }
+
+// =====================
+//  Main
+// =====================
+
 def main() -> i64 {
-    val p1 = Point {
-        x : 0.0 to f64, y : 0.0 to f64
+    print("=== Records ===");
+    val origin = Point { x: 0.0, y: 0.0 }
+    val target = Point { x: 3.0, y: 4.0 }
+    print(concat("distance: ", to_str(distance(origin, target))));
+
+    print("\n=== Nested Records ===");
+    val particle = Particle {
+        pos: Point { x: 0.0, y: 0.0 },
+        vel: Point { x: 1.0, y: 2.0 },
+        color: Color { r: 255, g: 128, b: 0 },
+        mass: 1.5,
     }
-    val p2 = Point {
-        x : 3.0 to f64, y : 4.0 to f64
-    }
-    print(concat("distance: ", to_str(distance(p1, p2))));
-    val r = Rectangle {
-        origin : p1, width : 5.0 to f64, height : 3.0 to f64
-    }
-    print(concat("area     : ", to_str(rect_area(r))));
-    print(concat("perimeter: ", to_str(rect_perimeter(r))));
-    val d = Direction.North print(concat("direction: ", direction_name(d)));
-    val circle = Shape.Circle
-    val rect = Shape.Rect
-    val tri = Shape.Triangle print(concat("circle sides  : ", to_str(shape_sides(circle))));
-    print(concat("rect sides    : ", to_str(shape_sides(rect))));
-    print(concat("triangle sides: ", to_str(shape_sides(tri))));
-    val alice = Person {
-        name : "Alice", age : 30
-    }
-    val bob = Person {
-        name : "Bob", age : 25
-    }
-    val carol = Person {
-        name : "Carol", age : 35
-    }
-    print(greet(alice));
-    print(greet(bob));
-    print(greet(carol));
-    val maybe = some(42)
-    val _r1 = if is_some(maybe) {
-        print("some(42) is some: true");
-        0
-    }
-    else {
-        print("some(42) is some: false");
-        0
-    }
-    ;
-    val empty = none
-    val _r2 = if is_some(empty) {
-        print("none is some: true");
-        0
-    }
-    else {
-        print("none is some: false");
-        0
-    }
-    ;
+    print(concat("pos.x = ", to_str(particle.pos.x)));
+    print(concat("vel.y = ", to_str(particle.vel.y)));
+    print(concat("color brightness = ", to_str(color_brightness(particle.color))));
+
+    val moved = move_particle(particle, 0.5)
+    print(concat("After 0.5s: pos.x = ", to_str(moved.pos.x)));
+    print(concat("After 0.5s: pos.y = ", to_str(moved.pos.y)));
+
+    print("\n=== Choice Types ===");
+    print(concat("Circle sides:   ", to_str(shape_sides(Shape.Circle))));
+    print(concat("Rect sides:     ", to_str(shape_sides(Shape.Rect))));
+    print(concat("Triangle sides: ", to_str(shape_sides(Shape.Triangle))));
+
+    demo_casting();
+    demo_inference();
+
+    print("\n=== Option Type ===");
+    val maybe: option<i64> = some(42)
+    val empty: option<i64> = none
+    print(concat("some(42) is_some: ", to_str(is_some(maybe))));
+    print(concat("none is_some:     ", to_str(is_some(empty))));
+
     0
 }

@@ -2460,10 +2460,12 @@ impl<'m> Lowerer<'m> {
                 });
             }
             // Use the declared binding type (from `val x: list<T> = list()`) if available.
+            // If no binding is provided, leave the element type as `Infer` so
+            // the HM inference pass can determine it from subsequent pushes.
             let elem_ty = if let Some(IrType::List(inner)) = &self.binding_ty {
                 *inner.clone()
             } else {
-                IrType::Scalar(DType::I64) // default
+                IrType::Infer
             };
             let result = self.builder.fresh_value();
             let list_ty = IrType::List(Box::new(elem_ty.clone()));
@@ -4598,15 +4600,17 @@ impl<'m> Lowerer<'m> {
                 (None, None) => unit_ty,
             };
 
-            let result = self
-                .builder
-                .add_block_param(merge_bb, Some("if_result"), result_ty.clone());
+            let result =
+                self.builder
+                    .add_block_param(merge_bb, Some("if_result"), result_ty.clone());
             let mut rebound_params = Vec::new();
             for name in &rebound_names {
                 let Some((_, ty)) = outer_scope.get(name) else {
                     continue;
                 };
-                let param = self.builder.add_block_param(merge_bb, Some(name), ty.clone());
+                let param = self
+                    .builder
+                    .add_block_param(merge_bb, Some(name), ty.clone());
                 rebound_params.push((name.clone(), param, ty.clone()));
             }
             self.builder.set_current_block(merge_bb);
@@ -4639,9 +4643,11 @@ impl<'m> Lowerer<'m> {
                     then_args: vec![],
                     else_block: merge_bb,
                     else_args: std::iter::once(unit_val)
-                        .chain(rebound_names.iter().filter_map(|name| {
-                            outer_scope.get(name).map(|(val, _)| *val)
-                        }))
+                        .chain(
+                            rebound_names
+                                .iter()
+                                .filter_map(|name| outer_scope.get(name).map(|(val, _)| *val)),
+                        )
                         .collect(),
                 },
                 None,
@@ -4681,7 +4687,9 @@ impl<'m> Lowerer<'m> {
                 let Some((_, ty)) = outer_scope.get(name) else {
                     continue;
                 };
-                let param = self.builder.add_block_param(merge_bb, Some(name), ty.clone());
+                let param = self
+                    .builder
+                    .add_block_param(merge_bb, Some(name), ty.clone());
                 rebound_params.push((name.clone(), param, ty.clone()));
             }
             self.builder.set_current_block(merge_bb);
@@ -4830,20 +4838,22 @@ impl<'m> Lowerer<'m> {
         }
 
         // Check if any arm has guards or non-enum patterns (wildcard, literal).
-        // If so, lower as an if-else chain instead of SwitchVariant.
-        let needs_chain = arms.iter().any(|a| {
-            a.guard.is_some()
-                || matches!(
-                    a.pattern,
-                    AstWhenPattern::Wildcard
-                        | AstWhenPattern::IntLit(_)
-                        | AstWhenPattern::BoolLit(_)
-                        | AstWhenPattern::StringLit(_)
-                )
-        });
-        // Also use chain when the scrutinee is not an enum (e.g. matching i64/bool/str).
+        // For enum matches with wildcards, use SwitchVariant with default_block.
+        // Only use chain if there are guards or non-enum literal patterns.
         let is_enum_scrut = matches!(&scrut_ty, IrType::Enum { .. });
-        if needs_chain || !is_enum_scrut {
+        let has_guard = arms.iter().any(|a| a.guard.is_some());
+        let has_non_enum_literal = arms.iter().any(|a| {
+            matches!(
+                a.pattern,
+                AstWhenPattern::IntLit(_)
+                    | AstWhenPattern::BoolLit(_)
+                    | AstWhenPattern::StringLit(_)
+            )
+        });
+
+        // Use chain only if: has guard OR not enum type OR has literal patterns (non-wildcard)
+        let needs_chain = has_guard || !is_enum_scrut || (has_non_enum_literal && !is_enum_scrut);
+        if needs_chain {
             return self.lower_when_as_chain(scrut_val, &scrut_ty, arms, span);
         }
 
@@ -4860,25 +4870,57 @@ impl<'m> Lowerer<'m> {
 
         // 3. Allocate one block per arm and a merge block.
         let mut arm_blocks: Vec<BlockId> = Vec::new();
-        for arm in arms {
-            arm_blocks.push(
-                self.builder
-                    .create_block(Some(&format!("when_{}_{}", enum_name, arm.variant_name))),
-            );
+        let mut default_block_opt: Option<BlockId> = None;
+        for (_arm_idx, arm) in arms.iter().enumerate() {
+            match &arm.pattern {
+                AstWhenPattern::Wildcard => {
+                    // Wildcard becomes the default block
+                    let bb = self.builder.create_block(Some(&format!("when_{}_wildcard", enum_name)));
+                    default_block_opt = Some(bb);
+                    arm_blocks.push(bb);
+                }
+                AstWhenPattern::EnumVariant { .. } => {
+                    // Regular variant arm
+                    arm_blocks.push(
+                        self.builder
+                            .create_block(Some(&format!("when_{}_{}", enum_name, arm.variant_name))),
+                    );
+                }
+                _ => {
+                    // This shouldn't happen - we filtered these out earlier
+                    return Err(LowerError::Unsupported {
+                        detail: format!("unexpected pattern in enum match: {:?}", arm.pattern),
+                        span: arm.span,
+                    });
+                }
+            }
         }
         let merge_bb = self.builder.create_block(Some("when_merge"));
 
-        // 4. Build the arms list for SwitchVariant.
+        // 4. Build the arms list for SwitchVariant (skip wildcard patterns).
         let mut switch_arms: Vec<(usize, BlockId)> = Vec::new();
         for (arm_idx, arm) in arms.iter().enumerate() {
-            let variant_idx = variants
-                .iter()
-                .position(|v| v == &arm.variant_name)
-                .ok_or_else(|| LowerError::Unsupported {
-                    detail: format!("no variant '{}' in enum '{}'", arm.variant_name, enum_name),
-                    span: arm.span,
-                })?;
-            switch_arms.push((variant_idx, arm_blocks[arm_idx]));
+            match &arm.pattern {
+                AstWhenPattern::EnumVariant { variant_name, .. } => {
+                    let variant_idx = variants
+                        .iter()
+                        .position(|v| v == variant_name)
+                        .ok_or_else(|| LowerError::Unsupported {
+                            detail: format!("no variant '{}' in enum '{}'", variant_name, enum_name),
+                            span: arm.span,
+                        })?;
+                    switch_arms.push((variant_idx, arm_blocks[arm_idx]));
+                }
+                AstWhenPattern::Wildcard => {
+                    // Skip - handled as default_block
+                }
+                _ => {
+                    return Err(LowerError::Unsupported {
+                        detail: format!("unexpected pattern in enum match: {:?}", arm.pattern),
+                        span: arm.span,
+                    });
+                }
+            }
         }
 
         // 5. Emit SwitchVariant terminator in the current block.
@@ -4886,7 +4928,7 @@ impl<'m> Lowerer<'m> {
             IrInstr::SwitchVariant {
                 scrutinee: scrut_val,
                 arms: switch_arms,
-                default_block: None,
+                default_block: default_block_opt,
             },
             None,
         );
@@ -5285,6 +5327,7 @@ impl<'m> Lowerer<'m> {
         // We need a "no-match" fallback block (panic or unreachable) for non-exhaustive matches.
         // But we emit a runtime panic for safety.
         let no_match_bb = self.builder.create_block(Some("when_no_match"));
+        let _no_match_scrut = self.builder.add_block_param(no_match_bb, None, scrut_ty.clone());
 
         let outer_scope = self.scope.clone();
         let mut result_ty: Option<IrType> = None;
@@ -5311,6 +5354,8 @@ impl<'m> Lowerer<'m> {
         //   arm_body_bb: bind vars, lower body, br merge_bb
         //   next_check_bb: (next iteration's current_bb)
         let mut current_check_bb = self.builder.current_block();
+        // The initial scrutinee value (from entry block or expression result)
+        let mut current_scrut_val = scrut_val;
 
         for (arm_idx, arm) in arms.iter().enumerate() {
             let is_last = arm_idx == arms.len() - 1;
@@ -5318,25 +5363,29 @@ impl<'m> Lowerer<'m> {
 
             // IMPORTANT: create bind_guard_bb BEFORE arm_body_bb so the validator's
             // linear block scan sees value definitions before their uses.
-            let bind_guard_bb_opt = if has_guard_with_bindings {
-                Some(
-                    self.builder
-                        .create_block(Some(&format!("when_guard_{}", arm_idx))),
-                )
+            let (bind_guard_bb_opt, guard_bb_scrut_opt) = if has_guard_with_bindings {
+                let bb = self.builder
+                    .create_block(Some(&format!("when_guard_{}", arm_idx)));
+                let scrut_param = self.builder.add_block_param(bb, None, scrut_ty.clone());
+                (Some(bb), Some(scrut_param))
             } else {
-                None
+                (None, None)
             };
 
             // Create the arm body block.
             let arm_body_bb = self
                 .builder
                 .create_block(Some(&format!("when_arm_{}", arm_idx)));
+            let arm_bb_scrut = self.builder.add_block_param(arm_body_bb, None, scrut_ty.clone());
+            
             // Create the next-check block (reuse no_match_bb for last arm).
-            let next_check_bb = if is_last {
-                no_match_bb
+            let (next_check_bb, next_bb_scrut_opt) = if is_last {
+                (no_match_bb, None)
             } else {
-                self.builder
-                    .create_block(Some(&format!("when_check_{}", arm_idx + 1)))
+                let bb = self.builder
+                    .create_block(Some(&format!("when_check_{}", arm_idx + 1)));
+                let scrut_param = self.builder.add_block_param(bb, None, scrut_ty.clone());
+                (bb, Some(scrut_param))
             };
 
             // Emit the pattern match condition into current_check_bb.
@@ -5345,7 +5394,7 @@ impl<'m> Lowerer<'m> {
 
             // Compute the pattern condition (tag check only, no extraction).
             let pat_cond = self.emit_pattern_condition(
-                scrut_val,
+                current_scrut_val,
                 scrut_ty,
                 &arm.pattern,
                 &enum_name_opt,
@@ -5357,14 +5406,15 @@ impl<'m> Lowerer<'m> {
             //   check_bb → (pat matches?) → bind_guard_bb → (guard?) → arm_body_bb
             // This ensures bindings are available to the guard expression.
             let body_scope = if let Some(bind_guard_bb) = bind_guard_bb_opt {
+                let guard_bb_scrut = guard_bb_scrut_opt.unwrap_or(current_scrut_val);
                 // In check_bb: branch on pattern condition.
                 self.builder.push_instr(
                     IrInstr::CondBr {
                         cond: pat_cond,
                         then_block: bind_guard_bb,
-                        then_args: vec![],
+                        then_args: vec![current_scrut_val],
                         else_block: next_check_bb,
-                        else_args: vec![],
+                        else_args: vec![current_scrut_val],
                     },
                     None,
                 );
@@ -5373,7 +5423,7 @@ impl<'m> Lowerer<'m> {
                 self.builder.set_current_block(bind_guard_bb);
                 self.scope = outer_scope.clone();
                 self.bind_pattern_vars(
-                    scrut_val,
+                    guard_bb_scrut,
                     scrut_ty,
                     &arm.pattern,
                     &enum_variants_opt,
@@ -5385,9 +5435,9 @@ impl<'m> Lowerer<'m> {
                     IrInstr::CondBr {
                         cond: guard_val,
                         then_block: arm_body_bb,
-                        then_args: vec![],
+                        then_args: vec![guard_bb_scrut],
                         else_block: next_check_bb,
-                        else_args: vec![],
+                        else_args: vec![current_scrut_val],
                     },
                     None,
                 );
@@ -5418,9 +5468,9 @@ impl<'m> Lowerer<'m> {
                     IrInstr::CondBr {
                         cond: final_cond,
                         then_block: arm_body_bb,
-                        then_args: vec![],
+                        then_args: vec![current_scrut_val],
                         else_block: next_check_bb,
-                        else_args: vec![],
+                        else_args: vec![current_scrut_val],
                     },
                     None,
                 );
@@ -5435,7 +5485,7 @@ impl<'m> Lowerer<'m> {
             // Bind pattern variables (no-op if already bound by bind_guard_bb path).
             if arm.guard.is_none() || !pattern_has_bindings(&arm.pattern) {
                 self.bind_pattern_vars(
-                    scrut_val,
+                    arm_bb_scrut,
                     scrut_ty,
                     &arm.pattern,
                     &enum_variants_opt,
@@ -5455,6 +5505,8 @@ impl<'m> Lowerer<'m> {
                 None,
             );
 
+            // Update current scrutinee value for next iteration (from next_check_bb's block parameter)
+            current_scrut_val = next_bb_scrut_opt.unwrap_or(scrut_val);
             current_check_bb = next_check_bb;
         }
 
@@ -12135,7 +12187,11 @@ fn collect_rebound_vars_in_stmt(stmt: &AstStmt, names: &mut Vec<String>, include
             collect_rebound_vars_in_expr(target, names);
             collect_rebound_vars_in_expr(value, names);
         }
-        AstStmt::LetTuple { names: tuple_names, init, .. } => {
+        AstStmt::LetTuple {
+            names: tuple_names,
+            init,
+            ..
+        } => {
             if include_lets {
                 for name in tuple_names {
                     if !names.contains(&name.name) {

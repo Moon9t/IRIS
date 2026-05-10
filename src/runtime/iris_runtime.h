@@ -55,6 +55,12 @@ typedef struct IrisVal {
     };
 } IrisVal;
 
+typedef struct IrisEnum {
+    int64_t  tag;
+    IrisVal** fields;
+    size_t   len;
+} IrisEnum;
+
 // ---------------------------------------------------------------------------
 // Complex heap types
 // ---------------------------------------------------------------------------
@@ -266,7 +272,7 @@ IrisVal*  iris_list_pop(IrisList* list);
 // ---------------------------------------------------------------------------
 IrisMap* iris_map_new(void);
 void     iris_map_set(IrisMap* map, IrisVal* key, IrisVal* val);
-IrisVal* iris_map_get(IrisMap* map, IrisVal* key);
+IrisOption* iris_map_get(IrisMap* map, IrisVal* key);
 int      iris_map_contains(IrisMap* map, IrisVal* key);
 void     iris_map_remove(IrisMap* map, IrisVal* key);
 int64_t  iris_map_len(IrisMap* map);
@@ -424,6 +430,13 @@ IrisVal* iris_get_element(IrisVal* t, int32_t idx);
 IrisVal* iris_make_closure(void* fn, int ncaptures, ...);
 IrisVal* iris_call_closure(IrisVal* closure, ...);
 void     iris_call_closure_void(IrisVal* closure, ...);
+
+// ---------------------------------------------------------------------------
+// Enum Variant Helpers
+// ---------------------------------------------------------------------------
+IrisVal* iris_make_variant(int64_t tag, int32_t nfields, ...);
+int64_t  iris_get_variant_tag(IrisVal* v);
+IrisVal* iris_extract_variant_field(IrisVal* v, int64_t field_idx);
 
 // ---------------------------------------------------------------------------
 // Terminal / Interactive Input

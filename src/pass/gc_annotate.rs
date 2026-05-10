@@ -212,7 +212,9 @@ impl Pass for GcAnnotatePass {
 // Escape / alias helpers
 // ---------------------------------------------------------------------------
 
-fn build_block_param_sources(func: &crate::ir::function::IrFunction) -> HashMap<ValueId, Vec<ValueId>> {
+fn build_block_param_sources(
+    func: &crate::ir::function::IrFunction,
+) -> HashMap<ValueId, Vec<ValueId>> {
     let mut sources: HashMap<ValueId, Vec<ValueId>> = HashMap::new();
 
     for block in &func.blocks {
@@ -275,11 +277,7 @@ fn collect_return_escape_values(
             escaped_heap_vals.insert(value);
         }
 
-        worklist.extend(escape_sources_for_value(
-            func,
-            value,
-            block_param_sources,
-        ));
+        worklist.extend(escape_sources_for_value(func, value, block_param_sources));
     }
 
     escaped_heap_vals

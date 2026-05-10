@@ -1,0 +1,55 @@
+def sum_to(n : i64) -> i64 {
+    var total = 0
+    var i = 1
+    while i <= n {
+        total = total + i;
+        i = i + 1
+    }
+    total
+}
+def sum_odds(limit : i64) -> i64 {
+    var total = 0
+    var i = 0
+    while i <= limit {
+        if(i % 2) != 0 {
+            total = total + i
+        }
+        i = i + 1
+    }
+    total
+}
+def first_even_after(start : i64) -> i64 {
+    var n = start
+    while(n % 2) != 0 {
+        n = n + 1
+    }
+    n
+}
+def count_pairs(width : i64, height : i64) -> i64 {
+    var count = 0
+    var row = 0
+    while row<height {
+        var col = 0
+        while col<width {
+            count = count + 1;
+            col = col + 1
+        }
+        row = row + 1
+    }
+    count
+}
+def sum_for() -> i64 {
+    var total = 0;
+    for i in 0 .. 10 {
+        total = total + i
+    }
+    total
+}
+def main() -> i64 {
+    print(concat("sum_to(10) = ", to_str(sum_to(10))));
+    print(concat("sum_odds(10) = ", to_str(sum_odds(10))));
+    print(concat("first_even_after(7) = ", to_str(first_even_after(7))));
+    print(concat("count_pairs(3, 2) = ", to_str(count_pairs(3, 2))));
+    print(concat("sum_for(0..9) = ", to_str(sum_for())));
+    0
+}

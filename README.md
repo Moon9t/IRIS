@@ -13,6 +13,23 @@
 
 ---
 
+---
+
+## Linguist / GitHub language support
+
+This project maintains a vendored TextMate grammar and a small set of metadata used to register the `IRIS` language with GitHub Linguist.
+
+- Vendored grammar (for syntax highlighting) lives in the Linguist repo under:
+  - `vendor/grammars/iris-tmLanguage/syntaxes/iris.tmLanguage.json` (in the Linguist checkout)
+- We generated a unified patch `iris-linguist.patch` in the `tools/` folder when preparing the submission.
+- The submission process performed locally in a Linux container (Docker) using the helper in `tools/linguist-docker/`:
+  - Build and run the helper image, mount a local copy of the Linguist repo, run `bundle install`, `script/update-ids`, and `rake test` there.
+- Current language_id assigned by `script/update-ids`: `817425607` (recorded in Linguist's `lib/linguist/languages.yml`).
+
+Notes
+- CI for forked PRs requires a repository maintainer to "Approve and run" Actions before GitHub will execute workflows — this is expected for contributions from forks.
+- If you want to update the vendored grammar later, see `CONTRIBUTING.md` for the minimal workflow we used.
+
 ## Quick Start
 
 ```sh
@@ -35,6 +52,9 @@ iris --version
 pipeline. There is no silent interpreter fallback in those user-facing paths.
 `iris build --target <preset>` can now emit cross-target binaries when the
 matching clang/sysroot toolchain is installed.
+
+The locked 0.3.0 language/tooling surface and install dependency matrix live in
+[docs/current-language-lock.md](docs/current-language-lock.md).
 
 **Output of `iris --version`:**
 
@@ -112,8 +132,8 @@ def add(a: i64, b: i64) -> i64 {
 }
 
 def example() -> i64 {
-    val x = 10          // immutable binding
-    var count = 0       // mutable binding
+    val x = 10          // inferred immutable binding
+    var count = 0       // inferred mutable binding
     count = count + 1
     add(x, count)       // tail expression is return value
 }
@@ -329,6 +349,12 @@ iris --version | -V
 iris --help | -h
 ```
 
+For installed binaries, `iris run`, `iris build`, `--emit eval`, and `--emit jit`
+need LLVM `clang` plus a target sysroot/linker setup. Windows full installers can
+bundle LLVM and MinGW UCRT64; Linux/macOS installers should detect or install
+clang plus the host libc/SDK. See the dependency matrix in
+[docs/current-language-lock.md](docs/current-language-lock.md#binary-install-dependencies).
+
 ---
 
 ## Tooling
@@ -339,12 +365,12 @@ The official `iris-lang` extension provides:
 
 - **Syntax highlighting** — full TextMate grammar
 - **LSP integration** — hover, completions, diagnostics, go-to-definition, rename, references, formatting, inlay hints, code actions (quick fixes + best practice hints)
-- **DAP debugger** — breakpoints, step in/over/out, step back, variables, call stack, hover evaluation
+- **DAP debugger** — line/conditional/log/hit-count breakpoints, step in/over/out/back, variables, call stack, hover/watch evaluation
 - **Code lenses** — inline ▷ Run / ⬡ Debug buttons on zero-arg functions
 - **REPL** — integrated terminal REPL
 - **Status bar** — shows IRIS version, git commit, build info; click for server actions
 
-Install: `code --install-extension iris-lang-0.2.0.vsix`
+Install: `code --install-extension iris-lang-0.3.0.vsix`
 
 ### REPL Commands
 

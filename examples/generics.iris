@@ -1,10 +1,15 @@
-// generics.iris -- generic functions
+// generics.iris -- generic (parameterized) functions
 //
-// Run: cargo run -- --emit eval examples/generics.iris
+// Demonstrates generic type parameters [T], monomorphization
+// with multiple concrete types, and generic utility functions.
+//
+// Run: iris run examples/generics.iris
 
-def identity[T](x: T) -> T {
-    x
-}
+// =====================
+//  Basic generics
+// =====================
+
+def identity[T](x: T) -> T { x }
 
 def my_min[T](a: T, b: T) -> T {
     if a <= b { a } else { b }
@@ -14,19 +19,92 @@ def my_max[T](a: T, b: T) -> T {
     if a >= b { a } else { b }
 }
 
-def my_clamp[T](v: T, lo: T, hi: T) -> T {
+def clamp[T](v: T, lo: T, hi: T) -> T {
     my_max(lo, my_min(v, hi))
 }
 
-def main() -> i64 {
-    val x = identity(42)
-    val y = my_min(10, 20)
-    val z = my_max(10, 20)
-    val c = my_clamp(15, 0, 10)
+// =====================
+//  Swap (concrete i64 — returns tuple)
+// =====================
 
-    print(concat("identity(42)    = ", to_str(x)));
-    print(concat("min(10,20)      = ", to_str(y)));
-    print(concat("max(10,20)      = ", to_str(z)));
-    print(concat("clamp(15,0,10) = ", to_str(c)));
+def swap_i64(a: i64, b: i64) -> (i64, i64) {
+    (b, a)
+}
+
+// =====================
+//  Generic pair record
+// =====================
+
+record Pair {
+    first: i64,
+    second: i64,
+}
+
+def make_pair(a: i64, b: i64) -> Pair {
+    Pair { first: a, second: b }
+}
+
+def pair_sum(p: Pair) -> i64 {
+    p.first + p.second
+}
+
+// =====================
+//  Generic first/second
+// =====================
+
+def first[T](a: T, b: T) -> T { a }
+def second[T](a: T, b: T) -> T { b }
+
+// =====================
+//  List search (concrete i64)
+// =====================
+
+def find_index_i64(lst: list<i64>, target: i64) -> i64 {
+    var i = 0
+    while i < list_len(lst) {
+        if list_get(lst, i) == target {
+            return i
+        };
+        i = i + 1
+    }
+    -1
+}
+
+def main() -> i64 {
+    print("=== Basic Generics ===");
+    // Monomorphized for i64
+    print(concat("identity(42)       = ", to_str(identity(42))));
+    print(concat("min(10, 20)        = ", to_str(my_min(10, 20))));
+    print(concat("max(10, 20)        = ", to_str(my_max(10, 20))));
+    print(concat("clamp(15, 0, 10)   = ", to_str(clamp(15, 0, 10))));
+    print(concat("clamp(-5, 0, 10)   = ", to_str(clamp(-5, 0, 10))));
+    print(concat("clamp(5, 0, 10)    = ", to_str(clamp(5, 0, 10))));
+
+    print("\n=== Monomorphized for str ===");
+    print(concat("identity(\"hello\")  = ", identity("hello")));
+    print(concat("min(\"a\", \"z\")      = ", my_min("a", "z")));
+    print(concat("max(\"a\", \"z\")      = ", my_max("a", "z")));
+
+    print("\n=== Swap ===");
+    val (a, b) = swap_i64(1, 2);
+    print(concat("swap(1, 2) = (", concat(to_str(a), concat(", ", concat(to_str(b), ")")))));
+
+    print("\n=== Generic First/Second ===");
+    print(concat("first(10, 20)  = ", to_str(first(10, 20))));
+    print(concat("second(10, 20) = ", to_str(second(10, 20))));
+
+    print("\n=== Pair Record ===");
+    val p = make_pair(10, 20)
+    print(concat("pair = (", concat(to_str(p.first), concat(", ", concat(to_str(p.second), ")")))));
+    print(concat("sum  = ", to_str(pair_sum(p))));
+
+    print("\n=== List Search (i64) ===");
+    val nums = list()
+    push(nums, 5); push(nums, 10); push(nums, 15);
+    push(nums, 20); push(nums, 25);
+
+    print(concat("index of 15: ", to_str(find_index_i64(nums, 15))));
+    print(concat("index of 99: ", to_str(find_index_i64(nums, 99))));
+
     0
 }

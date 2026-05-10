@@ -1,0 +1,39 @@
+name: v1-checks
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Build IRIS
+        run: |
+          cargo build --workspace --bins --verbose
+
+      - name: Run differential tests (interpreter vs native)
+        run: |
+          python3 tools/iris_diff_runner.py examples/hello.iris examples/factorial.iris projects/showcase/mathlab.iris --iris target/debug/iris
+
+      - name: Run perf gate (requires baseline committed)
+        run: |
+          python3 tools/iris_perf_gate.py benches/binary_search_bench.iris --runs 3 --iris target/debug/iris
+
+*** End File

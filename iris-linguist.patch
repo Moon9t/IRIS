@@ -1,0 +1,56 @@
+--- a/lib/linguist/languages.yml
++++ b/lib/linguist/languages.yml
+@@ -9116,6 +9116,18 @@
+   extensions:
+   - ".hoon"
+   language_id: 560883276
++IRIS:
++  type: programming
++  color: "#6A0DAD"
++  aliases:
++    - iris-lang
++  extensions:
++    - ".iris"
++  tm_scope: source.iris
++  ace_mode: text
++  interpreters:
++    - iris
++
+ iCalendar:
+   type: data
+   color: "#ec564c"
+--- a/lib/linguist/heuristics.yml
++++ b/lib/linguist/heuristics.yml
+@@ -28,6 +28,20 @@
+ #
+ ---
+ disambiguations:
++  - extensions: ['.iris']
++    rules:
++      - language: IRIS
++        and:
++          - pattern: '\bdef\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\('
++          - pattern:
++              - '\b(val|var|bring|record|choice|spawn)\b'
++              - '->\s*[A-Za-z_][A-Za-z0-9_<>, ]*'
++              - '\blist<[^>]+>'
++              - '\boption<[^>]+>'
++              - '\bresult<[^>]+>'
++          - negative_pattern:
++              - '^\s*#include\b'
++              - '^\s*<\?xml\b'
+ - extensions: ['.1', '.2', '.3', '.4', '.5', '.6', '.7', '.8', '.9']
+   rules:
+   - language: Roff Manpage
+--- a/grammars.yml
++++ b/grammars.yml
+@@ -474,6 +474,9 @@
+ - source.idl
+ - source.idl-dlm
+ - text.idl-idldoc
++vendor/grammars/iris-tmLanguage:
++- source.iris
++
+ vendor/grammars/idris:
+ - source.idris
+ vendor/grammars/imba-linguist-grammar:

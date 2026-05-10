@@ -1,0 +1,208 @@
+// comprehensive.iris -- Complete showcase of IRIS language features
+//
+// This example touches every major language feature as a quick reference.
+// For deeper coverage, see the dedicated examples for each topic.
+//
+// Run: iris run examples/comprehensive.iris
+
+// =====================
+//  Constants
+// =====================
+
+const PI: f64 = 3.14159265358979
+const VERSION: str = "0.3.0"
+
+// =====================
+//  Records (structs)
+// =====================
+
+record Point { x: f64, y: f64 }
+
+// =====================
+//  Choice types (enums)
+// =====================
+
+choice Shape { Circle, Rect, Triangle }
+
+def shape_name(s: Shape) -> str {
+    when s {
+        Shape.Circle   => "Circle"
+        Shape.Rect     => "Rectangle"
+        Shape.Triangle => "Triangle"
+    }
+}
+
+def shape_sides(s: Shape) -> i64 {
+    when s {
+        Shape.Circle   => 0
+        Shape.Rect     => 4
+        Shape.Triangle => 3
+    }
+}
+
+// =====================
+//  Traits
+// =====================
+
+trait Describe {
+    def describe(self: Self) -> str
+}
+
+impl Describe for Point {
+    def describe(self: Point) -> str {
+        val x = to_str(self.x)
+        val y = to_str(self.y)
+        f"({x}, {y})"
+    }
+}
+
+// =====================
+//  Generics
+// =====================
+
+def identity[T](x: T) -> T { x }
+
+def my_min[T](a: T, b: T) -> T {
+    if a <= b { a } else { b }
+}
+
+// =====================
+//  Error handling: option + result
+// =====================
+
+def safe_divide(a: i64, b: i64) -> option<i64> {
+    if b == 0 { none } else { some(a / b) }
+}
+
+def validate(s: str) -> result<i64, str> {
+    val p = parse_i64(s)
+    if is_some(p) { ok(unwrap(p)) } else { err("bad input") }
+}
+
+// =====================
+//  Lambdas and higher-order functions
+// =====================
+
+def apply(f: (i64) -> i64, x: i64) -> i64 { f(x) }
+
+// =====================
+//  Distance with records
+// =====================
+
+def distance(a: Point, b: Point) -> f64 {
+    val dx = a.x - b.x
+    val dy = a.y - b.y
+    sqrt(dx * dx + dy * dy)
+}
+
+// =====================
+//  Recursion
+// =====================
+
+def factorial(n: i64) -> i64 {
+    if n <= 1 { 1 } else { n * factorial(n - 1) }
+}
+
+// =====================
+//  Main
+// =====================
+
+def main() -> i64 {
+    print(f"=== IRIS v{VERSION} Comprehensive Demo ===");
+
+    // Constants
+    val pi_str = to_str(PI)
+    print(f"\nPI = {pi_str}");
+
+    // Records + traits
+    print("\n--- Records & Traits ---");
+    val p1 = Point { x: 0.0, y: 0.0 }
+    val p2 = Point { x: 3.0, y: 4.0 }
+    print(concat("p1 = ", p1.describe()));
+    print(concat("p2 = ", p2.describe()));
+    print(concat("distance = ", to_str(distance(p1, p2))));
+
+    // Enums
+    print("\n--- Enums & Pattern Matching ---");
+    print(concat(shape_name(Shape.Circle), concat(" has ", concat(to_str(shape_sides(Shape.Circle)), " sides"))));
+    print(concat(shape_name(Shape.Rect), concat(" has ", concat(to_str(shape_sides(Shape.Rect)), " sides"))));
+    print(concat(shape_name(Shape.Triangle), concat(" has ", concat(to_str(shape_sides(Shape.Triangle)), " sides"))));
+
+    // Generics
+    print("\n--- Generics ---");
+    print(concat("identity(42) = ", to_str(identity(42))));
+    print(concat("min(3, 7)    = ", to_str(my_min(3, 7))));
+
+    // Options & results
+    print("\n--- Error Handling ---");
+    val r1 = safe_divide(10, 3)
+    val r2 = safe_divide(10, 0)
+    when r1 { some(v) => print(concat("10/3 = ", to_str(v))), none => print("10/3 = None") };
+    when r2 { some(v) => print(concat("10/0 = ", to_str(v))), none => print("10/0 = None") };
+
+    when validate("42")  { ok(v) => print(concat("parse '42' -> Ok(", concat(to_str(v), ")"))), err(e) => print(e) };
+    when validate("abc") { ok(v) => print(concat("parse 'abc' -> Ok(", concat(to_str(v), ")"))), err(e) => print(e) };
+
+    // Lambdas
+    print("\n--- Lambdas ---");
+    val double = |x: i64| x * 2
+    print(concat("double(21) = ", to_str(apply(double, 21))));
+
+    // Lists + for-each
+    print("\n--- Lists & For-Each ---");
+    val nums = list()
+    for i in 1..6 { push(nums, i) }
+    var sum = 0
+    for n in nums { sum = sum + n }
+    print(concat("sum 1..5 = ", to_str(sum)));
+
+    // Maps
+    print("\n--- Maps ---");
+    val ages = map()
+    map_set(ages, "Alice", 30);
+    map_set(ages, "Bob", 25);
+    print(concat("Map size: ", to_str(map_len(ages))));
+    print(concat("Contains Alice? ", to_str(map_contains(ages, "Alice"))));
+    print(concat("Contains Eve?   ", to_str(map_contains(ages, "Eve"))));
+
+    // Tuples
+    print("\n--- Tuples ---");
+    val pair = (42, "hello")
+    print(concat("pair.0 = ", to_str(pair.0)));
+    print(concat("pair.1 = ", pair.1));
+
+    // Block expressions
+    print("\n--- Block Expressions ---");
+    val result = { val a = 10; val b = 20; a + b };
+    print(concat("{ 10 + 20 } = ", to_str(result)));
+
+    // Arrays
+    print("\n--- Arrays ---");
+    val arr = [10, 20, 30, 40, 50]
+    var arr_sum = 0
+    for i in 0..5 { arr_sum = arr_sum + arr[i] }
+    print(concat("array sum = ", to_str(arr_sum)));
+
+    // Recursion
+    print("\n--- Recursion ---");
+    print(concat("5! = ", to_str(factorial(5))));
+
+    // F-strings
+    print("\n--- F-Strings ---");
+    val lang = "IRIS"
+    print(f"Welcome to {lang}!");
+
+    // Casting
+    print("\n--- Casting ---");
+    val i = 42
+    val f = i to f64
+    print(concat("42 to f64 = ", to_str(f)));
+
+    // Strings
+    print("\n--- Strings ---");
+    print(concat("upper: ", to_upper("iris")));
+    print(concat("trim:  [", concat(trim("  hello  "), "]")));
+
+    print("\n=== Done ===");
+    0
+}

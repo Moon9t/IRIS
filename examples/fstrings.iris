@@ -1,0 +1,53 @@
+// fstrings.iris -- interpolated string literals
+//
+// IRIS f-strings use the f"...{ident}..." syntax to embed
+// variable values directly into strings.
+//
+// Run: iris run examples/fstrings.iris
+
+record Point { x: f64, y: f64 }
+
+def greet(name: str, age: i64) -> str {
+    f"Hello, {name}! You are {age} years old."
+}
+
+def format_point(p: Point) -> str {
+    val x = to_str(p.x)
+    val y = to_str(p.y)
+    f"({x}, {y})"
+}
+
+def main() -> i64 {
+    print("=== Basic F-Strings ===");
+    val name = "IRIS"
+    val version = "0.3.0"
+    print(f"Welcome to {name} v{version}!");
+
+    val x = 42
+    val y = 58
+    val sum = x + y
+    print(f"{x} + {y} = {sum}");
+
+    print("\n=== F-Strings with Functions ===");
+    print(greet("Alice", 30));
+    print(greet("Bob", 25));
+
+    print("\n=== F-Strings with Records ===");
+    val p = Point { x: 3.0, y: 4.0 }
+    val ps = format_point(p)
+    print(f"Point: {ps}");
+
+    print("\n=== F-Strings in Loops ===");
+    for i in 1..6 {
+        val sq = i * i
+        print(f"  {i}^2 = {sq}")
+    }
+
+    print("\n=== Building Messages ===");
+    val items = 5
+    val price = 12
+    val total = items * price
+    print(f"You bought {items} items at {price} each = {total} total");
+
+    0
+}

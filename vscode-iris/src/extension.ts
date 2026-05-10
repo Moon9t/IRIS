@@ -36,6 +36,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(
         vscode.commands.registerCommand('iris.runFile',    () => runIrisFile(context, 'run')),
         vscode.commands.registerCommand('iris.buildFile',  () => runIrisFile(context, 'build')),
+        vscode.commands.registerCommand('iris.debugFile',  (uri?: vscode.Uri | string) => debugIrisFile(uri)),
         vscode.commands.registerCommand('iris.openRepl',   () => openRepl(context)),
         vscode.commands.registerCommand('iris.restartLsp', () => restartLsp(context)),
         vscode.commands.registerCommand('iris.stopLsp',    () => stopLsp()),
@@ -419,6 +420,40 @@ function runFileAtPath(filePath: string, subcommand: 'run' | 'build'): void {
     });
 }
 
+async function debugIrisFile(target?: vscode.Uri | string): Promise<void> {
+    let filePath: string | undefined;
+
+    if (target instanceof vscode.Uri) {
+        filePath = target.fsPath;
+    } else if (typeof target === 'string') {
+        filePath = vscode.Uri.parse(target).fsPath;
+    } else {
+        const editor = vscode.window.activeTextEditor;
+        filePath = editor?.document.fileName;
+    }
+
+    if (!filePath || !filePath.endsWith('.iris')) {
+        vscode.window.showWarningMessage('Open an .iris file first.');
+        return;
+    }
+
+    const doc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === filePath);
+    if (doc) { await doc.save(); }
+
+    const stopOnEntry = vscode.workspace
+        .getConfiguration('iris')
+        .get<boolean>('debug.stopOnEntry', false);
+    const uri = vscode.Uri.file(filePath);
+
+    await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(uri), {
+        type: 'iris',
+        request: 'launch',
+        name: `Debug ${path.basename(filePath)}`,
+        program: filePath,
+        stopOnEntry,
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Diagnostics from run output
 // ---------------------------------------------------------------------------
@@ -573,7 +608,8 @@ class IrisCodeLensProvider implements vscode.CodeLensProvider {
                 }),
                 new vscode.CodeLens(range, {
                     title: '⬡ Debug',
-                    command: 'workbench.action.debug.start',
+                    command: 'iris.debugFile',
+                    arguments: [document.uri],
                     tooltip: `Debug ${fnName}()`,
                 }),
             );

@@ -1,0 +1,21 @@
+choice Token {
+    Number(i64),
+    Word(str),
+    Empty,
+}
+
+def score(t: Token) -> i64 {
+    when t {
+        Token.Number(n) => n,
+        Token.Word(w) => len(w),
+        Token.Empty => 0,
+    }
+}
+
+def main() -> i64 {
+    val a = score(Token.Number(7));
+    val b = score(Token.Word("abc"));
+    val c = score(Token.Empty);
+    print(a + b + c);
+    0
+}

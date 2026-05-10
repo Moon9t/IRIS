@@ -13,6 +13,9 @@ libfuzzer-sys = "0.4"
 [dependencies.iris]
 path = ".."
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+
 # Prevent this from interfering with workspaces
 [workspace]
 members = ["."]

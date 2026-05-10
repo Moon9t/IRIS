@@ -1,0 +1,79 @@
+// block_expressions.iris -- blocks as values and scoping
+//
+// In IRIS every block { ... } is an expression whose value is
+// its last (tail) expression.
+//
+// Run: iris run examples/block_expressions.iris
+
+def main() -> i64 {
+    print("=== Block as Expression ===");
+
+    // A block evaluates to its tail expression
+    val result = {
+        val a = 10;
+        val b = 20;
+        a + b
+    };
+    print(concat("{ 10 + 20 } = ", to_str(result)));
+
+    // Block with intermediate computation
+    val hypotenuse = {
+        val dx = 3.0;
+        val dy = 4.0;
+        sqrt(dx * dx + dy * dy)
+    };
+    print(concat("hypotenuse(3,4) = ", to_str(hypotenuse)));
+
+    print("\n=== If-Else as Expression ===");
+
+    val x = 42
+    val sign = if x > 0 { "positive" } else {
+        if x < 0 { "negative" } else { "zero" }
+    };
+    print(concat(to_str(x), concat(" is ", sign)));
+
+    val abs_val = if x < 0 { 0 - x } else { x }
+    print(concat("|", concat(to_str(x), concat("| = ", to_str(abs_val)))));
+
+    print("\n=== Scoping ===");
+
+    val outer = 100
+    val inner_result = {
+        // `outer` is visible here
+        val local = outer + 50;
+        local * 2
+    };
+    // `local` is NOT visible here — scoped to the block
+    print(concat("outer = ", to_str(outer)));
+    print(concat("inner_result = ", to_str(inner_result)));
+
+    print("\n=== Blocks in Loops ===");
+
+    var sum = 0
+    for i in 1..6 {
+        val contribution = {
+            val squared = i * i;
+            val doubled = i * 2;
+            squared + doubled
+        };
+        sum = sum + contribution
+    }
+    print(concat("sum of (i^2 + 2i) for i=1..5 = ", to_str(sum)));
+
+    print("\n=== Nested Blocks ===");
+
+    val deep = {
+        val a = {
+            val x = 3;
+            x * x
+        };
+        val b = {
+            val y = 4;
+            y * y
+        };
+        a + b
+    };
+    print(concat("3^2 + 4^2 = ", to_str(deep)));
+
+    0
+}

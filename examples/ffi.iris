@@ -1,0 +1,51 @@
+// ffi.iris -- Foreign Function Interface
+//
+// Demonstrates calling external code from IRIS: shell commands,
+// Python interop, C library loading, and Rust library loading.
+//
+// Run: iris run examples/ffi.iris
+
+bring std.ffi
+
+def main() -> i64 {
+    print("=== Shell Command ===");
+    val out = shell("echo ffi")
+    print(concat("shell output: ", trim(out)));
+
+    print("\n=== Python Interop ===");
+
+    // Python version
+    val pyv = py_version()
+    print(concat("Python version: ", pyv));
+
+    // Evaluate a Python expression
+    val pe = py_eval("3 * 7")
+    print(concat("py_eval(3*7) = ", pe));
+
+    // Call a Python function
+    val sq = py_call("math", "sqrt", "16")
+    print(concat("math.sqrt(16) = ", sq));
+
+    print("\n=== C Library (FFI) ===");
+
+    // Try to open a non-existent library (graceful failure)
+    val lh = lib_open("nonexistent_library")
+    if lh == -1 {
+        print("lib_open: -1 (not found, as expected)")
+    } else {
+        print(concat("lib_open handle = ", to_str(lh)));
+        lib_close(lh)
+    };
+
+    print("\n=== Rust Library ===");
+
+    // Try to open a non-existent Rust library
+    val rh = rust_open("nonexistent_rust_lib")
+    if rh == -1 {
+        print("rust_open: -1 (not found, as expected)")
+    } else {
+        print(concat("rust_open handle = ", to_str(rh)))
+    };
+
+    0
+}
