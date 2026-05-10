@@ -13,6 +13,7 @@
 
 ---
 
+<<<<<<< HEAD
 ---
 
 ## Linguist / GitHub language support
@@ -31,6 +32,9 @@ Notes
 - If you want to update the vendored grammar later, see `CONTRIBUTING.md` for the minimal workflow we used.
 
 ## Quick Start
+=======
+## Quick Start :
+>>>>>>> 07dbceaef5ae8022e146779dde042df854fca849
 
 ```sh
 # Install (or download from Releases)
