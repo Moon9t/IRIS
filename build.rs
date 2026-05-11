@@ -10,6 +10,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/runtime/iris_runtime.h");
     println!("cargo:rerun-if-changed=src/runtime/onnx_shim.c");
     println!("cargo:rerun-if-changed=src/runtime/onnx_shim.h");
+    println!("cargo:rerun-if-env-changed=SQLITE3_DIR");
     // Re-run when HEAD changes (new commit / checkout).
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs");
@@ -64,6 +65,7 @@ fn main() {
 // corresponding -D flags and add link search paths + libs.
 fn compile_c_runtime() {
     use std::env;
+
     let mut build = cc::Build::new();
     build.file("src/runtime/iris_runtime.c");
     build.file("src/runtime/onnx_shim.c");
@@ -71,26 +73,34 @@ fn compile_c_runtime() {
     build.include("src/runtime");
 
     // ONNX Runtime
-    if let Ok(onnx_dir) = env::var("ONNXRUNTIME_DIR") {
+    if let Some(onnx_dir) = sdk_dir("ONNXRUNTIME_DIR", r"C:\onnxruntime") {
         println!("cargo:rustc-cfg=onnx_runtime_enabled");
         build.define("ONNX_RUNTIME_ENABLED", None);
-        build.include(format!("{}/include", onnx_dir));
-        println!("cargo:rustc-link-search=native={}", format!("{}/lib", onnx_dir));
-        println!("cargo:rustc-link-lib=onnxruntime");
+        let include_dir = format!("{}/include", onnx_dir);
+        let lib_dir = format!("{}/lib", onnx_dir);
+        build.include(&include_dir);
+        println!("cargo:rustc-link-search=native={}", lib_dir);
+        link_lib_if_present(&lib_dir, "onnxruntime");
+        stage_runtime_dlls(&lib_dir);
     }
 
     // LibTorch (optional C++ shim later)
-    if let Ok(lt_dir) = env::var("LIBTORCH_DIR") {
+    if let Some(lt_dir) = sdk_dir("LIBTORCH_DIR", r"C:\libtorch") {
         println!("cargo:rustc-cfg=libtorch_enabled");
         build.define("LIBTORCH_ENABLED", None);
-        build.include(format!("{}/include", lt_dir));
+        let include_dir = format!("{}/include", lt_dir);
+        let lib_dir = format!("{}/lib", lt_dir);
+        build.include(&include_dir);
         build.file("src/runtime/pytorch_shim.cpp");
-        println!("cargo:rustc-link-search=native={}", format!("{}/lib", lt_dir));
-        // Ensure C++ compilation and link flags
         build.cpp(true);
         if let Ok(cxxflags) = env::var("LIBTORCH_CXXFLAGS") {
             for flag in cxxflags.split_whitespace() { build.flag(flag); }
         }
+        println!("cargo:rustc-link-search=native={}", lib_dir);
+        for lib in ["torch", "torch_cpu", "c10", "torch_global_deps"] {
+            link_lib_if_present(&lib_dir, lib);
+        }
+        stage_runtime_dlls(&lib_dir);
     }
 
     // TensorFlow
@@ -104,6 +114,128 @@ fn compile_c_runtime() {
     build.flag_if_supported("-std=c11");
     build.flag_if_supported("-fPIC");
     build.compile("iris_runtime_c");
+    stage_sqlite_runtime_dll();
+}
+
+fn sdk_dir(var_name: &str, default_path: &str) -> Option<String> {
+    std::env::var(var_name).ok().or_else(|| {
+        let candidate = std::path::Path::new(default_path);
+        if candidate.exists() {
+            Some(default_path.to_owned())
+        } else {
+            None
+        }
+    })
+}
+
+fn link_lib_if_present(lib_dir: &str, lib_name: &str) {
+    let candidates = if cfg!(windows) {
+        vec![format!("{}.lib", lib_name)]
+    } else if cfg!(target_os = "macos") {
+        vec![format!("lib{}.dylib", lib_name), format!("lib{}.a", lib_name)]
+    } else {
+        vec![format!("lib{}.so", lib_name), format!("lib{}.a", lib_name)]
+    };
+
+    let lib_dir = std::path::Path::new(lib_dir);
+    for candidate in candidates {
+        if std::fs::metadata(lib_dir.join(&candidate)).is_ok() {
+            println!("cargo:rustc-link-lib={}", lib_name);
+            return;
+        }
+    }
+}
+
+fn stage_runtime_dlls(lib_dir: &str) {
+    let out_dir = match std::env::var("OUT_DIR") {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let mut profile_dir = std::path::PathBuf::from(out_dir);
+    for _ in 0..3 {
+        if !profile_dir.pop() {
+            return;
+        }
+    }
+
+    let deps_dir = profile_dir.join("deps");
+    let _ = std::fs::create_dir_all(&deps_dir);
+
+    let entries = match std::fs::read_dir(lib_dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_dll = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("dll"))
+            .unwrap_or(false);
+        if !is_dll {
+            continue;
+        }
+
+        if let Some(file_name) = path.file_name() {
+            let profile_target = profile_dir.join(file_name);
+            let deps_target = deps_dir.join(file_name);
+            let _ = std::fs::copy(&path, profile_target);
+            let _ = std::fs::copy(&path, deps_target);
+        }
+    }
+}
+
+fn stage_sqlite_runtime_dll() {
+    use std::path::{Path, PathBuf};
+
+    let candidate_dirs = [
+        std::env::var("SQLITE3_DIR").ok(),
+        Some(r"C:\Program Files\Common Files\Apple\Mobile Device Support".to_owned()),
+        Some(r"C:\Program Files\Cheat Engine\win64".to_owned()),
+        Some(r"C:\Program Files (x86)\Common Files\Apple\Mobile Device Support".to_owned()),
+        Some(r"C:\Program Files (x86)\Passixer\Passixer iPhone Unlocker".to_owned()),
+    ];
+
+    let mut source_path: Option<PathBuf> = None;
+    for dir in candidate_dirs.into_iter().flatten() {
+        for file_name in ["sqlite3.dll", "SQLite3.dll"] {
+            let path = Path::new(&dir).join(file_name);
+            if path.exists() {
+                source_path = Some(path);
+                break;
+            }
+        }
+        if source_path.is_some() {
+            break;
+        }
+    }
+
+    let Some(source_path) = source_path else {
+        return;
+    };
+
+    let out_dir = match std::env::var("OUT_DIR") {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let mut profile_dir = PathBuf::from(out_dir);
+    for _ in 0..3 {
+        if !profile_dir.pop() {
+            return;
+        }
+    }
+
+    let deps_dir = profile_dir.join("deps");
+    let _ = std::fs::create_dir_all(&deps_dir);
+    if let Some(file_name) = source_path.file_name() {
+        let profile_target = profile_dir.join(file_name);
+        let deps_target = deps_dir.join(file_name);
+        let _ = std::fs::copy(&source_path, profile_target);
+        let _ = std::fs::copy(&source_path, deps_target);
+    }
 }
 
 // Run compile step after the metadata printed above.

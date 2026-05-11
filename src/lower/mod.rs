@@ -165,6 +165,73 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
     fn_sigs
         .entry("eprintln".into())
         .or_insert(IrType::Scalar(DType::I64));
+
+    let tensor_pair_ty = IrType::Tuple(vec![
+        IrType::List(Box::new(IrType::Scalar(DType::F64))),
+        IrType::List(Box::new(IrType::Scalar(DType::I64))),
+    ]);
+
+    let runtime_ml_externs = [
+        (
+            "iris_ml_onnx_load",
+            vec![IrType::Str],
+            IrType::Scalar(DType::I64),
+        ),
+        (
+            "iris_ml_onnx_free",
+            vec![IrType::Scalar(DType::I64)],
+            IrType::Scalar(DType::I64),
+        ),
+        (
+            "iris_ml_onnx_run",
+            vec![IrType::Scalar(DType::I64), tensor_pair_ty.clone()],
+            tensor_pair_ty.clone(),
+        ),
+        (
+            "iris_ml_pytorch_load",
+            vec![IrType::Str],
+            IrType::Scalar(DType::I64),
+        ),
+        (
+            "iris_ml_pytorch_free",
+            vec![IrType::Scalar(DType::I64)],
+            IrType::Scalar(DType::I64),
+        ),
+        (
+            "iris_ml_pytorch_run",
+            vec![IrType::Scalar(DType::I64), tensor_pair_ty.clone()],
+            tensor_pair_ty.clone(),
+        ),
+        (
+            "iris_ml_tf_load",
+            vec![IrType::Str],
+            IrType::Scalar(DType::I64),
+        ),
+        (
+            "iris_ml_tf_free",
+            vec![IrType::Scalar(DType::I64)],
+            IrType::Scalar(DType::I64),
+        ),
+        (
+            "iris_ml_tf_run",
+            vec![IrType::Scalar(DType::I64), tensor_pair_ty],
+            IrType::Tuple(vec![
+                IrType::List(Box::new(IrType::Scalar(DType::F64))),
+                IrType::List(Box::new(IrType::Scalar(DType::I64))),
+            ]),
+        ),
+    ];
+
+    for (name, params, ret_ty) in runtime_ml_externs {
+        fn_sigs.entry(name.to_owned()).or_insert(ret_ty.clone());
+        if !module.extern_fns.iter().any(|e| e.name == name) {
+            module.extern_fns.push(crate::ir::module::IrExternFn {
+                name: name.to_owned(),
+                param_types: params,
+                ret_ty,
+            });
+        }
+    }
     fn_sigs
         .entry("eprint".into())
         .or_insert(IrType::Scalar(DType::I64));
@@ -264,6 +331,9 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
 
     // 3d. Collect extern function declarations so call sites can emit CallExtern.
     for ext in &ast.extern_fns {
+        if module.extern_fns.iter().any(|e| e.name == ext.name.name) {
+            continue;
+        }
         let param_types: Vec<IrType> = ext
             .params
             .iter()

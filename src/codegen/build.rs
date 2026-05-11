@@ -371,6 +371,7 @@ fn build_binary_impl(
         });
     }
 
+    stage_sqlite_dll_next_to(output_path);
     Ok(output_path.to_path_buf())
 }
 
@@ -380,6 +381,40 @@ fn resolve_target_triple(target: Option<&str>) -> String {
         None => crate::codegen::llvm_ir::native_target_triple(),
     }
     .to_owned()
+}
+
+fn stage_sqlite_dll_next_to(output_path: &Path) {
+    use std::path::{Path, PathBuf};
+
+    let candidate_dirs = [
+        std::env::var("SQLITE3_DIR").ok(),
+        Some(r"C:\Program Files\Cheat Engine\win64".to_owned()),
+        Some(r"C:\Program Files\Common Files\Apple\Mobile Device Support".to_owned()),
+        Some(r"C:\Program Files (x86)\Common Files\Apple\Mobile Device Support".to_owned()),
+    ];
+
+    let mut source_path: Option<PathBuf> = None;
+    for dir in candidate_dirs.into_iter().flatten() {
+        for file_name in ["sqlite3.dll", "SQLite3.dll"] {
+            let path = Path::new(&dir).join(file_name);
+            if path.exists() {
+                source_path = Some(path);
+                break;
+            }
+        }
+        if source_path.is_some() {
+            break;
+        }
+    }
+
+    let Some(source_path) = source_path else {
+        return;
+    };
+
+    if let Some(parent) = output_path.parent() {
+        let target = parent.join(source_path.file_name().unwrap_or_default());
+        let _ = std::fs::copy(&source_path, target);
+    }
 }
 
 /// Find clang — required for compiling LLVM IR, C code, and linking.

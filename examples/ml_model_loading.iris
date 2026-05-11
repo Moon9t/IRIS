@@ -1,31 +1,52 @@
 // examples/ml_model_loading.iris
-// Demonstrates guarded model loading pattern for ONNX inference.
-// Works standalone without std.ml to avoid unresolved externs.
+// Real SQL-backed ML example using the std.sql connector.
+
+bring std.ml
+bring std.sql
+
+def add_training_row(db : i64, x : f64, y : f64) -> i64 {
+    sql_exec(db, concat("INSERT INTO training_samples (feature, target) VALUES (", concat(to_str(x), concat(", ", concat(to_str(y), ")")))))
+}
+
+def print_rows(rows : list<list<str>>) -> () {
+    for i in 0 .. list_len(rows) {
+        val row = list_get(rows, i);
+        print(join(row, ", "));
+    }
+}
 
 def main() -> i64 {
-    print("=== ML Model Loading Example ===");
+    print("=== SQL-Backed ML Training Example ===");
 
-    val model_path = "tests/fixtures/identity.onnx";
+    val db = sql_open("iris_ml_training.db");
+    if db == 0 {
+        print("failed to open database");
+        1
+    } else {
+        sql_exec(db, "DROP TABLE IF EXISTS training_samples");
+        sql_exec(db, "CREATE TABLE training_samples (id INTEGER PRIMARY KEY AUTOINCREMENT, feature REAL, target REAL)");
 
-    print("Model loading framework demonstration:");
-    print(concat("Attempting to load: ", model_path));
+        val _ = add_training_row(db, 1.0, 3.0);
+        val _ = add_training_row(db, 2.0, 5.0);
+        val _ = add_training_row(db, 3.0, 7.0);
+        val _ = add_training_row(db, 4.0, 9.0);
+        val _ = add_training_row(db, 5.0, 11.0);
 
-    print("");
-    print("Setup Steps:");
-    print("1. ONNX Runtime SDK installed at C:\\onnxruntime");
-    print("2. ONNXRUNTIME_DIR environment variable set");
-    print("3. Test models generated via tests/create_onnx_model.py");
-    print("4. IRIS binary rebuilt with ONNX support");
+        val rows = sql_query(db, "SELECT feature, target FROM training_samples ORDER BY id");
+        print("Database rows:");
+        print_rows(rows);
+        print(concat("row count = ", to_str(list_len(rows))));
 
-    print("");
-    print("In production:");
-    print("  - Use std.ml.onnx_load(model_path) to load");
-    print("  - Check return value >= 0 for success");
-    print("  - Call std.ml.onnx_run(session, input_tensor)");
-    print("  - Call std.ml.onnx_free(session) to cleanup");
+        val (features, targets) = sql_rows_to_xy(rows, 0, 1);
+        val (w, b) = linear_regression_train(features, targets, 0.05, 1000);
+        val prediction = linear_predict(w, b, 6.0 to f64);
 
-    print("");
-    print("Current build status: model loading available when ONNX runtime linked");
+        print(concat("trained w = ", to_str(w)));
+        print(concat("trained b = ", to_str(b)));
+        print(concat("prediction for x=6.0 = ", to_str(prediction)));
+        print("Expected trend: y = 2x + 1");
 
-    0
+        sql_close(db);
+        0
+    }
 }

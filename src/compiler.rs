@@ -230,6 +230,7 @@ impl FileCompiler {
     }
 
     fn merge_dep(&self, main_ast: &mut AstModule, dep: AstModule) {
+        main_ast.extern_fns.extend(dep.extern_fns);
         for func in dep.functions {
             if func.is_pub {
                 // Warn if a function with the same name is already defined.

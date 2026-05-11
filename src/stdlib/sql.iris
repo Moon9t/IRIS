@@ -1,0 +1,57 @@
+// src/stdlib/sql.iris -- IRIS SQLite connector helpers.
+//
+// This module wraps the built-in database operations (`db_open`, `db_exec`,
+// `db_query`, `db_close`) and adds small helpers for turning query rows into
+// numeric training vectors.
+
+pub def sql_open(path : str) -> i64 {
+    db_open(path)
+}
+
+pub def sql_exec(db : i64, sql : str) -> i64 {
+    db_exec(db, sql)
+}
+
+pub def sql_query(db : i64, sql : str) -> list<list<str>> {
+    db_query(db, sql)
+}
+
+pub def sql_close(db : i64) -> i64 {
+    db_close(db)
+}
+
+pub def sql_parse_f64_or_zero(s : str) -> f64 {
+    val parsed = parse_f64(s);
+    if is_some(parsed) { unwrap(parsed) } else { 0.0 }
+}
+
+pub def sql_rows_to_f64_column(rows : list<list<str>>, col_idx : i64) -> list<f64> {
+    val out : list<f64> = list();
+    for i in 0 .. list_len(rows) {
+        val row = list_get(rows, i);
+        val raw = if col_idx >= 0 && col_idx < list_len(row) { list_get(row, col_idx) } else { "0" };
+        list_push(out, sql_parse_f64_or_zero(raw));
+    }
+    out
+}
+
+pub def sql_query_f64_column(db : i64, sql : str, col_idx : i64) -> list<f64> {
+    sql_rows_to_f64_column(sql_query(db, sql), col_idx)
+}
+
+pub def sql_rows_to_xy(rows : list<list<str>>, x_idx : i64, y_idx : i64) -> (list<f64>, list<f64>) {
+    val xs : list<f64> = list();
+    val ys : list<f64> = list();
+    for i in 0 .. list_len(rows) {
+        val row = list_get(rows, i);
+        val x_raw = if x_idx >= 0 && x_idx < list_len(row) { list_get(row, x_idx) } else { "0" };
+        val y_raw = if y_idx >= 0 && y_idx < list_len(row) { list_get(row, y_idx) } else { "0" };
+        list_push(xs, sql_parse_f64_or_zero(x_raw));
+        list_push(ys, sql_parse_f64_or_zero(y_raw));
+    }
+    (xs, ys)
+}
+
+pub def sql_query_xy(db : i64, sql : str, x_idx : i64, y_idx : i64) -> (list<f64>, list<f64>) {
+    sql_rows_to_xy(sql_query(db, sql), x_idx, y_idx)
+}

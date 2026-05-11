@@ -1,101 +1,72 @@
-// examples/ml_neural_computation.iris
-// Vector-only forward pass that stays within the language features used by
-// the working std.ml examples.
+bring std.ml
 
 def print_list(v : list<f64>) -> () {
     var s : str = "[";
     for i in 0 .. list_len(v) {
-        if i > 0 { s = concat(s, ", "); }
+        if i>0 {
+            s = concat(s, ", ");
+            
+        }
         s = concat(s, to_str(list_get(v, i)));
+        
     }
     print(concat(s, "]"));
+    
 }
-
-def vec2(a : f64, b : f64) -> list<f64> {
-    val out : list<f64> = list();
-    list_push(out, a);
-    list_push(out, b);
-    out
-}
-
-def vec3(a : f64, b : f64, c : f64) -> list<f64> {
-    val out : list<f64> = list();
-    list_push(out, a);
-    list_push(out, b);
-    list_push(out, c);
-    out
-}
-
-def dot_product(a : list<f64>, b : list<f64>) -> f64 {
-    var s = 0.0;
-    for i in 0 .. list_len(a) {
-        s = s + list_get(a, i) * list_get(b, i);
-    }
-    s
-}
-
-def relu(x : f64) -> f64 {
-    if x > 0.0 { x } else { 0.0 }
-}
-
-def softmax(v : list<f64>) -> list<f64> {
-    val n = list_len(v);
-    var mx = list_get(v, 0);
-    for i in 1 .. n {
-        val xi = list_get(v, i);
-        if xi > mx {
-            mx = xi;
-        }
-    }
-
-    val exps : list<f64> = list();
-    var total = 0.0;
-    for i in 0 .. n {
-        val e = exp(list_get(v, i) - mx);
-        list_push(exps, e);
-        total = total + e;
-    }
-
-    val out : list<f64> = list();
-    for i in 0 .. n {
-        list_push(out, list_get(exps, i) / total);
-    }
-    out
-}
-
 def main() -> i64 {
-    val input : list<f64> = vec2(1.0, 0.5);
-
-    val h1_w : list<f64> = vec2(0.1, 0.2);
-    val h2_w : list<f64> = vec2(0.3, -0.2);
-    val h3_w : list<f64> = vec2(-0.1, 0.4);
-
+    val input : list<f64> = [1.0, 0.5];
+    val h1_w : list<f64> = [0.1, 0.2];
+    val h2_w : list<f64> = [0.3, -0.2];
+    val h3_w : list<f64> = [-0.1, 0.4];
     val h1_b = 0.05;
-    val h2_b = -0.10;
+    val h2_b = - 0.1;
     val h3_b = 0.15;
-
-    val o1_w : list<f64> = vec3(0.2, -0.1, 0.4);
-    val o2_w : list<f64> = vec3(-0.3, 0.5, 0.1);
-
+    val input : list<f64> = list();
+    list_push(input, 1.0);
+    list_push(input, 0.5);
+    val h1_w : list<f64> = list();
+    list_push(h1_w, 0.1);
+    list_push(h1_w, 0.2);
+    val h2_w : list<f64> = list();
+    list_push(h2_w, 0.3);
+    list_push(h2_w, -0.2);
+    val h3_w : list<f64> = list();
+    list_push(h3_w, -0.1);
+    list_push(h3_w, 0.4);
+    val h1_b = 0.05;
+    val h2_b = - 0.1;
+    val h3_b = 0.15;
+    val o1_w : list<f64> = list();
+    list_push(o1_w, 0.2);
+    list_push(o1_w, -0.1);
+    list_push(o1_w, 0.4);
+    val o2_w : list<f64> = list();
+    list_push(o2_w, -0.3);
+    list_push(o2_w, 0.5);
+    list_push(o2_w, 0.1);
     val o1_b = 0.02;
-    val o2_b = -0.03;
-
+    val o2_b = - 0.03;
     print("=== Neural Computation Example ===");
-    print("input = "); print_list(input);
-
-    val hidden1 = relu(dot_product(input, h1_w) + h1_b);
-    val hidden2 = relu(dot_product(input, h2_w) + h2_b);
-    val hidden3 = relu(dot_product(input, h3_w) + h3_b);
-    val hidden : list<f64> = vec3(hidden1, hidden2, hidden3);
-    print("hidden = "); print_list(hidden);
-
-    val logit1 = dot_product(hidden, o1_w) + o1_b;
-    val logit2 = dot_product(hidden, o2_w) + o2_b;
-    val logits : list<f64> = vec2(logit1, logit2);
-    print("logits = "); print_list(logits);
-
+    print("input = ");
+    print_list(input);
+    val hidden1 = relu(dot(input, h1_w) + h1_b);
+    val hidden2 = relu(dot(input, h2_w) + h2_b);
+    val hidden3 = relu(dot(input, h3_w) + h3_b);
+    val hidden : list<f64> = list();
+    list_push(hidden, hidden1);
+    list_push(hidden, hidden2);
+    list_push(hidden, hidden3);
+    print("hidden = ");
+    print_list(hidden);
+    val logit1 = dot(hidden, o1_w) + o1_b;
+    val logit2 = dot(hidden, o2_w) + o2_b;
+    val logits : list<f64> = list();
+    list_push(logits, logit1);
+    list_push(logits, logit2);
+    print("logits = ");
+    print_list(logits);
     val probs = softmax(logits);
-    print("probs = "); print_list(probs);
-
+    print("probs = ");
+    print_list(probs);
     0
 }

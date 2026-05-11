@@ -20,6 +20,7 @@ pub fn stdlib_source(name: &str) -> Option<&'static str> {
         "http" => Some(include_str!("http.iris")),
         "kv" => Some(include_str!("kv.iris")),
         "table" => Some(include_str!("table.iris")),
+        "sql" => Some(include_str!("sql.iris")),
         "dataset" => Some(include_str!("dataset.iris")),
         "dataframe" => Some(include_str!("dataframe.iris")),
         // Phase 105: New stdlib modules

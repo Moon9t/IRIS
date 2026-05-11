@@ -3,11 +3,12 @@ use iris::runtime_bindings::tensor_pair_from_slices;
 use iris::runtime_bindings::tensor_pair_to_slices;
 
 #[test]
-fn stdlib_ml_module_exports_backend_wrappers() {
-    let src = stdlib_source("ml").expect("ml stdlib source");
-    assert!(src.contains("iris_ml_onnx_run"));
-    assert!(src.contains("iris_ml_pytorch_run"));
-    assert!(src.contains("iris_ml_tf_run"));
+fn stdlib_sql_module_exports_connector_helpers() {
+    let src = stdlib_source("sql").expect("sql stdlib source");
+    assert!(src.contains("sql_open"));
+    assert!(src.contains("sql_exec"));
+    assert!(src.contains("sql_query"));
+    assert!(src.contains("sql_close"));
 }
 
 #[test]

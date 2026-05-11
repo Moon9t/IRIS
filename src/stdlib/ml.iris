@@ -1,723 +1,614 @@
 bring std.tensorx
 
-extern def iris_ml_onnx_load(model_path: str) -> i64
-extern def iris_ml_onnx_free(session: i64) -> i64
-extern def iris_ml_onnx_run(session: i64, input: Tensor) -> Tensor
-
-extern def iris_ml_pytorch_load(model_path: str) -> i64
-extern def iris_ml_pytorch_free(handle: i64) -> i64
-extern def iris_ml_pytorch_run(handle: i64, input: Tensor) -> Tensor
-
-extern def iris_ml_tf_load(model_path: str) -> i64
-extern def iris_ml_tf_free(handle: i64) -> i64
-extern def iris_ml_tf_run(handle: i64, input: Tensor) -> Tensor
-
-pub def onnx_load(model_path: str) -> i64 {
-    iris_ml_onnx_load(model_path)
-}
-
-pub def onnx_free(session: i64) -> i64 {
-    iris_ml_onnx_free(session)
-}
-
-pub def onnx_run(session: i64, input: Tensor) -> Tensor {
-    iris_ml_onnx_run(session, input)
-}
-
-pub def pytorch_load(model_path: str) -> i64 {
-    iris_ml_pytorch_load(model_path)
-}
-
-pub def pytorch_free(handle: i64) -> i64 {
-    iris_ml_pytorch_free(handle)
-}
-
-pub def pytorch_run(handle: i64, input: Tensor) -> Tensor {
-    iris_ml_pytorch_run(handle, input)
-}
-
-pub def tf_load(model_path: str) -> i64 {
-    iris_ml_tf_load(model_path)
-}
-
-pub def tf_free(handle: i64) -> i64 {
-    iris_ml_tf_free(handle)
-}
-
-pub def tf_run(handle: i64, input: Tensor) -> Tensor {
-    iris_ml_tf_run(handle, input)
-}
-
-pub
-def dot(a : list<f64>, b : list<f64>) -> f64 {
-    val n = list_len(a)var s = 0.0 for i in 0 .. n {
-        s = s + list_get(a, i) * list_get(b, i)
+pub def dot(a : list<f64>, b : list<f64>) -> f64 {
+    var s = 0.0;
+    for i in 0 .. list_len(a) {
+        s = s + list_get(a, i) * list_get(b, i);
     }
     s
 }
-pub
-def vec_add(a : list<f64>, b : list<f64>) -> list<f64> {
-    val n = list_len(a)val out : list<f64> = list()for i in 0 .. n {
-        list_push(out, list_get(a, i) + list_get(b, i))
+
+pub def vec_add(a : list<f64>, b : list<f64>) -> list<f64> {
+    val out : list<f64> = list();
+    for i in 0 .. list_len(a) {
+        list_push(out, list_get(a, i) + list_get(b, i));
     }
     out
 }
-pub
-def vec_sub(a : list<f64>, b : list<f64>) -> list<f64> {
-    val n = list_len(a)val out : list<f64> = list()for i in 0 .. n {
-        list_push(out, list_get(a, i) - list_get(b, i))
+
+pub def vec_sub(a : list<f64>, b : list<f64>) -> list<f64> {
+    val out : list<f64> = list();
+    for i in 0 .. list_len(a) {
+        list_push(out, list_get(a, i) - list_get(b, i));
     }
     out
 }
-pub
-def vec_scale(v : list<f64>, s : f64) -> list<f64> {
-    val n = list_len(v)val out : list<f64> = list()for i in 0 .. n {
-        list_push(out, list_get(v, i) * s)
+
+pub def vec_scale(v : list<f64>, s : f64) -> list<f64> {
+    val out : list<f64> = list();
+    for i in 0 .. list_len(v) {
+        list_push(out, list_get(v, i) * s);
     }
     out
 }
-pub
-def norm(v : list<f64>) -> f64 {
+
+pub def norm(v : list<f64>) -> f64 {
     sqrt(dot(v, v))
 }
-pub
-def vec_mean(v : list<f64>) -> f64 {
-    val n = list_len(v)if n == 0 {
+
+pub def vec_mean(v : list<f64>) -> f64 {
+    val n = list_len(v);
+    if n == 0 {
         0.0
-    }
-    else {
-        var s = 0.0 for i in 0 .. n {
-            s = s + list_get(v, i)
+    } else {
+        var s = 0.0;
+        for i in 0 .. n {
+            s = s + list_get(v, i);
         }
         s / (n to f64)
     }
-    
 }
-pub
-def vec_var(v : list<f64>) -> f64 {
-    val m = vec_mean(v)val n = list_len(v)if n == 0 {
+
+pub def vec_var(v : list<f64>) -> f64 {
+    val n = list_len(v);
+    if n == 0 {
         0.0
-    }
-    else {
-        var s = 0.0 for i in 0 .. n {
-            val d = list_get(v, i) - m s = s + d * d
+    } else {
+        val m = vec_mean(v);
+        var s = 0.0;
+        for i in 0 .. n {
+            val d = list_get(v, i) - m;
+            s = s + d * d;
         }
         s / (n to f64)
     }
-    
 }
-pub
-def vec_std(v : list<f64>) -> f64 {
+
+pub def vec_std(v : list<f64>) -> f64 {
     sqrt(vec_var(v))
 }
-pub
-def standardize(v : list<f64>) -> list<f64> {
-    val m = vec_mean(v)val s = vec_std(v)val n = list_len(v)val out : list<f64> = list()for i in 0 .. n {
-        val x = if s>0.0001 {
+
+pub def standardize(v : list<f64>) -> list<f64> {
+    val m = vec_mean(v);
+    val s = vec_std(v);
+    val n = list_len(v);
+    val out : list<f64> = list();
+    for i in 0 .. n {
+        val x = if s > 0.000001 {
             (list_get(v, i) - m) / s
-        }
-        else {
+        } else {
             0.0
-        }
-        list_push(out, x)
+        };
+        list_push(out, x);
     }
     out
 }
-pub
-def sigmoid(x : f64) -> f64 {
+
+pub def sigmoid(x : f64) -> f64 {
     1.0 / (1.0 + exp(0.0 - x))
 }
-pub
-def sigmoid_deriv(x : f64) -> f64 {
-    val s = sigmoid(x)s * (1.0 - s)
+
+pub def sigmoid_deriv(x : f64) -> f64 {
+    val s = sigmoid(x);
+    s * (1.0 - s)
 }
-pub
-def sigmoid_deriv_from_output(y : f64) -> f64 {
+
+pub def sigmoid_deriv_from_output(y : f64) -> f64 {
     y * (1.0 - y)
 }
-pub
-def relu(x : f64) -> f64 {
-    if x>0.0 {
-        x
-    }
-    else {
-        0.0
-    }
-    
+
+pub def relu(x : f64) -> f64 {
+    if x > 0.0 { x } else { 0.0 }
 }
-pub
-def relu_deriv(x : f64) -> f64 {
-    if x>0.0 {
-        1.0
-    }
-    else {
-        0.0
-    }
-    
+
+pub def relu_deriv(x : f64) -> f64 {
+    if x > 0.0 { 1.0 } else { 0.0 }
 }
-pub
-def leaky_relu(x : f64, alpha : f64) -> f64 {
-    if x>0.0 {
-        x
-    }
-    else {
-        alpha * x
-    }
-    
+
+pub def leaky_relu(x : f64, alpha : f64) -> f64 {
+    if x > 0.0 { x } else { alpha * x }
 }
-pub
-def tanh_act(x : f64) -> f64 {
-    (exp(x) - exp(0.0 - x)) / (exp(x) + exp(0.0 - x))
+
+pub def tanh_act(x : f64) -> f64 {
+    val ex = exp(x);
+    val enx = exp(0.0 - x);
+    (ex - enx) / (ex + enx)
 }
-pub
-def tanh_deriv(x : f64) -> f64 {
-    val t = tanh_act(x)1.0 - t * t
+
+pub def tanh_deriv(x : f64) -> f64 {
+    val t = tanh_act(x);
+    1.0 - t * t
 }
-pub
-def tanh_deriv_from_output(y : f64) -> f64 {
+
+pub def tanh_deriv_from_output(y : f64) -> f64 {
     1.0 - y * y
 }
-pub
-def softmax(v : list<f64>) -> list<f64> {
-    val n = list_len(v)var mx = list_get(v, 0)for i in 1 .. n {
-        val xi = list_get(v, i)if xi>mx {
-            mx = xi
+
+pub def softmax(v : list<f64>) -> list<f64> {
+    val n = list_len(v);
+    if n == 0 {
+        val empty : list<f64> = list();
+        empty
+    } else {
+        var mx = list_get(v, 0);
+        for i in 1 .. n {
+            val xi = list_get(v, i);
+            if xi > mx {
+                mx = xi;
+            }
         }
-        
-    }
-    val exps : list<f64> = list()var s = 0.0 for i in 0 .. n {
-        val e = exp(list_get(v, i) - mx)list_push(exps, e);
-        s = s + e
-    }
-    val out : list<f64> = list()for i in 0 .. n {
-        list_push(out, list_get(exps, i) / s)
-    }
-    out
-}
-pub
-def mse(pred : list<f64>, target : list<f64>) -> f64 {
-    val n = list_len(pred)var s = 0.0 for i in 0 .. n {
-        val d = list_get(pred, i) - list_get(target, i)s = s + d * d
-    }
-    s / (n to f64)
-}
-pub
-def binary_cross_entropy(pred : list<f64>, target : list<f64>) -> f64 {
-    val n = list_len(pred)var s = 0.0 for i in 0 .. n {
-        val p = clamp(list_get(pred, i), 0.000001, 0.999999)val t = list_get(target, i)s = s + (t * log(p) + (1.0 - t) * log(1.0 - p))
-    }
-    (0.0 - s) / (n to f64)
-}
-pub
-def cross_entropy(pred : list<f64>, target : list<f64>) -> f64 {
-    val n = list_len(pred)var s = 0.0 for i in 0 .. n {
-        val p = clamp(list_get(pred, i), 0.000001, 1.0)val t = list_get(target, i)s = s + t * log(p)
-    }
-    0.0 - s
-}
-pub
-def mae(pred : list<f64>, target : list<f64>) -> f64 {
-    val n = list_len(pred)var s = 0.0 for i in 0 .. n {
-        s = s + abs(list_get(pred, i) - list_get(target, i))
-    }
-    s / (n to f64)
-}
-pub
-def linear_regression_train(X : list<f64>, y : list<f64>, lr : f64, epochs : i64) -> (f64, f64) {
-    val n = list_len(X)var w = 0.0 var b = 0.0 for epoch in 0 .. epochs {
-        var dw = 0.0 var db = 0.0 for i in 0 .. n {
-            val xi = list_get(X, i)val yi = list_get(y, i)val pred = w * xi + b val err = pred - yi dw = dw + err * xi; db = db + err
-        }
-        val nf = n to f64 w = w - lr * dw / nf; b = b - lr * db / nf
-    }
-    (w, b)
-}
-pub
-def linear_predict(w : f64, b : f64, x : f64) -> f64 {
-    w * x + b
-}
-pub
-def linreg_train(X_flat : list<f64>, y : list<f64>, n_features : i64, lr : f64, epochs : i64) -> list<f64> {
-    val n = list_len(y)val weights : list<f64> = list()for j in 0 .. (n_features + 1) {
-        list_push(weights, 0.0)
-    }
-    for epoch in 0 .. epochs {
-        val grads : list<f64> = list()for j in 0 .. (n_features + 1) {
-            list_push(grads, 0.0)
-        }
+
+        val exps : list<f64> = list();
+        var total = 0.0;
         for i in 0 .. n {
-            var pred = list_get(weights, n_features)for j in 0 .. n_features {
-                pred = pred + list_get(weights, j) * list_get(X_flat, i * n_features + j)
-            }
-            val err = pred - list_get(y, i)for j in 0 .. n_features {
-                val g = list_get(grads, j) + err * list_get(X_flat, i * n_features + j)list_set(grads, j, g)
-            }
-            val gb = list_get(grads, n_features) + err list_set(grads, n_features, gb)
+            val e = exp(list_get(v, i) - mx);
+            list_push(exps, e);
+            total = total + e;
         }
-        val nf = n to f64 for j in 0 .. (n_features + 1) {
-            val w = list_get(weights, j) - lr * list_get(grads, j) / nf list_set(weights, j, w)
-        }
-        
-    }
-    weights
-}
-pub
-def linreg_predict(weights : list<f64>, x_row : list<f64>) -> f64 {
-    val n = list_len(x_row)var s = list_get(weights, n)for j in 0 .. n {
-        s = s + list_get(weights, j) * list_get(x_row, j)
-    }
-    s
-}
-pub
-def logreg_train(X_flat : list<f64>, y : list<f64>, n_features : i64, lr : f64, epochs : i64) -> list<f64> {
-    val n = list_len(y)val weights : list<f64> = list()for j in 0 .. (n_features + 1) {
-        list_push(weights, 0.0)
-    }
-    for epoch in 0 .. epochs {
-        val grads : list<f64> = list()for j in 0 .. (n_features + 1) {
-            list_push(grads, 0.0)
-        }
+
+        val out : list<f64> = list();
         for i in 0 .. n {
-            var z = list_get(weights, n_features)for j in 0 .. n_features {
-                z = z + list_get(weights, j) * list_get(X_flat, i * n_features + j)
-            }
-            val pred = sigmoid(z)val err = pred - list_get(y, i)for j in 0 .. n_features {
-                val g = list_get(grads, j) + err * list_get(X_flat, i * n_features + j)list_set(grads, j, g)
-            }
-            val gb = list_get(grads, n_features) + err list_set(grads, n_features, gb)
-        }
-        val nf = n to f64 for j in 0 .. (n_features + 1) {
-            val w = list_get(weights, j) - lr * list_get(grads, j) / nf list_set(weights, j, w)
-        }
-        
-    }
-    weights
-}
-pub
-def logreg_predict_prob(weights : list<f64>, x_row : list<f64>) -> f64 {
-    val n = list_len(x_row)var z = list_get(weights, n)for j in 0 .. n {
-        z = z + list_get(weights, j) * list_get(x_row, j)
-    }
-    sigmoid(z)
-}
-pub
-def logreg_predict(weights : list<f64>, x_row : list<f64>, threshold : f64) -> i64 {
-    if logreg_predict_prob(weights, x_row) >= threshold {
-        1
-    }
-    else {
-        0
-    }
-    
-}
-pub
-def euclidean_dist(a : list<f64>, b : list<f64>) -> f64 {
-    val n = list_len(a)var s = 0.0 for i in 0 .. n {
-        val d = list_get(a, i) - list_get(b, i)s = s + d * d
-    }
-    sqrt(s)
-}
-pub
-def knn_predict(X_flat : list<f64>, y_train : list<i64>, n_features : i64, x_query : list<f64>, k : i64) -> i64 {
-    val n_train = list_len(y_train)val dists : list<f64> = list()for i in 0 .. n_train {
-        val row : list<f64> = list()for j in 0 .. n_features {
-            list_push(row, list_get(X_flat, i * n_features + j))
-        }
-        list_push(dists, euclidean_dist(x_query, row))
-    }
-    val k_indices : list<i64> = list()val used : list<i64> = list()for _ in 0 .. n_train {
-        list_push(used, 0)
-    }
-    for _ in 0 .. k {
-        var best_idx = 0 - 1 var best_dist = 999999999.0 for i in 0 .. n_train {
-            if list_get(used, i) == 0 {
-                if list_get(dists, i)<best_dist {
-                    best_dist = list_get(dists, i);
-                    best_idx = i
-                }
-                
-            }
-            
-        }
-        if best_idx >= 0 {
-            list_push(k_indices, best_idx);
-            list_set(used, best_idx, 1)
-        }
-        
-    }
-    val votes : map<i64, i64> = map()for idx in 0 .. list_len(k_indices) {
-        val label = list_get(y_train, list_get(k_indices, idx))val cur = if map_contains(votes, label) {
-            unwrap(map_get(votes, label))
-        }
-        else {
-            0
-        }
-        map_set(votes, label, cur + 1)
-    }
-    var best_label = list_get(y_train, 0)var best_votes = 0 val n_k = list_len(k_indices)for idx in 0 .. n_k {
-        val label = list_get(y_train, list_get(k_indices, idx))val cnt = unwrap(map_get(votes, label))if cnt>best_votes {
-            best_votes = cnt; best_label = label
-        }
-        
-    }
-    best_label
-}
-pub
-def kmeans_init_centroids(X_flat : list<f64>, n_samples : i64, n_features : i64, k : i64) -> list<f64> {
-    val centroids : list<f64> = list()val step = n_samples / k for ci in 0 .. k {
-        val sample_idx = (ci * step) % n_samples for j in 0 .. n_features {
-            list_push(centroids, list_get(X_flat, sample_idx * n_features + j))
-        }
-        
-    }
-    centroids
-}
-pub
-def kmeans_assign(X_flat : list<f64>, centroids : list<f64>, n_samples : i64, n_features : i64, k : i64) -> list<i64> {
-    val labels : list<i64> = list()for i in 0 .. n_samples {
-        var best_c = 0 var best_d = 999999999.0 for c in 0 .. k {
-            var dist = 0.0 for j in 0 .. n_features {
-                val d = list_get(X_flat, i * n_features + j) - list_get(centroids, c * n_features + j)dist = dist + d * d
-            }
-            if dist<best_d {
-                best_d = dist; best_c = c
-            }
-            
-        }
-        list_push(labels, best_c)
-    }
-    labels
-}
-pub
-def kmeans_update(X_flat : list<f64>, labels : list<i64>, n_samples : i64, n_features : i64, k : i64) -> list<f64> {
-    val sums : list<f64> = list()val counts : list<i64> = list()for c in 0 .. k {
-        for j in 0 .. n_features {
-            list_push(sums, 0.0)
-        }
-        list_push(counts, 0)
-    }
-    for i in 0 .. n_samples {
-        val c = list_get(labels, i)list_set(counts, c, list_get(counts, c) + 1);
-        for j in 0 .. n_features {
-            val cur = list_get(sums, c * n_features + j)list_set(sums, c * n_features + j, cur + list_get(X_flat, i * n_features + j))
-        }
-        
-    }
-    val centroids : list<f64> = list()for c in 0 .. k {
-        val cnt = list_get(counts, c)val cf = if cnt>0 {
-            cnt to f64
-        }
-        else {
-            1.0
-        }
-        for j in 0 .. n_features {
-            list_push(centroids, list_get(sums, c * n_features + j) / cf)
-        }
-        
-    }
-    centroids
-}
-pub
-def kmeans_train(X_flat : list<f64>, n_samples : i64, n_features : i64, k : i64, max_iters : i64) -> (list<f64>, list<i64>) {
-    var centroids = kmeans_init_centroids(X_flat, n_samples, n_features, k)var labels : list<i64> = list()for iter in 0 .. max_iters {
-        labels = kmeans_assign(X_flat, centroids, n_samples, n_features, k); centroids = kmeans_update(X_flat, labels, n_samples, n_features, k)
-    }
-    (centroids, labels)
-}
-pub
-def gnb_train(X_flat : list<f64>, y : list<i64>, n_features : i64, n_classes : i64) -> (list<f64>, list<f64>, list<f64>) {
-    val n = list_len(y)val sums : list<f64> = list()val sums2 : list<f64> = list()val counts : list<i64> = list()for c in 0 .. n_classes {
-        for j in 0 .. n_features {
-            list_push(sums, 0.0);
-            list_push(sums2, 0.0)
-        }
-        list_push(counts, 0)
-    }
-    for i in 0 .. n {
-        val c = list_get(y, i)list_set(counts, c, list_get(counts, c) + 1);
-        for j in 0 .. n_features {
-            val x = list_get(X_flat, i * n_features + j)list_set(sums, c * n_features + j, list_get(sums, c * n_features + j) + x);
-            list_set(sums2, c * n_features + j, list_get(sums2, c * n_features + j) + x * x)
-        }
-        
-    }
-    val means : list<f64> = list()val vars : list<f64> = list()val priors : list<f64> = list()val nf = n to f64 for c in 0 .. n_classes {
-        val cf = list_get(counts, c) to f64 list_push(priors, cf / nf);
-        for j in 0 .. n_features {
-            val m = list_get(sums, c * n_features + j) / cf val v = list_get(sums2, c * n_features + j) / cf - m * m list_push(means, m);
-            list_push(vars, v + 0.000001)
-        }
-        
-    }
-    (means, vars, priors)
-}
-pub
-def gnb_predict(means : list<f64>, vars : list<f64>, priors : list<f64>, x_row : list<f64>, n_classes : i64) -> i64 {
-    val n_features = list_len(x_row)var best_class = 0 var best_log_prob = 0.0 - 999999.0 for c in 0 .. n_classes {
-        var log_p = log(list_get(priors, c))for j in 0 .. n_features {
-            val m = list_get(means, c * n_features + j)val v = list_get(vars, c * n_features + j)val x = list_get(x_row, j)val d = x - m log_p = log_p - 0.5 * log(2.0 * 3.14159265358979 * v) - (d * d) / (2.0 * v)
-        }
-        if log_p>best_log_prob {
-            best_log_prob = log_p; best_class = c
-        }
-        
-    }
-    best_class
-}
-pub
-def gini(labels : list<i64>, n_classes : i64) -> f64 {
-    val n = list_len(labels)if n == 0 {
-        1.0
-    }
-    else {
-        val counts : list<i64> = list()for c in 0 .. n_classes {
-            list_push(counts, 0)
-        }
-        for i in 0 .. n {
-            val c = list_get(labels, i)if c >= 0 {
-                if c<n_classes {
-                    list_set(counts, c, list_get(counts, c) + 1)
-                }
-                
-            }
-            
-        }
-        val nf = n to f64 var g = 1.0 for c in 0 .. n_classes {
-            val p = (list_get(counts, c) to f64) / nf g = g - p * p
-        }
-        g
-    }
-    
-}
-pub
-def majority_class(labels : list<i64>, n_classes : i64) -> i64 {
-    val counts : list<i64> = list()for c in 0 .. n_classes {
-        list_push(counts, 0)
-    }
-    val n = list_len(labels)for i in 0 .. n {
-        val c = list_get(labels, i)if c >= 0 {
-            if c<n_classes {
-                list_set(counts, c, list_get(counts, c) + 1)
-            }
-            
-        }
-        
-    }
-    var best = 0 var best_cnt = list_get(counts, 0)for c in 1 .. n_classes {
-        if list_get(counts, c)>best_cnt {
-            best_cnt = list_get(counts, c); best = c
-        }
-        
-    }
-    best
-}
-pub
-def sgd_update(params : list<f64>, grads : list<f64>, lr : f64) -> list<f64> {
-    val n = list_len(params)val out : list<f64> = list()for i in 0 .. n {
-        list_push(out, list_get(params, i) - lr * list_get(grads, i))
-    }
-    out
-}
-pub
-def sgd_momentum_update(params : list<f64>, grads : list<f64>, velocity : list<f64>, lr : f64, momentum : f64) -> (list<f64>, list<f64>) {
-    val n = list_len(params)val new_params : list<f64> = list()val new_vel : list<f64> = list()for i in 0 .. n {
-        val v = momentum * list_get(velocity, i) - lr * list_get(grads, i)list_push(new_vel, v);
-        list_push(new_params, list_get(params, i) + v)
-    }
-    (new_params, new_vel)
-}
-pub
-def adam_update(params : list<f64>, grads : list<f64>, m1 : list<f64>, m2 : list<f64>, lr : f64, beta1 : f64, beta2 : f64, eps : f64, t : i64) -> (list<f64>, list<f64>, list<f64>) {
-    val n = list_len(params)val new_params : list<f64> = list()val new_m1 : list<f64> = list()val new_m2 : list<f64> = list()val tf = t to f64 val bc1 = 1.0 - pow(beta1, tf)val bc2 = 1.0 - pow(beta2, tf)for i in 0 .. n {
-        val g = list_get(grads, i)val m = beta1 * list_get(m1, i) + (1.0 - beta1) * g val v = beta2 * list_get(m2, i) + (1.0 - beta2) * g * g val m_hat = m / bc1 val v_hat = v / bc2 list_push(new_m1, m);
-        list_push(new_m2, v);
-        list_push(new_params, list_get(params, i) - lr * m_hat / (sqrt(v_hat) + eps))
-    }
-    (new_params, new_m1, new_m2)
-}
-pub
-def zeros_like(v : list<f64>) -> list<f64> {
-    val n = list_len(v)val out : list<f64> = list()for i in 0 .. n {
-        list_push(out, 0.0)
-    }
-    out
-}
-pub
-def dense_forward(weights : list<f64>, biases : list<f64>, inp : list<f64>, n_in : i64, n_out : i64) -> list<f64> {
-    val out : list<f64> = list()for o in 0 .. n_out {
-        var s = list_get(biases, o)for i in 0 .. n_in {
-            s = s + list_get(weights, o * n_in + i) * list_get(inp, i)
-        }
-        list_push(out, s)
-    }
-    out
-}
-pub
-def apply_relu(v : list<f64>) -> list<f64> {
-    val n = list_len(v)val out : list<f64> = list()for i in 0 .. n {
-        list_push(out, relu(list_get(v, i)))
-    }
-    out
-}
-pub
-def apply_sigmoid(v : list<f64>) -> list<f64> {
-    val n = list_len(v)val out : list<f64> = list()for i in 0 .. n {
-        list_push(out, sigmoid(list_get(v, i)))
-    }
-    out
-}
-pub
-def apply_tanh(v : list<f64>) -> list<f64> {
-    val n = list_len(v)val out : list<f64> = list()for i in 0 .. n {
-        list_push(out, tanh_act(list_get(v, i)))
-    }
-    out
-}
-pub
-def xavier_init(n_in : i64, n_out : i64) -> list<f64> {
-    val limit = sqrt(6.0 / ((n_in + n_out) to f64))val size = n_in * n_out val w : list<f64> = list()for i in 0 .. size {
-        val r = random() * 2.0 * limit - limit list_push(w, r)
-    }
-    w
-}
-pub
-def zero_bias(n : i64) -> list<f64> {
-    val b : list<f64> = list()for i in 0 .. n {
-        list_push(b, 0.0)
-    }
-    b
-}
-pub
-def accuracy(pred : list<i64>, target : list<i64>) -> f64 {
-    val n = list_len(pred)if n == 0 {
-        0.0
-    }
-    else {
-        var correct = 0 for i in 0 .. n {
-            if list_get(pred, i) == list_get(target, i) {
-                correct = correct + 1
-            }
-            
-        }
-        (correct to f64) / (n to f64)
-    }
-    
-}
-pub
-def r2_score(pred : list<f64>, target : list<f64>) -> f64 {
-    val n = list_len(pred)val mean_t = vec_mean(target)var ss_res = 0.0 var ss_tot = 0.0 for i in 0 .. n {
-        val d = list_get(target, i) - list_get(pred, i)val dt = list_get(target, i) - mean_t ss_res = ss_res + d * d; ss_tot = ss_tot + dt * dt
-    }
-    if ss_tot<0.000001 {
-        1.0
-    }
-    else {
-        1.0 - ss_res / ss_tot
-    }
-    
-}
-pub
-def confusion_matrix_binary(pred : list<i64>, target : list<i64>) -> (i64, i64, i64, i64) {
-    val n = list_len(pred)var tp = 0 var fp = 0 var tn = 0 var fn_ = 0 for i in 0 .. n {
-        val p = list_get(pred, i)val t = list_get(target, i)if p == 1 {
-            if t == 1 {
-                tp = tp + 1
-            }
-            else {
-                fp = fp + 1
-            }
-            
-        }
-        else {
-            if t == 0 {
-                tn = tn + 1
-            }
-            else {
-                fn_ = fn_ + 1
-            }
-            
-        }
-        
-    }
-    (tp, fp, tn, fn_)
-}
-pub
-def precision(tp : i64, fp : i64) -> f64 {
-    val denom = tp + fp if denom == 0 {
-        0.0
-    }
-    else {
-        (tp to f64) / (denom to f64)
-    }
-    
-}
-pub
-def recall(tp : i64, fn_ : i64) -> f64 {
-    val denom = tp + fn_ if denom == 0 {
-        0.0
-    }
-    else {
-        (tp to f64) / (denom to f64)
-    }
-    
-}
-pub
-def f1_score(tp : i64, fp : i64, fn_ : i64) -> f64 {
-    val p = precision(tp, fp)val r = recall(tp, fn_)val denom = p + r if denom<0.000001 {
-        0.0
-    }
-    else {
-        2.0 * p * r / denom
-    }
-    
-}
-pub
-def min_max_normalize(v : list<f64>) -> list<f64> {
-    val n = list_len(v)if n == 0 {
-        v
-    }
-    else {
-        var mn = list_get(v, 0)var mx = list_get(v, 0)for i in 1 .. n {
-            val xi = list_get(v, i)if xi<mn {
-                mn = xi
-            }
-            ;
-            if xi>mx {
-                mx = xi
-            }
-            
-        }
-        val range = mx - mn val out : list<f64> = list()for i in 0 .. n {
-            val norm_val = if range<0.000001 {
-                0.0
-            }
-            else {
-                (list_get(v, i) - mn) / range
-            }
-            list_push(out, norm_val)
+            list_push(out, list_get(exps, i) / total);
         }
         out
     }
-    
 }
-pub
-def train_test_split(n : i64, test_ratio : f64) -> i64 {
-    val test_n = ((n to f64) * test_ratio) to i64 n - test_n
+
+pub def mse(pred : list<f64>, target : list<f64>) -> f64 {
+    val n = list_len(pred);
+    if n == 0 {
+        0.0
+    } else {
+        var s = 0.0;
+        for i in 0 .. n {
+            val d = list_get(pred, i) - list_get(target, i);
+            s = s + d * d;
+        }
+        s / (n to f64)
+    }
 }
-pub
-def shuffle_indices(n : i64) -> list<i64> {
-    val idx : list<i64> = list()for i in 0 .. n {
-        list_push(idx, i)
+
+pub def binary_cross_entropy(pred : list<f64>, target : list<f64>) -> f64 {
+    val n = list_len(pred);
+    if n == 0 {
+        0.0
+    } else {
+        var s = 0.0;
+        for i in 0 .. n {
+            val p0 = list_get(pred, i);
+            val p = if p0 < 0.000001 { 0.000001 } else if p0 > 0.999999 { 0.999999 } else { p0 };
+            val t = list_get(target, i);
+            s = s + (t * log(p) + (1.0 - t) * log(1.0 - p));
+        }
+        (0.0 - s) / (n to f64)
+    }
+}
+
+pub def cross_entropy(pred : list<f64>, target : list<f64>) -> f64 {
+    val n = list_len(pred);
+    if n == 0 {
+        0.0
+    } else {
+        var s = 0.0;
+        for i in 0 .. n {
+            val p0 = list_get(pred, i);
+            val p = if p0 < 0.000001 { 0.000001 } else if p0 > 1.0 { 1.0 } else { p0 };
+            s = s + list_get(target, i) * log(p);
+        }
+        0.0 - s
+    }
+}
+
+pub def mae(pred : list<f64>, target : list<f64>) -> f64 {
+    val n = list_len(pred);
+    if n == 0 {
+        0.0
+    } else {
+        var s = 0.0;
+        for i in 0 .. n {
+            s = s + abs(list_get(pred, i) - list_get(target, i));
+        }
+        s / (n to f64)
+    }
+}
+
+pub def sgd_update(params : list<f64>, grads : list<f64>, lr : f64) -> list<f64> {
+    val out : list<f64> = list();
+    for i in 0 .. list_len(params) {
+        list_push(out, list_get(params, i) - lr * list_get(grads, i));
+    }
+    out
+}
+
+pub def sgd_momentum_update(params : list<f64>, grads : list<f64>, velocity : list<f64>, lr : f64, momentum : f64) -> (list<f64>, list<f64>) {
+    val new_params : list<f64> = list();
+    val new_vel : list<f64> = list();
+    for i in 0 .. list_len(params) {
+        val v = momentum * list_get(velocity, i) - lr * list_get(grads, i);
+        list_push(new_vel, v);
+        list_push(new_params, list_get(params, i) + v);
+    }
+    (new_params, new_vel)
+}
+
+pub def adam_update(params : list<f64>, grads : list<f64>, m1 : list<f64>, m2 : list<f64>, lr : f64, beta1 : f64, beta2 : f64, eps : f64, t : i64) -> (list<f64>, list<f64>, list<f64>) {
+    val new_params : list<f64> = list();
+    val new_m1 : list<f64> = list();
+    val new_m2 : list<f64> = list();
+    val tf = t to f64;
+    val bc1 = 1.0 - pow(beta1, tf);
+    val bc2 = 1.0 - pow(beta2, tf);
+    for i in 0 .. list_len(params) {
+        val g = list_get(grads, i);
+        val m = beta1 * list_get(m1, i) + (1.0 - beta1) * g;
+        val v = beta2 * list_get(m2, i) + (1.0 - beta2) * g * g;
+        val m_hat = m / bc1;
+        val v_hat = v / bc2;
+        list_push(new_m1, m);
+        list_push(new_m2, v);
+        list_push(new_params, list_get(params, i) - lr * m_hat / (sqrt(v_hat) + eps));
+    }
+    (new_params, new_m1, new_m2)
+}
+
+pub def zeros_like(v : list<f64>) -> list<f64> {
+    val out : list<f64> = list();
+    for _ in 0 .. list_len(v) {
+        list_push(out, 0.0);
+    }
+    out
+}
+
+pub def dense_forward(weights : list<f64>, biases : list<f64>, inp : list<f64>, n_in : i64, n_out : i64) -> list<f64> {
+    val out : list<f64> = list();
+    for o in 0 .. n_out {
+        var s = list_get(biases, o);
+        for i in 0 .. n_in {
+            s = s + list_get(weights, o * n_in + i) * list_get(inp, i);
+        }
+        list_push(out, s);
+    }
+    out
+}
+
+pub def apply_relu(v : list<f64>) -> list<f64> {
+    val out : list<f64> = list();
+    for i in 0 .. list_len(v) {
+        list_push(out, relu(list_get(v, i)));
+    }
+    out
+}
+
+pub def apply_sigmoid(v : list<f64>) -> list<f64> {
+    val out : list<f64> = list();
+    for i in 0 .. list_len(v) {
+        list_push(out, sigmoid(list_get(v, i)));
+    }
+    out
+}
+
+pub def apply_tanh(v : list<f64>) -> list<f64> {
+    val out : list<f64> = list();
+    for i in 0 .. list_len(v) {
+        list_push(out, tanh_act(list_get(v, i)));
+    }
+    out
+}
+
+pub def xavier_init(n_in : i64, n_out : i64) -> list<f64> {
+    val limit = sqrt(6.0 / ((n_in + n_out) to f64));
+    val w : list<f64> = list();
+    for _ in 0 .. (n_in * n_out) {
+        val r = random() * 2.0 * limit - limit;
+        list_push(w, r);
+    }
+    w
+}
+
+pub def zero_bias(n : i64) -> list<f64> {
+    val b : list<f64> = list();
+    for _ in 0 .. n {
+        list_push(b, 0.0);
+    }
+    b
+}
+
+pub def accuracy(pred : list<i64>, target : list<i64>) -> f64 {
+    val n = list_len(pred);
+    if n == 0 {
+        0.0
+    } else {
+        var correct = 0;
+        for i in 0 .. n {
+            if list_get(pred, i) == list_get(target, i) {
+                correct = correct + 1;
+            }
+        }
+        (correct to f64) / (n to f64)
+    }
+}
+
+pub def r2_score(pred : list<f64>, target : list<f64>) -> f64 {
+    val n = list_len(pred);
+    if n == 0 {
+        0.0
+    } else {
+        val mean_t = vec_mean(target);
+        var ss_res = 0.0;
+        var ss_tot = 0.0;
+        for i in 0 .. n {
+            val d = list_get(target, i) - list_get(pred, i);
+            val dt = list_get(target, i) - mean_t;
+            ss_res = ss_res + d * d;
+            ss_tot = ss_tot + dt * dt;
+        }
+        if ss_tot < 0.000001 {
+            1.0
+        } else {
+            1.0 - ss_res / ss_tot
+        }
+    }
+}
+
+pub def confusion_matrix_binary(pred : list<i64>, target : list<i64>) -> (i64, i64, i64, i64) {
+    var tp = 0;
+    var fp = 0;
+    var tn = 0;
+    var fn_ = 0;
+    for i in 0 .. list_len(pred) {
+        val p = list_get(pred, i);
+        val t = list_get(target, i);
+        if p == 1 {
+            if t == 1 { tp = tp + 1; } else { fp = fp + 1; }
+        } else {
+            if t == 0 { tn = tn + 1; } else { fn_ = fn_ + 1; }
+        }
+    }
+    (tp, fp, tn, fn_)
+}
+
+pub def precision(tp : i64, fp : i64) -> f64 {
+    val denom = tp + fp;
+    if denom == 0 {
+        0.0
+    } else {
+        (tp to f64) / (denom to f64)
+    }
+}
+
+pub def recall(tp : i64, fn_ : i64) -> f64 {
+    val denom = tp + fn_;
+    if denom == 0 {
+        0.0
+    } else {
+        (tp to f64) / (denom to f64)
+    }
+}
+
+pub def f1_score(tp : i64, fp : i64, fn_ : i64) -> f64 {
+    val p = precision(tp, fp);
+    val r = recall(tp, fn_);
+    val denom = p + r;
+    if denom < 0.000001 {
+        0.0
+    } else {
+        2.0 * p * r / denom
+    }
+}
+
+pub def min_max_normalize(v : list<f64>) -> list<f64> {
+    val n = list_len(v);
+    if n == 0 {
+        v
+    } else {
+        var mn = list_get(v, 0);
+        var mx = list_get(v, 0);
+        for i in 1 .. n {
+            val xi = list_get(v, i);
+            if xi < mn { mn = xi; }
+            if xi > mx { mx = xi; }
+        }
+        val range = mx - mn;
+        val out : list<f64> = list();
+        for i in 0 .. n {
+            val norm_val = if range < 0.000001 { 0.0 } else { (list_get(v, i) - mn) / range };
+            list_push(out, norm_val);
+        }
+        out
+    }
+}
+
+pub def train_test_split(n : i64, test_ratio : f64) -> i64 {
+    n - (((n to f64) * test_ratio) to i64)
+}
+
+pub def shuffle_indices(n : i64) -> list<i64> {
+    val idx : list<i64> = list();
+    for i in 0 .. n {
+        list_push(idx, i);
     }
     for i in 0 .. n {
-        val j = ((random() * ((n - i) to f64)) to i64) + i val ji = if j >= n {
-            n - 1
-        }
-        else {
-            j
-        }
-        val tmp = list_get(idx, i)list_set(idx, i, list_get(idx, ji));
-        list_set(idx, ji, tmp)
+        val j = ((random() * ((n - i) to f64)) to i64) + i;
+        val ji = if j >= n { n - 1 } else { j };
+        val tmp = list_get(idx, i);
+        list_set(idx, i, list_get(idx, ji));
+        list_set(idx, ji, tmp);
     }
     idx
+}
+
+pub def linear_regression_train(X : list<f64>, y : list<f64>, lr : f64, epochs : i64) -> (f64, f64) {
+    val n = list_len(X);
+    var w = 0.0;
+    var b = 0.0;
+    for _ in 0 .. epochs {
+        var dw = 0.0;
+        var db = 0.0;
+        for i in 0 .. n {
+            val xi = list_get(X, i);
+            val yi = list_get(y, i);
+            val pred = w * xi + b;
+            val err = pred - yi;
+            dw = dw + err * xi;
+            db = db + err;
+        }
+        val nf = n to f64;
+        if nf > 0.0 {
+            w = w - lr * dw / nf;
+            b = b - lr * db / nf;
+        }
+    }
+    (w, b)
+}
+
+pub def linear_predict(w : f64, b : f64, x : f64) -> f64 {
+    w * x + b
+}
+
+pub def linreg_train(X_flat : list<f64>, y : list<f64>, n_features : i64, lr : f64, epochs : i64) -> list<f64> {
+    val n = list_len(y);
+    val weights : list<f64> = list();
+    for _ in 0 .. (n_features + 1) {
+        list_push(weights, 0.0);
+    }
+
+    for _ in 0 .. epochs {
+        val grads : list<f64> = list();
+        for _ in 0 .. (n_features + 1) {
+            list_push(grads, 0.0);
+        }
+
+        for i in 0 .. n {
+            var pred = list_get(weights, n_features);
+            for j in 0 .. n_features {
+                pred = pred + list_get(weights, j) * list_get(X_flat, i * n_features + j);
+            }
+            val err = pred - list_get(y, i);
+            for j in 0 .. n_features {
+                val g = list_get(grads, j) + err * list_get(X_flat, i * n_features + j);
+                list_set(grads, j, g);
+            }
+            val gb = list_get(grads, n_features) + err;
+            list_set(grads, n_features, gb);
+        }
+
+        val nf = n to f64;
+        for j in 0 .. (n_features + 1) {
+            val w = list_get(weights, j) - lr * list_get(grads, j) / nf;
+            list_set(weights, j, w);
+        }
+    }
+
+    weights
+}
+
+pub def linreg_predict(weights : list<f64>, x_row : list<f64>) -> f64 {
+    val n = list_len(x_row);
+    var s = list_get(weights, n);
+    for j in 0 .. n {
+        s = s + list_get(weights, j) * list_get(x_row, j);
+    }
+    s
+}
+
+pub def logreg_train(X_flat : list<f64>, y : list<f64>, n_features : i64, lr : f64, epochs : i64) -> list<f64> {
+    val n = list_len(y);
+    val weights : list<f64> = list();
+    for _ in 0 .. (n_features + 1) {
+        list_push(weights, 0.0);
+    }
+
+    for _ in 0 .. epochs {
+        val grads : list<f64> = list();
+        for _ in 0 .. (n_features + 1) {
+            list_push(grads, 0.0);
+        }
+
+        for i in 0 .. n {
+            var z = list_get(weights, n_features);
+            for j in 0 .. n_features {
+                z = z + list_get(weights, j) * list_get(X_flat, i * n_features + j);
+            }
+            val pred = sigmoid(z);
+            val err = pred - list_get(y, i);
+            for j in 0 .. n_features {
+                val g = list_get(grads, j) + err * list_get(X_flat, i * n_features + j);
+                list_set(grads, j, g);
+            }
+            val gb = list_get(grads, n_features) + err;
+            list_set(grads, n_features, gb);
+        }
+
+        val nf = n to f64;
+        for j in 0 .. (n_features + 1) {
+            val w = list_get(weights, j) - lr * list_get(grads, j) / nf;
+            list_set(weights, j, w);
+        }
+    }
+
+    weights
+}
+
+pub def logreg_predict_prob(weights : list<f64>, x_row : list<f64>) -> f64 {
+    val n = list_len(x_row);
+    var z = list_get(weights, n);
+    for j in 0 .. n {
+        z = z + list_get(weights, j) * list_get(x_row, j);
+    }
+    sigmoid(z)
+}
+
+pub def logreg_predict(weights : list<f64>, x_row : list<f64>, threshold : f64) -> i64 {
+    if logreg_predict_prob(weights, x_row) >= threshold { 1 } else { 0 }
+}
+
+pub def euclidean_dist(a : list<f64>, b : list<f64>) -> f64 {
+    val n = list_len(a);
+    var s = 0.0;
+    for i in 0 .. n {
+        val d = list_get(a, i) - list_get(b, i);
+        s = s + d * d;
+    }
+    sqrt(s)
+}
+
+pub def knn_predict(X_flat : list<f64>, y_train : list<i64>, n_features : i64, x_query : list<f64>, k : i64) -> i64 {
+    val n_train = list_len(y_train);
+    val dists : list<f64> = list();
+    for i in 0 .. n_train {
+        val row : list<f64> = list();
+        for j in 0 .. n_features {
+            list_push(row, list_get(X_flat, i * n_features + j));
+        }
+        list_push(dists, euclidean_dist(x_query, row));
+    }
+
+    val used : list<i64> = list();
+    for _ in 0 .. n_train {
+        list_push(used, 0);
+    }
+
+    var class0 = 0;
+    var class1 = 0;
+    for _ in 0 .. k {
+        var best_idx = 0;
+        var best_dist = 999999999.0;
+        for i in 0 .. n_train {
+            if list_get(used, i) == 0 {
+                val di = list_get(dists, i);
+                if di < best_dist {
+                    best_dist = di;
+                    best_idx = i;
+                }
+            }
+        }
+        list_set(used, best_idx, 1);
+        if list_get(y_train, best_idx) == 1 {
+            class1 = class1 + 1;
+        } else {
+            class0 = class0 + 1;
+        }
+    }
+
+    if class1 >= class0 { 1 } else { 0 }
 }

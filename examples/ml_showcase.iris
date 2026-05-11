@@ -1,6 +1,7 @@
 // examples/ml_showcase.iris
-// Concise ML showcase using vector operations and activations.
-// (Uses self-contained helpers instead of bring std.ml to avoid unresolved externs)
+// Concise ML showcase using std.ml helpers.
+
+bring std.ml
 
 def print_list(v : list<f64>) -> () {
     var s : str = "[";
@@ -11,56 +12,12 @@ def print_list(v : list<f64>) -> () {
     print(concat(s, "]"));
 }
 
-def vec_add(a : list<f64>, b : list<f64>) -> list<f64> {
-    var out : list<f64> = list();
-    for i in 0 .. list_len(a) {
-        list_push(out, list_get(a, i) + list_get(b, i));
-    }
-    out
-}
-
-def vec_scale(v : list<f64>, s : f64) -> list<f64> {
-    var out : list<f64> = list();
-    for i in 0 .. list_len(v) {
-        list_push(out, list_get(v, i) * s);
-    }
-    out
-}
-
-def sigmoid(x : f64) -> f64 {
-    1.0 / (1.0 + exp(0.0 - x))
-}
-
-def softmax(v : list<f64>) -> list<f64> {
-    val n = list_len(v);
-    var mx = list_get(v, 0);
-    for i in 1 .. n {
-        val xi = list_get(v, i);
-        if xi > mx {
-            mx = xi;
-        }
-    }
-    val exps : list<f64> = list();
-    var total = 0.0;
-    for i in 0 .. n {
-        val e = exp(list_get(v, i) - mx);
-        list_push(exps, e);
-        total = total + e;
-    }
-    var out : list<f64> = list();
-    for i in 0 .. n {
-        list_push(out, list_get(exps, i) / total);
-    }
-    out
-}
-
 def main() -> i64 {
     print("=== IRIS ML Showcase ===");
 
     val a : list<f64> = list();
     list_push(a, 1.0);
     list_push(a, 2.0);
-
     val b : list<f64> = list();
     list_push(b, 0.5);
     list_push(b, 0.5);

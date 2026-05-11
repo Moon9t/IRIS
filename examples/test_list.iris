@@ -1,0 +1,9 @@
+def main() -> i64 {
+    val a : list<f64> = [1.0, 2.0];
+    print("created list");
+    val len = list_len(a);
+    print(concat("length: ", to_str(len)));
+    val first = list_get(a, 0);
+    print(concat("first: ", to_str(first)));
+    0
+}
