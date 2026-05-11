@@ -76,6 +76,7 @@ dependencies = [
 name = "iris"
 version = "0.3.0"
 dependencies = [
+ "cc",
  "rusqlite",
  "serde_json",
  "thiserror",

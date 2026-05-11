@@ -43,6 +43,7 @@ pub mod pkg;
 pub mod profiler;
 pub mod proto;
 pub mod repl;
+pub mod runtime_bindings;
 pub mod security;
 pub mod stdlib;
 pub mod test_runner;

@@ -28,3 +28,6 @@ panic = "abort"
 [profile.dev]
 opt-level = 0
 debug = true
+
+[build-dependencies]
+cc = "1.0"

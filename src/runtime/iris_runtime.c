@@ -3155,9 +3155,15 @@ int64_t iris_str_count(const char* str, const char* sub) {
 
 double iris_math_pi(void) { return 3.14159265358979323846; }
 double iris_math_e(void)  { return 2.71828182845904523536; }
-double iris_math_inf(void) { return 1.0 / 0.0; /* +Infinity */ }
+double iris_math_inf(void) {
+    volatile double zero = 0.0;
+    return 1.0 / zero; /* +Infinity */
+}
 int    iris_is_nan(double x) { return x != x; }
-int    iris_is_inf(double x) { return (x == (1.0/0.0)) || (x == -(1.0/0.0)); }
+int    iris_is_inf(double x) {
+    volatile double zero = 0.0;
+    return (x == (1.0 / zero)) || (x == -(1.0 / zero));
+}
 
 /* -- OS / System -- */
 

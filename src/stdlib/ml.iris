@@ -1,3 +1,53 @@
+bring std.tensorx
+
+extern def iris_ml_onnx_load(model_path: str) -> i64
+extern def iris_ml_onnx_free(session: i64) -> i64
+extern def iris_ml_onnx_run(session: i64, input: Tensor) -> Tensor
+
+extern def iris_ml_pytorch_load(model_path: str) -> i64
+extern def iris_ml_pytorch_free(handle: i64) -> i64
+extern def iris_ml_pytorch_run(handle: i64, input: Tensor) -> Tensor
+
+extern def iris_ml_tf_load(model_path: str) -> i64
+extern def iris_ml_tf_free(handle: i64) -> i64
+extern def iris_ml_tf_run(handle: i64, input: Tensor) -> Tensor
+
+pub def onnx_load(model_path: str) -> i64 {
+    iris_ml_onnx_load(model_path)
+}
+
+pub def onnx_free(session: i64) -> i64 {
+    iris_ml_onnx_free(session)
+}
+
+pub def onnx_run(session: i64, input: Tensor) -> Tensor {
+    iris_ml_onnx_run(session, input)
+}
+
+pub def pytorch_load(model_path: str) -> i64 {
+    iris_ml_pytorch_load(model_path)
+}
+
+pub def pytorch_free(handle: i64) -> i64 {
+    iris_ml_pytorch_free(handle)
+}
+
+pub def pytorch_run(handle: i64, input: Tensor) -> Tensor {
+    iris_ml_pytorch_run(handle, input)
+}
+
+pub def tf_load(model_path: str) -> i64 {
+    iris_ml_tf_load(model_path)
+}
+
+pub def tf_free(handle: i64) -> i64 {
+    iris_ml_tf_free(handle)
+}
+
+pub def tf_run(handle: i64, input: Tensor) -> Tensor {
+    iris_ml_tf_run(handle, input)
+}
+
 pub
 def dot(a : list<f64>, b : list<f64>) -> f64 {
     val n = list_len(a)var s = 0.0 for i in 0 .. n {

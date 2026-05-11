@@ -3,8 +3,13 @@
 // tracked by Cargo's dependency fingerprinting).
 
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(onnx_runtime_enabled)");
+    println!("cargo:rustc-check-cfg=cfg(libtorch_enabled)");
+    println!("cargo:rustc-check-cfg=cfg(tensorflow_enabled)");
     println!("cargo:rerun-if-changed=src/runtime/iris_runtime.c");
     println!("cargo:rerun-if-changed=src/runtime/iris_runtime.h");
+    println!("cargo:rerun-if-changed=src/runtime/onnx_shim.c");
+    println!("cargo:rerun-if-changed=src/runtime/onnx_shim.h");
     // Re-run when HEAD changes (new commit / checkout).
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs");
@@ -49,6 +54,59 @@ fn main() {
     if let Ok(opt) = std::env::var("OPT_LEVEL") {
         println!("cargo:rustc-env=IRIS_OPT_LEVEL={}", opt);
     }
+
+    // Attempt to compile the C runtime and optional shims.
+    compile_c_runtime();
+}
+
+// Compile C runtime + optional shims. Detect backend dirs via env vars:
+// ONNXRUNTIME_DIR, LIBTORCH_DIR, TENSORFLOW_DIR. When present, enable
+// corresponding -D flags and add link search paths + libs.
+fn compile_c_runtime() {
+    use std::env;
+    let mut build = cc::Build::new();
+    build.file("src/runtime/iris_runtime.c");
+    build.file("src/runtime/onnx_shim.c");
+    build.file("src/runtime/tf_shim.c");
+    build.include("src/runtime");
+
+    // ONNX Runtime
+    if let Ok(onnx_dir) = env::var("ONNXRUNTIME_DIR") {
+        println!("cargo:rustc-cfg=onnx_runtime_enabled");
+        build.define("ONNX_RUNTIME_ENABLED", None);
+        println!("cargo:rustc-link-search=native={}", format!("{}/lib", onnx_dir));
+        println!("cargo:rustc-link-lib=onnxruntime");
+    }
+
+    // LibTorch (optional C++ shim later)
+    if let Ok(lt_dir) = env::var("LIBTORCH_DIR") {
+        println!("cargo:rustc-cfg=libtorch_enabled");
+        build.define("LIBTORCH_ENABLED", None);
+        build.file("src/runtime/pytorch_shim.cpp");
+        println!("cargo:rustc-link-search=native={}", format!("{}/lib", lt_dir));
+        // Ensure C++ compilation and link flags
+        build.cpp(true);
+        if let Ok(cxxflags) = env::var("LIBTORCH_CXXFLAGS") {
+            for flag in cxxflags.split_whitespace() { build.flag(flag); }
+        }
+    }
+
+    // TensorFlow
+    if let Ok(tf_dir) = env::var("TENSORFLOW_DIR") {
+        println!("cargo:rustc-cfg=tensorflow_enabled");
+        build.define("TENSORFLOW_ENABLED", None);
+        println!("cargo:rustc-link-search=native={}", format!("{}/lib", tf_dir));
+        println!("cargo:rustc-link-lib=tensorflow");
+    }
+    build.flag_if_supported("-std=c11");
+    build.flag_if_supported("-fPIC");
+    build.compile("iris_runtime_c");
+}
+
+// Run compile step after the metadata printed above.
+#[allow(dead_code)]
+fn _maybe_compile() {
+    compile_c_runtime();
 }
 
 /// Minimal date helper that doesn't depend on the `chrono` crate.

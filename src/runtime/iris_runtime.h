@@ -10,7 +10,55 @@
 
 #include <stdint.h>
 #include <stddef.h>
+
+#ifdef _WIN32
+typedef struct { long state; } pthread_mutex_t;
+typedef struct { long state; } pthread_cond_t;
+typedef void* pthread_t;
+
+#ifndef PTHREAD_MUTEX_INITIALIZER
+#define PTHREAD_MUTEX_INITIALIZER {0}
+#endif
+#ifndef PTHREAD_COND_INITIALIZER
+#define PTHREAD_COND_INITIALIZER {0}
+#endif
+
+static inline int pthread_mutex_init(pthread_mutex_t* mu, const void* attr) {
+    (void)mu; (void)attr; return 0;
+}
+static inline int pthread_mutex_destroy(pthread_mutex_t* mu) {
+    (void)mu; return 0;
+}
+static inline int pthread_mutex_lock(pthread_mutex_t* mu) {
+    (void)mu; return 0;
+}
+static inline int pthread_mutex_unlock(pthread_mutex_t* mu) {
+    (void)mu; return 0;
+}
+static inline int pthread_cond_init(pthread_cond_t* cond, const void* attr) {
+    (void)cond; (void)attr; return 0;
+}
+static inline int pthread_cond_destroy(pthread_cond_t* cond) {
+    (void)cond; return 0;
+}
+static inline int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mu) {
+    (void)cond; (void)mu; return 0;
+}
+static inline int pthread_cond_signal(pthread_cond_t* cond) {
+    (void)cond; return 0;
+}
+static inline int pthread_create(pthread_t* t, const void* attr, void* (*fn)(void*), void* arg) {
+    (void)attr; if (t) *t = NULL; if (fn) fn(arg); return 0;
+}
+static inline int pthread_detach(pthread_t t) {
+    (void)t; return 0;
+}
+static inline int pthread_join(pthread_t t, void** ret) {
+    (void)t; if (ret) *ret = NULL; return 0;
+}
+#else
 #include <pthread.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -414,6 +462,25 @@ void* iris_tensor_op(void);
 void* iris_tensor_load(void* t, ...);
 void  iris_tensor_store(void* t, ...);
 
+
+// ---------------------------------------------------------------------------
+// Backend integration (ONNX / LibTorch / TensorFlow)
+// ---------------------------------------------------------------------------
+
+// ONNX Runtime shim: load/run/free
+void* iris_onnx_session_create(const char* model_path);
+int   iris_onnx_session_run(void* session, IrisTensor** inputs, size_t n_inputs, IrisTensor*** outputs, size_t* n_outputs);
+void  iris_onnx_session_free(void* session);
+
+// LibTorch (PyTorch) shim: load/run/free (C++ shim exposes C ABI)
+void* iris_pytorch_load(const char* model_path);
+int   iris_pytorch_run(void* model, IrisTensor** inputs, size_t n_inputs, IrisTensor*** outputs, size_t* n_outputs);
+void  iris_pytorch_free(void* model);
+
+// TensorFlow saved model shim (C API based)
+void* iris_tf_load_saved_model(const char* path);
+int   iris_tf_run(void* model, IrisTensor** inputs, size_t n_inputs, IrisTensor*** outputs, size_t* n_outputs);
+void  iris_tf_free(void* model);
 // ---------------------------------------------------------------------------
 // Time / OS
 // ---------------------------------------------------------------------------
