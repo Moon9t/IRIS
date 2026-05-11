@@ -8,6 +8,11 @@
 #ifdef ONNX_RUNTIME_ENABLED
 #include <onnxruntime_c_api.h>
 
+// Compatibility: some ORT distributions may not define ORT_INVALID_DEVICE_ID
+#ifndef ORT_INVALID_DEVICE_ID
+#define ORT_INVALID_DEVICE_ID -1
+#endif
+
 typedef struct {
     OrtEnv* env;
     OrtSession* session;

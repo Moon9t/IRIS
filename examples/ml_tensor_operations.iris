@@ -1,0 +1,96 @@
+// examples/ml_tensor_operations.iris
+// Vector operations: dot product, addition, scaling, softmax.
+// (Uses self-contained helpers instead of bring std.ml to avoid unresolved externs)
+
+def print_list(v : list<f64>) -> () {
+    var s : str = "[";
+    for i in 0 .. list_len(v) {
+        if i > 0 { s = concat(s, ", "); }
+        s = concat(s, to_str(list_get(v, i)));
+    }
+    print(concat(s, "]"));
+}
+
+def dot_product(a : list<f64>, b : list<f64>) -> f64 {
+    var s = 0.0;
+    for i in 0 .. list_len(a) {
+        s = s + list_get(a, i) * list_get(b, i);
+    }
+    s
+}
+
+def vec_add(a : list<f64>, b : list<f64>) -> list<f64> {
+    var out : list<f64> = list();
+    for i in 0 .. list_len(a) {
+        list_push(out, list_get(a, i) + list_get(b, i));
+    }
+    out
+}
+
+def vec_scale(v : list<f64>, s : f64) -> list<f64> {
+    var out : list<f64> = list();
+    for i in 0 .. list_len(v) {
+        list_push(out, list_get(v, i) * s);
+    }
+    out
+}
+
+def softmax(v : list<f64>) -> list<f64> {
+    val n = list_len(v);
+    var mx = list_get(v, 0);
+    for i in 1 .. n {
+        val xi = list_get(v, i);
+        if xi > mx {
+            mx = xi;
+        }
+    }
+    val exps : list<f64> = list();
+    var total = 0.0;
+    for i in 0 .. n {
+        val e = exp(list_get(v, i) - mx);
+        list_push(exps, e);
+        total = total + e;
+    }
+    var out : list<f64> = list();
+    for i in 0 .. n {
+        list_push(out, list_get(exps, i) / total);
+    }
+    out
+}
+
+def main() -> i64 {
+    val v1 : list<f64> = list();
+    list_push(v1, 1.0);
+    list_push(v1, 2.0);
+    list_push(v1, 3.0);
+
+    val v2 : list<f64> = list();
+    list_push(v2, 0.5);
+    list_push(v2, 1.0);
+    list_push(v2, -1.0);
+
+    print("=== ML Tensor Operations ===");
+    print("v1 = "); print_list(v1);
+    print("v2 = "); print_list(v2);
+
+    val d = dot_product(v1, v2);
+    print(concat("dot(v1, v2) = ", to_str(d)));
+
+    val added = vec_add(v1, v2);
+    print("v1 + v2 = "); print_list(added);
+
+    val scaled = vec_scale(v1, 2.0);
+    print("2.0 * v1 = "); print_list(scaled);
+
+    val logits : list<f64> = list();
+    list_push(logits, 2.0);
+    list_push(logits, 0.5);
+    list_push(logits, -1.0);
+
+    print("logits = "); print_list(logits);
+
+    val probs = softmax(logits);
+    print("softmax(logits) = "); print_list(probs);
+
+    0
+}

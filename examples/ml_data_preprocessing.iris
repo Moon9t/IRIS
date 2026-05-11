@@ -1,0 +1,136 @@
+// examples/ml_data_preprocessing.iris
+// ML data preprocessing patterns: normalization, batching, encoding.
+// (Uses self-contained helpers instead of bring std.ml to avoid unresolved externs)
+
+def print_list(v : list<f64>) -> () {
+    var s : str = "[";
+    for i in 0 .. list_len(v) {
+        if i > 0 { s = concat(s, ", "); }
+        s = concat(s, to_str(list_get(v, i)));
+    }
+    print(concat(s, "]"));
+}
+
+def print_list_of_lists(vv : list<list<f64>>) -> () {
+    var s : str = "[";
+    for i in 0 .. list_len(vv) {
+        if i > 0 { s = concat(s, ", "); }
+        s = concat(s, "[");
+        var inner : list<f64> = list_get(vv, i);
+        for j in 0 .. list_len(inner) {
+            if j > 0 { s = concat(s, ", "); }
+            s = concat(s, to_str(list_get(inner, j)));
+        }
+        s = concat(s, "]");
+    }
+    print(concat(s, "]"));
+}
+
+def vec_mean(v : list<f64>) -> f64 {
+    val n = list_len(v);
+    if n == 0 {
+        0.0
+    } else {
+        var s = 0.0;
+        for i in 0 .. n {
+            s = s + list_get(v, i);
+        }
+        s / (n to f64)
+    }
+}
+
+def vec_var(v : list<f64>) -> f64 {
+    val m = vec_mean(v);
+    val n = list_len(v);
+    if n == 0 {
+        0.0
+    } else {
+        var s = 0.0;
+        for i in 0 .. n {
+            val d = list_get(v, i) - m;
+            s = s + d * d;
+        }
+        s / (n to f64)
+    }
+}
+
+def vec_std(v : list<f64>) -> f64 {
+    sqrt(vec_var(v))
+}
+
+def standardize(v : list<f64>) -> list<f64> {
+    val m = vec_mean(v);
+    val s = vec_std(v);
+    val n = list_len(v);
+    var out : list<f64> = list();
+    for i in 0 .. n {
+        val x = if s > 0.0001 {
+            (list_get(v, i) - m) / s
+        } else {
+            0.0
+        };
+        list_push(out, x);
+    }
+    out
+}
+
+def main() -> i64 {
+    print("=== ML Data Preprocessing ===");
+
+    val raw_data : list<f64> = list();
+    list_push(raw_data, 100.0);
+    list_push(raw_data, 200.0);
+    list_push(raw_data, 150.0);
+    list_push(raw_data, 300.0);
+    list_push(raw_data, 250.0);
+    list_push(raw_data, 175.0);
+
+    print("raw_data = "); print_list(raw_data);
+
+    val m = vec_mean(raw_data);
+    val s = vec_std(raw_data);
+    print(concat("mean = ", to_str(m)));
+    print(concat("std = ", to_str(s)));
+
+    var minv = list_get(raw_data, 0);
+    var maxv = list_get(raw_data, 0);
+    for i in 1 .. list_len(raw_data) {
+        val v = list_get(raw_data, i);
+        if v < minv { minv = v; }
+        if v > maxv { maxv = v; }
+    }
+
+    var normalized : list<f64> = list();
+    val range = maxv - minv;
+    for i in 0 .. list_len(raw_data) {
+        if range == 0.0 {
+            list_push(normalized, 0.0);
+        } else {
+            val norm_val = (list_get(raw_data, i) - minv) / range;
+            list_push(normalized, norm_val);
+        }
+    }
+    print("min-max normalized = "); print_list(normalized);
+
+    val zscore = standardize(raw_data);
+    print("z-score normalized = "); print_list(zscore);
+
+    var batches : list<list<f64>> = list();
+    var i = 0;
+    val bs = 2;
+    while i < list_len(zscore) {
+        var batch : list<f64> = list();
+        var j = 0;
+        while j < bs && i < list_len(zscore) {
+            list_push(batch, list_get(zscore, i));
+            i = i + 1;
+            j = j + 1;
+        }
+        list_push(batches, batch);
+    }
+    print("batches = "); print_list_of_lists(batches);
+
+    print("Preprocessing complete!");
+
+    0
+}

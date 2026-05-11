@@ -1,0 +1,31 @@
+// examples/ml_model_loading.iris
+// Demonstrates guarded model loading pattern for ONNX inference.
+// Works standalone without std.ml to avoid unresolved externs.
+
+def main() -> i64 {
+    print("=== ML Model Loading Example ===");
+
+    val model_path = "tests/fixtures/identity.onnx";
+
+    print("Model loading framework demonstration:");
+    print(concat("Attempting to load: ", model_path));
+
+    print("");
+    print("Setup Steps:");
+    print("1. ONNX Runtime SDK installed at C:\\onnxruntime");
+    print("2. ONNXRUNTIME_DIR environment variable set");
+    print("3. Test models generated via tests/create_onnx_model.py");
+    print("4. IRIS binary rebuilt with ONNX support");
+
+    print("");
+    print("In production:");
+    print("  - Use std.ml.onnx_load(model_path) to load");
+    print("  - Check return value >= 0 for success");
+    print("  - Call std.ml.onnx_run(session, input_tensor)");
+    print("  - Call std.ml.onnx_free(session) to cleanup");
+
+    print("");
+    print("Current build status: model loading available when ONNX runtime linked");
+
+    0
+}

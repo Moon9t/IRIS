@@ -74,6 +74,7 @@ fn compile_c_runtime() {
     if let Ok(onnx_dir) = env::var("ONNXRUNTIME_DIR") {
         println!("cargo:rustc-cfg=onnx_runtime_enabled");
         build.define("ONNX_RUNTIME_ENABLED", None);
+        build.include(format!("{}/include", onnx_dir));
         println!("cargo:rustc-link-search=native={}", format!("{}/lib", onnx_dir));
         println!("cargo:rustc-link-lib=onnxruntime");
     }
@@ -82,6 +83,7 @@ fn compile_c_runtime() {
     if let Ok(lt_dir) = env::var("LIBTORCH_DIR") {
         println!("cargo:rustc-cfg=libtorch_enabled");
         build.define("LIBTORCH_ENABLED", None);
+        build.include(format!("{}/include", lt_dir));
         build.file("src/runtime/pytorch_shim.cpp");
         println!("cargo:rustc-link-search=native={}", format!("{}/lib", lt_dir));
         // Ensure C++ compilation and link flags
@@ -95,6 +97,7 @@ fn compile_c_runtime() {
     if let Ok(tf_dir) = env::var("TENSORFLOW_DIR") {
         println!("cargo:rustc-cfg=tensorflow_enabled");
         build.define("TENSORFLOW_ENABLED", None);
+        build.include(format!("{}/include", tf_dir));
         println!("cargo:rustc-link-search=native={}", format!("{}/lib", tf_dir));
         println!("cargo:rustc-link-lib=tensorflow");
     }
