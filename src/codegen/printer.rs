@@ -833,8 +833,14 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
         IrInstr::DbExec { result, db, sql } => {
             write!(out, "{} = db_exec {}, {}", result, db, sql)?;
         }
+        IrInstr::DbExecParams { result, db, sql, params } => {
+            write!(out, "{} = db_exec_params {}, {}, {}", result, db, sql, params)?;
+        }
         IrInstr::DbQuery { result, db, sql } => {
             write!(out, "{} = db_query {}, {}", result, db, sql)?;
+        }
+        IrInstr::DbQueryParams { result, db, sql, params } => {
+            write!(out, "{} = db_query_params {}, {}, {}", result, db, sql, params)?;
         }
         IrInstr::DbClose { result, db } => {
             write!(out, "{} = db_close {}", result, db)?;

@@ -790,11 +790,25 @@ pub enum IrInstr {
         db: ValueId,
         sql: ValueId,
     },
+    /// Execute SQL with bound parameters. Returns result rows affected (i64).
+    DbExecParams {
+        result: ValueId,
+        db: ValueId,
+        sql: ValueId,
+        params: ValueId,
+    },
     /// Query SQL (SELECT). Returns list<list<str>>.
     DbQuery {
         result: ValueId,
         db: ValueId,
         sql: ValueId,
+    },
+    /// Query SQL with bound parameters. Returns list<list<str>>.
+    DbQueryParams {
+        result: ValueId,
+        db: ValueId,
+        sql: ValueId,
+        params: ValueId,
     },
     /// Close a database handle.
     DbClose {
@@ -1035,7 +1049,9 @@ impl IrInstr {
             // Database
             IrInstr::DbOpen { result, .. } => Some(*result),
             IrInstr::DbExec { result, .. } => Some(*result),
+            IrInstr::DbExecParams { result, .. } => Some(*result),
             IrInstr::DbQuery { result, .. } => Some(*result),
+            IrInstr::DbQueryParams { result, .. } => Some(*result),
             IrInstr::DbClose { result, .. } => Some(*result),
             // Phase 58: Extended collections
             IrInstr::ListContains { result, .. } => Some(*result),
@@ -1233,7 +1249,9 @@ impl IrInstr {
             // Database
             IrInstr::DbOpen { path, .. } => vec![*path],
             IrInstr::DbExec { db, sql, .. } => vec![*db, *sql],
+            IrInstr::DbExecParams { db, sql, params, .. } => vec![*db, *sql, *params],
             IrInstr::DbQuery { db, sql, .. } => vec![*db, *sql],
+            IrInstr::DbQueryParams { db, sql, params, .. } => vec![*db, *sql, *params],
             IrInstr::DbClose { db, .. } => vec![*db],
             // Phase 58: Extended collections
             IrInstr::ListContains { list, value, .. } => vec![*list, *value],

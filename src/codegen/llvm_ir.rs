@@ -4535,6 +4535,16 @@ fn emit_instr_ir(
                 val(*sql)
             )?;
         }
+        IrInstr::DbExecParams { result, db, sql, params } => {
+            writeln!(
+                out,
+                "  %v{} = call i64 @iris_db_exec_params(i64 {}, ptr {}, ptr {})",
+                result.0,
+                val(*db),
+                val(*sql),
+                val(*params)
+            )?;
+        }
         IrInstr::DbQuery { result, db, sql } => {
             writeln!(
                 out,
@@ -4542,6 +4552,16 @@ fn emit_instr_ir(
                 result.0,
                 val(*db),
                 val(*sql)
+            )?;
+        }
+        IrInstr::DbQueryParams { result, db, sql, params } => {
+            writeln!(
+                out,
+                "  %v{} = call ptr @iris_db_query_params(i64 {}, ptr {}, ptr {})",
+                result.0,
+                val(*db),
+                val(*sql),
+                val(*params)
             )?;
         }
         IrInstr::DbClose { result, db } => {
@@ -5166,7 +5186,9 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         // Database
         "declare i64 @iris_db_open(ptr)",
         "declare i64 @iris_db_exec(i64, ptr)",
+        "declare i64 @iris_db_exec_params(i64, ptr, ptr)",
         "declare ptr @iris_db_query(i64, ptr)",
+        "declare ptr @iris_db_query_params(i64, ptr, ptr)",
         "declare i64 @iris_db_close(i64)",
         // Process / environment (Phase 59)
         "declare void @exit(i32)",

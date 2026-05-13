@@ -1,0 +1,43 @@
+// examples/sql_params.iris
+// Focused runtime check for parameterized SQLite queries.
+
+def print_rows(rows : list<list<str>>) -> () {
+    for i in 0 .. list_len(rows) {
+        val row = list_get(rows, i);
+        print(join(row, ", "));
+    }
+}
+
+def main() -> i64 {
+    print("=== SQL Parameterized Query Example ===");
+
+    val db = db_open("iris_sql_params.db");
+    if db == 0 {
+        print("failed to open database");
+        1
+    } else {
+        db_exec(db, "DROP TABLE IF EXISTS people");
+        db_exec(db, "CREATE TABLE people (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, age INTEGER)");
+
+        val insert_alice = list();
+        list_push(insert_alice, "Alice");
+        list_push(insert_alice, "30");
+        db_exec_params(db, "INSERT INTO people (name, age) VALUES (?, ?)", insert_alice);
+
+        val insert_bob = list();
+        list_push(insert_bob, "Bob");
+        list_push(insert_bob, "25");
+        db_exec_params(db, "INSERT INTO people (name, age) VALUES (?, ?)", insert_bob);
+
+        val lookup = list();
+        list_push(lookup, "Bob");
+        val rows = db_query_params(db, "SELECT name, age FROM people WHERE name = ?", lookup);
+
+        print("Query result:");
+        print_rows(rows);
+        print(concat("matched rows = ", to_str(list_len(rows))));
+
+        db_close(db);
+        0
+    }
+}

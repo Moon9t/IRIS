@@ -95,3 +95,11 @@ fn database_example_runs() {
         out
     );
 }
+
+#[test]
+fn sql_params_example_runs() {
+    let out = compile_file(&example_path("sql_params.iris"), EmitKind::Eval).unwrap();
+    assert!(out.contains("Query result:"), "output was:\n{}", out);
+    assert!(out.contains("Bob, 25"), "output was:\n{}", out);
+    assert!(out.contains("matched rows = 1"), "output was:\n{}", out);
+}

@@ -3236,7 +3236,32 @@ def main() -> i64 {
 
 `db_query` returns a `list<list<str>>`. Each inner list is one row. Column values are always strings — use `to_i64()` or `to_f64()` if you need numeric types.
 
-### 16.5 Updating and Deleting
+### 16.5 Parameterized Queries
+
+Use `db_exec_params` and `db_query_params` when values should be bound separately from the SQL text.
+
+```iris
+def main() -> i64 {
+    val db = db_open("app.db");
+    db_exec(db, "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, age INTEGER)");
+
+    val insert_params = list();
+    list_push(insert_params, "Alice");
+    list_push(insert_params, "30");
+    db_exec_params(db, "INSERT INTO users (name, age) VALUES (?, ?)", insert_params);
+
+    val lookup_params = list();
+    list_push(lookup_params, "Alice");
+    val rows = db_query_params(db, "SELECT name, age FROM users WHERE name = ?", lookup_params);
+
+    print(concat("matched rows = ", to_str(list_len(rows))));
+    db_close(db)
+}
+```
+
+The `std.sql` module also exposes `sql_exec_params`, `sql_query_params`, and `sql_query_xy_params` as thin wrappers over the same builtins.
+
+### 16.6 Updating and Deleting
 
 ```iris
 def main() -> i64 {
@@ -3251,7 +3276,7 @@ def main() -> i64 {
 
 UPDATE and DELETE are executed with `db_exec` just like INSERT and CREATE.
 
-### 16.6 Error Handling
+### 16.7 Error Handling
 
 Always check the return value of `db_exec`:
 
@@ -3268,7 +3293,7 @@ def main() -> i64 {
 
 If `db_open` fails (e.g. invalid path), it returns 0. Always verify the handle before using it.
 
-### 16.7 A Complete Example: Task Manager
+### 16.8 A Complete Example: Task Manager
 
 Here is a small task-management database that creates a table, inserts tasks, marks one complete, and queries the results:
 

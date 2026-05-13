@@ -14,6 +14,7 @@ use crate::ir::module::IrModule;
 use crate::ir::types::{DType, IrType};
 use crate::ir::value::ValueId;
 use crate::security;
+use rusqlite::{params_from_iter, types::Value as SqlValue};
 
 /// A runtime value produced or consumed by the interpreter.
 #[derive(Debug, Clone)]
@@ -329,6 +330,27 @@ impl<'m> Interpreter<'m> {
         } else {
             e
         }
+    }
+
+    fn sqlite_param_values(&self, params: &IrValue) -> Vec<SqlValue> {
+        let list = if let IrValue::List(rc) = params {
+            rc.lock().ok().map(|guard| guard.clone())
+        } else {
+            None
+        };
+
+        list.unwrap_or_default()
+            .into_iter()
+            .map(|value| match value {
+                IrValue::I64(n) => SqlValue::Integer(n),
+                IrValue::I32(n) => SqlValue::Integer(n as i64),
+                IrValue::F64(n) => SqlValue::Real(n),
+                IrValue::F32(n) => SqlValue::Real(n as f64),
+                IrValue::Bool(b) => SqlValue::Integer(if b { 1 } else { 0 }),
+                IrValue::Str(s) => SqlValue::Text(s),
+                other => SqlValue::Text(format!("{}", other)),
+            })
+            .collect()
     }
 
     fn run(
@@ -2500,6 +2522,29 @@ impl<'m> Interpreter<'m> {
                                 self.values.insert(*result, IrValue::I64(-1));
                             }
                         }
+                        IrInstr::DbExecParams { result, db, sql, params } => {
+                            let db_handle = if let IrValue::I64(h) = self.get(*db)? {
+                                h
+                            } else {
+                                0
+                            };
+                            let sql_str = if let IrValue::Str(s) = self.get(*sql)? {
+                                s
+                            } else {
+                                String::new()
+                            };
+                            let params_val = self.get(*params)?;
+                            if db_handle != 0 {
+                                let conn = unsafe { &*(db_handle as *const rusqlite::Connection) };
+                                let bind_values = self.sqlite_param_values(&params_val);
+                                match conn.execute(&sql_str, params_from_iter(bind_values)) {
+                                    Ok(_) => self.values.insert(*result, IrValue::I64(0)),
+                                    Err(_) => self.values.insert(*result, IrValue::I64(-1)),
+                                };
+                            } else {
+                                self.values.insert(*result, IrValue::I64(-1));
+                            }
+                        }
                         IrInstr::DbQuery { result, db, sql } => {
                             let db_handle = if let IrValue::I64(h) = self.get(*db)? {
                                 h
@@ -2522,6 +2567,51 @@ impl<'m> Interpreter<'m> {
                                             for i in 0..col_count {
                                                 let val: String =
                                                     row.get::<_, String>(i).unwrap_or_default();
+                                                cols.push(IrValue::Str(val));
+                                            }
+                                            Ok(cols)
+                                        }) {
+                                            for cols in iter.flatten() {
+                                                all_rows.push(IrValue::List(std::sync::Arc::new(
+                                                    std::sync::Mutex::new(cols),
+                                                )));
+                                            }
+                                        }
+                                        all_rows
+                                    }
+                                    Err(_) => vec![],
+                                }
+                            } else {
+                                vec![]
+                            };
+                            self.values.insert(
+                                *result,
+                                IrValue::List(std::sync::Arc::new(std::sync::Mutex::new(rows))),
+                            );
+                        }
+                        IrInstr::DbQueryParams { result, db, sql, params } => {
+                            let db_handle = if let IrValue::I64(h) = self.get(*db)? {
+                                h
+                            } else {
+                                0
+                            };
+                            let sql_str = if let IrValue::Str(s) = self.get(*sql)? {
+                                s
+                            } else {
+                                String::new()
+                            };
+                            let params_val = self.get(*params)?;
+                            let rows: Vec<IrValue> = if db_handle != 0 {
+                                let conn = unsafe { &*(db_handle as *const rusqlite::Connection) };
+                                let bind_values = self.sqlite_param_values(&params_val);
+                                match conn.prepare(&sql_str) {
+                                    Ok(mut stmt) => {
+                                        let col_count = stmt.column_count();
+                                        let mut all_rows = Vec::new();
+                                        if let Ok(iter) = stmt.query_map(params_from_iter(bind_values), |row| {
+                                            let mut cols = Vec::new();
+                                            for i in 0..col_count {
+                                                let val: String = row.get::<_, String>(i).unwrap_or_default();
                                                 cols.push(IrValue::Str(val));
                                             }
                                             Ok(cols)

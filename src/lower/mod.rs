@@ -2935,6 +2935,24 @@ impl<'m> Lowerer<'m> {
                 .push_instr(IrInstr::DbExec { result, db, sql }, Some(ty.clone()));
             return Ok((result, ty));
         }
+        if callee.name == "db_exec_params" {
+            if args.len() != 3 {
+                return Err(LowerError::Unsupported {
+                    detail: "db_exec_params(db, sql, params) requires 3 arguments".into(),
+                    span,
+                });
+            }
+            let (db, _) = self.lower_expr(&args[0])?;
+            let (sql, _) = self.lower_expr(&args[1])?;
+            let (params, _) = self.lower_expr(&args[2])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::Scalar(DType::I64);
+            self.builder.push_instr(
+                IrInstr::DbExecParams { result, db, sql, params },
+                Some(ty.clone()),
+            );
+            return Ok((result, ty));
+        }
         if callee.name == "db_query" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
@@ -2948,6 +2966,24 @@ impl<'m> Lowerer<'m> {
             let ty = IrType::List(Box::new(IrType::List(Box::new(IrType::Str))));
             self.builder
                 .push_instr(IrInstr::DbQuery { result, db, sql }, Some(ty.clone()));
+            return Ok((result, ty));
+        }
+        if callee.name == "db_query_params" {
+            if args.len() != 3 {
+                return Err(LowerError::Unsupported {
+                    detail: "db_query_params(db, sql, params) requires 3 arguments".into(),
+                    span,
+                });
+            }
+            let (db, _) = self.lower_expr(&args[0])?;
+            let (sql, _) = self.lower_expr(&args[1])?;
+            let (params, _) = self.lower_expr(&args[2])?;
+            let result = self.builder.fresh_value();
+            let ty = IrType::List(Box::new(IrType::List(Box::new(IrType::Str))));
+            self.builder.push_instr(
+                IrInstr::DbQueryParams { result, db, sql, params },
+                Some(ty.clone()),
+            );
             return Ok((result, ty));
         }
         if callee.name == "db_close" {

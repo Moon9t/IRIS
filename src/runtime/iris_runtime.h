@@ -354,6 +354,9 @@ int64_t  iris_db_open(const char* path);
 int64_t  iris_db_exec(int64_t db, const char* sql);
 IrisList* iris_db_query(int64_t db, const char* sql);
 int64_t  iris_db_close(int64_t db);
+/* Parameterized query/exec helpers (prepared-statement style) */
+IrisList* iris_db_query_params(int64_t db, const char* sql, IrisList* params);
+int64_t  iris_db_exec_params(int64_t db, const char* sql, IrisList* params);
 
 // ---------------------------------------------------------------------------
 // Process and environment

@@ -1697,6 +1697,16 @@ fn emit_llvm_instr(
                 val(*sql)
             )?;
         }
+        IrInstr::DbExecParams { result, db, sql, params } => {
+            writeln!(
+                out,
+                "  %v{} = call i64 @iris_db_exec_params(i64 {}, ptr {}, ptr {})",
+                result.0,
+                val(*db),
+                val(*sql),
+                val(*params)
+            )?;
+        }
         IrInstr::DbQuery { result, db, sql } => {
             writeln!(
                 out,
@@ -1704,6 +1714,16 @@ fn emit_llvm_instr(
                 result.0,
                 val(*db),
                 val(*sql)
+            )?;
+        }
+        IrInstr::DbQueryParams { result, db, sql, params } => {
+            writeln!(
+                out,
+                "  %v{} = call ptr @iris_db_query_params(i64 {}, ptr {}, ptr {})",
+                result.0,
+                val(*db),
+                val(*sql),
+                val(*params)
             )?;
         }
         IrInstr::DbClose { result, db } => {

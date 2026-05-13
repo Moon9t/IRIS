@@ -73,7 +73,9 @@ fn is_side_effecting(instr: &IrInstr) -> bool {
             | IrInstr::FileWriteAll { .. }
             | IrInstr::DbOpen { .. }
             | IrInstr::DbExec { .. }
+            | IrInstr::DbExecParams { .. }
             | IrInstr::DbQuery { .. }
+            | IrInstr::DbQueryParams { .. }
             | IrInstr::DbClose { .. }
             | IrInstr::ProcessExit { .. }
             | IrInstr::CallExtern { .. }
@@ -633,9 +635,19 @@ pub(crate) fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, Va
             replace(db);
             replace(sql);
         }
+        IrInstr::DbExecParams { db, sql, params, .. } => {
+            replace(db);
+            replace(sql);
+            replace(params);
+        }
         IrInstr::DbQuery { db, sql, .. } => {
             replace(db);
             replace(sql);
+        }
+        IrInstr::DbQueryParams { db, sql, params, .. } => {
+            replace(db);
+            replace(sql);
+            replace(params);
         }
         IrInstr::DbClose { db, .. } => {
             replace(db);

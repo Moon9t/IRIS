@@ -140,6 +140,8 @@ const OP_DB_OPEN: u8 = 0x6F;
 const OP_DB_EXEC: u8 = 0x70;
 const OP_DB_QUERY: u8 = 0x71;
 const OP_DB_CLOSE: u8 = 0x72;
+const OP_DB_EXEC_PARAMS: u8 = 0x73;
+const OP_DB_QUERY_PARAMS: u8 = 0x74;
 
 const MAGIC: &[u8; 4] = b"IRIS";
 const VERSION: u8 = 1;
@@ -1206,11 +1208,25 @@ impl Writer {
                 self.vid(*db);
                 self.vid(*sql);
             }
+            IrInstr::DbExecParams { result, db, sql, params } => {
+                self.u8(OP_DB_EXEC_PARAMS);
+                self.vid(*result);
+                self.vid(*db);
+                self.vid(*sql);
+                self.vid(*params);
+            }
             IrInstr::DbQuery { result, db, sql } => {
                 self.u8(OP_DB_QUERY);
                 self.vid(*result);
                 self.vid(*db);
                 self.vid(*sql);
+            }
+            IrInstr::DbQueryParams { result, db, sql, params } => {
+                self.u8(OP_DB_QUERY_PARAMS);
+                self.vid(*result);
+                self.vid(*db);
+                self.vid(*sql);
+                self.vid(*params);
             }
             IrInstr::DbClose { result, db } => {
                 self.u8(OP_DB_CLOSE);
@@ -2440,11 +2456,25 @@ impl<'a> Reader<'a> {
                 let sql = self.vid()?;
                 IrInstr::DbExec { result, db, sql }
             }
+            OP_DB_EXEC_PARAMS => {
+                let result = self.vid()?;
+                let db = self.vid()?;
+                let sql = self.vid()?;
+                let params = self.vid()?;
+                IrInstr::DbExecParams { result, db, sql, params }
+            }
             OP_DB_QUERY => {
                 let result = self.vid()?;
                 let db = self.vid()?;
                 let sql = self.vid()?;
                 IrInstr::DbQuery { result, db, sql }
+            }
+            OP_DB_QUERY_PARAMS => {
+                let result = self.vid()?;
+                let db = self.vid()?;
+                let sql = self.vid()?;
+                let params = self.vid()?;
+                IrInstr::DbQueryParams { result, db, sql, params }
             }
             OP_DB_CLOSE => {
                 let result = self.vid()?;

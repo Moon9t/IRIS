@@ -16,8 +16,20 @@ pub def sql_query(db : i64, sql : str) -> list<list<str>> {
     db_query(db, sql)
 }
 
+pub def sql_query_params(db : i64, sql : str, params : list<str>) -> list<list<str>> {
+    db_query_params(db, sql, params)
+}
+
 pub def sql_close(db : i64) -> i64 {
     db_close(db)
+}
+
+pub def sql_exec_params(db : i64, sql : str, params : list<str>) -> i64 {
+    db_exec_params(db, sql, params)
+}
+
+pub def sql_query_xy_params(db : i64, sql : str, params : list<str>, x_idx : i64, y_idx : i64) -> (list<f64>, list<f64>) {
+    sql_rows_to_xy(sql_query_params(db, sql, params), x_idx, y_idx)
 }
 
 pub def sql_parse_f64_or_zero(s : str) -> f64 {

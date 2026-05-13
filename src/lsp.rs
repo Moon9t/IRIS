@@ -228,7 +228,9 @@ static STATIC_COMPLETIONS: &[&str] = &[
     "sleep_ms",
     "db_open",
     "db_exec",
+    "db_exec_params",
     "db_query",
+    "db_query_params",
     "db_close",
     "file_read_all",
     "file_write_all",
@@ -2348,7 +2350,9 @@ fn builtin_hover(name: &str) -> Option<String> {
         // Database (SQLite)
         "db_open"  => "def db_open(path: str) -> i64\nOpen a SQLite database, returns handle",
         "db_exec"  => "def db_exec(db: i64, sql: str) -> i64\nExecute SQL (INSERT/UPDATE/DELETE/CREATE), returns 0 on success",
+        "db_exec_params" => "def db_exec_params(db: i64, sql: str, params: list<str>) -> i64\nExecute SQL with bound parameters",
         "db_query" => "def db_query(db: i64, sql: str) -> list<list<str>>\nQuery SQL (SELECT), returns rows of string columns",
+        "db_query_params" => "def db_query_params(db: i64, sql: str, params: list<str>) -> list<list<str>>\nQuery SQL with bound parameters",
         "db_close" => "def db_close(db: i64) -> i64\nClose a database handle",
         // Control
         "panic"  => "def panic(msg: str) -> !\nAbort with error message",

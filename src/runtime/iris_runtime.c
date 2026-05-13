@@ -942,6 +942,13 @@ typedef int (*fn_sqlite3_finalize)(sqlite3_stmt*);
 typedef int (*fn_sqlite3_column_count)(sqlite3_stmt*);
 typedef const unsigned char* (*fn_sqlite3_column_text)(sqlite3_stmt*, int);
 typedef void (*fn_sqlite3_free)(void*);
+typedef int (*fn_sqlite3_bind_text)(sqlite3_stmt*, int, const char*, int, void(*)(void*));
+typedef int (*fn_sqlite3_bind_double)(sqlite3_stmt*, int, double);
+typedef int (*fn_sqlite3_bind_int64)(sqlite3_stmt*, int, long long);
+
+#ifndef SQLITE_TRANSIENT
+#define SQLITE_TRANSIENT ((void(*)(void*))-1)
+#endif
 
 // Loaded function pointers
 static fn_sqlite3_open         p_sqlite3_open = NULL;
@@ -953,6 +960,9 @@ static fn_sqlite3_finalize     p_sqlite3_finalize = NULL;
 static fn_sqlite3_column_count p_sqlite3_column_count = NULL;
 static fn_sqlite3_column_text  p_sqlite3_column_text = NULL;
 static fn_sqlite3_free         p_sqlite3_free = NULL;
+static fn_sqlite3_bind_text    p_sqlite3_bind_text = NULL;
+static fn_sqlite3_bind_double  p_sqlite3_bind_double = NULL;
+static fn_sqlite3_bind_int64   p_sqlite3_bind_int64 = NULL;
 
 static int iris_load_sqlite3(void) {
     if (p_sqlite3_open) return 1; // already loaded
@@ -974,6 +984,9 @@ static int iris_load_sqlite3(void) {
     LOAD(sqlite3_finalize);
     LOAD(sqlite3_column_count);
     LOAD(sqlite3_column_text);
+    LOAD(sqlite3_bind_text);
+    LOAD(sqlite3_bind_double);
+    LOAD(sqlite3_bind_int64);
     LOAD(sqlite3_free);
     #undef LOAD
     return p_sqlite3_open ? 1 : 0;
@@ -1012,6 +1025,71 @@ IrisList* iris_db_query(int64_t db, const char* sql) {
     }
     p_sqlite3_finalize(stmt);
     return rows;
+}
+
+IrisList* iris_db_query_params(int64_t db, const char* sql, IrisList* params) {
+    IrisList* rows = iris_list_new();
+    if (!db || !p_sqlite3_prepare_v2) return rows;
+    sqlite3* conn = (sqlite3*)(intptr_t)db;
+    sqlite3_stmt* stmt = NULL;
+    if (p_sqlite3_prepare_v2(conn, sql, -1, &stmt, NULL) != SQLITE_OK) return rows;
+    int nParams = params ? (int)iris_list_len(params) : 0;
+    for (int i = 0; i < nParams; i++) {
+        IrisVal* v = iris_list_get(params, i);
+        if (!v) continue;
+        if (v->tag == IRIS_TAG_STR && p_sqlite3_bind_text) {
+            const char* txt = iris_unbox_str(v);
+            p_sqlite3_bind_text(stmt, i + 1, txt ? txt : "", -1, SQLITE_TRANSIENT);
+        } else if (v->tag == IRIS_TAG_F64 && p_sqlite3_bind_double) {
+            p_sqlite3_bind_double(stmt, i + 1, v->f64);
+        } else if (v->tag == IRIS_TAG_I64 && p_sqlite3_bind_int64) {
+            p_sqlite3_bind_int64(stmt, i + 1, (long long)v->i64);
+        } else if (p_sqlite3_bind_text) {
+            char* s = iris_value_to_str(v);
+            p_sqlite3_bind_text(stmt, i + 1, s ? s : "", -1, SQLITE_TRANSIENT);
+            if (s) p_sqlite3_free(s);
+        }
+    }
+    int ncols = p_sqlite3_column_count(stmt);
+    while (p_sqlite3_step(stmt) == SQLITE_ROW) {
+        IrisList* row = iris_list_new();
+        for (int i = 0; i < ncols; i++) {
+            const unsigned char* txt = p_sqlite3_column_text(stmt, i);
+            iris_list_push(row, iris_box_str(txt ? (const char*)txt : ""));
+        }
+        iris_list_push(rows, iris_box_list(row));
+    }
+    p_sqlite3_finalize(stmt);
+    return rows;
+}
+
+int64_t iris_db_exec_params(int64_t db, const char* sql, IrisList* params) {
+    if (!db || !p_sqlite3_prepare_v2) return -1;
+    sqlite3* conn = (sqlite3*)(intptr_t)db;
+    sqlite3_stmt* stmt = NULL;
+    if (p_sqlite3_prepare_v2(conn, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+    int nParams = params ? (int)iris_list_len(params) : 0;
+    for (int i = 0; i < nParams; i++) {
+        IrisVal* v = iris_list_get(params, i);
+        if (!v) continue;
+        if (v->tag == IRIS_TAG_STR && p_sqlite3_bind_text) {
+            const char* txt = iris_unbox_str(v);
+            p_sqlite3_bind_text(stmt, i + 1, txt ? txt : "", -1, SQLITE_TRANSIENT);
+        } else if (v->tag == IRIS_TAG_F64 && p_sqlite3_bind_double) {
+            p_sqlite3_bind_double(stmt, i + 1, v->f64);
+        } else if (v->tag == IRIS_TAG_I64 && p_sqlite3_bind_int64) {
+            p_sqlite3_bind_int64(stmt, i + 1, (long long)v->i64);
+        } else if (p_sqlite3_bind_text) {
+            char* s = iris_value_to_str(v);
+            p_sqlite3_bind_text(stmt, i + 1, s ? s : "", -1, SQLITE_TRANSIENT);
+            if (s) p_sqlite3_free(s);
+        }
+    }
+    int rc = SQLITE_OK;
+    int step_rc = p_sqlite3_step(stmt);
+    if (step_rc != SQLITE_DONE && step_rc != SQLITE_ROW) rc = -1;
+    p_sqlite3_finalize(stmt);
+    return rc == SQLITE_OK ? 0 : -1;
 }
 
 int64_t iris_db_close(int64_t db) {
