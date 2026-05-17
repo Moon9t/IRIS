@@ -41,9 +41,9 @@ The ML integration bridge is now production-ready for real model execution. All 
 ```
 IRIS Source Code
     ↓
-std.ml.onnx_load("model.onnx")  // IRIS stdlib wrapper
+onnx_load("model.onnx")  // IRIS std.ml wrapper
     ↓
-iris_ml_onnx_load(path)  // Rust FFI binding
+iris_mlrt_onnx_load(path)  // native IRIS runtime bridge
     ↓
 iris_onnx_session_create(path)  // C shim
     ↓

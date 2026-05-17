@@ -1,5 +1,12 @@
 # IRIS Language Extension Changelog
 
+## 0.4.0
+
+### New Features
+
+- Bumped extension metadata for the IRIS 0.4.0 language release.
+- Kept editor support aligned with the updated examples and ML pipeline docs.
+
 ## 0.3.0
 
 ### New Features

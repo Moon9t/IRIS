@@ -8,7 +8,8 @@ High-level approach
 - Expose minimal operations: load model, run/infer, run with provided inputs/outputs, destroy session/model.
 - Map IRIS runtime `IrisTensor` <-> backend tensor memory (zero-copy when possible).
 - Add safe wrappers in `iris_runtime.c` and `iris_runtime.h`; add Rust bindings to call these C functions from `src/`.
-- Add `std.ml` (or extend `std.tensorx`) stdlib functions to load/run models and convert to/from `tensor<T,shape>`.
+- Expose IRIS-facing bridge wrappers as `iris_mlrt_onnx_*`, `iris_mlrt_pytorch_*`, and `iris_mlrt_tf_*`.
+- Add `std.ml` functions to load/run models, clean tabular data, prepare `(list<f64>, list<i64>)` tensor pairs, and convert to/from `tensor<T,shape>`.
 - CI/build: optional linking flags per backend; provide helpful fallbacks when a backend is not available.
 
 Memory & ownership rules
@@ -18,6 +19,14 @@ Memory & ownership rules
 - Concurrency: sessions are not thread-safe unless explicitly documented (user must manage concurrency).
 
 API sketches (C)
+
+- IRIS runtime bridge:
+  - `int64_t iris_mlrt_onnx_load(const char* model_path);`
+  - `IrisVal* iris_mlrt_onnx_run(int64_t session, IrisVal* input);`
+  - `int64_t iris_mlrt_pytorch_load(const char* model_path);`
+  - `IrisVal* iris_mlrt_pytorch_run(int64_t model, IrisVal* input);`
+  - `int64_t iris_mlrt_tf_load(const char* model_path);`
+  - `IrisVal* iris_mlrt_tf_run(int64_t model, IrisVal* input);`
 
 - ONNX Runtime shim (C):
   - `void* iris_onnx_session_create(const char* model_path);`
@@ -40,19 +49,19 @@ Engineering plan
 2. Add lightweight ONNX C shim with build-time optional linking (stub if ONNX not present).
 3. Add wrapper functions to `src/runtime/iris_runtime.h/.c` forwarding to the shim.
 4. Add Rust bindings in `src/ffi` or `src/runtime_bindings.rs` that call the C functions and convert to/from `IrisTensor`.
-5. Add `stdlib` bindings (IRIS-level functions) to load and run models from IRIS source.
+5. Add `stdlib` bindings (IRIS-level functions) to clean datasets and load/run models from IRIS source.
 6. Add unit/integration tests using a small exported ONNX model (matrix multiply) and an exported PyTorch model if LibTorch enabled.
 7. Add CI matrix entries for Linux (preferred), macOS, and Windows. Provide scripts in `installer/` for obtaining prebuilt binaries where possible.
 
 Next steps
 
 - Implement ONNX shim stubs in `src/runtime/onnx_shim.c` + header prototypes in `src/runtime/iris_runtime.h`.
-- Add simple IRIS stdlib examples/tests that call the ONNX path (fallback safe message if runtime not linked).
+- Keep `examples/ml_full_pipeline.iris` as the end-to-end showcase: ingest rows, clean values, train/retrain, predict, and hand off tensors to ONNX/PyTorch/TensorFlow hooks when native SDKs are configured.
 
 Platform note: building libtorch and TF can be heavy; recommend starting with ONNX Runtime for cross-framework inference, then add LibTorch and TF shims.
 
 Platform-specific build/link steps
 
-- Windows: set `ONNXRUNTIME_DIR`, `LIBTORCH_DIR`, or `TENSORFLOW_DIR` to the unpacked SDK directories before invoking `cargo build` or `cargo test`. The runtime includes a small pthread compatibility layer so the embedded C runtime can compile with MSVC.
+- Windows: set `ONNXRUNTIME_DIR`, `LIBTORCH_DIR`, or `TENSORFLOW_DIR` to the unpacked SDK directories before invoking `cargo build` or `cargo test`. Generated native IRIS programs link external ONNX/TensorFlow SDKs only when `IRIS_NATIVE_ML_BACKENDS=1` is set; otherwise the generated runtime uses safe stubs. The runtime includes a small pthread compatibility layer so the embedded C runtime can compile with MSVC.
 - Linux: install the matching shared libraries and point the same environment variables at their root directories so `build.rs` can add the include and link search paths.
 - Validation: `tests/ml_bindings.rs` covers the Rust tensor marshalling layer and ensures the ML stdlib facade is embedded.

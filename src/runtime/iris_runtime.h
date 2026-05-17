@@ -484,6 +484,18 @@ void  iris_pytorch_free(void* model);
 void* iris_tf_load_saved_model(const char* path);
 int   iris_tf_run(void* model, IrisTensor** inputs, size_t n_inputs, IrisTensor*** outputs, size_t* n_outputs);
 void  iris_tf_free(void* model);
+
+// IRIS language-facing ML runtime wrappers.
+// Tensor values are represented as (list<f64>, list<i64>) tuple values.
+int64_t  iris_mlrt_onnx_load(const char* model_path);
+int64_t  iris_mlrt_onnx_free(int64_t session);
+IrisVal* iris_mlrt_onnx_run(int64_t session, IrisVal* input);
+int64_t  iris_mlrt_pytorch_load(const char* model_path);
+int64_t  iris_mlrt_pytorch_free(int64_t model);
+IrisVal* iris_mlrt_pytorch_run(int64_t model, IrisVal* input);
+int64_t  iris_mlrt_tf_load(const char* model_path);
+int64_t  iris_mlrt_tf_free(int64_t model);
+IrisVal* iris_mlrt_tf_run(int64_t model, IrisVal* input);
 // ---------------------------------------------------------------------------
 // Time / OS
 // ---------------------------------------------------------------------------

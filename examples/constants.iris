@@ -21,7 +21,7 @@ const GOLDEN_RATIO: f64 = 1.61803398874989
 const MAX_ITERATIONS: i64 = 100
 const TOLERANCE: f64 = 0.000001
 const BOARD_SIZE: i64 = 8
-const VERSION: str = "0.3.0"
+const VERSION: str = "0.4.0"
 
 // =====================
 //  Use constants in calculations

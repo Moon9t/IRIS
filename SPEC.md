@@ -1,6 +1,6 @@
 # IRIS Language Specification
 
-**Version 0.3.0**
+**Version 0.4.0**
 **Last updated: 2025-06-03**
 
 > This document defines the syntax, semantics, and type system of the IRIS
@@ -944,7 +944,7 @@ when x {
 }
 ```
 
-> **Implementation note (v0.3.0):** Guard expressions are parsed but have
+> **Implementation note (v0.4.0):** Guard expressions are parsed but have
 > limited runtime support. Use `if`/`else` chains as a workaround until
 > guard evaluation is fully implemented in a future release.
 

@@ -6,8 +6,8 @@ This directory contains examples showcasing IRIS's ML integration capabilities.
 
 The IRIS language now includes production-grade integrations with:
 - **ONNX Runtime** - Execute pre-trained ONNX models
-- **LibTorch** (stub) - PyTorch C++ API bindings
-- **TensorFlow** (stub) - TensorFlow C API bindings
+- **LibTorch** - PyTorch C++ API bindings through `std.ml`
+- **TensorFlow** - TensorFlow C API bindings through `std.ml`
 
 All examples demonstrate real tensor operations and ML patterns that work without external dependencies.
 
@@ -121,6 +121,22 @@ Demonstrates:
 
 ---
 
+### 6. `ml_full_pipeline.iris`
+**End-to-end data ingestion, cleaning, training, and prediction**
+
+Demonstrates:
+- Mixed-source row ingestion from CSV-style and JSON-style adapters
+- Missing-value cleanup for empty, `NA`, `null`, and `?` tokens
+- Feature standardization and supervised dataset construction
+- Logistic regression training, scoring, streaming re-ingest, and retraining
+- Expected-output prediction plus ONNX, PyTorch/LibTorch, and TensorFlow handoff hooks
+
+**Run:** `iris examples/ml_full_pipeline.iris`
+
+**Output:** Shows row counts, model accuracy before and after ingesting new data, the expected label, probability, and backend handoff status.
+
+---
+
 ## Running the Examples
 
 ```bash
@@ -132,6 +148,9 @@ iris examples/ml_showcase.iris
 
 # Run preprocessing demo
 iris examples/ml_data_preprocessing.iris
+
+# Run a full supervised ML pipeline
+iris examples/ml_full_pipeline.iris
 ```
 
 ## Bridge Architecture
@@ -143,9 +162,9 @@ IRIS Code
     ↓
 std.ml module (extern declarations)
     ↓
-Rust FFI bindings (runtime_bindings.rs)
+Native runtime bridge (iris_mlrt_* wrappers)
     ↓
-C shim layer (onnx_shim.c)
+C/C++ shim layer (onnx_shim.c, pytorch_shim.cpp, tf_shim.c)
     ↓
 ONNX Runtime C API
     ↓
@@ -163,7 +182,9 @@ To run actual model inference:
 2. **Set Environment Variable**
    ```powershell
    $env:ONNXRUNTIME_DIR = 'C:\onnxruntime'  # Windows
+   $env:IRIS_NATIVE_ML_BACKENDS = '1'
    export ONNXRUNTIME_DIR=/path/to/onnxruntime  # Linux/macOS
+   export IRIS_NATIVE_ML_BACKENDS=1
    ```
 
 3. **Generate Test Models** (requires Python)
@@ -241,10 +262,10 @@ For comprehensive setup and integration details, see:
 ✓ Tensor marshalling: Complete
 ✓ FFI bindings: Tested and validated
 ✓ Examples: Ready to run
-⚠ Real model execution: Requires ONNX Runtime SDK
+⚠ Real model execution: Requires backend SDKs and `IRIS_NATIVE_ML_BACKENDS=1`
 
 ---
 
-**Version:** IRIS v0.3.0
-**Last Updated:** 2024
+**Version:** IRIS v0.4.0
+**Last Updated:** 2026-05-17
 **ML Integration:** Production-ready

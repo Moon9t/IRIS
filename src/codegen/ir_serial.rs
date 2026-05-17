@@ -1208,7 +1208,12 @@ impl Writer {
                 self.vid(*db);
                 self.vid(*sql);
             }
-            IrInstr::DbExecParams { result, db, sql, params } => {
+            IrInstr::DbExecParams {
+                result,
+                db,
+                sql,
+                params,
+            } => {
                 self.u8(OP_DB_EXEC_PARAMS);
                 self.vid(*result);
                 self.vid(*db);
@@ -1221,7 +1226,12 @@ impl Writer {
                 self.vid(*db);
                 self.vid(*sql);
             }
-            IrInstr::DbQueryParams { result, db, sql, params } => {
+            IrInstr::DbQueryParams {
+                result,
+                db,
+                sql,
+                params,
+            } => {
                 self.u8(OP_DB_QUERY_PARAMS);
                 self.vid(*result);
                 self.vid(*db);
@@ -2461,7 +2471,12 @@ impl<'a> Reader<'a> {
                 let db = self.vid()?;
                 let sql = self.vid()?;
                 let params = self.vid()?;
-                IrInstr::DbExecParams { result, db, sql, params }
+                IrInstr::DbExecParams {
+                    result,
+                    db,
+                    sql,
+                    params,
+                }
             }
             OP_DB_QUERY => {
                 let result = self.vid()?;
@@ -2474,7 +2489,12 @@ impl<'a> Reader<'a> {
                 let db = self.vid()?;
                 let sql = self.vid()?;
                 let params = self.vid()?;
-                IrInstr::DbQueryParams { result, db, sql, params }
+                IrInstr::DbQueryParams {
+                    result,
+                    db,
+                    sql,
+                    params,
+                }
             }
             OP_DB_CLOSE => {
                 let result = self.vid()?;

@@ -1,0 +1,145 @@
+bring std.csv
+bring std.fs
+bring std.json
+bring std.ml
+
+def add_sample(rows : list<list<str>>, feature_a : str, feature_b : str, label : str) -> i64 {
+    val row : list<str> = list()
+    list_push(row, feature_a);
+    list_push(row, feature_b);
+    list_push(row, label);
+    list_push(rows, row);
+    0
+}
+
+def add_csv_sample(rows : list<list<str>>, row_text : str) -> i64 {
+    val row = csv_parse_row(row_text)
+    list_push(rows, row);
+    0
+}
+
+def add_json_sample(rows : list<list<str>>, payload : str) -> i64 {
+    val pairs = json_parse(payload)
+    add_sample(rows, json_get(pairs, "credit"), json_get(pairs, "income"), json_get(pairs, "label"))
+}
+
+def build_training_stream() -> list<list<str>> {
+    val rows : list<list<str>> = list()
+
+    add_csv_sample(rows, "0.10,0.20,0");
+    add_csv_sample(rows, "0.20,0.10,0");
+    add_csv_sample(rows, "0.25,,0");
+    add_json_sample(rows, "{\"credit\":\"0.72\",\"income\":\"0.65\",\"label\":\"1\"}");
+    add_json_sample(rows, "{\"credit\":\"0.82\",\"income\":\"0.90\",\"label\":\"1\"}");
+    add_csv_sample(rows, "NA,0.75,1");
+    add_csv_sample(rows, "0.15,0.35,0");
+    add_csv_sample(rows, "0.95,0.80,1");
+
+    rows
+}
+
+def feature_columns() -> list<i64> {
+    val cols : list<i64> = list()
+    list_push(cols, 0);
+    list_push(cols, 1);
+    cols
+}
+
+def model_accuracy(weights : list<f64>, X : list<f64>, y : list<f64>, n_features : i64) -> f64 {
+    val preds : list<i64> = list()
+    val targets : list<i64> = list()
+    for i in 0 .. list_len(y) {
+        val row = matrix_row(X, n_features, i)
+        val prob = logreg_predict_prob(weights, row)
+        val pred = if prob >= 0.5 { 1 } else { 0 }
+        val target = if list_get(y, i) >= 0.5 { 1 } else { 0 }
+        list_push(preds, pred);
+        list_push(targets, target);
+    }
+    accuracy(preds, targets)
+}
+
+def fit_pipeline(rows : list<list<str>>) -> (list<f64>, list<f64>, list<f64>) {
+    val cols = feature_columns()
+    val raw = rows_to_supervised_dataset(rows, cols, 2)
+    val X = standardize_matrix(raw.0, list_len(cols))
+    val weights = logreg_train(X, raw.1, list_len(cols), 0.35, 700)
+    (weights, X, raw.1)
+}
+
+def framework_handoff(sample : MLTensor) -> i64 {
+    if path_exists("models/pipeline.onnx") {
+        val onnx_handle = onnx_load("models/pipeline.onnx")
+        if ml_backend_ready(onnx_handle) {
+            val out = onnx_run(onnx_handle, sample)
+            print(concat("onnx output values = ", to_str(list_len(out.0))));
+            onnx_free(onnx_handle);
+        }
+    } else {
+        print("onnx hook = ready via onnx_load/onnx_run/onnx_free");
+    }
+
+    if path_exists("models/pipeline.pt") {
+        val torch_handle = torch_load("models/pipeline.pt")
+        if ml_backend_ready(torch_handle) {
+            val out = torch_run(torch_handle, sample)
+            print(concat("torch output values = ", to_str(list_len(out.0))));
+            torch_free(torch_handle);
+        }
+    } else {
+        print("torch hook = ready via torch_load/torch_run/torch_free");
+    }
+
+    if path_exists("models/pipeline_saved_model") {
+        val tf_handle = tf_load("models/pipeline_saved_model")
+        if ml_backend_ready(tf_handle) {
+            val out = tf_run(tf_handle, sample)
+            print(concat("tensorflow output values = ", to_str(list_len(out.0))));
+            tf_free(tf_handle);
+        }
+    } else {
+        print("tensorflow hook = ready via tf_load/tf_run/tf_free");
+    }
+
+    0
+}
+
+def main() -> i64 {
+    print("=== Full IRIS ML Pipeline ===");
+
+    val rows = build_training_stream()
+    print(concat("ingested rows = ", to_str(list_len(rows))));
+
+    val fit1 = fit_pipeline(rows)
+    val weights1 = fit1.0
+    val X1 = fit1.1
+    val y1 = fit1.2
+    val acc1 = model_accuracy(weights1, X1, y1, 2)
+    print(concat("pipeline accuracy = ", to_str(acc1)));
+
+    val incoming = "0.88,0.70,1"
+    add_csv_sample(rows, incoming);
+    print(concat("streaming rows after ingest = ", to_str(list_len(rows))));
+
+    val fit2 = fit_pipeline(rows)
+    val weights2 = fit2.0
+    val X2 = fit2.1
+    val y2 = fit2.2
+    val acc2 = model_accuracy(weights2, X2, y2, 2)
+    print(concat("updated accuracy = ", to_str(acc2)));
+
+    val last_row = matrix_row(X2, 2, list_len(y2) - 1)
+    val prob = logreg_predict_prob(weights2, last_row)
+    val label = if prob >= 0.5 { "approve" } else { "review" }
+    print(concat("expected output = ", label));
+    print(concat("prediction probability = ", to_str(prob)));
+
+    val shape : list<i64> = list()
+    list_push(shape, 1);
+    list_push(shape, 2);
+    val sample = tensor_pair(last_row, shape)
+    framework_handoff(sample);
+
+    print("full pipeline complete");
+    0
+}

@@ -31,14 +31,22 @@ use crate::pass::Pass;
 fn local_contains_infer(ty: &IrType) -> bool {
     match ty {
         IrType::Infer => true,
-        IrType::Option(_) | IrType::ResultType(..) | IrType::Chan(_) | IrType::Atomic(_) | IrType::Mutex(_) => false,
+        IrType::Option(_)
+        | IrType::ResultType(..)
+        | IrType::Chan(_)
+        | IrType::Atomic(_)
+        | IrType::Mutex(_) => false,
         IrType::Scalar(_) | IrType::Str | IrType::Enum { .. } | IrType::Struct { .. } => false,
         IrType::Tensor { .. } => false,
         IrType::Tuple(elems) => elems.iter().any(local_contains_infer),
         IrType::Array { elem, .. } => local_contains_infer(elem),
-        IrType::Grad(inner) | IrType::Sparse(inner) | IrType::List(inner) => local_contains_infer(inner),
+        IrType::Grad(inner) | IrType::Sparse(inner) | IrType::List(inner) => {
+            local_contains_infer(inner)
+        }
         IrType::Map(k, v) => local_contains_infer(k) || local_contains_infer(v),
-        IrType::Fn { params, ret } => params.iter().any(local_contains_infer) || local_contains_infer(ret),
+        IrType::Fn { params, ret } => {
+            params.iter().any(local_contains_infer) || local_contains_infer(ret)
+        }
     }
 }
 
@@ -163,7 +171,13 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
         let num_instrs = module.functions[fn_idx].blocks[bi].instrs.len();
         for ii in 0..num_instrs {
             let instr = module.functions[fn_idx].blocks[bi].instrs[ii].clone();
-            collect_constraints(&instr, &mut uf, &mut slots, &mut errors, &mut list_elem_slots);
+            collect_constraints(
+                &instr,
+                &mut uf,
+                &mut slots,
+                &mut errors,
+                &mut list_elem_slots,
+            );
         }
     }
 
@@ -183,9 +197,8 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
                     IrType::List(_) => {
                         // If we tracked an element slot for this list, use it.
                         if let Some(&elem_slot) = list_elem_slots.get(&vid) {
-                            let elem_ty = uf
-                                .get_type(elem_slot)
-                                .unwrap_or(IrType::Scalar(DType::I64));
+                            let elem_ty =
+                                uf.get_type(elem_slot).unwrap_or(IrType::Scalar(DType::I64));
                             let resolved = IrType::List(Box::new(elem_ty));
                             module.functions[fn_idx].value_types.insert(vid, resolved);
                         } else if let Some(&s) = slots.get(&vid) {
@@ -220,9 +233,15 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
         diag.push_str("--- list element slots ---\n");
         for (vid, &s) in list_elem_slots.iter() {
             if let Some(ty) = uf.get_type(s) {
-                diag.push_str(&format!("List Value {:?} elem slot {} => {:?}\n", vid, s, ty));
+                diag.push_str(&format!(
+                    "List Value {:?} elem slot {} => {:?}\n",
+                    vid, s, ty
+                ));
             } else {
-                diag.push_str(&format!("List Value {:?} elem slot {} => <unknown>\n", vid, s));
+                diag.push_str(&format!(
+                    "List Value {:?} elem slot {} => <unknown>\n",
+                    vid, s
+                ));
             }
         }
         diag.push_str("--- function blocks ---\n");
@@ -293,13 +312,7 @@ fn collect_constraints(
     }
 
     // Local helper to unify with better diagnostics when both sides are concrete.
-    fn try_unify(
-        uf: &mut UnionFind,
-        errors: &mut Vec<String>,
-        a: usize,
-        b: usize,
-        ctx: &str,
-    ) {
+    fn try_unify(uf: &mut UnionFind, errors: &mut Vec<String>, a: usize, b: usize, ctx: &str) {
         let ta = uf.get_type(a);
         let tb = uf.get_type(b);
         if let (Some(ref ta2), Some(ref tb2)) = (ta.as_ref(), tb.as_ref()) {
@@ -324,10 +337,22 @@ fn collect_constraints(
             let sl = get_or_create_slot(uf, slots, *lhs, None);
             let srs = get_or_create_slot(uf, slots, *rhs, None);
             // Unify lhs and rhs (same numeric type).
-            try_unify(uf, errors, sl, srs, &format!("BinOp lhs {:?} rhs {:?}", lhs, rhs));
+            try_unify(
+                uf,
+                errors,
+                sl,
+                srs,
+                &format!("BinOp lhs {:?} rhs {:?}", lhs, rhs),
+            );
             // For non-Bool results (i.e., non-comparison ops), result type = operand type.
             if !matches!(ty, IrType::Scalar(DType::Bool)) {
-                try_unify(uf, errors, sr, sl, &format!("BinOp result {:?} lhs {:?}", result, lhs));
+                try_unify(
+                    uf,
+                    errors,
+                    sr,
+                    sl,
+                    &format!("BinOp result {:?} lhs {:?}", result, lhs),
+                );
             }
         }
         IrInstr::UnaryOp {
@@ -338,7 +363,13 @@ fn collect_constraints(
         } => {
             let sr = get_or_create_slot(uf, slots, *result, Some(ty.clone()));
             let so = get_or_create_slot(uf, slots, *operand, None);
-            try_unify(uf, errors, sr, so, &format!("UnaryOp result {:?} operand {:?}", result, operand));
+            try_unify(
+                uf,
+                errors,
+                sr,
+                so,
+                &format!("UnaryOp result {:?} operand {:?}", result, operand),
+            );
         }
         IrInstr::ConstInt { result, ty, .. } => {
             let _ = get_or_create_slot(uf, slots, *result, Some(ty.clone()));
@@ -347,12 +378,7 @@ fn collect_constraints(
             let _ = get_or_create_slot(uf, slots, *result, Some(ty.clone()));
         }
         IrInstr::ConstBool { result, .. } => {
-            let _ = get_or_create_slot(
-                uf,
-                slots,
-                *result,
-                Some(IrType::Scalar(DType::Bool)),
-            );
+            let _ = get_or_create_slot(uf, slots, *result, Some(IrType::Scalar(DType::Bool)));
         }
         IrInstr::ConstStr { result, .. } => {
             let _ = get_or_create_slot(uf, slots, *result, Some(IrType::Str));
@@ -371,15 +397,31 @@ fn collect_constraints(
         IrInstr::ListPush { list, value } => {
             let s_val = get_or_create_slot(uf, slots, *value, None);
             // Ensure the list has an element slot registered.
-            let elem_slot = *list_elem_slots.entry(*list).or_insert_with(|| uf.new_slot(None));
+            let elem_slot = *list_elem_slots
+                .entry(*list)
+                .or_insert_with(|| uf.new_slot(None));
             // Unify the element slot with the pushed value's slot.
-            try_unify(uf, errors, elem_slot, s_val, &format!("ListPush list {:?} value {:?}", list, value));
+            try_unify(
+                uf,
+                errors,
+                elem_slot,
+                s_val,
+                &format!("ListPush list {:?} value {:?}", list, value),
+            );
             let _ = get_or_create_slot(uf, slots, *list, None);
         }
         IrInstr::ListGet { result, list, .. } => {
             let s_res = get_or_create_slot(uf, slots, *result, None);
-            let elem_slot = *list_elem_slots.entry(*list).or_insert_with(|| uf.new_slot(None));
-            try_unify(uf, errors, s_res, elem_slot, &format!("ListGet result {:?} list {:?}", result, list));
+            let elem_slot = *list_elem_slots
+                .entry(*list)
+                .or_insert_with(|| uf.new_slot(None));
+            try_unify(
+                uf,
+                errors,
+                s_res,
+                elem_slot,
+                &format!("ListGet result {:?} list {:?}", result, list),
+            );
         }
         IrInstr::Cast { result, to_ty, .. } => {
             let _ = get_or_create_slot(uf, slots, *result, Some(to_ty.clone()));
@@ -389,7 +431,7 @@ fn collect_constraints(
         IrInstr::Return { .. } => {}
         // Everything else: if there's a result with a known result_ty, record it.
         _ => {
-                if let Some(r) = instr.result() {
+            if let Some(r) = instr.result() {
                 // Most instructions already have a concrete type stored in value_types;
                 // this is a no-op if it's already known.
                 let _ = get_or_create_slot(uf, slots, r, None);

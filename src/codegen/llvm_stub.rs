@@ -1697,7 +1697,12 @@ fn emit_llvm_instr(
                 val(*sql)
             )?;
         }
-        IrInstr::DbExecParams { result, db, sql, params } => {
+        IrInstr::DbExecParams {
+            result,
+            db,
+            sql,
+            params,
+        } => {
             writeln!(
                 out,
                 "  %v{} = call i64 @iris_db_exec_params(i64 {}, ptr {}, ptr {})",
@@ -1716,7 +1721,12 @@ fn emit_llvm_instr(
                 val(*sql)
             )?;
         }
-        IrInstr::DbQueryParams { result, db, sql, params } => {
+        IrInstr::DbQueryParams {
+            result,
+            db,
+            sql,
+            params,
+        } => {
             writeln!(
                 out,
                 "  %v{} = call ptr @iris_db_query_params(i64 {}, ptr {}, ptr {})",
@@ -1838,7 +1848,14 @@ fn emit_llvm_instr(
         IrInstr::CallExtern {
             result, name, args, ..
         } => {
-            let arg_strs: Vec<String> = args.iter().map(|a| format!("ptr {}", val(*a))).collect();
+            let arg_strs: Vec<String> = args
+                .iter()
+                .map(|a| {
+                    let arg_ty = func.value_type(*a).cloned().unwrap_or(IrType::Infer);
+                    let llvm_arg_ty = llvm_type_name(&arg_ty).unwrap_or_else(|_| "ptr".to_owned());
+                    format!("{} {}", llvm_arg_ty, val(*a))
+                })
+                .collect();
             if let Some(r) = result {
                 writeln!(
                     out,

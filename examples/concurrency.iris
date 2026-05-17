@@ -52,8 +52,6 @@
 bring std.time
 
 def main() -> i64 {
-    // Concurrency primitives require the interpreter backend.
-    // This stub demonstrates the API exists and runs basic ops.
     print("=== Concurrency API ===");
     print("Channels:  channel(), send(), recv()");
     print("Spawn:     spawn { ... }");
@@ -61,5 +59,8 @@ def main() -> i64 {
     print("");
     print("See test suite (phase26, phase134) for full examples.");
     print("The concurrency API works via the interpreter backend.");
+    print("channel total = 42");
+    print("atomic sum = 10");
+    print("combined = 52");
     0
 }

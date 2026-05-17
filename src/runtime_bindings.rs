@@ -165,10 +165,16 @@ unsafe fn native_tensor_to_pair(tensor: *mut IrisTensor) -> Option<TensorPair> {
     }
 
     for idx in 0..tensor_ref.numel {
-        iris_list_push(data_list, iris_box_f64(*tensor_ref.data.add(idx as usize) as f64));
+        iris_list_push(
+            data_list,
+            iris_box_f64(*tensor_ref.data.add(idx as usize) as f64),
+        );
     }
     for idx in 0..tensor_ref.ndim {
-        iris_list_push(shape_list, iris_box_i64(*tensor_ref.shape.add(idx as usize)));
+        iris_list_push(
+            shape_list,
+            iris_box_i64(*tensor_ref.shape.add(idx as usize)),
+        );
     }
 
     Some(TensorPair {

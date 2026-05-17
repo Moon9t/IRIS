@@ -1,6 +1,6 @@
-use iris::stdlib::stdlib_source;
 use iris::runtime_bindings::tensor_pair_from_slices;
 use iris::runtime_bindings::tensor_pair_to_slices;
+use iris::stdlib::stdlib_source;
 
 #[test]
 fn stdlib_sql_module_exports_connector_helpers() {

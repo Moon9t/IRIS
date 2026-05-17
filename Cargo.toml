@@ -1,6 +1,6 @@
 [package]
 name = "iris"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.75"
 description = "IRIS: Intermediate Representation for Intelligent Systems — an ML compiler DSL"

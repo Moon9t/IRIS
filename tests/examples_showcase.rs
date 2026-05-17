@@ -56,6 +56,24 @@ fn neural_net_example_runs() {
 }
 
 #[test]
+fn ml_full_pipeline_example_runs() {
+    let out = compile_file(&example_path("ml_full_pipeline.iris"), EmitKind::Eval).unwrap();
+    assert!(out.contains("ingested rows = 8"), "output was:\n{}", out);
+    assert!(out.contains("updated accuracy = "), "output was:\n{}", out);
+    assert!(
+        out.contains("expected output = approve"),
+        "output was:\n{}",
+        out
+    );
+    assert!(out.contains("torch hook = ready"), "output was:\n{}", out);
+    assert!(
+        out.contains("tensorflow hook = ready"),
+        "output was:\n{}",
+        out
+    );
+}
+
+#[test]
 fn networking_example_runs() {
     let out = compile_file(&example_path("networking.iris"), EmitKind::Eval).unwrap();
     assert!(out.contains("preview status = 200"), "output was:\n{}", out);

@@ -13,9 +13,6 @@
 
 ---
 
-<<<<<<< HEAD
----
-
 ## Linguist / GitHub language support
 
 This project maintains a vendored TextMate grammar and a small set of metadata used to register the `IRIS` language with GitHub Linguist.
@@ -32,9 +29,6 @@ Notes
 - If you want to update the vendored grammar later, see `CONTRIBUTING.md` for the minimal workflow we used.
 
 ## Quick Start
-=======
-## Quick Start :
->>>>>>> 07dbceaef5ae8022e146779dde042df854fca849
 
 ```sh
 # Install (or download from Releases)
@@ -57,22 +51,22 @@ pipeline. There is no silent interpreter fallback in those user-facing paths.
 `iris build --target <preset>` can now emit cross-target binaries when the
 matching clang/sysroot toolchain is installed.
 
-The locked 0.3.0 language/tooling surface and install dependency matrix live in
+The locked 0.4.0 language/tooling surface and install dependency matrix live in
 [docs/current-language-lock.md](docs/current-language-lock.md).
 
 **Output of `iris --version`:**
 
 ```
-iris 0.3.0 (abc1234 2026-03-13)
+iris 0.4.0 (abc1234 2026-05-17)
 IRIS — Intermediate Representation for Intelligent Systems
 Copyright (C) 2024-2026 Moon & IRIS Project Contributors
 License: GPL-2.0-or-later <https://www.gnu.org/licenses/old-licenses/gpl-2.0.html>
 
 Compiler:
-  Version:       0.3.0
+  Version:       0.4.0
   Git commit:    abc1234567890abcdef1234567890abcdef123456
   Git branch:    main
-  Build date:    2026-03-13
+  Build date:    2026-05-17
 
 Platform:
   Target:        x86_64-pc-windows-msvc
@@ -102,6 +96,29 @@ Build:
 | **Package Manager** | `iris pkg init/add/remove/install/build/run` |
 | **Tooling** | LSP server, DAP debugger, REPL, VS Code extension |
 | **Standard Library** | 25 modules: math, string, fmt, fs, json, csv, http, crypto, ffi, os, testing, … |
+
+---
+
+## ML Pipeline Example
+
+IRIS v0.4.0 includes a runnable end-to-end ML pipeline example:
+
+```sh
+iris run examples/ml_full_pipeline.iris
+```
+
+It normalizes mixed inputs into rows (CSV-style records, JSON-style records, and
+the same adapter pattern for SQL/HTTP/file sources), cleans missing tokens (`NA`,
+empty fields, `null`, `?`), builds a supervised dataset, standardizes features,
+trains logistic regression, scores the model, ingests an additional row, retrains,
+and returns an expected output label. The same example prepares `(list<f64>,
+list<i64>)` tensor pairs for ONNX, PyTorch/LibTorch, and TensorFlow runtime
+handoff through `std.ml`.
+
+Native IRIS binaries compile the ML shim stubs by default. To link real ONNX or
+TensorFlow native runtimes into generated binaries, set the backend SDK variables
+and opt in with `IRIS_NATIVE_ML_BACKENDS=1` before running `iris build` or
+`iris run`.
 
 ---
 
@@ -374,7 +391,7 @@ The official `iris-lang` extension provides:
 - **REPL** — integrated terminal REPL
 - **Status bar** — shows IRIS version, git commit, build info; click for server actions
 
-Install: `code --install-extension iris-lang-0.3.0.vsix`
+Install: `code --install-extension iris-lang-0.4.0.vsix`
 
 ### REPL Commands
 

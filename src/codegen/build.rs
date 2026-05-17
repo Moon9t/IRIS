@@ -34,6 +34,11 @@ pub const RUNTIME_H_SRC: &str = include_str!("../runtime/iris_runtime.h");
 ///  iris_make_tuple, iris_get_element, iris_make_closure, etc.)
 pub const RUNTIME_C_SRC: &str = include_str!("../runtime/iris_runtime.c");
 
+/// Native ML backend shims used by generated IRIS binaries.
+pub const ONNX_SHIM_H_SRC: &str = include_str!("../runtime/onnx_shim.h");
+pub const ONNX_SHIM_C_SRC: &str = include_str!("../runtime/onnx_shim.c");
+pub const TF_SHIM_C_SRC: &str = include_str!("../runtime/tf_shim.c");
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -229,6 +234,9 @@ fn build_binary_impl(
     // 4. Write embedded runtime sources.
     let h_path = tmp_dir.join("iris_runtime.h");
     let c_path = tmp_dir.join("iris_runtime.c");
+    let onnx_h_path = tmp_dir.join("onnx_shim.h");
+    let onnx_c_path = tmp_dir.join("onnx_shim.c");
+    let tf_c_path = tmp_dir.join("tf_shim.c");
     std::fs::write(&h_path, RUNTIME_H_SRC).map_err(|e| CodegenError::Unsupported {
         backend: "binary".into(),
         detail: format!("failed to write runtime header: {}", e),
@@ -236,6 +244,18 @@ fn build_binary_impl(
     std::fs::write(&c_path, RUNTIME_C_SRC).map_err(|e| CodegenError::Unsupported {
         backend: "binary".into(),
         detail: format!("failed to write runtime C source: {}", e),
+    })?;
+    std::fs::write(&onnx_h_path, ONNX_SHIM_H_SRC).map_err(|e| CodegenError::Unsupported {
+        backend: "binary".into(),
+        detail: format!("failed to write ONNX shim header: {}", e),
+    })?;
+    std::fs::write(&onnx_c_path, ONNX_SHIM_C_SRC).map_err(|e| CodegenError::Unsupported {
+        backend: "binary".into(),
+        detail: format!("failed to write ONNX shim source: {}", e),
+    })?;
+    std::fs::write(&tf_c_path, TF_SHIM_C_SRC).map_err(|e| CodegenError::Unsupported {
+        backend: "binary".into(),
+        detail: format!("failed to write TensorFlow shim source: {}", e),
     })?;
 
     // Locate compiler tools.
@@ -257,6 +277,19 @@ fn build_binary_impl(
 
     let resolved_target = resolve_target_triple(target);
     let target_args = ["-target".to_owned(), resolved_target.clone()];
+    let native_ml_backends = std::env::var("IRIS_NATIVE_ML_BACKENDS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let onnx_sdk = if native_ml_backends {
+        std::env::var("ONNXRUNTIME_DIR").ok().map(PathBuf::from)
+    } else {
+        None
+    };
+    let tf_sdk = if native_ml_backends {
+        std::env::var("TENSORFLOW_DIR").ok().map(PathBuf::from)
+    } else {
+        None
+    };
 
     // 5a. Compile iris_runtime.c → iris_runtime.o using clang.
     let rt_obj = tmp_dir.join("iris_runtime.o");
@@ -299,6 +332,64 @@ fn build_binary_impl(
     }
 
     // 5b. Compile LLVM IR → module.o using clang (only clang understands .ll).
+    let mut support_objs = vec![rt_obj.clone()];
+    for (src, obj_name, backend_name) in [
+        (&onnx_c_path, "onnx_shim.o", "ONNX shim"),
+        (&tf_c_path, "tf_shim.o", "TensorFlow shim"),
+    ] {
+        let obj = tmp_dir.join(obj_name);
+        let mut shim_cmd = Command::new(&clang);
+        shim_cmd.args(&target_args);
+        shim_cmd.args([
+            "-O2",
+            "-c",
+            path_str(src)?,
+            "-o",
+            path_str(&obj)?,
+            "-I",
+            path_str(&tmp_dir)?,
+            "-Wno-pragma-pack",
+        ]);
+        if resolved_target.contains("windows") {
+            if let Some(ref inc) = msys2_inc {
+                shim_cmd.arg("-I").arg(inc);
+            }
+        }
+        if backend_name == "ONNX shim" {
+            if let Some(ref sdk) = onnx_sdk {
+                shim_cmd.arg("-DONNX_RUNTIME_ENABLED");
+                shim_cmd.arg("-I").arg(sdk.join("include"));
+            }
+        }
+        if backend_name == "TensorFlow shim" {
+            if let Some(ref sdk) = tf_sdk {
+                shim_cmd.arg("-DTENSORFLOW_ENABLED");
+                shim_cmd.arg("-I").arg(sdk.join("include"));
+            }
+        }
+
+        let shim_output = shim_cmd.output().map_err(|e| CodegenError::Unsupported {
+            backend: "binary".into(),
+            detail: format!("'{}' could not compile {}: {}", clang, backend_name, e),
+        })?;
+        if !shim_output.status.success() {
+            let stderr = String::from_utf8_lossy(&shim_output.stderr);
+            let stdout = String::from_utf8_lossy(&shim_output.stdout);
+            return Err(CodegenError::Unsupported {
+                backend: "binary".into(),
+                detail: format!(
+                    "'{}' failed to compile {} (exit: {:?})\nstderr: {}\nstdout: {}",
+                    clang,
+                    backend_name,
+                    shim_output.status.code(),
+                    stderr,
+                    stdout
+                ),
+            });
+        }
+        support_objs.push(obj);
+    }
+
     // Use -O1 for user IR to avoid clang 17 optimizer crashes with complex IR patterns.
     let mod_obj = tmp_dir.join("module.o");
     let mut ir_cmd = Command::new(&clang);
@@ -329,16 +420,11 @@ fn build_binary_impl(
     // 6. Link module.o + iris_runtime.o → native binary using clang + lld.
     let mut link_cmd = Command::new(&clang);
     link_cmd.args(&target_args);
-    link_cmd.args([
-        "-fuse-ld=lld",
-        "-O2",
-        path_str(&mod_obj)?,
-        path_str(&rt_obj)?,
-        "-o",
-        path_str(output_path)?,
-        "-lm",
-        "-lpthread",
-    ]);
+    link_cmd.args(["-fuse-ld=lld", "-O2", path_str(&mod_obj)?]);
+    for obj in &support_objs {
+        link_cmd.arg(path_str(obj)?);
+    }
+    link_cmd.args(["-o", path_str(output_path)?, "-lm", "-lpthread"]);
     // Windows: link WinSock2 for TCP/HTTP builtins
     if resolved_target.contains("windows") {
         link_cmd.arg("-lws2_32");
@@ -350,6 +436,14 @@ fn build_binary_impl(
         if let Some(ref lib) = gcc_lib {
             link_cmd.arg(format!("-L{}", lib));
         }
+    }
+    if let Some(ref sdk) = onnx_sdk {
+        link_cmd.arg(format!("-L{}", sdk.join("lib").display()));
+        link_cmd.arg("-lonnxruntime");
+    }
+    if let Some(ref sdk) = tf_sdk {
+        link_cmd.arg(format!("-L{}", sdk.join("lib").display()));
+        link_cmd.arg("-ltensorflow");
     }
     if !resolved_target.contains("windows") {
         // Non-Windows targets keep relying on the target toolchain's standard sysroot.

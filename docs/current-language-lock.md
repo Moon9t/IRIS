@@ -1,6 +1,6 @@
-# IRIS 0.3.0 Current Language Lock
+# IRIS 0.4.0 Current Language Lock
 
-This document captures the current ready-to-use IRIS language surface for the 0.3.0 build. It is the reference for examples, LSP/DAP support, editor grammar, and installer dependency checks.
+This document captures the current ready-to-use IRIS language surface for the 0.4.0 build. It is the reference for examples, LSP/DAP support, editor grammar, installer dependency checks, and ML pipeline examples.
 
 ## Locked Language Surface
 
@@ -19,6 +19,7 @@ This document captures the current ready-to-use IRIS language surface for the 0.
 - LSP: diagnostics, hover, rich completions, go to definition, document symbols, signature help, formatting, quick fixes, inlay hints, references, and rename.
 - DAP: launch, line/conditional/log/hit-count breakpoints, continue, next, step in, step out, step back, pause, restart, loaded sources, stack trace, locals, set variable, watch/evaluate, exception info, and debug-console completions.
 - VS Code extension: grammar, snippets, run/build/debug commands, inline run/debug code lenses, REPL, IR/LLVM viewers, LSP status bar, and settings for executable path, formatting, inlay hints, timing, and stop-on-entry debugging.
+- ML pipeline: `examples/ml_full_pipeline.iris` demonstrates mixed-source ingestion through adapters, cleaning, supervised dataset construction, training, scoring, streaming re-ingest, retraining, prediction, and backend tensor handoff.
 
 ## Binary Install Dependencies
 
@@ -33,6 +34,7 @@ The `iris` binary itself includes the Rust compiler frontend, embedded runtime C
 | macOS native execution | Apple Command Line Tools or a bundled LLVM that can see the macOS SDK |
 | Python FFI | A compatible Python installation available at runtime |
 | C/Rust FFI | The user-provided shared libraries (`.dll`, `.so`, `.dylib`) and their transitive dependencies |
+| Native ONNX/TensorFlow backend handoff | Backend SDK env vars plus `IRIS_NATIVE_ML_BACKENDS=1` at build/run time |
 | VS Code extension | VS Code and the `iris` binary on PATH or configured through `iris.executablePath` |
 
 ## Bundling Policy

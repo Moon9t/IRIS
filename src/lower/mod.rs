@@ -166,72 +166,6 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
         .entry("eprintln".into())
         .or_insert(IrType::Scalar(DType::I64));
 
-    let tensor_pair_ty = IrType::Tuple(vec![
-        IrType::List(Box::new(IrType::Scalar(DType::F64))),
-        IrType::List(Box::new(IrType::Scalar(DType::I64))),
-    ]);
-
-    let runtime_ml_externs = [
-        (
-            "iris_ml_onnx_load",
-            vec![IrType::Str],
-            IrType::Scalar(DType::I64),
-        ),
-        (
-            "iris_ml_onnx_free",
-            vec![IrType::Scalar(DType::I64)],
-            IrType::Scalar(DType::I64),
-        ),
-        (
-            "iris_ml_onnx_run",
-            vec![IrType::Scalar(DType::I64), tensor_pair_ty.clone()],
-            tensor_pair_ty.clone(),
-        ),
-        (
-            "iris_ml_pytorch_load",
-            vec![IrType::Str],
-            IrType::Scalar(DType::I64),
-        ),
-        (
-            "iris_ml_pytorch_free",
-            vec![IrType::Scalar(DType::I64)],
-            IrType::Scalar(DType::I64),
-        ),
-        (
-            "iris_ml_pytorch_run",
-            vec![IrType::Scalar(DType::I64), tensor_pair_ty.clone()],
-            tensor_pair_ty.clone(),
-        ),
-        (
-            "iris_ml_tf_load",
-            vec![IrType::Str],
-            IrType::Scalar(DType::I64),
-        ),
-        (
-            "iris_ml_tf_free",
-            vec![IrType::Scalar(DType::I64)],
-            IrType::Scalar(DType::I64),
-        ),
-        (
-            "iris_ml_tf_run",
-            vec![IrType::Scalar(DType::I64), tensor_pair_ty],
-            IrType::Tuple(vec![
-                IrType::List(Box::new(IrType::Scalar(DType::F64))),
-                IrType::List(Box::new(IrType::Scalar(DType::I64))),
-            ]),
-        ),
-    ];
-
-    for (name, params, ret_ty) in runtime_ml_externs {
-        fn_sigs.entry(name.to_owned()).or_insert(ret_ty.clone());
-        if !module.extern_fns.iter().any(|e| e.name == name) {
-            module.extern_fns.push(crate::ir::module::IrExternFn {
-                name: name.to_owned(),
-                param_types: params,
-                ret_ty,
-            });
-        }
-    }
     fn_sigs
         .entry("eprint".into())
         .or_insert(IrType::Scalar(DType::I64));
@@ -2948,7 +2882,12 @@ impl<'m> Lowerer<'m> {
             let result = self.builder.fresh_value();
             let ty = IrType::Scalar(DType::I64);
             self.builder.push_instr(
-                IrInstr::DbExecParams { result, db, sql, params },
+                IrInstr::DbExecParams {
+                    result,
+                    db,
+                    sql,
+                    params,
+                },
                 Some(ty.clone()),
             );
             return Ok((result, ty));
@@ -2981,7 +2920,12 @@ impl<'m> Lowerer<'m> {
             let result = self.builder.fresh_value();
             let ty = IrType::List(Box::new(IrType::List(Box::new(IrType::Str))));
             self.builder.push_instr(
-                IrInstr::DbQueryParams { result, db, sql, params },
+                IrInstr::DbQueryParams {
+                    result,
+                    db,
+                    sql,
+                    params,
+                },
                 Some(ty.clone()),
             );
             return Ok((result, ty));
@@ -4981,15 +4925,19 @@ impl<'m> Lowerer<'m> {
             match &arm.pattern {
                 AstWhenPattern::Wildcard => {
                     // Wildcard becomes the default block
-                    let bb = self.builder.create_block(Some(&format!("when_{}_wildcard", enum_name)));
+                    let bb = self
+                        .builder
+                        .create_block(Some(&format!("when_{}_wildcard", enum_name)));
                     default_block_opt = Some(bb);
                     arm_blocks.push(bb);
                 }
                 AstWhenPattern::EnumVariant { .. } => {
                     // Regular variant arm
                     arm_blocks.push(
-                        self.builder
-                            .create_block(Some(&format!("when_{}_{}", enum_name, arm.variant_name))),
+                        self.builder.create_block(Some(&format!(
+                            "when_{}_{}",
+                            enum_name, arm.variant_name
+                        ))),
                     );
                 }
                 _ => {
@@ -5008,13 +4956,17 @@ impl<'m> Lowerer<'m> {
         for (arm_idx, arm) in arms.iter().enumerate() {
             match &arm.pattern {
                 AstWhenPattern::EnumVariant { variant_name, .. } => {
-                    let variant_idx = variants
-                        .iter()
-                        .position(|v| v == variant_name)
-                        .ok_or_else(|| LowerError::Unsupported {
-                            detail: format!("no variant '{}' in enum '{}'", variant_name, enum_name),
-                            span: arm.span,
-                        })?;
+                    let variant_idx =
+                        variants
+                            .iter()
+                            .position(|v| v == variant_name)
+                            .ok_or_else(|| LowerError::Unsupported {
+                                detail: format!(
+                                    "no variant '{}' in enum '{}'",
+                                    variant_name, enum_name
+                                ),
+                                span: arm.span,
+                            })?;
                     switch_arms.push((variant_idx, arm_blocks[arm_idx]));
                 }
                 AstWhenPattern::Wildcard => {
@@ -5433,7 +5385,9 @@ impl<'m> Lowerer<'m> {
         // We need a "no-match" fallback block (panic or unreachable) for non-exhaustive matches.
         // But we emit a runtime panic for safety.
         let no_match_bb = self.builder.create_block(Some("when_no_match"));
-        let _no_match_scrut = self.builder.add_block_param(no_match_bb, None, scrut_ty.clone());
+        let _no_match_scrut = self
+            .builder
+            .add_block_param(no_match_bb, None, scrut_ty.clone());
 
         let outer_scope = self.scope.clone();
         let mut result_ty: Option<IrType> = None;
@@ -5470,7 +5424,8 @@ impl<'m> Lowerer<'m> {
             // IMPORTANT: create bind_guard_bb BEFORE arm_body_bb so the validator's
             // linear block scan sees value definitions before their uses.
             let (bind_guard_bb_opt, guard_bb_scrut_opt) = if has_guard_with_bindings {
-                let bb = self.builder
+                let bb = self
+                    .builder
                     .create_block(Some(&format!("when_guard_{}", arm_idx)));
                 let scrut_param = self.builder.add_block_param(bb, None, scrut_ty.clone());
                 (Some(bb), Some(scrut_param))
@@ -5482,13 +5437,16 @@ impl<'m> Lowerer<'m> {
             let arm_body_bb = self
                 .builder
                 .create_block(Some(&format!("when_arm_{}", arm_idx)));
-            let arm_bb_scrut = self.builder.add_block_param(arm_body_bb, None, scrut_ty.clone());
-            
+            let arm_bb_scrut = self
+                .builder
+                .add_block_param(arm_body_bb, None, scrut_ty.clone());
+
             // Create the next-check block (reuse no_match_bb for last arm).
             let (next_check_bb, next_bb_scrut_opt) = if is_last {
                 (no_match_bb, None)
             } else {
-                let bb = self.builder
+                let bb = self
+                    .builder
                     .create_block(Some(&format!("when_check_{}", arm_idx + 1)));
                 let scrut_param = self.builder.add_block_param(bb, None, scrut_ty.clone());
                 (bb, Some(scrut_param))

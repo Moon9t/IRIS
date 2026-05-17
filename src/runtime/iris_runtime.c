@@ -1951,6 +1951,145 @@ IrisVal* iris_get_element(IrisVal* t, int32_t idx) {
     return iris_box_i64(0);
 }
 
+// ---------------------------------------------------------------------------
+// IRIS language-facing ML runtime wrappers
+// ---------------------------------------------------------------------------
+
+typedef int (*IrisMlRunFn)(void*, IrisTensor**, size_t, IrisTensor***, size_t*);
+
+static IrisVal* iris_mlrt_empty_tensor_pair(void) {
+    IrisList* data = iris_list_new();
+    IrisList* shape = iris_list_new();
+    return iris_make_tuple(2, iris_box_list(data), iris_box_list(shape));
+}
+
+static IrisTensor* iris_mlrt_tensor_from_pair(IrisVal* pair) {
+    if (!pair || pair->tag != IRIS_TAG_TUPLE) return NULL;
+
+    IrisVal* data_val = iris_get_element(pair, 0);
+    IrisVal* shape_val = iris_get_element(pair, 1);
+    IrisList* data = iris_unbox_list(data_val);
+    IrisList* shape_list = iris_unbox_list(shape_val);
+    int64_t ndim64 = iris_list_len(shape_list);
+    if (ndim64 <= 0 || ndim64 > INT32_MAX) return NULL;
+
+    int32_t ndim = (int32_t)ndim64;
+    int64_t* shape = (int64_t*)xmalloc(sizeof(int64_t) * (size_t)ndim);
+    for (int32_t i = 0; i < ndim; i++) {
+        shape[i] = iris_unbox_i64(iris_list_get(shape_list, i));
+    }
+
+    IrisTensor* tensor = iris_tensor_alloc(ndim, shape);
+    free(shape);
+    if (!tensor) return NULL;
+
+    if (iris_list_len(data) != tensor->numel) {
+        iris_tensor_free(tensor);
+        return NULL;
+    }
+
+    for (int64_t i = 0; i < tensor->numel; i++) {
+        tensor->data[i] = (float)iris_unbox_f64(iris_list_get(data, i));
+    }
+    return tensor;
+}
+
+static IrisVal* iris_mlrt_pair_from_tensor(IrisTensor* tensor) {
+    if (!tensor) return iris_mlrt_empty_tensor_pair();
+
+    IrisList* data = iris_list_new();
+    IrisList* shape = iris_list_new();
+    for (int64_t i = 0; i < tensor->numel; i++) {
+        iris_list_push(data, iris_box_f64((double)tensor->data[i]));
+    }
+    for (int32_t i = 0; i < tensor->ndim; i++) {
+        iris_list_push(shape, iris_box_i64(tensor->shape[i]));
+    }
+    return iris_make_tuple(2, iris_box_list(data), iris_box_list(shape));
+}
+
+static IrisVal* iris_mlrt_run_single(int64_t handle, IrisVal* input, IrisMlRunFn run_fn) {
+    if (handle == 0 || !run_fn) return iris_mlrt_empty_tensor_pair();
+
+    IrisTensor* native_input = iris_mlrt_tensor_from_pair(input);
+    if (!native_input) return iris_mlrt_empty_tensor_pair();
+
+    IrisTensor* inputs[1];
+    inputs[0] = native_input;
+    IrisTensor** outputs = NULL;
+    size_t n_outputs = 0;
+    int rc = run_fn((void*)(intptr_t)handle, inputs, 1, &outputs, &n_outputs);
+    iris_tensor_free(native_input);
+
+    if (rc != 0 || !outputs || n_outputs == 0) {
+        if (outputs) free(outputs);
+        return iris_mlrt_empty_tensor_pair();
+    }
+
+    IrisVal* result = iris_mlrt_pair_from_tensor(outputs[0]);
+    for (size_t i = 0; i < n_outputs; i++) {
+        if (outputs[i]) iris_tensor_free(outputs[i]);
+    }
+    free(outputs);
+    return result;
+}
+
+int64_t iris_mlrt_onnx_load(const char* model_path) {
+    return (int64_t)(intptr_t)iris_onnx_session_create(model_path);
+}
+
+int64_t iris_mlrt_onnx_free(int64_t session) {
+    iris_onnx_session_free((void*)(intptr_t)session);
+    return 0;
+}
+
+IrisVal* iris_mlrt_onnx_run(int64_t session, IrisVal* input) {
+    return iris_mlrt_run_single(session, input, iris_onnx_session_run);
+}
+
+int64_t iris_mlrt_pytorch_load(const char* model_path) {
+#if defined(LIBTORCH_ENABLED)
+    return (int64_t)(intptr_t)iris_pytorch_load(model_path);
+#else
+    (void)model_path;
+    fprintf(stderr, "iris: libtorch support not enabled at build time\n");
+    return 0;
+#endif
+}
+
+int64_t iris_mlrt_pytorch_free(int64_t model) {
+#if defined(LIBTORCH_ENABLED)
+    iris_pytorch_free((void*)(intptr_t)model);
+#else
+    (void)model;
+#endif
+    return 0;
+}
+
+IrisVal* iris_mlrt_pytorch_run(int64_t model, IrisVal* input) {
+#if defined(LIBTORCH_ENABLED)
+    return iris_mlrt_run_single(model, input, iris_pytorch_run);
+#else
+    (void)model;
+    (void)input;
+    fprintf(stderr, "iris: libtorch support not enabled at build time\n");
+    return iris_mlrt_empty_tensor_pair();
+#endif
+}
+
+int64_t iris_mlrt_tf_load(const char* model_path) {
+    return (int64_t)(intptr_t)iris_tf_load_saved_model(model_path);
+}
+
+int64_t iris_mlrt_tf_free(int64_t model) {
+    iris_tf_free((void*)(intptr_t)model);
+    return 0;
+}
+
+IrisVal* iris_mlrt_tf_run(int64_t model, IrisVal* input) {
+    return iris_mlrt_run_single(model, input, iris_tf_run);
+}
+
 /* Closure: stores a function pointer and captured environment. */
 typedef struct {
     void*     fn;        /* function pointer */

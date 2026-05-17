@@ -1,0 +1,26 @@
+def main() -> i64 {
+    print("=== Database Example ===");
+
+    val db = db_open(":memory:");
+    db_exec(db, "DROP TABLE IF EXISTS tasks");
+    db_exec(db, "CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT)");
+
+    val first_params = list();
+    list_push(first_params, "Write docs");
+    db_exec_params(db, "INSERT INTO tasks (title) VALUES (?)", first_params);
+
+    val second_params = list();
+    list_push(second_params, "Ship release");
+    db_exec_params(db, "INSERT INTO tasks (title) VALUES (?)", second_params);
+
+    val rows = db_query(db, "SELECT title FROM tasks ORDER BY id");
+    print(concat("rows = ", to_str(list_len(rows))));
+
+    val first = list_get(list_get(rows, 0), 0)
+    val second = list_get(list_get(rows, 1), 0)
+    print(concat("first = ", first));
+    print(concat("second = ", second));
+
+    db_close(db);
+    0
+}

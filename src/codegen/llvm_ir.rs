@@ -1485,8 +1485,7 @@ fn unbox_ptr_to_result(
     counter: &mut u32,
 ) -> Result<(), CodegenError> {
     match result_ty {
-        IrType::Scalar(DType::I64)
-        | IrType::Scalar(DType::U64 | DType::USize) => {
+        IrType::Scalar(DType::I64) | IrType::Scalar(DType::U64 | DType::USize) => {
             writeln!(
                 out,
                 "  %v{} = call i64 @iris_unbox_i64(ptr {})",
@@ -2421,7 +2420,11 @@ fn emit_instr_ir(
             let tag_val = if scrutinee_emitted_ty == Some("ptr") {
                 let raw_tag = format!("%tag_{}", gep_counter);
                 *gep_counter += 1;
-                writeln!(out, "  {} = call i64 @iris_get_variant_tag(ptr {})", raw_tag, sv)?;
+                writeln!(
+                    out,
+                    "  {} = call i64 @iris_get_variant_tag(ptr {})",
+                    raw_tag, sv
+                )?;
                 raw_tag
             } else {
                 sv
@@ -3524,7 +3527,7 @@ fn emit_instr_ir(
             } else {
                 elem_ty.clone()
             };
-            
+
             let idx_v =
                 coerce_to_type(*index, "i64", consts, func, emitted_types, gep_counter, out)?;
             // iris_list_get returns IrisVal* (boxed); unbox to the element type.
@@ -3677,7 +3680,7 @@ fn emit_instr_ir(
             } else {
                 elem_ty.clone()
             };
-            
+
             // iris_list_pop returns IrisVal* (boxed); unbox to the element type.
             match &resolved_elem_ty {
                 IrType::Scalar(DType::I64) => {
@@ -4439,8 +4442,16 @@ fn emit_instr_ir(
             writeln!(out, "  br label %{}", merge_lbl)?;
             writeln!(out, "{}:", err_lbl)?;
             writeln!(out, "  {} = call ptr @iris_const_str()", err_msg)?;
-            writeln!(out, "  {} = call ptr @iris_box_str(ptr {})", err_box, err_msg)?;
-            writeln!(out, "  {} = call ptr @iris_make_err(ptr {})", err_res, err_box)?;
+            writeln!(
+                out,
+                "  {} = call ptr @iris_box_str(ptr {})",
+                err_box, err_msg
+            )?;
+            writeln!(
+                out,
+                "  {} = call ptr @iris_make_err(ptr {})",
+                err_res, err_box
+            )?;
             writeln!(out, "  br label %{}", merge_lbl)?;
             writeln!(out, "{}:", merge_lbl)?;
             writeln!(
@@ -4490,8 +4501,16 @@ fn emit_instr_ir(
             writeln!(out, "  br label %{}", merge_lbl)?;
             writeln!(out, "{}:", err_lbl)?;
             writeln!(out, "  {} = call ptr @iris_const_str()", err_msg)?;
-            writeln!(out, "  {} = call ptr @iris_box_str(ptr {})", err_box, err_msg)?;
-            writeln!(out, "  {} = call ptr @iris_make_err(ptr {})", err_res, err_box)?;
+            writeln!(
+                out,
+                "  {} = call ptr @iris_box_str(ptr {})",
+                err_box, err_msg
+            )?;
+            writeln!(
+                out,
+                "  {} = call ptr @iris_make_err(ptr {})",
+                err_res, err_box
+            )?;
             writeln!(out, "  br label %{}", merge_lbl)?;
             writeln!(out, "{}:", merge_lbl)?;
             writeln!(
@@ -4535,7 +4554,12 @@ fn emit_instr_ir(
                 val(*sql)
             )?;
         }
-        IrInstr::DbExecParams { result, db, sql, params } => {
+        IrInstr::DbExecParams {
+            result,
+            db,
+            sql,
+            params,
+        } => {
             writeln!(
                 out,
                 "  %v{} = call i64 @iris_db_exec_params(i64 {}, ptr {}, ptr {})",
@@ -4554,7 +4578,12 @@ fn emit_instr_ir(
                 val(*sql)
             )?;
         }
-        IrInstr::DbQueryParams { result, db, sql, params } => {
+        IrInstr::DbQueryParams {
+            result,
+            db,
+            sql,
+            params,
+        } => {
             writeln!(
                 out,
                 "  %v{} = call ptr @iris_db_query_params(i64 {}, ptr {}, ptr {})",
@@ -4713,7 +4742,15 @@ fn emit_instr_ir(
             ret_ty,
         } => {
             let llvm_ret = llvm_type_complete(ret_ty).unwrap_or_else(|_| "ptr".to_owned());
-            let arg_strs: Vec<String> = args.iter().map(|a| format!("ptr {}", val(*a))).collect();
+            let arg_strs: Vec<String> = args
+                .iter()
+                .map(|a| {
+                    let arg_ty = func.value_type(*a).cloned().unwrap_or(IrType::Infer);
+                    let llvm_arg_ty =
+                        llvm_type_complete(&arg_ty).unwrap_or_else(|_| "ptr".to_owned());
+                    format!("{} {}", llvm_arg_ty, val(*a))
+                })
+                .collect();
             if let Some(r) = result {
                 writeln!(
                     out,

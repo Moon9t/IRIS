@@ -1,0 +1,42 @@
+bring std.http
+bring std.http_server
+
+def build_router() -> list<str> {
+    val router = router_new()
+    router_add(router, "GET", "/health", "health");
+    router_add(router, "POST", "/echo", "echo");
+    router
+}
+
+def handle(router : list<str>, req : str) -> str {
+    val method = http_request_method(req)
+    val path = http_request_path(req)
+    val route = router_match(router, method, path)
+
+    if route == "health" {
+        json_ok("{\"status\":\"ok\"}")
+    } else {
+        if route == "echo" {
+            http_response(200, "OK", concat("{\"echo\":\"", concat(http_body(req), "\"}")))
+        } else {
+            bad_request("{\"error\":\"unknown route\"}")
+        }
+    }
+}
+
+def main() -> i64 {
+    print("=== Backend Routing Example ===");
+
+    val router = build_router()
+    print(concat("routes = ", to_str(list_len(router))));
+
+    val health_req = http_get_request("127.0.0.1", "/health")
+    val health_resp = handle(router, health_req)
+    print(concat("health = ", http_body(health_resp)));
+
+    val echo_req = http_post_request("127.0.0.1", "/echo", "hello")
+    val echo_resp = handle(router, echo_req)
+    print(concat("echo = ", http_body(echo_resp)));
+
+    0
+}

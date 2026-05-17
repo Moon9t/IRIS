@@ -635,7 +635,9 @@ pub(crate) fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, Va
             replace(db);
             replace(sql);
         }
-        IrInstr::DbExecParams { db, sql, params, .. } => {
+        IrInstr::DbExecParams {
+            db, sql, params, ..
+        } => {
             replace(db);
             replace(sql);
             replace(params);
@@ -644,7 +646,9 @@ pub(crate) fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, Va
             replace(db);
             replace(sql);
         }
-        IrInstr::DbQueryParams { db, sql, params, .. } => {
+        IrInstr::DbQueryParams {
+            db, sql, params, ..
+        } => {
             replace(db);
             replace(sql);
             replace(params);

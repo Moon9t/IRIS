@@ -46,9 +46,9 @@ def main() -> i64 {
     print(concat("pred(1,0) = ", to_str(p10)));
     print(concat("pred(1,1) = ", to_str(p11)));
 
-    val xs1 = list();
-    val xs2 = list();
-    val targets = list();
+    val xs1 : list<f64> = list();
+    val xs2 : list<f64> = list();
+    val targets : list<f64> = list();
     val _a = add_case(xs1, xs2, targets, 0.0, 0.0, 0.0);
     val _b = add_case(xs1, xs2, targets, 0.0, 1.0, 1.0);
     val _c = add_case(xs1, xs2, targets, 1.0, 0.0, 1.0);

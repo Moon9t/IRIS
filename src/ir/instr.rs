@@ -1249,9 +1249,13 @@ impl IrInstr {
             // Database
             IrInstr::DbOpen { path, .. } => vec![*path],
             IrInstr::DbExec { db, sql, .. } => vec![*db, *sql],
-            IrInstr::DbExecParams { db, sql, params, .. } => vec![*db, *sql, *params],
+            IrInstr::DbExecParams {
+                db, sql, params, ..
+            } => vec![*db, *sql, *params],
             IrInstr::DbQuery { db, sql, .. } => vec![*db, *sql],
-            IrInstr::DbQueryParams { db, sql, params, .. } => vec![*db, *sql, *params],
+            IrInstr::DbQueryParams {
+                db, sql, params, ..
+            } => vec![*db, *sql, *params],
             IrInstr::DbClose { db, .. } => vec![*db],
             // Phase 58: Extended collections
             IrInstr::ListContains { list, value, .. } => vec![*list, *value],

@@ -94,7 +94,9 @@ fn compile_c_runtime() {
         build.file("src/runtime/pytorch_shim.cpp");
         build.cpp(true);
         if let Ok(cxxflags) = env::var("LIBTORCH_CXXFLAGS") {
-            for flag in cxxflags.split_whitespace() { build.flag(flag); }
+            for flag in cxxflags.split_whitespace() {
+                build.flag(flag);
+            }
         }
         println!("cargo:rustc-link-search=native={}", lib_dir);
         for lib in ["torch", "torch_cpu", "c10", "torch_global_deps"] {
@@ -108,7 +110,10 @@ fn compile_c_runtime() {
         println!("cargo:rustc-cfg=tensorflow_enabled");
         build.define("TENSORFLOW_ENABLED", None);
         build.include(format!("{}/include", tf_dir));
-        println!("cargo:rustc-link-search=native={}", format!("{}/lib", tf_dir));
+        println!(
+            "cargo:rustc-link-search=native={}",
+            format!("{}/lib", tf_dir)
+        );
         println!("cargo:rustc-link-lib=tensorflow");
     }
     build.flag_if_supported("-std=c11");
@@ -132,7 +137,10 @@ fn link_lib_if_present(lib_dir: &str, lib_name: &str) {
     let candidates = if cfg!(windows) {
         vec![format!("{}.lib", lib_name)]
     } else if cfg!(target_os = "macos") {
-        vec![format!("lib{}.dylib", lib_name), format!("lib{}.a", lib_name)]
+        vec![
+            format!("lib{}.dylib", lib_name),
+            format!("lib{}.a", lib_name),
+        ]
     } else {
         vec![format!("lib{}.so", lib_name), format!("lib{}.a", lib_name)]
     };

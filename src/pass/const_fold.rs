@@ -1075,7 +1075,9 @@ fn apply_reps(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
             replace(db);
             replace(sql);
         }
-        IrInstr::DbExecParams { db, sql, params, .. } => {
+        IrInstr::DbExecParams {
+            db, sql, params, ..
+        } => {
             replace(db);
             replace(sql);
             replace(params);
@@ -1084,7 +1086,9 @@ fn apply_reps(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
             replace(db);
             replace(sql);
         }
-        IrInstr::DbQueryParams { db, sql, params, .. } => {
+        IrInstr::DbQueryParams {
+            db, sql, params, ..
+        } => {
             replace(db);
             replace(sql);
             replace(params);

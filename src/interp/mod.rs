@@ -2522,7 +2522,12 @@ impl<'m> Interpreter<'m> {
                                 self.values.insert(*result, IrValue::I64(-1));
                             }
                         }
-                        IrInstr::DbExecParams { result, db, sql, params } => {
+                        IrInstr::DbExecParams {
+                            result,
+                            db,
+                            sql,
+                            params,
+                        } => {
                             let db_handle = if let IrValue::I64(h) = self.get(*db)? {
                                 h
                             } else {
@@ -2589,7 +2594,12 @@ impl<'m> Interpreter<'m> {
                                 IrValue::List(std::sync::Arc::new(std::sync::Mutex::new(rows))),
                             );
                         }
-                        IrInstr::DbQueryParams { result, db, sql, params } => {
+                        IrInstr::DbQueryParams {
+                            result,
+                            db,
+                            sql,
+                            params,
+                        } => {
                             let db_handle = if let IrValue::I64(h) = self.get(*db)? {
                                 h
                             } else {
@@ -2608,14 +2618,17 @@ impl<'m> Interpreter<'m> {
                                     Ok(mut stmt) => {
                                         let col_count = stmt.column_count();
                                         let mut all_rows = Vec::new();
-                                        if let Ok(iter) = stmt.query_map(params_from_iter(bind_values), |row| {
-                                            let mut cols = Vec::new();
-                                            for i in 0..col_count {
-                                                let val: String = row.get::<_, String>(i).unwrap_or_default();
-                                                cols.push(IrValue::Str(val));
-                                            }
-                                            Ok(cols)
-                                        }) {
+                                        if let Ok(iter) =
+                                            stmt.query_map(params_from_iter(bind_values), |row| {
+                                                let mut cols = Vec::new();
+                                                for i in 0..col_count {
+                                                    let val: String =
+                                                        row.get::<_, String>(i).unwrap_or_default();
+                                                    cols.push(IrValue::Str(val));
+                                                }
+                                                Ok(cols)
+                                            })
+                                        {
                                             for cols in iter.flatten() {
                                                 all_rows.push(IrValue::List(std::sync::Arc::new(
                                                     std::sync::Mutex::new(cols),

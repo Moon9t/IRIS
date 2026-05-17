@@ -9,7 +9,7 @@ IRIS Source Code
     ↓
 Stdlib Module: std.ml
     ↓
-Rust FFI Bridge (src/runtime_bindings.rs)
+Native IRIS runtime bridge (`iris_mlrt_*` wrappers)
     ↓
 C Shim Layer (src/runtime/*.c)
     ↓
@@ -35,6 +35,7 @@ Native ML Framework APIs
 2. **Set Environment Variable**:
    ```powershell
    $env:ONNXRUNTIME_DIR = "C:\onnxruntime"
+   $env:IRIS_NATIVE_ML_BACKENDS = "1"
    ```
 
 3. **Verify Installation**:
@@ -83,6 +84,7 @@ Native ML Framework APIs
 2. **Set Environment Variable**:
    ```bash
    export ONNXRUNTIME_DIR=/opt/onnxruntime-linux-x64-1.17.0
+   export IRIS_NATIVE_ML_BACKENDS=1
    ```
 
 3. **Build and Test**:
@@ -106,6 +108,7 @@ Native ML Framework APIs
 2. **Set Environment Variable**:
    ```powershell
    $env:LIBTORCH_DIR = "C:\libtorch"
+   $env:IRIS_NATIVE_ML_BACKENDS = "1"
    ```
 
 3. **Build**:
@@ -136,6 +139,7 @@ Similar to ONNX Runtime, but with LibTorch:
 
 ```bash
 export LIBTORCH_DIR=/opt/libtorch
+export IRIS_NATIVE_ML_BACKENDS=1
 cargo clean && cargo build
 cargo test --test ml_inference
 ```
@@ -156,6 +160,7 @@ cargo test --test ml_inference
 2. **Extract and Set Environment**:
    ```powershell
    $env:TENSORFLOW_DIR = "C:\tensorflow"
+   $env:IRIS_NATIVE_ML_BACKENDS = "1"
    ```
 
 3. **Build and Test**:
@@ -209,19 +214,19 @@ import std.ml;
 
 def test_onnx_inference() {
     // Load ONNX model
-    let model_id = std.ml.onnx_load("model.onnx");
+    let model_id = onnx_load("model.onnx");
     
     // Create input tensor: [2, 3]
     let input = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]];
     
     // Run inference (shape is inferred)
-    let output = std.ml.onnx_run(model_id, input);
+    let output = onnx_run(model_id, input);
     
     // Use output
     print(output);
     
     // Cleanup
-    std.ml.onnx_free(model_id);
+    onnx_free(model_id);
 }
 ```
 
@@ -251,7 +256,7 @@ cargo build
    ```
 2. Both directories should exist with appropriate files.
 
-### "unresolved external symbol iris_pytorch_load"
+### "unresolved external symbol iris_mlrt_pytorch_load" or "iris_pytorch_load"
 
 **Cause**: LibTorch SDK not available or path incorrect.
 
@@ -304,7 +309,7 @@ python create_onnx_model.py
 
 The build script (`build.rs`) automatically:
 
-1. Checks for `ONNXRUNTIME_DIR`, `LIBTORCH_DIR`, `TENSORFLOW_DIR` env vars
+1. Checks for `ONNXRUNTIME_DIR`, `LIBTORCH_DIR`, `TENSORFLOW_DIR` env vars. Generated native IRIS programs only link external ONNX/TensorFlow SDKs when `IRIS_NATIVE_ML_BACKENDS=1` is set; otherwise they use safe shim stubs.
 2. Includes C/C++ headers from `include/` subdirectories
 3. Links libraries from `lib/` subdirectories
 4. Sets conditional compilation flags (`ONNX_RUNTIME_ENABLED`, etc.)

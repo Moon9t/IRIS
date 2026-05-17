@@ -25,7 +25,7 @@ function Write-Banner {
     Write-Host "  ██║██║  ██║██║███████║" -ForegroundColor Cyan
     Write-Host "  ╚═╝╚═╝  ╚═╝╚═╝╚══════╝" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  IRIS Language Installer  v0.3.0" -ForegroundColor White
+    Write-Host "  IRIS Language Installer  v0.4.0" -ForegroundColor White
     Write-Host "  Intermediate Representation for Intelligent Systems" -ForegroundColor DarkGray
     Write-Host ""
 }
@@ -225,7 +225,7 @@ if ($codeCmd) {
             Write-Ok "VSCode extension installed."
         } catch {
             Write-Warn "Could not install VSCode extension automatically."
-            Write-Warn "You can install it manually: code --install-extension iris-lang-0.3.0.vsix"
+            Write-Warn "You can install it manually: code --install-extension iris-lang-0.4.0.vsix"
         }
     } else {
         Write-Info "No .vsix found next to installer — skipping VSCode extension."

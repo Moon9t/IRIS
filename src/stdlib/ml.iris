@@ -1,5 +1,180 @@
 bring std.tensorx
 
+pub type MLTensor = (list<f64>, list<i64>)
+
+extern def iris_mlrt_onnx_load(path : str) -> i64
+extern def iris_mlrt_onnx_run(handle : i64, input : MLTensor) -> MLTensor
+extern def iris_mlrt_onnx_free(handle : i64) -> i64
+extern def iris_mlrt_pytorch_load(path : str) -> i64
+extern def iris_mlrt_pytorch_run(handle : i64, input : MLTensor) -> MLTensor
+extern def iris_mlrt_pytorch_free(handle : i64) -> i64
+extern def iris_mlrt_tf_load(path : str) -> i64
+extern def iris_mlrt_tf_run(handle : i64, input : MLTensor) -> MLTensor
+extern def iris_mlrt_tf_free(handle : i64) -> i64
+
+pub def tensor_pair(data : list<f64>, shape : list<i64>) -> MLTensor {
+    (data, shape)
+}
+
+pub def onnx_load(path : str) -> i64 {
+    iris_mlrt_onnx_load(path)
+}
+
+pub def onnx_run(handle : i64, input : MLTensor) -> MLTensor {
+    iris_mlrt_onnx_run(handle, input)
+}
+
+pub def onnx_free(handle : i64) -> i64 {
+    iris_mlrt_onnx_free(handle)
+}
+
+pub def pytorch_load(path : str) -> i64 {
+    iris_mlrt_pytorch_load(path)
+}
+
+pub def pytorch_run(handle : i64, input : MLTensor) -> MLTensor {
+    iris_mlrt_pytorch_run(handle, input)
+}
+
+pub def pytorch_free(handle : i64) -> i64 {
+    iris_mlrt_pytorch_free(handle)
+}
+
+pub def torch_load(path : str) -> i64 {
+    pytorch_load(path)
+}
+
+pub def torch_run(handle : i64, input : MLTensor) -> MLTensor {
+    pytorch_run(handle, input)
+}
+
+pub def torch_free(handle : i64) -> i64 {
+    pytorch_free(handle)
+}
+
+pub def tensorflow_load(path : str) -> i64 {
+    iris_mlrt_tf_load(path)
+}
+
+pub def tensorflow_run(handle : i64, input : MLTensor) -> MLTensor {
+    iris_mlrt_tf_run(handle, input)
+}
+
+pub def tensorflow_free(handle : i64) -> i64 {
+    iris_mlrt_tf_free(handle)
+}
+
+pub def tf_load(path : str) -> i64 {
+    tensorflow_load(path)
+}
+
+pub def tf_run(handle : i64, input : MLTensor) -> MLTensor {
+    tensorflow_run(handle, input)
+}
+
+pub def tf_free(handle : i64) -> i64 {
+    tensorflow_free(handle)
+}
+
+pub def ml_backend_ready(handle : i64) -> bool {
+    handle != 0
+}
+
+pub def is_missing_token(raw : str) -> bool {
+    val s = to_lower(trim(raw));
+    s == "" || s == "na" || s == "n/a" || s == "null" || s == "none" || s == "nan" || s == "?"
+}
+
+pub def parse_f64_or(raw : str, fallback : f64) -> f64 {
+    val parsed = parse_f64(trim(raw));
+    if is_some(parsed) { unwrap(parsed) } else { fallback }
+}
+
+pub def clean_numeric_value(raw : str, fallback : f64) -> f64 {
+    if is_missing_token(raw) {
+        fallback
+    } else {
+        parse_f64_or(raw, fallback)
+    }
+}
+
+pub def clean_numeric_column(raw : list<str>, fallback : f64) -> list<f64> {
+    val out : list<f64> = list();
+    for i in 0 .. list_len(raw) {
+        list_push(out, clean_numeric_value(list_get(raw, i), fallback));
+    }
+    out
+}
+
+pub def rows_to_supervised_dataset(rows : list<list<str>>, feature_cols : list<i64>, target_col : i64) -> (list<f64>, list<f64>) {
+    val features : list<f64> = list();
+    val targets : list<f64> = list();
+
+    for i in 0 .. list_len(rows) {
+        val row = list_get(rows, i);
+        for j in 0 .. list_len(feature_cols) {
+            val col = list_get(feature_cols, j);
+            val raw = if col >= 0 && col < list_len(row) { list_get(row, col) } else { "" };
+            list_push(features, clean_numeric_value(raw, 0.0));
+        }
+        val target_raw = if target_col >= 0 && target_col < list_len(row) { list_get(row, target_col) } else { "0" };
+        list_push(targets, clean_numeric_value(target_raw, 0.0));
+    }
+
+    (features, targets)
+}
+
+pub def matrix_col_mean(X_flat : list<f64>, n_features : i64, col : i64) -> f64 {
+    val n = list_len(X_flat) / n_features;
+    if n == 0 {
+        0.0
+    } else {
+        var s = 0.0;
+        for i in 0 .. n {
+            s = s + list_get(X_flat, i * n_features + col);
+        }
+        s / (n to f64)
+    }
+}
+
+pub def matrix_col_std(X_flat : list<f64>, n_features : i64, col : i64) -> f64 {
+    val n = list_len(X_flat) / n_features;
+    if n == 0 {
+        0.0
+    } else {
+        val m = matrix_col_mean(X_flat, n_features, col);
+        var s = 0.0;
+        for i in 0 .. n {
+            val d = list_get(X_flat, i * n_features + col) - m;
+            s = s + d * d;
+        }
+        sqrt(s / (n to f64))
+    }
+}
+
+pub def standardize_matrix(X_flat : list<f64>, n_features : i64) -> list<f64> {
+    val out : list<f64> = list();
+    val n = list_len(X_flat) / n_features;
+    for i in 0 .. n {
+        for j in 0 .. n_features {
+            val m = matrix_col_mean(X_flat, n_features, j);
+            val s = matrix_col_std(X_flat, n_features, j);
+            val raw = list_get(X_flat, i * n_features + j);
+            val x = if s > 0.000001 { (raw - m) / s } else { 0.0 };
+            list_push(out, x);
+        }
+    }
+    out
+}
+
+pub def matrix_row(X_flat : list<f64>, n_features : i64, row_idx : i64) -> list<f64> {
+    val row : list<f64> = list();
+    for j in 0 .. n_features {
+        list_push(row, list_get(X_flat, row_idx * n_features + j));
+    }
+    row
+}
+
 pub def dot(a : list<f64>, b : list<f64>) -> f64 {
     var s = 0.0;
     for i in 0 .. list_len(a) {
