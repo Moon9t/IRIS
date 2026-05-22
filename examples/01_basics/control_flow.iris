@@ -1,164 +1,173 @@
-// control_flow.iris -- control flow constructs
-//
-// Demonstrates while loops, early return, for-each over lists,
-// short-circuit logical operators, for-range, and nested conditionals.
-//
-// Run: iris run examples/control_flow.iris
-
-// =====================
-//  While-based factor search
-// =====================
-
-def first_factor(n: i64) -> i64 {
+def first_factor(n : i64) -> i64 {
     var d = 2
     var result = n
-    var done = false
-    while d * d <= n && !done {
-        if (n % d) == 0 {
+    while d * d <= n {
+        if(n % d) == 0 {
             result = d;
-            done = true
-        } else {
+            break
+        }
+        else {
             d = d + 1
         }
+        
     }
     result
 }
-
-// =====================
-//  Sum odd numbers using skip logic
-// =====================
-
-def sum_odds_to(limit: i64) -> i64 {
+def sum_odds_to(limit : i64) -> i64 {
     var total = 0
     var i = 1
     while i <= limit {
-        if (i % 2) != 0 {
+        if(i % 2) != 0 {
             total = total + i
-        } else {
+        }
+        else {
             val _skip = 0
-        };
+        }
+        ;
         i = i + 1
     }
     total
 }
-
-// =====================
-//  Early return
-// =====================
-
-def is_prime(n: i64) -> bool {
-    if n < 2 { return false };
-    if n == 2 { return true };
-    if (n % 2) == 0 { return false };
+def is_prime(n : i64) -> bool {
+    if n<2 {
+        return false
+    }
+    ;
+    if n == 2 {
+        return true
+    }
+    ;
+    if(n % 2) == 0 {
+        return false
+    }
+    ;
     var d = 3
     while d * d <= n {
-        if (n % d) == 0 { return false };
+        if(n % d) == 0 {
+            return false
+        }
+        ;
         d = d + 2
     }
     true
 }
-
-def count_primes(n: i64) -> i64 {
+def count_primes(n : i64) -> i64 {
     var count = 0
     var i = 2
     while i <= n {
-        if is_prime(i) { count = count + 1 } else { val _n = 0 };
+        if is_prime(i) {
+            count = count + 1
+        }
+        else {
+            val _n = 0
+        }
+        ;
         i = i + 1
     }
     count
 }
-
-// =====================
-//  Short-circuit logical operators
-// =====================
-
-def in_range(x: i64, lo: i64, hi: i64) -> bool {
+def in_range(x : i64, lo : i64, hi : i64) -> bool {
     x >= lo && x <= hi
 }
-
-def is_teen_or_senior(age: i64) -> bool {
+def is_teen_or_senior(age : i64) -> bool {
     (age >= 13 && age <= 19) || age >= 65
 }
-
-// =====================
-//  For-each over a list
-// =====================
-
-def sum_list(items: list<i64>) -> i64 {
+def sum_list(items : list<i64>) -> i64 {
     var total = 0
-    for item in items { total = total + item }
+    for item in items {
+        total = total + item
+    }
     total
 }
-
-def count_positive(items: list<i64>) -> i64 {
+def count_positive(items : list<i64>) -> i64 {
     var count = 0
     for item in items {
-        if item > 0 { count = count + 1 } else { val _n = 0 }
+        if item>0 {
+            count = count + 1
+        }
+        else {
+            val _n = 0
+        }
+        
     }
     count
 }
-
-// =====================
-//  Nested if-else chains (IRIS doesn't have else-if)
-// =====================
-
-def grade(score: i64) -> str {
-    if score >= 90 { "A" } else {
-        if score >= 80 { "B" } else {
-            if score >= 70 { "C" } else {
-                if score >= 60 { "D" } else { "F" }
-            }
-        }
+def grade(score : i64) -> str {
+    if score >= 90 {
+        "A"
     }
+    else {
+        if score >= 80 {
+            "B"
+        }
+        else {
+            if score >= 70 {
+                "C"
+            }
+            else {
+                if score >= 60 {
+                    "D"
+                }
+                else {
+                    "F"
+                }
+                
+            }
+            
+        }
+        
+    }
+    
 }
-
-// =====================
-//  Main
-// =====================
-
 def main() -> i64 {
     print("=== Factor Search ===");
     print(concat("First factor of 91:  ", to_str(first_factor(91))));
     print(concat("First factor of 97:  ", to_str(first_factor(97))));
     print(concat("First factor of 100: ", to_str(first_factor(100))));
-
-    print("\n=== Odd Sum ===");
+    print("
+=== Odd Sum ===");
     print(concat("Sum of odds 1..10: ", to_str(sum_odds_to(10))));
     print(concat("Sum of odds 1..20: ", to_str(sum_odds_to(20))));
-
-    print("\n=== Early return ===");
+    print("
+=== Early return ===");
     print(concat("is_prime(2)  = ", to_str(is_prime(2))));
     print(concat("is_prime(17) = ", to_str(is_prime(17))));
     print(concat("is_prime(18) = ", to_str(is_prime(18))));
     print(concat("is_prime(97) = ", to_str(is_prime(97))));
     print(concat("Primes <= 50: ", to_str(count_primes(50))));
-
-    print("\n=== Short-circuit && / || ===");
+    print("
+=== Short-circuit && / || ===");
     print(concat("in_range(5,1,10)   = ", to_str(in_range(5, 1, 10))));
     print(concat("in_range(15,1,10)  = ", to_str(in_range(15, 1, 10))));
     print(concat("teen_or_senior(15) = ", to_str(is_teen_or_senior(15))));
     print(concat("teen_or_senior(40) = ", to_str(is_teen_or_senior(40))));
     print(concat("teen_or_senior(70) = ", to_str(is_teen_or_senior(70))));
-
-    print("\n=== For-each over list ===");
-    val nums = list()
-    push(nums, -3); push(nums, 5); push(nums, -1);
-    push(nums, 7); push(nums, 0); push(nums, 2);
+    print("
+=== For-each over list ===");
+    val nums = list()push(nums, - 3);
+    push(nums, 5);
+    push(nums, - 1);
+    push(nums, 7);
+    push(nums, 0);
+    push(nums, 2);
     print(concat("Sum:      ", to_str(sum_list(nums))));
     print(concat("Positive: ", to_str(count_positive(nums))));
-
-    print("\n=== For range ===");
+    print("
+=== For range ===");
     var total = 0
-    for i in 1..11 { total = total + i }
+    for i in 1 .. 11 {
+        total = total + i
+    }
     print(concat("Sum 1..10: ", to_str(total)));
-
-    print("\n=== Grading ===");
-    val scores = list()
-    push(scores, 95); push(scores, 85); push(scores, 75);
-    push(scores, 65); push(scores, 50);
+    print("
+=== Grading ===");
+    val scores = list()push(scores, 95);
+    push(scores, 85);
+    push(scores, 75);
+    push(scores, 65);
+    push(scores, 50);
     for s in scores {
         print(concat(to_str(s), concat(" -> ", grade(s))))
     }
-
     0
 }

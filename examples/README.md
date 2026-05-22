@@ -9,7 +9,7 @@ The examples are categorized progressively:
 ### `01_basics/`
 Core language features and syntax.
 - **Variables & Constants:** `constants.iris`
-- **Strings:** `strings.iris`, `string_processing.iris`, `fstrings.iris`
+- **Strings & Input:** `strings.iris`, `string_processing.iris`, `fstrings.iris`, `user_input.iris`
 - **Control Flow:** `control_flow.iris`, `loops.iris`, `block_expressions.iris`
 - **Data Collections:** `arrays.iris`, `test_list.iris`
 - **Other:** `hello.iris`, `fizzbuzz.iris`, `error_handling.iris`

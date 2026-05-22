@@ -986,17 +986,18 @@ fn emit_llvm_instr(
         }
         IrInstr::Spawn { body_fn, args } => {
             if args.is_empty() {
-                writeln!(
-                    out,
-                    "  call void @iris_spawn_fn(ptr @{}, ptr null)",
-                    body_fn
-                )?;
+                writeln!(out, "  call i64 @{}()", body_fn)?;
             } else {
-                writeln!(
-                    out,
-                    "  call void @iris_spawn_fn(ptr @{}_trampoline, ptr null)",
-                    body_fn
-                )?;
+                let mut call_args = Vec::new();
+                for arg_id in args {
+                    let v = val(*arg_id);
+                    let ty = func
+                        .value_type(*arg_id)
+                        .map(|ty| llvm_type_name(ty).unwrap_or_else(|_| "ptr".to_owned()))
+                        .unwrap_or_else(|| "ptr".to_owned());
+                    call_args.push(format!("{} {}", ty, v));
+                }
+                writeln!(out, "  call i64 @{}({})", body_fn, call_args.join(", "))?;
             }
         }
 

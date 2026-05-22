@@ -1,4 +1,6 @@
-bring "storage.iris" bring std.json bring std.fmt
+bring "storage.iris"
+bring std.json
+bring std.fmt
 pub def report_print_list(task_ids : list<i64>) -> i64 {
     val n = len(task_ids);
     if n == 0 {

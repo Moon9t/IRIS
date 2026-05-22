@@ -3036,51 +3036,19 @@ fn emit_instr_ir(
         }
         IrInstr::Spawn { body_fn, args } => {
             if args.is_empty() {
-                // No captures — pass null as the arg.
-                writeln!(
-                    out,
-                    "  call void @iris_spawn_fn(ptr @{}, ptr null)",
-                    body_fn
-                )?;
+                // No captures — call the lifted body directly.
+                writeln!(out, "  call i64 @{}()", body_fn)?;
             } else {
-                // Pack captures into a heap-allocated array of ptr.
-                // Each capture is boxed first, then stored into the array.
-                let n = args.len();
-                let arr = format!("%spawn_arr{}", gep_counter);
-                *gep_counter += 1;
-                // Allocate n * 8 bytes (array of ptr).
-                writeln!(out, "  {} = call ptr @malloc(i64 {})", arr, n * 8)?;
-                for (i, arg_id) in args.iter().enumerate() {
-                    let v = val(*arg_id);
-                    let vty = func.value_type(*arg_id);
-                    let boxed = box_to_ptr(
-                        out,
-                        func,
-                        *arg_id,
-                        &v,
-                        vty,
-                        emitted_types.get(arg_id).map(|s| s.as_str()),
-                        gep_counter,
-                    )?;
-                    let slot = format!("%spawn_slot{}_{}", gep_counter, i);
-                    *gep_counter += 1;
-                    writeln!(
-                        out,
-                        "  {} = getelementptr ptr, ptr {}, i64 {}",
-                        slot, arr, i
-                    )?;
-                    writeln!(out, "  store ptr {}, ptr {}", boxed, slot)?;
+                // Captured values are passed directly to the lifted body.
+                let mut call_args = Vec::new();
+                for arg_id in args {
+                    let ty = func
+                        .value_type(*arg_id)
+                        .map(|ty| llvm_type_complete(ty).unwrap_or_else(|_| "ptr".to_owned()))
+                        .unwrap_or_else(|| "ptr".to_owned());
+                    call_args.push(format!("{} {}", ty, val(*arg_id)));
                 }
-                // Generate a trampoline wrapper name (deferred to the
-                // trampoline_fns collection — emitted after all functions).
-                let trampoline_name = format!("{}_trampoline", body_fn);
-                // Record that we need to generate this trampoline.
-                // For now, emit the call using the trampoline.
-                writeln!(
-                    out,
-                    "  call void @iris_spawn_fn(ptr @{}, ptr {})",
-                    trampoline_name, arr
-                )?;
+                writeln!(out, "  call i64 @{}({})", body_fn, call_args.join(", "))?;
             }
         }
 

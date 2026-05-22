@@ -1,48 +1,41 @@
 bring std.ml
 bring std.fmt
-
 def main() -> i64 {
     print("=== IRIS External ML Runtime Inference ===");
-    
-    // Load the tiny ONNX model downloaded for this project
     val model_path = "models/tiny-random-gpt2.onnx";
     print(concat("Loading ONNX model from: ", model_path));
     val handle = ml.onnx_load(model_path);
-    
     if handle == 0 - 1 {
         print("Failed to load ONNX model. Ensure the models/ directory contains the file.");
         return 1;
+        
     }
-    
     print("Model loaded successfully!");
-    
-    // Create a dummy input tensor (batch=1, seq_len=4)
     val shape = list();
     list_push(shape, 1);
     list_push(shape, 4);
-    
     val data = list();
     var i = 0;
-    while i < 4 {
+    while i<4 {
         list_push(data, to_f64(100 + i * 10));
         i = i + 1;
+        
     }
-    
     val input_tensor = ml.tensor_pair(data, shape);
-    
     print("Running inference...");
     val output_tensor = ml.onnx_run(handle, input_tensor);
-    
-    if ml.tensor_get_ndim(output_tensor) > 0 {
+    if ml.tensor_get_ndim(output_tensor)>0 {
         print("Inference successful!");
         val numel = ml.tensor_get_numel(output_tensor);
         print(concat("Output elements: ", to_str(numel)));
-    } else {
-        print("Inference returned empty tensor (expected if ONNX runtime is a mock shim or input mismatch).");
+        
     }
-    
+    else {
+        print("Inference returned empty tensor (expected if ONNX runtime is a mock shim or input mismatch).");
+        
+    }
     ml.onnx_free(handle);
     print("Cleaned up ONNX resources.");
-    
     return 0;
+    
 }

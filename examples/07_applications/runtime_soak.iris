@@ -49,7 +49,12 @@ def main() -> i64 {
     var iteration = 0
     var checksum = 0
 
-    while elapsed_ms(start) < duration_ms {
+    while true {
+        val elapsed = elapsed_ms(start)
+        if elapsed >= duration_ms {
+            break
+        }
+
         val batch_sum = allocate_batch(iteration, width)
         checksum = checksum + batch_sum
 
@@ -59,7 +64,6 @@ def main() -> i64 {
             val _noop = 0
         };
 
-        val elapsed = elapsed_ms(start)
         if elapsed >= next_report {
             print(concat("soak_ms=", to_str(elapsed)));
             print(concat("iterations=", to_str(iteration + 1)));

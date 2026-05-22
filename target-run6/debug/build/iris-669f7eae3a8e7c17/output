@@ -1,0 +1,142 @@
+cargo:rustc-check-cfg=cfg(onnx_runtime_enabled)
+cargo:rustc-check-cfg=cfg(libtorch_enabled)
+cargo:rustc-check-cfg=cfg(tensorflow_enabled)
+cargo:rerun-if-changed=src/runtime/iris_runtime.c
+cargo:rerun-if-changed=src/runtime/iris_runtime.h
+cargo:rerun-if-changed=src/runtime/onnx_shim.c
+cargo:rerun-if-changed=src/runtime/onnx_shim.h
+cargo:rerun-if-env-changed=SQLITE3_DIR
+cargo:rerun-if-changed=.git/HEAD
+cargo:rerun-if-changed=.git/refs
+cargo:rustc-env=IRIS_BUILD_DATE=2026-05-23
+cargo:rustc-env=IRIS_GIT_HASH_SHORT=2483d07
+cargo:rustc-env=IRIS_GIT_HASH=2483d07e6a57327fc00993930703f5d95d692ee5
+cargo:rustc-env=IRIS_GIT_BRANCH=master
+cargo:rustc-env=IRIS_GIT_DIRTY=true
+cargo:rustc-env=IRIS_RUSTC_VERSION=rustc 1.91.1 (ed61e7d7e 2025-11-07)
+cargo:rustc-env=IRIS_TARGET=x86_64-pc-windows-msvc
+cargo:rustc-env=IRIS_HOST=x86_64-pc-windows-msvc
+cargo:rustc-env=IRIS_PROFILE=debug
+cargo:rustc-env=IRIS_OPT_LEVEL=0
+cargo:rustc-cfg=onnx_runtime_enabled
+cargo:rustc-link-search=native=C:\onnxruntime/lib
+cargo:rustc-link-lib=onnxruntime
+OUT_DIR = Some(C:\Users\Moon\Desktop\Projects\IRIS\target-run6\debug\build\iris-669f7eae3a8e7c17\out)
+OPT_LEVEL = Some(0)
+TARGET = Some(x86_64-pc-windows-msvc)
+CARGO_ENCODED_RUSTFLAGS = Some()
+cargo:rerun-if-env-changed=VCINSTALLDIR
+VCINSTALLDIR = None
+cargo:rerun-if-env-changed=VSTEL_MSBuildProjectFullPath
+VSTEL_MSBuildProjectFullPath = None
+cargo:rerun-if-env-changed=VCToolsVersion
+VCToolsVersion = None
+cargo:rerun-if-env-changed=VSCMD_ARG_VCVARS_SPECTRE
+VSCMD_ARG_VCVARS_SPECTRE = None
+cargo:rerun-if-env-changed=WindowsSdkDir
+WindowsSdkDir = None
+cargo:rerun-if-env-changed=WindowsSDKVersion
+WindowsSDKVersion = None
+cargo:rerun-if-env-changed=LIB
+LIB = None
+PATH = Some(C:\Users\Moon\Desktop\Projects\IRIS\target-run6\debug\deps;C:\Users\Moon\Desktop\Projects\IRIS\target-run6\debug;C:\Users\Moon\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib\rustlib\x86_64-pc-windows-msvc\lib;c:\Users\Moon\AppData\Roaming\Code\User\globalStorage\github.copilot-chat\debugCommand;c:\Users\Moon\AppData\Roaming\Code\User\globalStorage\github.copilot-chat\copilotCli;C:\Users\Moon\AppData\Roaming\Code\User\globalStorage\pleiades.java-extension-pack-jdk\gradle\latest\bin;C:\Users\Moon\AppData\Roaming\Code\User\globalStorage\pleiades.java-extension-pack-jdk\maven\latest\bin;C:\Program Files\Java\jdk-21\bin;C:\Ruby40-x64\bin;C:\Users\Moon\AppData\Local\Programs\Python\Python314\Scripts\;C:\Users\Moon\AppData\Local\Programs\Python\Python314\;C:\Program Files\Common Files\Oracle\Java\javapath;C:\Program Files (x86)\Common Files\Oracle\Java\java8path;C:\Program Files (x86)\Common Files\Oracle\Java\javapath;C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Windows\System32\OpenSSH\;C:\Program Files\Git\cmd;C:\Program Files\Go\bin;C:\ProgramData\chocolatey\bin;C:\Program Files\nodejs\;C:\Program Files\GitHub CLI\;C:\Program Files\CMake\bin;C:\Program Files\Docker\Docker\resources\bin;C:\Program Files (x86)\cloudflared\;C:\Program Files\dotnet\;C:\msys64\bin;C:\Users\Moon\.cargo\bin;C:\msys64\ucrt64\bin;C:\Ruby40-x64\bin;C:\Ruby40-x64\msys64\ucrt64\bin;C:\Ruby40-x64\msys64\usr\bin;c:\Users\Moon\AppData\Roaming\Code\User\globalStorage\github.copilot-chat\debugCommand;c:\Users\Moon\AppData\Roaming\Code\User\globalStorage\github.copilot-chat\copilotCli;C:\Users\Moon\AppData\Roaming\Code\User\globalStorage\pleiades.java-extension-pack-jdk\gradle\latest\bin;C:\Users\Moon\AppData\Roaming\Code\User\globalStorage\pleiades.java-extension-pack-jdk\maven\latest\bin;C:\Program Files\Java\jdk-21\bin;C:\Users\Moon\AppData\Local\Programs\Microsoft VS Code;C:\Ruby40-x64\bin;C:\Users\Moon\AppData\Local\Programs\Python\Python314\Scripts\;C:\Users\Moon\AppData\Local\Programs\Python\Python314\;C:\Program Files\Common Files\Oracle\Java\javapath;C:\Program Files (x86)\Common Files\Oracle\Java\java8path;C:\Program Files (x86)\Common Files\Oracle\Java\javapath;C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0;C:\Users\Moon\.cargo\bin;C:\Users\Moon\AppData\Local\Programs\Antigravity\bin;C:\Users\Moon\AppData\Local\Programs\Microsoft VS Code\bin;C:\Users\Moon\AppData\Local\Programs\Antigravity IDE\bin;c:\Users\Moon\.vscode\extensions\ms-python.debugpy-2026.6.0-win32-x64\bundled\scripts\noConfigScripts;C:\Users\Moon\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin)
+cargo:rerun-if-env-changed=INCLUDE
+INCLUDE = None
+HOST = Some(x86_64-pc-windows-msvc)
+cargo:rerun-if-env-changed=CC_x86_64-pc-windows-msvc
+CC_x86_64-pc-windows-msvc = None
+cargo:rerun-if-env-changed=CC_x86_64_pc_windows_msvc
+CC_x86_64_pc_windows_msvc = None
+cargo:rerun-if-env-changed=HOST_CC
+HOST_CC = None
+cargo:rerun-if-env-changed=CC
+CC = None
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+CARGO_CFG_TARGET_FEATURE = Some(cmpxchg16b,fxsr,sse,sse2,sse3)
+DEBUG = Some(true)
+cargo:rerun-if-env-changed=CFLAGS
+CFLAGS = None
+cargo:rerun-if-env-changed=HOST_CFLAGS
+HOST_CFLAGS = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64_pc_windows_msvc
+CFLAGS_x86_64_pc_windows_msvc = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64-pc-windows-msvc
+CFLAGS_x86_64-pc-windows-msvc = None
+OUT_DIR = Some(C:\Users\Moon\Desktop\Projects\IRIS\target-run6\debug\build\iris-669f7eae3a8e7c17\out)
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+TARGET = Some(x86_64-pc-windows-msvc)
+CARGO_CFG_TARGET_FEATURE = Some(cmpxchg16b,fxsr,sse,sse2,sse3)
+HOST = Some(x86_64-pc-windows-msvc)
+cargo:rerun-if-env-changed=CFLAGS
+CFLAGS = None
+cargo:rerun-if-env-changed=HOST_CFLAGS
+HOST_CFLAGS = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64_pc_windows_msvc
+CFLAGS_x86_64_pc_windows_msvc = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64-pc-windows-msvc
+CFLAGS_x86_64-pc-windows-msvc = None
+OUT_DIR = Some(C:\Users\Moon\Desktop\Projects\IRIS\target-run6\debug\build\iris-669f7eae3a8e7c17\out)
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+TARGET = Some(x86_64-pc-windows-msvc)
+CARGO_CFG_TARGET_FEATURE = Some(cmpxchg16b,fxsr,sse,sse2,sse3)
+HOST = Some(x86_64-pc-windows-msvc)
+cargo:rerun-if-env-changed=CFLAGS
+CFLAGS = None
+cargo:rerun-if-env-changed=HOST_CFLAGS
+HOST_CFLAGS = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64_pc_windows_msvc
+CFLAGS_x86_64_pc_windows_msvc = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64-pc-windows-msvc
+CFLAGS_x86_64-pc-windows-msvc = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+iris_runtime.c
+C:\Users\Moon\Desktop\Projects\IRIS\src\runtime\iris_runtime.h(103): warning C4201: nonstandard extension used: nameless struct/union
+src/runtime/iris_runtime.c(312): warning C4996: 'scanf': This function or variable may be unsafe. Consider using scanf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/runtime/iris_runtime.c(317): warning C4996: 'scanf': This function or variable may be unsafe. Consider using scanf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/runtime/iris_runtime.c(416): warning C4996: 'strcpy': This function or variable may be unsafe. Consider using strcpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/runtime/iris_runtime.c(463): warning C4018: '<': signed/unsigned mismatch
+src/runtime/iris_runtime.c(466): warning C4018: '<': signed/unsigned mismatch
+src/runtime/iris_runtime.c(470): warning C4018: '<': signed/unsigned mismatch
+src/runtime/iris_runtime.c(477): warning C4018: '<': signed/unsigned mismatch
+src/runtime/iris_runtime.c(2295): warning C4267: 'return': conversion from 'size_t' to 'int', possible loss of data
+src/runtime/iris_runtime.c(2489): warning C4996: 'strncpy': This function or variable may be unsafe. Consider using strncpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/runtime/iris_runtime.c(2490): warning C4996: 'strncpy': This function or variable may be unsafe. Consider using strncpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/runtime/iris_runtime.c(2495): warning C4996: 'inet_addr': Use inet_pton() or InetPton() instead or define _WINSOCK_DEPRECATED_NO_WARNINGS to disable deprecated API warnings
+src/runtime/iris_runtime.c(2686): warning C4996: 'strcpy': This function or variable may be unsafe. Consider using strcpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/runtime/iris_runtime.c(2689): warning C4996: 'strcpy': This function or variable may be unsafe. Consider using strcpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/runtime/iris_runtime.c(2690): warning C4996: 'strcpy': This function or variable may be unsafe. Consider using strcpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/runtime/iris_runtime.c(2808): warning C4189: 'start': local variable is initialized but not referenced
+src/runtime/iris_runtime.c(3118): warning C4189: 'plen': local variable is initialized but not referenced
+src/runtime/iris_runtime.c(3146): warning C4189: 'mutable_str': local variable is initialized but not referenced
+src/runtime/iris_runtime.c(3145): warning C4189: 'saved': local variable is initialized but not referenced
+C:\Users\Moon\Desktop\Projects\IRIS\src\runtime\iris_runtime.c(3143) : warning C4702: unreachable code
+onnx_shim.c
+C:\Users\Moon\Desktop\Projects\IRIS\src\runtime\iris_runtime.h(103): warning C4201: nonstandard extension used: nameless struct/union
+src/runtime/onnx_shim.c(33): warning C4133: 'function': incompatible types - from 'const char *' to 'const wchar_t *'
+src/runtime/onnx_shim.c(97): warning C4047: 'function': 'OrtValue **' differs in levels of indirection from 'OrtValue ***'
+src/runtime/onnx_shim.c(97): warning C4024: 'function through pointer': different types for formal and actual parameter 8
+tf_shim.c
+C:\Users\Moon\Desktop\Projects\IRIS\src\runtime\iris_runtime.h(103): warning C4201: nonstandard extension used: nameless struct/union
+cargo:rerun-if-env-changed=AR_x86_64-pc-windows-msvc
+AR_x86_64-pc-windows-msvc = None
+cargo:rerun-if-env-changed=AR_x86_64_pc_windows_msvc
+AR_x86_64_pc_windows_msvc = None
+cargo:rerun-if-env-changed=HOST_AR
+HOST_AR = None
+cargo:rerun-if-env-changed=AR
+AR = None
+cargo:rerun-if-env-changed=ARFLAGS
+ARFLAGS = None
+cargo:rerun-if-env-changed=HOST_ARFLAGS
+HOST_ARFLAGS = None
+cargo:rerun-if-env-changed=ARFLAGS_x86_64_pc_windows_msvc
+ARFLAGS_x86_64_pc_windows_msvc = None
+cargo:rerun-if-env-changed=ARFLAGS_x86_64-pc-windows-msvc
+ARFLAGS_x86_64-pc-windows-msvc = None
+cargo:rustc-link-lib=static=iris_runtime_c
+cargo:rustc-link-search=native=C:\Users\Moon\Desktop\Projects\IRIS\target-run6\debug\build\iris-669f7eae3a8e7c17\out
