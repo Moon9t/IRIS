@@ -124,6 +124,23 @@ sleep(100)                      // sleep 100ms
 
 ---
 
+## stochastic
+
+Stochastic calculus helpers for Brownian motion and related processes.
+
+```iris
+bring std.stochastic
+
+val z = normal()
+val incs = brownian_increments(3, 0.1)
+val path = brownian_path(3, 0.1)
+val gbm = gbm_path(3, 0.1, 1.0, 0.05, 0.2)
+```
+
+**Functions:** `normal_pair`, `normal`, `normal_mu_sigma`, `brownian_step`, `brownian_increments`, `brownian_path`, `brownian_motion`, `gbm_path`
+
+---
+
 ## tensorx
 
 Dense tensor helpers over flat `list<f64>` storage plus shape metadata.

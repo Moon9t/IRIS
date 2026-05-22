@@ -1,4 +1,4 @@
-// phase49.rs — Complete LLVM IR Backend
+// llvm_complete_backend.rs — Complete LLVM IR Backend
 //
 // Tests for the enhanced LLVM IR emitter (EmitKind::LlvmComplete):
 //   - Named struct type declarations (%Name = type { ... })

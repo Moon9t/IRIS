@@ -1,4 +1,4 @@
-// phase51.rs — CPU SIMD / Vectorization
+// simd_vectorization_backend.rs — CPU SIMD / Vectorization
 //
 // Tests for the SIMD-annotated LLVM IR emitter (EmitKind::Simd):
 //   - Phase comment and vector width annotation

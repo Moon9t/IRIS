@@ -327,6 +327,7 @@ static STATIC_COMPLETIONS: &[&str] = &[
     "std.queue",
     "std.heap",
     "std.time",
+    "std.stochastic",
     "std.path",
     "std.fs",
     "std.json",
@@ -1791,6 +1792,7 @@ fn completion_detail_for(label: &str) -> Option<&'static str> {
         "std.queue" => "bring std.queue",
         "std.heap" => "bring std.heap",
         "std.time" => "bring std.time",
+        "std.stochastic" => "bring std.stochastic",
         "std.path" => "bring std.path",
         "std.fs" => "bring std.fs",
         "std.json" => "bring std.json",
@@ -3420,6 +3422,15 @@ fn suggest_bring_for_name(name: &str) -> Option<String> {
         // std.time
         ("now", "std.time"),
         ("sleep", "std.time"),
+        // std.stochastic
+        ("normal", "std.stochastic"),
+        ("normal_pair", "std.stochastic"),
+        ("normal_mu_sigma", "std.stochastic"),
+        ("brownian_step", "std.stochastic"),
+        ("brownian_increments", "std.stochastic"),
+        ("brownian_path", "std.stochastic"),
+        ("brownian_motion", "std.stochastic"),
+        ("gbm_path", "std.stochastic"),
         // std.http
         ("http_get", "std.http"),
         ("http_post", "std.http"),

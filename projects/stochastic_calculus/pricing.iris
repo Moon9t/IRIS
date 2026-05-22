@@ -1,0 +1,22 @@
+bring std.math
+bring "sde.iris"
+
+// Price a European Call Option using Monte Carlo simulation
+pub def monte_carlo_call_option(s0: f64, k: f64, t: f64, r: f64, sigma: f64, simulations: i64) -> f64 {
+    var i = 0;
+    var payoff_sum = 0.0;
+    
+    while i < simulations {
+        val path = sde.simulate_gbm(s0, r, sigma, t, 1);
+        val s_t = list_get(path, 1);
+        var payoff = s_t - k;
+        if payoff < 0.0 {
+            payoff = 0.0;
+        }
+        payoff_sum = payoff_sum + payoff;
+        i = i + 1;
+    }
+    
+    val option_price = (payoff_sum / to_f64(simulations)) * exp(0.0 - (r * t));
+    return option_price;
+}

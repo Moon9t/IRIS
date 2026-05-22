@@ -18,7 +18,7 @@ MAJOR.MINOR.PATCH
 ```
 
 | Segment | When to bump |
-|---------|--------------|
+| --------- | -------------- |
 | **MAJOR** | Breaking changes to syntax, semantics, IR, or stdlib public API |
 | **MINOR** | New features, new builtins, new passes — fully backward-compatible |
 | **PATCH** | Bug fixes, performance improvements, documentation updates |
@@ -101,7 +101,7 @@ These features are available but subject to redesign or removal.
 The following milestones must be met before the `1.0.0` release:
 
 | # | Milestone | Status |
-|---|-----------|--------|
+| --- | --------- | -------- |
 | 1 | All Tier 1 features pass fuzz testing (lexer, parser, lowerer, compiler) | In progress |
 | 2 | Unit test coverage for all `src/` modules (≥200 unit tests) | In progress |
 | 3 | Language specification published (`SPEC.md`) | In progress |

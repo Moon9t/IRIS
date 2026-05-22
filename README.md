@@ -1,15 +1,12 @@
 # IRIS — Intermediate Representation for Intelligent Systems
 
-<p align="center">
-  <strong>A compiled, statically-typed systems &amp; ML language written in Rust.</strong><br/>
-  Low-level control. High-level ML ergonomics. First-class tensor, gradient, and sparsity types.
-</p>
+**The C of Machine Learning — a compiled, statically-typed systems language for building Autonomous Intelligent Systems.**
 
-<p align="center">
-  <a href="https://github.com/moon9t/iris/actions"><img src="https://github.com/moon9t/iris/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/moon9t/iris/releases"><img src="https://img.shields.io/github/v/release/moon9t/iris?label=release" alt="Release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg" alt="License"></a>
-</p>
+Low-level control. High-level ML ergonomics. First-class tensors, autodiff, and ONNX/CUDA/SIMD backends. Build AIS that learn, adapt, and act.
+
+[![CI](https://github.com/moon9t/iris/actions/workflows/ci.yml/badge.svg)](https://github.com/moon9t/iris/actions)
+[![Release](https://img.shields.io/github/v/release/moon9t/iris?label=release)](https://github.com/moon9t/iris/releases)
+[![License](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 
 ---
 
@@ -85,17 +82,18 @@ Build:
 ## Features at a Glance
 
 | Category | Highlights |
-|----------|-----------|
+| ---------- | ----------- |
 | **Type System** | `i32` `i64` `f32` `f64` `bool` `str`, tensors, arrays, tuples, records, enums, generics, traits |
 | **Collections** | `list<T>`, `map<K,V>`, deque, sorted set, bitset, heap, queue |
 | **ML Built-ins** | `tensor<f32,[M,K]>`, `einsum`, `grad<T>` autodiff, `sparse<T>` |
+| **AIS Framework** | Agent loop, perception, decision, action, reinforcement learning |
 | **Concurrency** | `channel<T>`, `spawn`, `par for`, `async/await`, `atomic<T>`, `mutex` |
 | **Error Handling** | `option<T>`, `result<T,E>`, `?` operator, pattern matching (`when`) |
 | **FFI** | C FFI (dlopen/dlsym), Python FFI (eval/exec/call), Rust cdylib FFI |
 | **Native Compilation** | LLVM IR → clang → native binary (Windows, Linux, macOS) |
 | **Package Manager** | `iris pkg init/add/remove/install/build/run` |
 | **Tooling** | LSP server, DAP debugger, REPL, VS Code extension |
-| **Standard Library** | 25 modules: math, string, fmt, fs, json, csv, http, crypto, ffi, os, testing, … |
+| **Standard Library** | 34 modules: math, string, fmt, fs, json, csv, http, ml, nn, ais, rl, crypto, ffi, os, testing, … |
 
 ---
 
@@ -119,6 +117,34 @@ Native IRIS binaries compile the ML shim stubs by default. To link real ONNX or
 TensorFlow native runtimes into generated binaries, set the backend SDK variables
 and opt in with `IRIS_NATIVE_ML_BACKENDS=1` before running `iris build` or
 `iris run`.
+
+---
+
+## Autonomous Intelligent Systems (AIS)
+
+IRIS includes `std.ais` — a framework for building autonomous systems that perceive, decide, and act:
+
+```iris
+bring std.ais
+bring std.ml
+
+def main() -> i64 {
+    // Train a decision model
+    val weights = logreg_train(features, labels, 2, 0.1, 500)
+
+    // Run an autonomous agent loop
+    agent_loop(
+        || sensor_read(),            // perceive
+        |obs| predict(weights, obs), // decide
+        |action| actuate(action),    // act
+        1000                         // max steps
+    )
+}
+```
+
+See `std.ais` for agent lifecycle, perception pipelines, decision strategies
+(argmax, epsilon-greedy, softmax sampling), and `std.rl` for reinforcement
+learning primitives (Q-learning, SARSA, policy gradients, replay buffers).
 
 ---
 
@@ -292,7 +318,7 @@ def f() -> i64 { math.square(5) }
 
 ---
 
-## Standard Library (25 modules)
+## Standard Library (34 modules)
 
 ```iris
 bring std.math       // gcd, lcm, abs_i64, is_even, is_odd, ...
@@ -303,6 +329,7 @@ bring std.json       // json_stringify, json_parse, ...
 bring std.csv        // csv_parse_row, csv_emit_row, ...
 bring std.http       // http_get, http_post, ...
 bring std.time       // now, sleep, elapsed, ...
+bring std.stochastic // normal, brownian_path, gbm_path, ...
 bring std.crypto     // sha256, uuid, hex_encode, hex_decode
 bring std.ffi        // ffi_open, ffi_call_*, python_*, rust_*
 bring std.os         // env_get, env_set, exec_cmd, pid, exit_code
@@ -320,6 +347,12 @@ bring std.dataframe  // DataFrame-like API
 bring std.path       // path manipulation
 bring std.async      // async runtime helpers
 bring std.bitset     // bit array operations
+bring std.ml         // ML pipeline: logreg, standardize, tensor ops
+bring std.nn         // Neural network layers: Linear, Conv2d, RNN, LSTM
+bring std.tensor     // Tensor operations: matmul, reshape, reduce
+bring std.ais        // Autonomous Intelligent Systems: agent loop, decision
+bring std.rl         // Reinforcement learning: Q-learning, SARSA, replay
+bring std.http_server // HTTP server framework
 ```
 
 ---
@@ -396,7 +429,7 @@ Install: `code --install-extension iris-lang-0.4.0.vsix`
 ### REPL Commands
 
 | Command | Alias | Description |
-|---------|-------|-------------|
+| -------- | ------- | ------------- |
 | `:help` | `:h` | Show command reference |
 | `:env` | `:e` | List active definitions and bindings |
 | `:type <expr>` | `:t <expr>` | Show inferred type of expression |
@@ -456,6 +489,7 @@ installer/         Windows installer (Inno Setup)
 ## Building from Source
 
 Requires Rust 1.75+ stable. For native binary compilation, clang 17+ must be in PATH.
+See [REQUIREMENTS.md](REQUIREMENTS.md) for complete system requirements.
 
 ```sh
 cargo build                # Debug build
@@ -493,6 +527,4 @@ Copyright (C) 2024-2026 Moon
 
 ---
 
-<p align="center">
-  <a href="https://github.com/moon9t/iris">github.com/moon9t/iris</a>
-</p>
+[github.com/moon9t/iris](https://github.com/moon9t/iris)

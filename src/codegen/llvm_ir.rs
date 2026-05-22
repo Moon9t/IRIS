@@ -784,12 +784,37 @@ fn emit_function_body(
                 // ListGet/ListPop/MapGet/ChanRecv: runtime returns boxed IrisVal*,
                 // we unbox to the element type, so emitted type matches the elem type.
                 IrInstr::ListGet {
-                    result, elem_ty, ..
+                    result,
+                    list,
+                    elem_ty,
+                    ..
                 }
                 | IrInstr::ListPop {
-                    result, elem_ty, ..
+                    result,
+                    list,
+                    elem_ty,
+                    ..
+                } => {
+                    let resolved_elem_ty = if matches!(elem_ty, IrType::Infer) {
+                        if let Some(IrType::List(inner)) = func.value_type(*list) {
+                            (**inner).clone()
+                        } else {
+                            elem_ty.clone()
+                        }
+                    } else {
+                        elem_ty.clone()
+                    };
+                    let s = match &resolved_elem_ty {
+                        IrType::Scalar(DType::I64) => "i64".to_owned(),
+                        IrType::Scalar(DType::I32) => "i32".to_owned(),
+                        IrType::Scalar(DType::F64) => "double".to_owned(),
+                        IrType::Scalar(DType::F32) => "float".to_owned(),
+                        IrType::Scalar(DType::Bool) => "i1".to_owned(),
+                        _ => "ptr".to_owned(),
+                    };
+                    emitted_types.insert(*result, s);
                 }
-                | IrInstr::ChanRecv {
+                IrInstr::ChanRecv {
                     result, elem_ty, ..
                 } => {
                     let s = match elem_ty {
@@ -5448,10 +5473,10 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_hex_decode(ptr)",
         // Deque
         "declare ptr @iris_deque_new()",
-        "declare void @iris_deque_push_front(ptr, ptr)",
-        "declare void @iris_deque_push_back(ptr, ptr)",
-        "declare ptr @iris_deque_pop_front(ptr)",
-        "declare ptr @iris_deque_pop_back(ptr)",
+        "declare ptr @iris_deque_push_front(ptr, i64)",
+        "declare ptr @iris_deque_push_back(ptr, i64)",
+        "declare i64 @iris_deque_pop_front(ptr)",
+        "declare i64 @iris_deque_pop_back(ptr)",
         "declare i64 @iris_deque_len(ptr)",
         // FFI
         "declare ptr @iris_ffi_open(ptr)",
@@ -5482,8 +5507,8 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_list_take(ptr, i64)",
         "declare ptr @iris_list_drop(ptr, i64)",
         // Deque front/back accessors
-        "declare ptr @iris_deque_front(ptr)",
-        "declare ptr @iris_deque_back(ptr)",
+        "declare i64 @iris_deque_front(ptr)",
+        "declare i64 @iris_deque_back(ptr)",
         // Channel extras
         "declare ptr @iris_chan_try_recv(ptr)",
         "declare i64 @iris_chan_len(ptr)",
@@ -5503,6 +5528,12 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare void @iris_term_reset()",
         "declare i64 @iris_term_rows()",
         "declare i64 @iris_term_cols()",
+        // BitSet
+        "declare ptr @iris_bitset_new(i64)",
+        "declare ptr @iris_bitset_set(ptr, i64)",
+        "declare i1 @iris_bitset_get(ptr, i64)",
+        "declare i64 @iris_bitset_count(ptr)",
+        "declare ptr @iris_bitset_clear(ptr, i64)",
     ];
     for decl in declares {
         writeln!(out, "{}", decl)?;

@@ -8,7 +8,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 
 ## [0.6.0] — Performance & Security
 
-### Added
+### Added (0.5.0)
 
 - **Security audit infrastructure** (`src/security.rs`) — `SecurityPolicy` with
   per-capability allow/deny flags (fs_read, fs_write, network, ffi, process),
@@ -38,7 +38,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
   `iris_sandbox_check_network`, `iris_sandbox_check_ffi`. Default-deny when
   sandbox is active.
 
-### Changed
+### Changed (Unreleased)
 
 - **Compiler pipeline** — now includes `CopyPropPass` (after `StrengthReducePass`)
   and `LicmPass` (after `OpExpandPass`) in all pipeline paths including
@@ -47,7 +47,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 
 ### Tests
 
-- 36 new integration tests in `phase132.rs` covering security policy, path
+- 36 new integration tests in `v0_6_0_performance_security.rs` covering security policy, path
   validation, audit logging, profiler lifecycle / flame graphs / edge cases,
   CopyPropPass constant dedup, LicmPass safety, full pipeline integration,
   pass manager with all v0.6.0 passes, and benchmark file existence.
@@ -56,7 +56,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 
 ## [0.5.0] — ML & Compute
 
-### Added
+### Added (Unreleased)
 
 - **Real tensor runtime** — `IrisTensor` struct in C runtime with 30+ functions:
   create, reshape, transpose, element-wise ops, matrix multiply, reductions
@@ -77,10 +77,11 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
   tensors to sparse (index, value) pairs; `Densify` reconstructs dense arrays
   from sparse representation. C runtime provides `iris_tensor_sparsify`,
   `iris_sparse_to_tensor`, `iris_sparse_dot`, `iris_sparse_nnz`.
-- **48 new tests** — 24 tensor tests (phase129), 17 reverse-mode AD tests
-  (phase130), 7 sparse tensor tests (phase131).
+- **48 new tests** — 24 tensor tests (tensor_runtime_operations.rs), 17 reverse-mode AD tests
+  (reverse_mode_automatic_differentiation.rs), 7 sparse tensor tests
+  (sparse_tensor_operations.rs).
 
-### Improved
+### Changed
 
 - **ONNX binary export** — already functional from prior work; verified with
   8 passing tests.
@@ -113,7 +114,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
   with real TCP calls (`TcpStream::connect`, `TcpListener::bind`, `accept`,
   `read`, `write`, `close`) via the existing `tcp_store` module.
 
-### Added
+### Added (0.2.0)
 
 - `ROADMAP.md` with milestones v0.3.0 through v1.0.0 and beyond.
 - `STABILITY.md` — feature-tier classification (Tier 1 Stable through Tier 4
@@ -365,3 +366,4 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 [Unreleased]: https://github.com/Moon9t/IRIS/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/Moon9t/IRIS/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Moon9t/IRIS/releases/tag/v0.1.0
+

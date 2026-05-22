@@ -1,10 +1,12 @@
 [package]
 name = "iris"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.75"
-description = "IRIS: Intermediate Representation for Intelligent Systems — an ML compiler DSL"
+description = "IRIS: The C of Machine Learning — a compiled systems language for Autonomous Intelligent Systems"
 license = "GPL-2.0-or-later"
+repository = "https://github.com/moon9t/iris"
+homepage = "https://github.com/moon9t/iris"
 
 [[bin]]
 name = "iris"

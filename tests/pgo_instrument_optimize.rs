@@ -1,4 +1,4 @@
-// phase53.rs — Profile-Guided Optimization (PGO)
+// pgo_instrument_optimize.rs — Profile-Guided Optimization (PGO)
 //
 // Tests for the PGO backends (EmitKind::PgoInstrument and EmitKind::PgoOptimize):
 //   - PgoInstrument emits block counter globals (@__profc_*)

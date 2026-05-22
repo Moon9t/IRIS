@@ -1,0 +1,87 @@
+// src/stdlib/stochastic.iris -- IRIS stochastic calculus helpers
+
+// Box-Muller transform for standard normal samples.
+pub def normal_pair() -> (f64, f64) {
+    var u1 = random()
+    val u2 = random()
+    if u1 < 0.000000000001 { u1 = 0.000000000001 }
+    val r = sqrt(0.0 - 2.0 * log(u1))
+    val theta = 2.0 * math_pi() * u2
+    val z0 = r * cos(theta)
+    val z1 = r * sin(theta)
+    (z0, z1)
+}
+
+// Standard normal sample N(0, 1).
+pub def normal() -> f64 {
+    val pair = normal_pair()
+    pair.0
+}
+
+// Normal sample with mean and standard deviation.
+pub def normal_mu_sigma(mu: f64, sigma: f64) -> f64 {
+    mu + sigma * normal()
+}
+
+// Brownian increment for time step dt.
+pub def brownian_step(dt: f64) -> f64 {
+    if dt <= 0.0 { 0.0 } else { sqrt(dt) * normal() }
+}
+
+// List of Brownian increments of length steps.
+pub def brownian_increments(steps: i64, dt: f64) -> list<f64> {
+    val n = if steps < 0 { 0 } else { steps }
+    val out: list<f64> = list()
+    var i = 0
+    while i < n {
+        val _ = list_push(out, brownian_step(dt))
+        i = i + 1
+    }
+    out
+}
+
+// Brownian path with W_0 = 0.0 and length steps + 1.
+pub def brownian_path(steps: i64, dt: f64) -> list<f64> {
+    val n = if steps < 0 { 0 } else { steps }
+    val out: list<f64> = list()
+    var w = 0.0
+    val _ = list_push(out, w)
+    var i = 0
+    while i < n {
+        w = w + brownian_step(dt)
+        val _ = list_push(out, w)
+        i = i + 1
+    }
+    out
+}
+
+// Brownian motion with drift: X_{t+dt} = X_t + mu * dt + sigma * dW.
+pub def brownian_motion(steps: i64, dt: f64, mu: f64, sigma: f64) -> list<f64> {
+    val n = if steps < 0 { 0 } else { steps }
+    val out: list<f64> = list()
+    var x = 0.0
+    val _ = list_push(out, x)
+    var i = 0
+    while i < n {
+        x = x + mu * dt + sigma * brownian_step(dt)
+        val _ = list_push(out, x)
+        i = i + 1
+    }
+    out
+}
+
+// Geometric Brownian motion via Euler-Maruyama.
+pub def gbm_path(steps: i64, dt: f64, s0: f64, mu: f64, sigma: f64) -> list<f64> {
+    val n = if steps < 0 { 0 } else { steps }
+    val out: list<f64> = list()
+    var s = s0
+    val _ = list_push(out, s)
+    var i = 0
+    while i < n {
+        val dw = brownian_step(dt)
+        s = s + mu * s * dt + sigma * s * dw
+        val _ = list_push(out, s)
+        i = i + 1
+    }
+    out
+}

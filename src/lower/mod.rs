@@ -46,16 +46,120 @@ fn did_you_mean<'a>(name: &str, candidates: impl Iterator<Item = &'a str>) -> Op
     let mut best: Option<(usize, &str)> = None;
     for c in candidates {
         let d = levenshtein(name, c);
-        if d <= 2 {
-            if best.map(|(bd, _)| d < bd).unwrap_or(true) {
+        if d <= 2
+            && best.map(|(bd, _)| d < bd).unwrap_or(true) {
                 best = Some((d, c));
             }
-        }
     }
     best.map(|(_, s)| s.to_owned())
 }
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+
+thread_local! {
+    static CURRENT_BRING_PREFIXES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static CURRENT_BRING_MAPPINGS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+}
+
+fn set_current_brings(brings: &[crate::parser::ast::AstBring]) {
+    let mut prefixes = Vec::new();
+    let mut mappings = HashMap::new();
+    for bring in brings {
+        match &bring.path {
+            crate::parser::ast::BringPath::File(rel_path) => {
+                let path_obj = std::path::Path::new(rel_path);
+                let stem = path_obj
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("module")
+                    .replace(['.', '-'], "_");
+                if !prefixes.contains(&stem) {
+                    prefixes.push(stem.clone());
+                }
+                mappings.insert(stem.clone(), stem);
+            }
+            crate::parser::ast::BringPath::Stdlib(name) => {
+                let mangled_prefix = name.replace(['.', '-'], "_");
+                if !prefixes.contains(&mangled_prefix) {
+                    prefixes.push(mangled_prefix.clone());
+                }
+                let qualifier = if let Some(last_dot) = name.rfind('.') {
+                    &name[last_dot + 1..]
+                } else {
+                    name.as_str()
+                };
+                mappings.insert(qualifier.to_string(), mangled_prefix);
+            }
+        }
+    }
+    CURRENT_BRING_PREFIXES.with(|p| {
+        *p.borrow_mut() = prefixes;
+    });
+    CURRENT_BRING_MAPPINGS.with(|m| {
+        *m.borrow_mut() = mappings;
+    });
+}
+
+fn clear_current_brings() {
+    CURRENT_BRING_PREFIXES.with(|p| {
+        p.borrow_mut().clear();
+    });
+    CURRENT_BRING_MAPPINGS.with(|m| {
+        m.borrow_mut().clear();
+    });
+}
+
+fn resolve_qualifier(qualifier: &str) -> String {
+    CURRENT_BRING_MAPPINGS.with(|m| {
+        m.borrow()
+            .get(qualifier)
+            .cloned()
+            .unwrap_or_else(|| qualifier.to_string())
+    })
+}
+
+pub(crate) fn resolve_brought_name(name: &str, module: &IrModule) -> String {
+    let resolved = CURRENT_BRING_PREFIXES.with(|prefixes| {
+        for prefix in prefixes.borrow().iter() {
+            let candidate = format!("{}__{}", prefix, name);
+            if module.struct_def(&candidate).is_some()
+                || module.enum_def(&candidate).is_some()
+                || module.type_alias(&candidate).is_some()
+            {
+                return Some(candidate);
+            }
+        }
+        None
+    });
+    if let Some(res) = resolved {
+        return res;
+    }
+    if module.struct_def(name).is_some()
+        || module.enum_def(name).is_some()
+        || module.type_alias(name).is_some()
+    {
+        return name.to_string();
+    }
+    // Fallback: scan all type registries for any mangled candidate matching `*__name`.
+    let suffix = format!("__{}", name);
+    for key in module.struct_defs.keys() {
+        if key.ends_with(&suffix) {
+            return key.clone();
+        }
+    }
+    for key in module.enum_defs.keys() {
+        if key.ends_with(&suffix) {
+            return key.clone();
+        }
+    }
+    for key in module.type_aliases.keys() {
+        if key.ends_with(&suffix) {
+            return key.clone();
+        }
+    }
+    name.to_string()
+}
 
 use crate::error::LowerError;
 use crate::ir::block::BlockId;
@@ -86,6 +190,15 @@ fn pattern_has_bindings(pattern: &AstWhenPattern) -> bool {
 
 /// Lower an `AstModule` to an `IrModule`.
 pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError> {
+    set_current_brings(&ast.brings);
+    struct ScopeGuard;
+    impl Drop for ScopeGuard {
+        fn drop(&mut self) {
+            clear_current_brings();
+        }
+    }
+    let _guard = ScopeGuard;
+
     let mut module = IrModule::new(module_name);
 
     // 0. Register type aliases so structs/functions can reference them.
@@ -139,7 +252,10 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
         HashMap::new();
     for func in &ast.functions {
         if func.type_params.is_empty() {
-            let ret_ty = lower_type_with_structs(&func.return_ty, &module);
+            let mut ret_ty = lower_type_with_structs(&func.return_ty, &module);
+            if func.is_async {
+                ret_ty = IrType::Chan(Box::new(ret_ty));
+            }
             fn_sigs.insert(func.name.name.clone(), ret_ty);
         } else {
             generic_fn_map.insert(func.name.name.clone(), func.clone());
@@ -226,7 +342,10 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
                     impl_def.trait_name, impl_def.type_name, method.name.name
                 )
             };
-            let ret_ty = lower_type_with_structs(&method.return_ty, &module);
+            let mut ret_ty = lower_type_with_structs(&method.return_ty, &module);
+            if method.is_async {
+                ret_ty = IrType::Chan(Box::new(ret_ty));
+            }
             fn_sigs.insert(mangled.clone(), ret_ty);
             if impl_def.trait_name.is_empty() {
                 // Register in struct_method_map for obj.method() dispatch.
@@ -364,7 +483,77 @@ struct Lowerer<'m> {
     tape_nodes: HashMap<ValueId, ValueId>,
 }
 
+fn get_qualified_enum_name(base: &AstExpr) -> Option<String> {
+    if let AstExpr::FieldAccess {
+        base: inner_base,
+        field: inner_field,
+        ..
+    } = base
+    {
+        if let AstExpr::Ident(inner_ident) = inner_base.as_ref() {
+            let resolved_q = resolve_qualifier(&inner_ident.name);
+            return Some(format!("{}__{}", resolved_q, inner_field));
+        }
+    }
+    None
+}
+
 impl<'m> Lowerer<'m> {
+    fn resolve_unqualified_name(&self, name: &str) -> String {
+        if self.scope.contains_key(name) {
+            return name.to_string();
+        }
+        let resolved = CURRENT_BRING_PREFIXES.with(|prefixes| {
+            for prefix in prefixes.borrow().iter() {
+                let candidate = format!("{}__{}", prefix, name);
+                if self.fn_sigs.contains_key(&candidate)
+                    || self.mono_sigs.borrow().contains_key(&candidate)
+                    || self.const_defs.contains_key(&candidate)
+                    || self.module.struct_def(&candidate).is_some()
+                    || self.module.enum_def(&candidate).is_some()
+                    || self.module.type_alias(&candidate).is_some()
+                {
+                    return Some(candidate);
+                }
+            }
+            None
+        });
+        if let Some(res) = resolved {
+            return res;
+        }
+        if self.fn_sigs.contains_key(name)
+            || self.mono_sigs.borrow().contains_key(name)
+            || self.const_defs.contains_key(name)
+            || self.module.struct_def(name).is_some()
+            || self.module.enum_def(name).is_some()
+            || self.module.type_alias(name).is_some()
+        {
+            return name.to_string();
+        }
+        // Fallback: scan all fn_sigs / const_defs / module registries for any
+        // mangled candidate matching `*__name`. This handles transitive brings
+        // where a dependency module internally brings another module (e.g.,
+        // nn.iris does `bring std.ml` and calls `xavier_init` which becomes
+        // `ml__xavier_init` after mangling).
+        let suffix = format!("__{}", name);
+        for key in self.fn_sigs.keys() {
+            if key.ends_with(&suffix) {
+                return key.clone();
+            }
+        }
+        for key in self.mono_sigs.borrow().keys() {
+            if key.ends_with(&suffix) {
+                return key.clone();
+            }
+        }
+        for key in self.const_defs.keys() {
+            if key.ends_with(&suffix) {
+                return key.clone();
+            }
+        }
+        name.to_string()
+    }
+
     fn new_with_lambda_state(
         builder: IrFunctionBuilder,
         module: &'m IrModule,
@@ -438,7 +627,7 @@ impl<'m> Lowerer<'m> {
                     | DType::U32
                     | DType::U64
                     | DType::USize
-            )
+            ) | IrType::Tensor { .. }
         )
     }
 
@@ -512,7 +701,8 @@ impl<'m> Lowerer<'m> {
 
     /// Looks up a variable and returns its `ValueId` and type.
     fn lookup(&self, ident: &Ident) -> Result<(ValueId, IrType), LowerError> {
-        self.scope.get(&ident.name).cloned().ok_or_else(|| {
+        let resolved_name = self.resolve_unqualified_name(&ident.name);
+        self.scope.get(&resolved_name).cloned().ok_or_else(|| {
             // Build a combined candidate list: scope names + known function names.
             let scope_names: Vec<&str> = self.scope.keys().map(|s| s.as_str()).collect();
             let fn_names: Vec<&str> = self.fn_sigs.keys().map(|s| s.as_str()).collect();
@@ -542,10 +732,11 @@ impl<'m> Lowerer<'m> {
                     );
                     return Ok((result, result_ty));
                 }
+                let resolved_name = self.resolve_unqualified_name(&ident.name);
                 // If the ident is not in scope, check if it's a named function —
                 // create a first-class function reference via MakeClosure.
-                if !self.scope.contains_key(&ident.name) {
-                    if let Some(ret_ty) = self.fn_sigs.get(&ident.name).cloned() {
+                if !self.scope.contains_key(&resolved_name) {
+                    if let Some(ret_ty) = self.fn_sigs.get(&resolved_name).cloned() {
                         let fn_ty = IrType::Fn {
                             params: vec![], // param types not tracked in fn_sigs
                             ret: Box::new(ret_ty.clone()),
@@ -554,7 +745,7 @@ impl<'m> Lowerer<'m> {
                         self.builder.push_instr(
                             IrInstr::MakeClosure {
                                 result,
-                                fn_name: ident.name.clone(),
+                                fn_name: resolved_name,
                                 captures: vec![],
                                 result_ty: fn_ty.clone(),
                             },
@@ -824,10 +1015,11 @@ impl<'m> Lowerer<'m> {
             }
 
             AstExpr::StructLit { name, fields, span } => {
+                let resolved_name = resolve_brought_name(name, self.module);
                 // Look up the struct definition.
                 let struct_fields = self
                     .module
-                    .struct_def(name)
+                    .struct_def(&resolved_name)
                     .ok_or_else(|| LowerError::UndefinedVariable {
                         name: name.clone(),
                         span: *span,
@@ -855,7 +1047,7 @@ impl<'m> Lowerer<'m> {
                 }
 
                 let result_ty = IrType::Struct {
-                    name: name.clone(),
+                    name: resolved_name,
                     fields: struct_fields,
                 };
                 let result = self.builder.fresh_value();
@@ -873,20 +1065,62 @@ impl<'m> Lowerer<'m> {
             AstExpr::FieldAccess { base, field, span } => {
                 // Check if base is a bare identifier naming an enum → variant construction.
                 if let AstExpr::Ident(base_ident) = base.as_ref() {
-                    if let Some(variants) = self.module.enum_def(&base_ident.name) {
+                    // Check if this is a qualified constant lookup
+                    if !self.scope.contains_key(&base_ident.name) {
+                        let resolved_q = resolve_qualifier(&base_ident.name);
+                        let mangled_const = format!("{}__{}", resolved_q, field);
+                        if let Some(val_ty) = self.scope.get(&mangled_const).cloned() {
+                            return Ok(val_ty);
+                        }
+                    }
+
+                    let resolved_enum = self.resolve_unqualified_name(&base_ident.name);
+                    if let Some(variants) = self.module.enum_def(&resolved_enum) {
                         let variants = variants.clone();
                         let variant_idx =
                             variants.iter().position(|v| v == field).ok_or_else(|| {
                                 LowerError::Unsupported {
                                     detail: format!(
                                         "no variant '{}' in enum '{}'",
-                                        field, base_ident.name
+                                        field, resolved_enum
                                     ),
                                     span: *span,
                                 }
                             })?;
                         let result_ty = IrType::Enum {
-                            name: base_ident.name.clone(),
+                            name: resolved_enum,
+                            variants,
+                        };
+                        let result = self.builder.fresh_value();
+                        self.builder.push_instr(
+                            IrInstr::MakeVariant {
+                                result,
+                                variant_idx,
+                                fields: vec![],
+                                result_ty: result_ty.clone(),
+                            },
+                            Some(result_ty.clone()),
+                        );
+                        return Ok((result, result_ty));
+                    }
+                }
+
+                // Check if base is a qualified enum name (e.g. `utils.Shape.Circle`)
+                if let Some(enum_name) = get_qualified_enum_name(base.as_ref()) {
+                    if let Some(variants) = self.module.enum_def(&enum_name) {
+                        let variants = variants.clone();
+                        let variant_idx =
+                            variants.iter().position(|v| v == field).ok_or_else(|| {
+                                LowerError::Unsupported {
+                                    detail: format!(
+                                        "no variant '{}' in enum '{}'",
+                                        field, enum_name
+                                    ),
+                                    span: *span,
+                                }
+                            })?;
+                        let result_ty = IrType::Enum {
+                            name: enum_name,
                             variants,
                         };
                         let result = self.builder.fresh_value();
@@ -1083,8 +1317,30 @@ impl<'m> Lowerer<'m> {
                 Ok((result, to_ty))
             }
 
-            // await expr: just lower the inner expression (async is a no-op at IR level)
-            AstExpr::Await { expr, .. } => self.lower_expr(expr),
+            // await expr: expect a channel and recv its value
+            AstExpr::Await { expr, span } => {
+                let (val, ty) = self.lower_expr(expr)?;
+                match ty {
+                    IrType::Chan(elem) => {
+                        let elem_ty = (*elem).clone();
+                        let result = self.builder.fresh_value();
+                        self.builder.push_instr(
+                            IrInstr::ChanRecv {
+                                result,
+                                chan: val,
+                                elem_ty: elem_ty.clone(),
+                            },
+                            Some(elem_ty.clone()),
+                        );
+                        Ok((result, elem_ty))
+                    }
+                    other => Err(LowerError::TypeMismatch {
+                        expected: "chan<T>".to_owned(),
+                        found: format!("{}", other),
+                        span: *span,
+                    }),
+                }
+            }
 
             AstExpr::Try { expr, span } => {
                 let (val, res_ty) = self.lower_expr(expr)?;
@@ -1190,16 +1446,18 @@ impl<'m> Lowerer<'m> {
                 // Also handle module-qualified calls: `utils.normalize(x)` where `utils` is not a
                 // local variable but `normalize` is a known function (imported via `bring`).
                 if let AstExpr::Ident(base_ident) = base.as_ref() {
+                    let resolved_q = resolve_qualifier(&base_ident.name);
+                    let base_resolved_enum = self.resolve_unqualified_name(&base_ident.name);
                     // Module-qualified call: base not in scope, but method is a known function.
                     if !self.scope.contains_key(&base_ident.name)
-                        && self.module.enum_def(&base_ident.name).is_none()
-                        && self.module.struct_def(&base_ident.name).is_none()
+                        && self.module.enum_def(&base_resolved_enum).is_none()
+                        && self.module.struct_def(&base_resolved_enum).is_none()
                     {
-                        let ret_ty = self
-                            .fn_sigs
-                            .get(method.as_str())
-                            .cloned()
-                            .or_else(|| self.mono_sigs.borrow().get(method.as_str()).cloned());
+                        let mangled_fn = format!("{}__{}", resolved_q, method);
+                        let ret_ty =
+                            self.fn_sigs.get(mangled_fn.as_str()).cloned().or_else(|| {
+                                self.mono_sigs.borrow().get(mangled_fn.as_str()).cloned()
+                            });
                         if let Some(ret_ty) = ret_ty {
                             let mut arg_vals = Vec::with_capacity(args.len());
                             for arg in args {
@@ -1210,7 +1468,37 @@ impl<'m> Lowerer<'m> {
                             self.builder.push_instr(
                                 IrInstr::Call {
                                     result: Some(result),
-                                    callee: method.clone(),
+                                    callee: mangled_fn,
+                                    args: arg_vals,
+                                    result_ty: Some(ret_ty.clone()),
+                                },
+                                Some(ret_ty.clone()),
+                            );
+                            return Ok((result, ret_ty));
+                        }
+
+                        let unqualified_mangled_fn = self.resolve_unqualified_name(method);
+                        let ret_ty = self
+                            .fn_sigs
+                            .get(unqualified_mangled_fn.as_str())
+                            .cloned()
+                            .or_else(|| {
+                                self.mono_sigs
+                                    .borrow()
+                                    .get(unqualified_mangled_fn.as_str())
+                                    .cloned()
+                            });
+                        if let Some(ret_ty) = ret_ty {
+                            let mut arg_vals = Vec::with_capacity(args.len());
+                            for arg in args {
+                                let (v, _) = self.lower_expr(arg)?;
+                                arg_vals.push(v);
+                            }
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::Call {
+                                    result: Some(result),
+                                    callee: unqualified_mangled_fn,
                                     args: arg_vals,
                                     result_ty: Some(ret_ty.clone()),
                                 },
@@ -1219,7 +1507,7 @@ impl<'m> Lowerer<'m> {
                             return Ok((result, ret_ty));
                         }
                     }
-                    if let Some(variants) = self.module.enum_def(&base_ident.name) {
+                    if let Some(variants) = self.module.enum_def(&base_resolved_enum) {
                         let variants = variants.clone();
                         if let Some(variant_idx) = variants.iter().position(|v| v == method) {
                             // This is an enum variant constructor with data.
@@ -1229,7 +1517,36 @@ impl<'m> Lowerer<'m> {
                                 field_vals.push(v);
                             }
                             let result_ty = IrType::Enum {
-                                name: base_ident.name.clone(),
+                                name: base_resolved_enum,
+                                variants,
+                            };
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::MakeVariant {
+                                    result,
+                                    variant_idx,
+                                    fields: field_vals,
+                                    result_ty: result_ty.clone(),
+                                },
+                                Some(result_ty.clone()),
+                            );
+                            return Ok((result, result_ty));
+                        }
+                    }
+                }
+
+                // Check if base is a qualified enum name (e.g. `utils.Shape.Circle(x)`)
+                if let Some(enum_name) = get_qualified_enum_name(base.as_ref()) {
+                    if let Some(variants) = self.module.enum_def(&enum_name) {
+                        let variants = variants.clone();
+                        if let Some(variant_idx) = variants.iter().position(|v| v == method) {
+                            let mut field_vals = Vec::with_capacity(args.len());
+                            for arg in args {
+                                let (v, _) = self.lower_expr(arg)?;
+                                field_vals.push(v);
+                            }
+                            let result_ty = IrType::Enum {
+                                name: enum_name,
                                 variants,
                             };
                             let result = self.builder.fresh_value();
@@ -1453,6 +1770,7 @@ impl<'m> Lowerer<'m> {
         args: &[AstExpr],
         span: Span,
     ) -> Result<(ValueId, IrType), LowerError> {
+        let callee_name = self.resolve_unqualified_name(&callee.name);
         // Built-in: println(x) / print(x) → Print instruction
         if callee.name == "println" || callee.name == "print" || callee.name == "eprintln" {
             if args.len() != 1 {
@@ -2087,7 +2405,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Check if the callee is a closure variable in scope.
-        if let Some((closure_val, IrType::Fn { ret, .. })) = self.scope.get(&callee.name).cloned() {
+        if let Some((closure_val, IrType::Fn { ret, .. })) = self.scope.get(&callee_name).cloned() {
             let ret_ty = *ret;
             let mut arg_vals = Vec::with_capacity(args.len());
             for arg in args {
@@ -2165,6 +2483,28 @@ impl<'m> Lowerer<'m> {
             self.builder
                 .push_instr(IrInstr::ValueToStr { result, operand }, Some(IrType::Str));
             return Ok((result, IrType::Str));
+        }
+
+        // Built-in: to_f64(v) → Cast to f64
+        if callee.name == "to_f64" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "to_f64() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (operand, from_ty) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::Cast {
+                    result,
+                    operand,
+                    from_ty,
+                    to_ty: IrType::Scalar(DType::F64),
+                },
+                Some(IrType::Scalar(DType::F64)),
+            );
+            return Ok((result, IrType::Scalar(DType::F64)));
         }
 
         // Built-in: format("...", args...) — split on "{}" and concat with args
@@ -4257,7 +4597,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Generic function call — monomorphize on demand.
-        if let Some(generic_fn) = self.generic_fns.get(&callee.name).cloned() {
+        if let Some(generic_fn) = self.generic_fns.get(&callee_name).cloned() {
             // Lower each argument and collect concrete types.
             let mut arg_vals = Vec::with_capacity(args.len());
             let mut arg_tys = Vec::with_capacity(args.len());
@@ -4289,7 +4629,10 @@ impl<'m> Lowerer<'m> {
                 }
                 lower_type_with_structs(ty, self.module)
             };
-            let concrete_ret = resolve(&generic_fn.return_ty);
+            let mut concrete_ret = resolve(&generic_fn.return_ty);
+            if generic_fn.is_async {
+                concrete_ret = IrType::Chan(Box::new(concrete_ret));
+            }
 
             // Generate mangled name: e.g. `max_val__i64` for T=i64.
             let mangle = subs
@@ -4297,7 +4640,7 @@ impl<'m> Lowerer<'m> {
                 .map(|ty| format!("{}", ty).replace(['<', '>', ',', ' '], "_"))
                 .collect::<Vec<_>>()
                 .join("_");
-            let mangled = format!("{}__{}", callee.name, mangle);
+            let mangled = format!("{}__{}", callee_name, mangle);
 
             // Register the return type for the mangled name.
             self.mono_sigs
@@ -4347,7 +4690,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Trait method dispatch — static dispatch based on first arg's concrete type.
-        if let Some(impls) = self.trait_dispatch.get(&callee.name).cloned() {
+        if let Some(impls) = self.trait_dispatch.get(&callee_name).cloned() {
             if !args.is_empty() {
                 let (first_val, first_ty) = self.lower_expr(&args[0])?;
                 let type_key = ir_type_dispatch_name(&first_ty);
@@ -4414,24 +4757,24 @@ impl<'m> Lowerer<'m> {
         // pre-collected signatures so the result has a concrete type.
         let ret_ty = self
             .fn_sigs
-            .get(&callee.name)
+            .get(&callee_name)
             .cloned()
-            .or_else(|| self.mono_sigs.borrow().get(&callee.name).cloned())
+            .or_else(|| self.mono_sigs.borrow().get(&callee_name).cloned())
             .unwrap_or(IrType::Infer);
 
         // If we still have Infer here, the callee is not defined anywhere.
         // Emit a compile-time error rather than silently producing bad IR.
-        if ret_ty == IrType::Infer && !self.module.extern_fns.iter().any(|e| e.name == callee.name)
+        if ret_ty == IrType::Infer && !self.module.extern_fns.iter().any(|e| e.name == callee_name)
         {
             return Err(LowerError::UndefinedVariable {
-                name: callee.name.clone(),
+                name: callee_name,
                 span,
                 suggestion: None,
             });
         }
 
         // Build argument list, filling in defaults for omitted trailing args.
-        let defaults = self.fn_defaults.get(&callee.name).cloned();
+        let defaults = self.fn_defaults.get(&callee_name).cloned();
         let mut arg_vals = Vec::with_capacity(args.len());
         for arg in args {
             let (v, _) = self.lower_expr(arg)?;
@@ -4445,13 +4788,13 @@ impl<'m> Lowerer<'m> {
         }
 
         // Check if this is an extern (C-linkage) function.
-        let is_extern = self.module.extern_fns.iter().any(|e| e.name == callee.name);
+        let is_extern = self.module.extern_fns.iter().any(|e| e.name == callee_name);
         if is_extern {
             let result = self.builder.fresh_value();
             self.builder.push_instr(
                 IrInstr::CallExtern {
                     result: Some(result),
-                    name: callee.name.clone(),
+                    name: callee_name.clone(),
                     args: arg_vals,
                     ret_ty: ret_ty.clone(),
                 },
@@ -4464,7 +4807,7 @@ impl<'m> Lowerer<'m> {
         self.builder.push_instr(
             IrInstr::Call {
                 result: Some(result),
-                callee: callee.name.clone(),
+                callee: callee_name,
                 args: arg_vals,
                 result_ty: Some(ret_ty.clone()),
             },
@@ -4516,11 +4859,12 @@ impl<'m> Lowerer<'m> {
                 op: TensorOp::Einsum {
                     notation: notation.clone(),
                 },
-                inputs: input_vals,
+                inputs: input_vals.clone(),
                 result_ty: result_ty.clone(),
             },
             Some(result_ty.clone()),
         );
+        self.maybe_record_tape_result(result, &result_ty, "einsum", &input_vals);
         Ok((result, result_ty))
     }
 
@@ -4921,7 +5265,7 @@ impl<'m> Lowerer<'m> {
         // 3. Allocate one block per arm and a merge block.
         let mut arm_blocks: Vec<BlockId> = Vec::new();
         let mut default_block_opt: Option<BlockId> = None;
-        for (_arm_idx, arm) in arms.iter().enumerate() {
+        for arm in arms.iter() {
             match &arm.pattern {
                 AstWhenPattern::Wildcard => {
                     // Wildcard becomes the default block
@@ -11560,8 +11904,125 @@ impl<'m> Lowerer<'m> {
                             Ok(())
                         }
                     }
+                    AstExpr::FieldAccess { base, field, span } => {
+                        if let AstExpr::Ident(base_ident) = base.as_ref() {
+                            let (base_val, base_ty) = self.lower_expr(base)?;
+                            let struct_fields = match &base_ty {
+                                IrType::Struct { fields, .. } => fields.clone(),
+                                _ => {
+                                    return Err(LowerError::Unsupported {
+                                        detail: format!("field assignment on non-struct type {}", base_ty),
+                                        span: *span,
+                                    });
+                                }
+                            };
+                            let field_index = struct_fields
+                                .iter()
+                                .position(|(n, _)| n == field)
+                                .ok_or_else(|| LowerError::Unsupported {
+                                    detail: format!("no field '{}' in struct", field),
+                                    span: *span,
+                                })?;
+                            let (value_val, _) = self.lower_expr(value)?;
+                            
+                            let mut new_fields = Vec::with_capacity(struct_fields.len());
+                            for i in 0..struct_fields.len() {
+                                if i == field_index {
+                                    new_fields.push(value_val);
+                                } else {
+                                    let f_ty = struct_fields[i].1.clone();
+                                    let f_val = self.builder.fresh_value();
+                                    self.builder.push_instr(
+                                        IrInstr::GetField {
+                                            result: f_val,
+                                            base: base_val,
+                                            field_index: i,
+                                            result_ty: f_ty.clone(),
+                                        },
+                                        Some(f_ty.clone()),
+                                    );
+                                    new_fields.push(f_val);
+                                }
+                            }
+                            let result_ty = base_ty.clone();
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::MakeStruct {
+                                    result,
+                                    fields: new_fields,
+                                    result_ty: result_ty.clone(),
+                                },
+                                Some(result_ty.clone()),
+                            );
+                            self.scope.insert(base_ident.name.clone(), (result, result_ty));
+                            Ok(())
+                        } else {
+                            Err(LowerError::Unsupported {
+                                detail: "field assignment target base must be an identifier".into(),
+                                span: *span,
+                            })
+                        }
+                    }
+                    AstExpr::TupleIndex { base, index, span } => {
+                        if let AstExpr::Ident(base_ident) = base.as_ref() {
+                            let (base_val, base_ty) = self.lower_expr(base)?;
+                            let elem_types = match &base_ty {
+                                IrType::Tuple(elems) => elems.clone(),
+                                _ => {
+                                    return Err(LowerError::Unsupported {
+                                        detail: format!("tuple index assignment on non-tuple type {}", base_ty),
+                                        span: *span,
+                                    });
+                                }
+                            };
+                            if *index >= elem_types.len() {
+                                return Err(LowerError::Unsupported {
+                                    detail: format!("tuple index {} out of bounds for {} elements", index, elem_types.len()),
+                                    span: *span,
+                                });
+                            }
+                            let (value_val, _) = self.lower_expr(value)?;
+                            
+                            let mut new_elements = Vec::with_capacity(elem_types.len());
+                            for i in 0..elem_types.len() {
+                                if i == *index {
+                                    new_elements.push(value_val);
+                                } else {
+                                    let f_ty = elem_types[i].clone();
+                                    let f_val = self.builder.fresh_value();
+                                    self.builder.push_instr(
+                                        IrInstr::GetElement {
+                                            result: f_val,
+                                            base: base_val,
+                                            index: i,
+                                            result_ty: f_ty.clone(),
+                                        },
+                                        Some(f_ty.clone()),
+                                    );
+                                    new_elements.push(f_val);
+                                }
+                            }
+                            let result_ty = base_ty.clone();
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::MakeTuple {
+                                    result,
+                                    elements: new_elements,
+                                    result_ty: result_ty.clone(),
+                                },
+                                Some(result_ty.clone()),
+                            );
+                            self.scope.insert(base_ident.name.clone(), (result, result_ty));
+                            Ok(())
+                        } else {
+                            Err(LowerError::Unsupported {
+                                detail: "tuple index assignment target base must be an identifier".into(),
+                                span: *span,
+                            })
+                        }
+                    }
                     _ => Err(LowerError::Unsupported {
-                        detail: "assignment target must be an identifier or tensor index".into(),
+                        detail: "assignment target must be an identifier, tensor index, struct field, or tuple index".into(),
                         span: *span,
                     }),
                 }
@@ -11866,6 +12327,128 @@ fn lower_function_with_generics_and_subs(
         })
         .collect();
 
+    if func.is_async {
+        let chan_ty = IrType::Chan(Box::new(return_ty.clone()));
+        let inner_name = format!("__async_inner_{}", func.name.name);
+        let spawn_name = format!("__async_spawn_{}", func.name.name);
+
+        // Build the inner (sync) function that computes the result.
+        let mut inner_func = func.clone();
+        inner_func.name.name = inner_name.clone();
+        inner_func.is_async = false;
+        let (mut inner_ir, mut inner_lifted) = lower_function_with_generics_and_subs(
+            &inner_func,
+            module,
+            fn_sigs,
+            const_defs,
+            generic_fns.clone(),
+            mono_cache.clone(),
+            mono_sigs.clone(),
+            type_param_subs.clone(),
+            trait_dispatch.clone(),
+            fn_defaults.clone(),
+        )?;
+        // Preserve attributes on the inner implementation only.
+        inner_ir.attrs = func.attrs.clone();
+
+        // Build the spawn body function: call inner, send on channel, return 0.
+        let mut spawn_params: Vec<Param> = Vec::with_capacity(params.len() + 1);
+        spawn_params.push(Param {
+            name: "__ch".to_owned(),
+            ty: chan_ty.clone(),
+        });
+        spawn_params.extend(params.iter().cloned());
+        let mut spawn_builder = IrFunctionBuilder::new(
+            &spawn_name,
+            spawn_params.clone(),
+            IrType::Scalar(DType::I64),
+        );
+        let spawn_entry = spawn_builder.create_block(Some("entry"));
+        spawn_builder.set_current_block(spawn_entry);
+        let chan_val = spawn_builder.add_block_param(spawn_entry, Some("__ch"), chan_ty.clone());
+        let mut arg_vals: Vec<ValueId> = Vec::with_capacity(params.len());
+        for p in &params {
+            let v = spawn_builder.add_block_param(spawn_entry, Some(&p.name), p.ty.clone());
+            arg_vals.push(v);
+        }
+        let call_result = spawn_builder.fresh_value();
+        spawn_builder.push_instr(
+            IrInstr::Call {
+                result: Some(call_result),
+                callee: inner_name.clone(),
+                args: arg_vals,
+                result_ty: Some(return_ty.clone()),
+            },
+            Some(return_ty.clone()),
+        );
+        spawn_builder.push_instr(
+            IrInstr::ChanSend {
+                chan: chan_val,
+                value: call_result,
+            },
+            None,
+        );
+        let dummy = spawn_builder.fresh_value();
+        let dummy_ty = IrType::Scalar(DType::I64);
+        spawn_builder.push_instr(
+            IrInstr::ConstInt {
+                result: dummy,
+                value: 0,
+                ty: dummy_ty.clone(),
+            },
+            Some(dummy_ty.clone()),
+        );
+        spawn_builder.push_instr(
+            IrInstr::Return {
+                values: vec![dummy],
+            },
+            None,
+        );
+        spawn_builder.seal_unterminated_blocks();
+        let spawn_ir = spawn_builder.build();
+
+        // Build the async wrapper: create channel, spawn worker, return channel.
+        let mut builder = IrFunctionBuilder::new(&func.name.name, params.clone(), chan_ty.clone());
+        let entry = builder.create_block(Some("entry"));
+        builder.set_current_block(entry);
+        let mut wrapper_args: Vec<ValueId> = Vec::with_capacity(params.len());
+        for p in &params {
+            let v = builder.add_block_param(entry, Some(&p.name), p.ty.clone());
+            wrapper_args.push(v);
+        }
+        let chan_val = builder.fresh_value();
+        builder.push_instr(
+            IrInstr::ChanNew {
+                result: chan_val,
+                elem_ty: return_ty.clone(),
+            },
+            Some(chan_ty.clone()),
+        );
+        let mut spawn_args = Vec::with_capacity(wrapper_args.len() + 1);
+        spawn_args.push(chan_val);
+        spawn_args.extend(wrapper_args);
+        builder.push_instr(
+            IrInstr::Spawn {
+                body_fn: spawn_name.clone(),
+                args: spawn_args,
+            },
+            None,
+        );
+        builder.push_instr(
+            IrInstr::Return {
+                values: vec![chan_val],
+            },
+            None,
+        );
+        builder.seal_unterminated_blocks();
+        let mut wrapper_ir = builder.build();
+        wrapper_ir.attrs = Vec::new();
+
+        inner_lifted.push(inner_ir);
+        inner_lifted.push(spawn_ir);
+        return Ok((wrapper_ir, inner_lifted));
+    }
+
     let mut builder = IrFunctionBuilder::new(&func.name.name, params.clone(), return_ty.clone());
     let entry = builder.create_block(Some("entry"));
     builder.set_current_block(entry);
@@ -12028,23 +12611,24 @@ pub fn lower_type_with_structs(ty: &AstType, module: &IrModule) -> IrType {
             if name == "str" {
                 return IrType::Str;
             }
+            let resolved_name = resolve_brought_name(name, module);
             // Check type aliases first.
-            if let Some(aliased) = module.type_alias(name) {
+            if let Some(aliased) = module.type_alias(&resolved_name) {
                 return aliased.clone();
             }
-            if let Some(fields) = module.struct_def(name) {
+            if let Some(fields) = module.struct_def(&resolved_name) {
                 IrType::Struct {
-                    name: name.clone(),
+                    name: resolved_name,
                     fields: fields.clone(),
                 }
-            } else if let Some(variants) = module.enum_def(name) {
+            } else if let Some(variants) = module.enum_def(&resolved_name) {
                 IrType::Enum {
-                    name: name.clone(),
+                    name: resolved_name,
                     variants: variants.clone(),
                 }
             } else {
                 IrType::Struct {
-                    name: name.clone(),
+                    name: resolved_name,
                     fields: Vec::new(),
                 }
             }

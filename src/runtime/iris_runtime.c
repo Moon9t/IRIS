@@ -1600,6 +1600,47 @@ void  iris_tensor_store(void* t, ...)     { (void)t; }
 
 // --- Allocation / lifecycle ------------------------------------------------
 
+typedef struct IrisMemBlock {
+    void* ptr;
+    size_t size;
+    int in_use;
+    struct IrisMemBlock* next;
+} IrisMemBlock;
+
+static IrisMemBlock* tensor_pool_head = NULL;
+static int tensor_pool_enabled = 0;
+static size_t tensor_pool_max_bytes = 0;
+static pthread_mutex_t tensor_pool_mu = PTHREAD_MUTEX_INITIALIZER;
+
+int64_t iris_tensor_pool_init(int64_t limit_bytes) {
+    pthread_mutex_lock(&tensor_pool_mu);
+    if (!tensor_pool_enabled) {
+        tensor_pool_enabled = 1;
+        tensor_pool_max_bytes = (size_t)limit_bytes;
+        tensor_pool_head = NULL;
+    }
+    pthread_mutex_unlock(&tensor_pool_mu);
+    return 0;
+}
+
+int64_t iris_tensor_pool_destroy(void) {
+    pthread_mutex_lock(&tensor_pool_mu);
+    if (tensor_pool_enabled) {
+        IrisMemBlock* curr = tensor_pool_head;
+        while (curr) {
+            IrisMemBlock* next = curr->next;
+            free(curr->ptr);
+            free(curr);
+            curr = next;
+        }
+        tensor_pool_head = NULL;
+        tensor_pool_enabled = 0;
+        tensor_pool_max_bytes = 0;
+    }
+    pthread_mutex_unlock(&tensor_pool_mu);
+    return 0;
+}
+
 IrisTensor* iris_tensor_alloc(int32_t ndim, const int64_t* shape) {
     IrisTensor* t = xmalloc(sizeof(IrisTensor));
     t->ndim = ndim;
@@ -1609,13 +1650,116 @@ IrisTensor* iris_tensor_alloc(int32_t ndim, const int64_t* shape) {
         t->shape[i] = shape[i];
         t->numel *= shape[i];
     }
-    t->data = xmalloc(t->numel * sizeof(float));
-    return t;
+    
+    size_t req_bytes = t->numel * sizeof(float);
+    
+    pthread_mutex_lock(&tensor_pool_mu);
+    if (tensor_pool_enabled) {
+        IrisMemBlock* best_block = NULL;
+        IrisMemBlock* curr = tensor_pool_head;
+        while (curr) {
+            if (!curr->in_use && curr->size >= req_bytes) {
+                if (!best_block || curr->size < best_block->size) {
+                    best_block = curr;
+                }
+            }
+            curr = curr->next;
+        }
+        
+        if (best_block) {
+            best_block->in_use = 1;
+            t->data = best_block->ptr;
+            pthread_mutex_unlock(&tensor_pool_mu);
+            return t;
+        }
+        
+        if (tensor_pool_max_bytes > 0) {
+            size_t total_cached = 0;
+            IrisMemBlock* p = tensor_pool_head;
+            while (p) {
+                total_cached += p->size;
+                p = p->next;
+            }
+            
+            while (total_cached + req_bytes > tensor_pool_max_bytes) {
+                IrisMemBlock* prev = NULL;
+                IrisMemBlock* curr_evict = tensor_pool_head;
+                IrisMemBlock* to_evict = NULL;
+                IrisMemBlock* to_evict_prev = NULL;
+                
+                while (curr_evict) {
+                    if (!curr_evict->in_use) {
+                        to_evict = curr_evict;
+                        to_evict_prev = prev;
+                        break;
+                    }
+                    prev = curr_evict;
+                    curr_evict = curr_evict->next;
+                }
+                
+                if (to_evict) {
+                    if (to_evict_prev) {
+                        to_evict_prev->next = to_evict->next;
+                    } else {
+                        tensor_pool_head = to_evict->next;
+                    }
+                    total_cached -= to_evict->size;
+                    free(to_evict->ptr);
+                    free(to_evict);
+                } else {
+                    break;
+                }
+            }
+        }
+        
+        void* ptr = malloc(req_bytes);
+        if (!ptr) {
+            fprintf(stderr, "iris: tensor pool out of memory\n");
+            abort();
+        }
+        
+        IrisMemBlock* block = xmalloc(sizeof(IrisMemBlock));
+        block->ptr = ptr;
+        block->size = req_bytes;
+        block->in_use = 1;
+        block->next = tensor_pool_head;
+        tensor_pool_head = block;
+        
+        t->data = ptr;
+        pthread_mutex_unlock(&tensor_pool_mu);
+        return t;
+    } else {
+        pthread_mutex_unlock(&tensor_pool_mu);
+        t->data = xmalloc(req_bytes);
+        return t;
+    }
 }
 
 void iris_tensor_free(IrisTensor* t) {
     if (!t) return;
-    free(t->data);
+    
+    pthread_mutex_lock(&tensor_pool_mu);
+    if (tensor_pool_enabled) {
+        IrisMemBlock* curr = tensor_pool_head;
+        while (curr) {
+            if (curr->ptr == t->data) {
+                curr->in_use = 0;
+                break;
+            }
+            curr = curr->next;
+        }
+        
+        if (curr) {
+            pthread_mutex_unlock(&tensor_pool_mu);
+        } else {
+            pthread_mutex_unlock(&tensor_pool_mu);
+            free(t->data);
+        }
+    } else {
+        pthread_mutex_unlock(&tensor_pool_mu);
+        free(t->data);
+    }
+    
     free(t->shape);
     free(t);
 }
@@ -3557,37 +3701,114 @@ char* iris_hex_decode(const char* input) {
 
 IrisList* iris_deque_new(void) { return iris_list_new(); }
 
-void iris_deque_push_front(IrisList* dq, IrisVal* val) {
-    if (!dq || !val) return;
+IrisList* iris_deque_push_front(IrisList* dq, int64_t val) {
+    if (!dq) return dq;
+    IrisVal* boxed = iris_box_i64(val);
     /* shift elements right */
     if (dq->len >= dq->cap) {
         dq->cap = dq->cap ? dq->cap * 2 : 8;
-        dq->data = (IrisVal**)realloc(dq->data, sizeof(IrisVal*) * dq->cap);
+        dq->data = (IrisVal**)xrealloc(dq->data, sizeof(IrisVal*) * dq->cap);
     }
     memmove(dq->data + 1, dq->data, sizeof(IrisVal*) * dq->len);
-    dq->data[0] = val;
+    iris_retain(boxed);
+    dq->data[0] = boxed;
     dq->len++;
+    return dq;
 }
 
-void iris_deque_push_back(IrisList* dq, IrisVal* val) {
-    iris_list_push(dq, val);
+IrisList* iris_deque_push_back(IrisList* dq, int64_t val) {
+    iris_list_push(dq, iris_box_i64(val));
+    return dq;
 }
 
-IrisVal* iris_deque_pop_front(IrisList* dq) {
-    if (!dq || dq->len == 0) return NULL;
+int64_t iris_deque_pop_front(IrisList* dq) {
+    if (!dq || dq->len == 0) return 0;
     IrisVal* v = dq->data[0];
     memmove(dq->data, dq->data + 1, sizeof(IrisVal*) * (dq->len - 1));
     dq->len--;
-    return v;
+    int64_t res = v ? v->i64 : 0;
+    if (v) iris_release(v);
+    return res;
 }
 
-IrisVal* iris_deque_pop_back(IrisList* dq) {
-    if (!dq || dq->len == 0) return NULL;
-    return dq->data[--dq->len];
+int64_t iris_deque_pop_back(IrisList* dq) {
+    if (!dq || dq->len == 0) return 0;
+    IrisVal* v = dq->data[--dq->len];
+    int64_t res = v ? v->i64 : 0;
+    if (v) iris_release(v);
+    return res;
 }
 
 int64_t iris_deque_len(IrisList* dq) {
     return dq ? (int64_t)dq->len : 0;
+}
+
+int64_t iris_deque_front(IrisList* dq) {
+    if (!dq || dq->len == 0) return 0;
+    IrisVal* v = dq->data[0];
+    return v ? v->i64 : 0;
+}
+
+int64_t iris_deque_back(IrisList* dq) {
+    if (!dq || dq->len == 0) return 0;
+    IrisVal* v = dq->data[dq->len - 1];
+    return v ? v->i64 : 0;
+}
+
+/* -- BitSet (backed by IrisList of i64 words) -- */
+
+IrisList* iris_bitset_new(int64_t nbits) {
+    (void)nbits;
+    return iris_list_new();
+}
+
+IrisList* iris_bitset_set(IrisList* bs, int64_t pos) {
+    if (!bs) return bs;
+    int64_t word_idx = pos / 64;
+    int64_t bit_idx  = pos % 64;
+    while ((int64_t)bs->len <= word_idx) {
+        iris_list_push(bs, iris_box_i64(0));
+    }
+    IrisVal* w = bs->data[word_idx];
+    int64_t wv = w ? w->i64 : 0;
+    bs->data[word_idx] = iris_box_i64(wv | (1LL << bit_idx));
+    return bs;
+}
+
+int iris_bitset_get(IrisList* bs, int64_t pos) {
+    if (!bs) return 0;
+    int64_t word_idx = pos / 64;
+    int64_t bit_idx  = pos % 64;
+    if (word_idx >= (int64_t)bs->len) return 0;
+    IrisVal* w = bs->data[word_idx];
+    int64_t wv = w ? w->i64 : 0;
+    return (wv >> bit_idx) & 1;
+}
+
+int64_t iris_bitset_count(IrisList* bs) {
+    if (!bs) return 0;
+    int64_t count = 0;
+    for (size_t i = 0; i < bs->len; i++) {
+        IrisVal* w = bs->data[i];
+        if (w) {
+            uint64_t v = (uint64_t)w->i64;
+            /* popcount via Kernighan trick */
+            while (v) { v &= v - 1; count++; }
+        }
+    }
+    return count;
+}
+
+IrisList* iris_bitset_clear(IrisList* bs, int64_t pos) {
+    if (!bs) return bs;
+    int64_t word_idx = pos / 64;
+    int64_t bit_idx  = pos % 64;
+    if (word_idx < (int64_t)bs->len) {
+        IrisVal* w = bs->data[word_idx];
+        int64_t wv = w ? w->i64 : 0;
+        bs->data[word_idx] = iris_box_i64(wv & ~(1LL << bit_idx));
+    }
+    return bs;
 }
 
 /* -- FFI -- */

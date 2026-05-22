@@ -13,6 +13,7 @@ pub fn stdlib_source(name: &str) -> Option<&'static str> {
         "queue" => Some(include_str!("queue.iris")),
         "heap" => Some(include_str!("heap.iris")),
         "time" => Some(include_str!("time.iris")),
+        "stochastic" => Some(include_str!("stochastic.iris")),
         "path" => Some(include_str!("path.iris")),
         "fs" => Some(include_str!("fs.iris")),
         "json" => Some(include_str!("json.iris")),
@@ -24,6 +25,8 @@ pub fn stdlib_source(name: &str) -> Option<&'static str> {
         "dataset" => Some(include_str!("dataset.iris")),
         "dataframe" => Some(include_str!("dataframe.iris")),
         // Phase 105: New stdlib modules
+        "svg" => Some(include_str!("svg.iris")),
+        "termplot" => Some(include_str!("termplot.iris")),
         "iter" => Some(include_str!("iter.iris")),
         "deque" => Some(include_str!("deque.iris")),
         "bitset" => Some(include_str!("bitset.iris")),
@@ -37,6 +40,9 @@ pub fn stdlib_source(name: &str) -> Option<&'static str> {
         "ml" => Some(include_str!("ml.iris")),
         "nn" => Some(include_str!("nn.iris")),
         "tensor" | "tensorx" => Some(include_str!("tensor.iris")),
+        // Autonomous Intelligent Systems
+        "ais" => Some(include_str!("ais.iris")),
+        "rl" => Some(include_str!("rl.iris")),
         // Networking
         "http_server" => Some(include_str!("http_server.iris")),
         _ => None,

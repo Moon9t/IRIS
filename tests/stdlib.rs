@@ -711,15 +711,14 @@ fn testing_assert_eq_pass() {
 
 #[test]
 fn testing_assert_eq_fail() {
-    assert_eq!(
-        eval(
-            r#"
+    let out = eval(
+        r#"
         bring std.testing
         def main() -> bool { assert_eq(5, 6, "fail") }
-    "#
-        ),
-        "false"
+    "#,
     );
+    assert!(out.contains("false"));
+    assert!(out.contains("FAIL"));
 }
 
 #[test]
@@ -1218,15 +1217,14 @@ fn path_join_path() {
 
 #[test]
 fn log_info_returns_true() {
-    assert_eq!(
-        eval(
-            r#"
+    let out = eval(
+        r#"
         bring std.log
         def main() -> bool { info("hello log") }
-    "#
-        ),
-        "true"
+    "#,
     );
+    assert!(out.contains("true"));
+    assert!(out.contains("hello log"));
 }
 
 #[test]

@@ -1,0 +1,29 @@
+bring std.math
+
+// Simulate a Geometric Brownian Motion (GBM) path
+pub def simulate_gbm(s0: f64, mu: f64, sigma: f64, t: f64, steps: i64) -> list<f64> {
+    val path = list();
+    list_push(path, s0);
+    val dt = t / to_f64(steps);
+    val drift = (mu - (0.5 * sigma * sigma)) * dt;
+    val vol = sigma * sqrt(dt);
+    
+    var s = s0;
+    var i = 0;
+    while i < steps {
+        // Approximate standard normal variable using sum of uniforms
+        // Or Box-Muller transform
+        var u1 = 0.0;
+        while u1 == 0.0 {
+            u1 = random();
+        }
+        val u2 = random();
+        val z = sqrt(-2.0 * log(u1)) * cos(2.0 * 3.1415926535 * u2);
+        
+        s = s * exp(drift + vol * z);
+        list_push(path, s);
+        i = i + 1;
+    }
+    
+    return path;
+}

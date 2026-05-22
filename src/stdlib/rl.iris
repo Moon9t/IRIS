@@ -1,0 +1,208 @@
+// std.rl — Reinforcement Learning Primitives
+// IRIS v0.5.0 "The C of Machine Learning"
+//
+// Tabular and function-approximation RL algorithms.
+// Use with std.ais for complete autonomous system development.
+
+bring std.ml
+
+// ---------------------------------------------------------------------------
+// Experience Replay Buffer
+// ---------------------------------------------------------------------------
+
+/// A single experience tuple: (state, action, reward, next_state, done)
+/// Stored as flat lists for memory efficiency.
+
+record Experience {
+    state: list<f64>,
+    action: i64,
+    reward: f64,
+    next_state: list<f64>,
+    done: bool
+}
+
+record ReplayBuffer {
+    states: list<list<f64>>,
+    actions: list<i64>,
+    rewards: list<f64>,
+    next_states: list<list<f64>>,
+    dones: list<bool>,
+    capacity: i64,
+    size: i64
+}
+
+/// Create a new replay buffer with given capacity.
+pub def replay_buffer_new(capacity: i64) -> ReplayBuffer {
+    ReplayBuffer {
+        states: list(),
+        actions: list(),
+        rewards: list(),
+        next_states: list(),
+        dones: list(),
+        capacity: capacity,
+        size: 0
+    }
+}
+
+/// Add an experience to the buffer (FIFO eviction when full).
+pub def replay_buffer_push(buf: ReplayBuffer, exp: Experience) -> i64 {
+    if buf.size < buf.capacity {
+        list_push(buf.states, exp.state);
+        list_push(buf.actions, exp.action);
+        list_push(buf.rewards, exp.reward);
+        list_push(buf.next_states, exp.next_state);
+        list_push(buf.dones, exp.done);
+        buf.size = buf.size + 1
+    } else {
+        // Overwrite oldest (circular, approximate)
+        val idx = buf.size % buf.capacity
+        list_set(buf.states, idx, exp.state);
+        list_set(buf.actions, idx, exp.action);
+        list_set(buf.rewards, idx, exp.reward);
+        list_set(buf.next_states, idx, exp.next_state);
+        list_set(buf.dones, idx, exp.done);
+    }
+    buf.size
+}
+
+/// Sample a random batch of indices from the buffer.
+pub def replay_buffer_sample_indices(buf: ReplayBuffer, batch_size: i64) -> list<i64> {
+    val indices : list<i64> = list()
+    val max_idx = if buf.size < buf.capacity { buf.size } else { buf.capacity }
+    for i in 0 .. batch_size {
+        list_push(indices, random_range(0, max_idx - 1))
+    }
+    indices
+}
+
+// ---------------------------------------------------------------------------
+// Q-Learning (Tabular)
+// ---------------------------------------------------------------------------
+
+/// Initialize a Q-table as a flat list of zeros.
+/// Indexed as: Q[state * n_actions + action]
+pub def q_table_new(n_states: i64, n_actions: i64) -> list<f64> {
+    val q : list<f64> = list()
+    for i in 0 .. n_states * n_actions {
+        list_push(q, 0.0)
+    }
+    q
+}
+
+/// Get Q-value: Q(state, action)
+pub def q_get(q: list<f64>, state: i64, action: i64, n_actions: i64) -> f64 {
+    list_get(q, state * n_actions + action)
+}
+
+/// Set Q-value: Q(state, action) = value
+pub def q_set(q: list<f64>, state: i64, action: i64, n_actions: i64, value: f64) -> i64 {
+    list_set(q, state * n_actions + action, value);
+    0
+}
+
+/// Q-learning update:
+///   Q(s,a) += alpha * (reward + gamma * max_a' Q(s', a') - Q(s,a))
+pub def q_learning_update(q: list<f64>, state: i64, action: i64,
+                           reward: f64, next_state: i64, n_actions: i64,
+                           alpha: f64, gamma: f64) -> f64 {
+    val current = q_get(q, state, action, n_actions)
+
+    // Find max Q(s', a')
+    var max_next = q_get(q, next_state, 0, n_actions)
+    for a in 1 .. n_actions {
+        val v = q_get(q, next_state, a, n_actions)
+        if v > max_next { max_next = v }
+    }
+
+    val td_target = reward + gamma * max_next
+    val new_value = current + alpha * (td_target - current)
+    q_set(q, state, action, n_actions, new_value);
+    new_value
+}
+
+/// SARSA update:
+///   Q(s,a) += alpha * (reward + gamma * Q(s', a') - Q(s,a))
+pub def sarsa_update(q: list<f64>, state: i64, action: i64,
+                      reward: f64, next_state: i64, next_action: i64,
+                      n_actions: i64, alpha: f64, gamma: f64) -> f64 {
+    val current = q_get(q, state, action, n_actions)
+    val next_q = q_get(q, next_state, next_action, n_actions)
+    val new_value = current + alpha * (reward + gamma * next_q - current)
+    q_set(q, state, action, n_actions, new_value);
+    new_value
+}
+
+/// Choose the best action for a state from the Q-table (greedy).
+pub def q_best_action(q: list<f64>, state: i64, n_actions: i64) -> i64 {
+    var best = 0
+    var best_val = q_get(q, state, 0, n_actions)
+    for a in 1 .. n_actions {
+        val v = q_get(q, state, a, n_actions)
+        if v > best_val {
+            best_val = v
+            best = a
+        }
+    }
+    best
+}
+
+// ---------------------------------------------------------------------------
+// Policy Gradient Helpers
+// ---------------------------------------------------------------------------
+
+/// Compute policy gradient loss for a batch of (log_prob, advantage) pairs.
+/// Returns: -mean(log_prob * advantage)
+pub def policy_gradient_loss(log_probs: list<f64>, advantages: list<f64>) -> f64 {
+    val n = list_len(log_probs)
+    if n == 0 { return 0.0 }
+    var total = 0.0
+    for i in 0 .. n {
+        total = total - list_get(log_probs, i) * list_get(advantages, i)
+    }
+    total / to_f64(n)
+}
+
+/// Compute log-probability under a simple softmax policy.
+/// Given logits for all actions, returns log_prob of the chosen action.
+pub def log_prob_softmax(logits: list<f64>, action: i64) -> f64 {
+    val n = list_len(logits)
+    if n == 0 || action < 0 || action >= n { return -100.0 }
+
+    // log_softmax = logit[action] - log(sum(exp(logits)))
+    var mx = list_get(logits, 0)
+    for i in 1 .. n {
+        val v = list_get(logits, i)
+        if v > mx { mx = v }
+    }
+    var sum_exp = 0.0
+    for i in 0 .. n {
+        sum_exp = sum_exp + exp(list_get(logits, i) - mx)
+    }
+    list_get(logits, action) - mx - log(sum_exp)
+}
+
+// ---------------------------------------------------------------------------
+// Environment Interface
+// ---------------------------------------------------------------------------
+
+/// Simple grid-world environment for testing RL agents.
+/// State is a single integer (position), action is 0=left, 1=right.
+/// Returns (new_state, reward, done).
+pub def grid_step(state: i64, action: i64, grid_size: i64) -> (i64, f64, bool) {
+    val new_state = if action == 0 {
+        if state > 0 { state - 1 } else { 0 }
+    } else {
+        if state < grid_size - 1 { state + 1 } else { grid_size - 1 }
+    }
+    val at_goal = new_state == grid_size - 1
+    val reward = if at_goal { 1.0 } else { -0.01 }
+    (new_state, reward, at_goal)
+}
+
+/// Multi-armed bandit environment.
+/// Returns a random reward drawn from each arm's distribution.
+pub def bandit_pull(arm: i64, n_arms: i64) -> f64 {
+    // Each arm has a different mean reward
+    val mean = to_f64(arm + 1) / to_f64(n_arms + 1)
+    mean + (random() - 0.5) * 0.2
+}

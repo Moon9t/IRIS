@@ -1,0 +1,67 @@
+bring std.math
+bring std.fmt
+bring std.svg
+bring "sde.iris"
+bring "pricing.iris"
+
+def main() -> i64 {
+    print("=== Stochastic Calculus Project ===");
+    
+    val s0 = 100.0;
+    val k = 100.0;
+    val t = 1.0;
+    val r = 0.05;
+    val sigma = 0.2;
+    val simulations = 10000;
+    
+    print("Pricing European Call Option (Monte Carlo)");
+    val args = list();
+    list_push(args, to_str(s0));
+    list_push(args, to_str(k));
+    list_push(args, to_str(t));
+    list_push(args, to_str(r));
+    list_push(args, to_str(sigma));
+    print(fmt.sprintf("S0 = %.2f, K = %.2f, T = %.2f, r = %.2f, sigma = %.2f", args));
+                      
+    val price = pricing.monte_carlo_call_option(s0, k, t, r, sigma, simulations);
+    print(concat("Simulated Option Price: ", to_str(price)));
+    
+    print("");
+    print("Simulating a GBM path (100 steps) and saving to SVG...");
+    val path = sde.simulate_gbm(s0, r, sigma, t, 100);
+    
+    // Create an SVG visualization
+    val ctx = svg.svg_new(800, 400);
+    svg.svg_rect(ctx, 0.0, 0.0, 800.0, 400.0, "#f5f5f5"); // Background
+    
+    // Find min and max for scaling
+    val len = list_len(path);
+    var mn = list_get(path, 0);
+    var mx = list_get(path, 0);
+    var i = 1;
+    while i < len {
+        val v = list_get(path, i);
+        if v < mn { mn = v; }
+        if v > mx { mx = v; }
+        i = i + 1;
+    }
+    
+    val range_y = mx - mn + 1.0;
+    
+    // Draw lines
+    i = 0;
+    while i < len - 1 {
+        val x1 = (to_f64(i) / to_f64(len)) * 800.0;
+        val y1 = 400.0 - ((list_get(path, i) - mn) / range_y) * 380.0 - 10.0;
+        val x2 = (to_f64(i + 1) / to_f64(len)) * 800.0;
+        val y2 = 400.0 - ((list_get(path, i + 1) - mn) / range_y) * 380.0 - 10.0;
+        svg.svg_line(ctx, x1, y1, x2, y2, "#1a73e8", 2.0);
+        i = i + 1;
+    }
+    
+    svg.svg_text(ctx, 10.0, 30.0, "Geometric Brownian Motion Path", "#000000", 20);
+    svg.svg_save(ctx, "gbm_path.svg");
+    print("Saved to gbm_path.svg!");
+    
+    return 0;
+}

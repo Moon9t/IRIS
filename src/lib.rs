@@ -184,14 +184,21 @@ pub fn compile_multi_to_ast(
         let dep_ast_opt: Option<crate::parser::ast::AstModule> =
             if let Some(lib_name) = key.strip_prefix("std:") {
                 crate::stdlib::stdlib_source(lib_name)
-                    .map(|src| parse_recovering(src))
+                    .map(parse_recovering)
                     .transpose()?
             } else {
                 // Key is the stem name (e.g., "utils" from "utils.iris" or legacy "utils").
                 parsed.remove(key.as_str())
             };
 
-        if let Some(dep) = dep_ast_opt {
+        if let Some(mut dep) = dep_ast_opt {
+            let mod_name = if let Some(lib_name) = key.strip_prefix("std:") {
+                lib_name.replace(['.', '-'], "_")
+            } else {
+                key.replace(['.', '-'], "_")
+            };
+            crate::compiler::mangle_module_symbols(&mut dep, &mod_name);
+
             // Enqueue dep's own brings.
             for bring in &dep.brings {
                 let dep_key = bring_key(&bring.path);
@@ -199,21 +206,16 @@ pub fn compile_multi_to_ast(
                     queue.push_back(dep_key);
                 }
             }
-            // Merge pub functions.
-            for func in &dep.functions {
-                if func.is_pub {
-                    main_ast.functions.push(func.clone());
-                }
-            }
-            // Merge structs/enums/consts/type_aliases/traits/impls (backward compat).
-            main_ast.structs.extend(dep.structs.iter().cloned());
-            main_ast.enums.extend(dep.enums.iter().cloned());
-            main_ast.consts.extend(dep.consts.iter().cloned());
-            main_ast
-                .type_aliases
-                .extend(dep.type_aliases.iter().cloned());
-            main_ast.traits.extend(dep.traits.iter().cloned());
-            main_ast.impls.extend(dep.impls.iter().cloned());
+            // Merge all functions (including internal ones) and other definitions
+            main_ast.extern_fns.extend(dep.extern_fns);
+            main_ast.functions.extend(dep.functions);
+            main_ast.structs.extend(dep.structs);
+            main_ast.enums.extend(dep.enums);
+            main_ast.consts.extend(dep.consts);
+            main_ast.type_aliases.extend(dep.type_aliases);
+            main_ast.traits.extend(dep.traits);
+            main_ast.impls.extend(dep.impls);
+            main_ast.models.extend(dep.models);
         }
     }
 

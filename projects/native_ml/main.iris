@@ -1,0 +1,67 @@
+bring std.fmt
+bring std.ml
+bring std.nn
+bring std.math
+
+// Generates a synthetic dataset for a 2D circle classification problem
+def generate_data(n_samples: i64, radius: f64) -> (list<f64>, list<f64>) {
+    val X: list<f64> = list();
+    val Y: list<f64> = list();
+    for i in 0 .. n_samples {
+        val x1 = (random() * 4.0) - 2.0;
+        val x2 = (random() * 4.0) - 2.0;
+        list_push(X, x1);
+        list_push(X, x2);
+        
+        val r2 = x1*x1 + x2*x2;
+        if r2 < radius * radius {
+            list_push(Y, 1.0);
+            list_push(Y, 0.0);
+        } else {
+            list_push(Y, 0.0);
+            list_push(Y, 1.0);
+        }
+    }
+    (X, Y)
+}
+
+def main() -> i64 {
+    print("=== IRIS Native Machine Learning (MLP) ===");
+    
+    val n_train = 500;
+    val data = generate_data(n_train, 1.5);
+    val X = data.0;
+    val Y = data.1;
+    
+    // Create an MLP: 2 inputs -> 8 hidden -> 2 outputs
+    val layers = list();
+    list_push(layers, 2);
+    list_push(layers, 8);
+    list_push(layers, 2);
+    
+    val nn_model = nn.mlp_create(layers);
+    var W = nn_model.0;
+    var B = nn_model.1;
+    val shapes = nn_model.2;
+    
+    print("Training Native MLP with Adam Optimizer...");
+    // epochs=50, lr=0.01, beta1=0.9, beta2=0.999, eps=1e-8, use_relu=1
+    val trained = nn.mlp_train_adam(W, B, shapes, X, Y, n_train, 2, 2, 0.01, 50, 0.9, 0.999, 0.00000001, 1);
+    W = trained.0;
+    B = trained.1;
+    
+    val loss = nn.mlp_eval_loss(W, B, shapes, X, Y, n_train, 2, 2, 1);
+    print(concat("Final MSE Loss: ", to_str(loss)));
+    
+    print("Testing predictions:");
+    val test1 = list(); list_push(test1, 0.0); list_push(test1, 0.0); // Inside circle (Class 0)
+    val test2 = list(); list_push(test2, 2.0); list_push(test2, 2.0); // Outside circle (Class 1)
+    
+    val pred1 = nn.mlp_predict_class(W, B, shapes, test1, 1);
+    val pred2 = nn.mlp_predict_class(W, B, shapes, test2, 1);
+    
+    print(concat("Prediction (0.0, 0.0) -> Class ", to_str(pred1)));
+    print(concat("Prediction (2.0, 2.0) -> Class ", to_str(pred2)));
+    
+    return 0;
+}

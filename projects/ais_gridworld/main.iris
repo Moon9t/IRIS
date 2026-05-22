@@ -1,0 +1,53 @@
+bring std.fmt
+bring std.termplot
+bring "environment.iris"
+bring "agent.iris"
+
+def main() -> i64 {
+    print("=== AIS Gridworld RL ===");
+    
+    val grid_size = 5;
+    val num_episodes = 50;
+    val max_steps = 20;
+    
+    val env = environment.gridworld_new(grid_size);
+    val ag = agent.agent_new(grid_size, 2, 0.1, 0.9, 0.2); // 2 actions: left, right
+    
+    print(concat("Training for ", concat(to_str(num_episodes), " episodes...")));
+    
+    for episode in 0 .. num_episodes {
+        environment.gridworld_reset(env);
+        var step = 0;
+        var done = false;
+        
+        while !done && step < max_steps {
+            val s = env.state;
+            val a = agent.agent_decide(ag, s);
+            
+            val res = environment.gridworld_step(env, a);
+            val next_s = res.0;
+            val reward = res.1;
+            done = res.2;
+            
+            agent.agent_learn(ag, s, a, reward, next_s);
+            step = step + 1;
+        }
+        
+        if episode % 10 == 0 || episode == num_episodes - 1 {
+            val args = list();
+            list_push(args, to_str(episode));
+            list_push(args, to_str(step));
+            print(fmt.sprintf("Episode %d finished in %d steps", args));
+        }
+    }
+    
+    print("Training finished.");
+    
+    print("Agent Q-Table (State 0, Actions 0-1):");
+    val q_vals = list();
+    list_push(q_vals, rl.q_get(ag.q_table, 0, 0, 2));
+    list_push(q_vals, rl.q_get(ag.q_table, 0, 1, 2));
+    termplot.term_plot_bar(q_vals, 40, "Q-Values (Left vs Right)");
+    
+    return 0;
+}

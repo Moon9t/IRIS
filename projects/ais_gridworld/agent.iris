@@ -1,0 +1,35 @@
+bring std.rl
+bring std.ais
+
+pub record Agent {
+    q_table: list<f64>,
+    n_states: i64,
+    n_actions: i64,
+    alpha: f64,
+    gamma: f64,
+    epsilon: f64,
+}
+
+pub def agent_new(states: i64, actions: i64, alpha: f64, gamma: f64, epsilon: f64) -> Agent {
+    Agent {
+        q_table: rl.q_table_new(states, actions),
+        n_states: states,
+        n_actions: actions,
+        alpha: alpha,
+        gamma: gamma,
+        epsilon: epsilon,
+    }
+}
+
+pub def agent_decide(agent: Agent, state: i64) -> i64 {
+    val q_vals = list();
+    for a in 0 .. agent.n_actions {
+        list_push(q_vals, rl.q_get(agent.q_table, state, a, agent.n_actions));
+    }
+    ais.epsilon_greedy(q_vals, agent.epsilon)
+}
+
+pub def agent_learn(agent: Agent, state: i64, action: i64, reward: f64, next_state: i64) -> i64 {
+    rl.q_learning_update(agent.q_table, state, action, reward, next_state, agent.n_actions, agent.alpha, agent.gamma);
+    return 0;
+}
