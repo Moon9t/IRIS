@@ -150,10 +150,9 @@ def demo_reward_processing() -> i64 {
 }
 
 def main() -> i64 {
-    print("╔══════════════════════════════════════════════════╗");
-    print("║  IRIS — Autonomous Intelligent Systems Demo     ║");
-    print("║  The C of Machine Learning                      ║");
-    print("╚══════════════════════════════════════════════════╝");
+    print("===================================================");
+    print("  IRIS - Autonomous Intelligent Systems Demo     ");
+    print("===================================================");
     print("");
 
     // --- Q-Learning Agent ---

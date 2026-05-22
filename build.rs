@@ -113,7 +113,7 @@ fn compile_c_runtime() {
         println!("cargo:rustc-link-search=native={}/lib", tf_dir);
         println!("cargo:rustc-link-lib=tensorflow");
     }
-    build.flag_if_supported("-std=c11");
+    build.flag_if_supported("-std=gnu11");
     build.flag_if_supported("-fPIC");
     build.compile("iris_runtime_c");
     stage_sqlite_runtime_dll();
