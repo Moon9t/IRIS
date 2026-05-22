@@ -57,8 +57,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 thread_local! {
-    static CURRENT_BRING_PREFIXES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    static CURRENT_BRING_MAPPINGS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    static CURRENT_BRING_PREFIXES: RefCell<Vec<Vec<String>>> = const { RefCell::new(Vec::new()) };
+    static CURRENT_BRING_MAPPINGS: RefCell<Vec<HashMap<String, String>>> = const { RefCell::new(Vec::new()) };
 }
 
 fn set_current_brings(brings: &[crate::parser::ast::AstBring]) {
@@ -93,40 +93,43 @@ fn set_current_brings(brings: &[crate::parser::ast::AstBring]) {
         }
     }
     CURRENT_BRING_PREFIXES.with(|p| {
-        *p.borrow_mut() = prefixes;
+        p.borrow_mut().push(prefixes);
     });
     CURRENT_BRING_MAPPINGS.with(|m| {
-        *m.borrow_mut() = mappings;
+        m.borrow_mut().push(mappings);
     });
 }
 
 fn clear_current_brings() {
     CURRENT_BRING_PREFIXES.with(|p| {
-        p.borrow_mut().clear();
+        p.borrow_mut().pop();
     });
     CURRENT_BRING_MAPPINGS.with(|m| {
-        m.borrow_mut().clear();
+        m.borrow_mut().pop();
     });
 }
 
 fn resolve_qualifier(qualifier: &str) -> String {
     CURRENT_BRING_MAPPINGS.with(|m| {
         m.borrow()
-            .get(qualifier)
+            .last()
+            .and_then(|map| map.get(qualifier))
             .cloned()
             .unwrap_or_else(|| qualifier.to_string())
     })
 }
 
 pub(crate) fn resolve_brought_name(name: &str, module: &IrModule) -> String {
-    let resolved = CURRENT_BRING_PREFIXES.with(|prefixes| {
-        for prefix in prefixes.borrow().iter() {
-            let candidate = format!("{}__{}", prefix, name);
-            if module.struct_def(&candidate).is_some()
-                || module.enum_def(&candidate).is_some()
-                || module.type_alias(&candidate).is_some()
-            {
-                return Some(candidate);
+    let resolved = CURRENT_BRING_PREFIXES.with(|prefixes_stack| {
+        if let Some(prefixes) = prefixes_stack.borrow().last() {
+            for prefix in prefixes.iter() {
+                let candidate = format!("{}__{}", prefix, name);
+                if module.struct_def(&candidate).is_some()
+                    || module.enum_def(&candidate).is_some()
+                    || module.type_alias(&candidate).is_some()
+                {
+                    return Some(candidate);
+                }
             }
         }
         None
@@ -502,17 +505,19 @@ impl<'m> Lowerer<'m> {
         if self.scope.contains_key(name) {
             return name.to_string();
         }
-        let resolved = CURRENT_BRING_PREFIXES.with(|prefixes| {
-            for prefix in prefixes.borrow().iter() {
-                let candidate = format!("{}__{}", prefix, name);
-                if self.fn_sigs.contains_key(&candidate)
-                    || self.mono_sigs.borrow().contains_key(&candidate)
-                    || self.const_defs.contains_key(&candidate)
-                    || self.module.struct_def(&candidate).is_some()
-                    || self.module.enum_def(&candidate).is_some()
-                    || self.module.type_alias(&candidate).is_some()
-                {
-                    return Some(candidate);
+        let resolved = CURRENT_BRING_PREFIXES.with(|prefixes_stack| {
+            if let Some(prefixes) = prefixes_stack.borrow().last() {
+                for prefix in prefixes.iter() {
+                    let candidate = format!("{}__{}", prefix, name);
+                    if self.fn_sigs.contains_key(&candidate)
+                        || self.mono_sigs.borrow().contains_key(&candidate)
+                        || self.const_defs.contains_key(&candidate)
+                        || self.module.struct_def(&candidate).is_some()
+                        || self.module.enum_def(&candidate).is_some()
+                        || self.module.type_alias(&candidate).is_some()
+                    {
+                        return Some(candidate);
+                    }
                 }
             }
             None

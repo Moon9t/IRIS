@@ -75,7 +75,7 @@ jobs:
           PASS=0
           FAIL=0
           SKIP=0
-          for f in examples/*.iris; do
+          while IFS= read -r f; do
             NAME=$(basename "$f")
             echo "=== Testing: $NAME ==="
             # Set a 30-second timeout per example
@@ -92,7 +92,7 @@ jobs:
                 FAIL=$((FAIL + 1))
               fi
             fi
-          done
+          done < <(find examples -type f -name '*.iris' | sort)
           echo ""
           echo "=== Results ==="
           echo "  Pass: $PASS"
@@ -125,12 +125,10 @@ jobs:
 
       - name: Test ML examples
         run: |
-          for f in examples/ml_*.iris examples/ais_*.iris; do
-            if [ -f "$f" ]; then
-              echo "=== ML Test: $(basename $f) ==="
-              timeout 60 cargo run --release -- run "$f" || echo "  WARN: exit $?"
-            fi
-          done
+          while IFS= read -r f; do
+            echo "=== ML Test: $(basename $f) ==="
+            timeout 60 cargo run --release -- run "$f" || echo "  WARN: exit $?"
+          done < <(find examples/06_machine_learning examples/07_applications -type f \( -name 'ml_*.iris' -o -name 'ais_*.iris' \) | sort)
 
   # ───────────────── binary size tracking ──────────────────────────
   binary-size:
@@ -192,7 +190,7 @@ jobs:
       - name: Run benchmarks
         run: |
           mkdir -p bench-results
-          for f in benches/*.iris examples/fibonacci.iris examples/factorial.iris; do
+          for f in benches/*.iris examples/02_functions/fibonacci.iris examples/02_functions/factorial.iris; do
             if [ -f "$f" ]; then
               NAME=$(basename "$f" .iris)
               echo "=== Benchmark: $NAME ==="

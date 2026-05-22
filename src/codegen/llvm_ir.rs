@@ -428,7 +428,7 @@ fn emit_llvm_ir_impl(
     // trampoline wrapper that takes a single `ptr` (array of boxed captures),
     // unpacks them, and calls the real spawn body function.
     for func in module.functions() {
-        if !func.name.starts_with("__spawn_") || func.params.is_empty() {
+        if !(func.name.starts_with("__spawn_") || func.name.starts_with("__async_spawn_")) || func.params.is_empty() {
             continue;
         }
         let tramp_name = format!("{}_trampoline", func.name);

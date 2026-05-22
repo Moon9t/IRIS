@@ -147,6 +147,7 @@ IrisTensor* iris_tensor_conv2d(IrisTensor* input, IrisTensor* weight,
     int64_t W_in = has_batch ? input->shape[3] : input->shape[2];
 
     int64_t C_out = weight->shape[0];
+    if (weight->shape[1] != C_in) return NULL;
     int64_t kH    = weight->shape[2];
     int64_t kW    = weight->shape[3];
 

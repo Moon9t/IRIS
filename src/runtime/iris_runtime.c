@@ -1647,11 +1647,23 @@ IrisTensor* iris_tensor_alloc(int32_t ndim, const int64_t* shape) {
     t->shape = xmalloc(ndim * sizeof(int64_t));
     t->numel = 1;
     for (int32_t i = 0; i < ndim; i++) {
+        if (shape[i] < 0) {
+            fprintf(stderr, "IRIS ML: Negative shape dimension\n");
+            abort();
+        }
+        if (shape[i] > 0 && t->numel > (INT64_MAX / shape[i])) {
+            fprintf(stderr, "IRIS ML: Tensor shape overflow\n");
+            abort();
+        }
         t->shape[i] = shape[i];
         t->numel *= shape[i];
     }
     
-    size_t req_bytes = t->numel * sizeof(float);
+    if ((uint64_t)t->numel > (uint64_t)(SIZE_MAX / sizeof(float))) {
+        fprintf(stderr, "IRIS ML: Tensor too large\n");
+        abort();
+    }
+    size_t req_bytes = (size_t)t->numel * sizeof(float);
     
     pthread_mutex_lock(&tensor_pool_mu);
     if (tensor_pool_enabled) {
@@ -3771,6 +3783,7 @@ IrisList* iris_bitset_set(IrisList* bs, int64_t pos) {
     }
     IrisVal* w = bs->data[word_idx];
     int64_t wv = w ? w->i64 : 0;
+    if (w) { iris_release(w); }
     bs->data[word_idx] = iris_box_i64(wv | (1LL << bit_idx));
     return bs;
 }
@@ -3806,6 +3819,7 @@ IrisList* iris_bitset_clear(IrisList* bs, int64_t pos) {
     if (word_idx < (int64_t)bs->len) {
         IrisVal* w = bs->data[word_idx];
         int64_t wv = w ? w->i64 : 0;
+        if (w) { iris_release(w); }
         bs->data[word_idx] = iris_box_i64(wv & ~(1LL << bit_idx));
     }
     return bs;

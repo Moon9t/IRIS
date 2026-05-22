@@ -192,12 +192,6 @@ impl FileCompiler {
         ))
     }
 
-    fn parse_source_cached(&self, path: &Path, src: &str) -> Result<AstModule, Error> {
-        let ast = self.parse_source(src)?;
-        let _ = path;
-        Ok(ast)
-    }
-
     fn resolve_file_path(
         &self,
         rel_path: &str,

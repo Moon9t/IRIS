@@ -2121,6 +2121,28 @@ Sparse tensors save memory and speed up operations when the data is predominantl
 2. Write a function to compute the Frobenius norm of a matrix (square root of sum of squared elements) using `einsum`.
 3. Design a three-layer MLP record type and write its `forward` function.
 
+### 11.7 Native Neural Networks (`std.nn`)
+
+IRIS provides a native neural network library (`std.nn`) that enables training models directly without Python.
+
+```rust
+bring std.nn
+// Create a 2-layer Multi-Layer Perceptron (MLP)
+val model = nn.mlp_create([784, 128, 10])
+// Train with Adam optimizer
+nn.mlp_train_adam(model, inputs, targets, 0.001, 10, 32)
+```
+
+### 11.8 External Model Inference (ONNX)
+
+For production deployment, you can run pre-trained ONNX models natively:
+
+```rust
+bring std.ml
+val session = ml.onnx_load("model.onnx")
+val result = ml.onnx_run(session, [input_tensor])
+```
+
 ---
 
 ## Chapter 12: Native Compilation
@@ -2544,7 +2566,25 @@ IRIS ships with 25 stdlib modules total. Additional modules include:
 | `std.async` | Async runtime helpers |
 | `std.bitset` | Bit array operations |
 
-### 13.13 Using `bring` in the REPL
+### 13.13 `std.svg` & `std.termplot` — Visualizations
+
+IRIS provides native visualization modules:
+
+- **`std.svg`**: Generates scalable vector graphics.
+  ```rust
+  bring std.svg
+  val canvas = svg.svg_new(800, 600)
+  svg.svg_rect(canvas, 10, 10, 100, 100, "red")
+  svg.svg_save(canvas, "plot.svg")
+  ```
+
+- **`std.termplot`**: Renders ASCII terminal charts.
+  ```rust
+  bring std.termplot
+  termplot.term_plot_bar("Loss", values, 50)
+  ```
+
+### 13.14 Using `bring` in the REPL
 
 In the REPL, use `:bring` to load a stdlib module:
 
@@ -3412,6 +3452,13 @@ def main() -> i64 {
 | `python_exec(code)` | Execute Python code (no return) |
 | `python_call(file, func, arg)` | Call a function in a Python file |
 | `python_version()` | Return the Python version string |
+
+You can also evaluate arbitrary Python strings natively within IRIS:
+
+```rust
+bring std.ffi
+val result = ffi.py_eval("'Hello ' + 'World!'")
+```
 
 ### 17.3 Rust FFI
 

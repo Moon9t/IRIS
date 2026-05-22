@@ -1342,7 +1342,7 @@ Declares a function with C linkage that is resolved at link time.
 
 ## 16. Standard Library
 
-IRIS ships with 26 standard library modules, imported via `bring std.NAME`:
+IRIS ships with 34 standard library modules, imported via `bring std.NAME`:
 
 | Module | Contents |
 |--------|----------|
