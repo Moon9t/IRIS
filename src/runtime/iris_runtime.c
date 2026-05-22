@@ -7,6 +7,9 @@
 
 #include "iris_runtime.h"
 
+#define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +20,8 @@
 #include <errno.h>
 #include <time.h>
 #include <inttypes.h>
+
+#include <sys/types.h>
 
 #ifdef _WIN32
   #include <winsock2.h>
