@@ -40,7 +40,7 @@ def f() -> i64 {
 fn test_option_conditional_chain() {
     let src = r#"
 def f() -> i64 {
-    val xs = list()
+    val xs: list<i64> = list()
     push(xs, 10);
     push(xs, 20);
     push(xs, 30);
@@ -108,7 +108,7 @@ def f() -> i64 {
 fn test_option_in_loop() {
     let src = r#"
 def f() -> i64 {
-    val xs = list()
+    val xs: list<i64> = list()
     push(xs, 10);
     push(xs, 20);
     push(xs, 30);

@@ -1,0 +1,21 @@
+bring std.rl
+
+pub record GridWorld {
+    grid_size: i64,
+    state: i64,
+}
+
+pub def gridworld_new(size: i64) -> GridWorld {
+    GridWorld { grid_size: size, state: 0 }
+}
+
+pub def gridworld_reset(env: GridWorld) -> GridWorld {
+    env.state = 0;
+    env
+}
+
+pub def gridworld_step(env: GridWorld, action: i64) -> (i64, f64, bool) {
+    val res = rl.grid_step(env.state, action, env.grid_size);
+    env.state = res.0;
+    res
+}

@@ -506,7 +506,7 @@ pub fn cmd_check() -> Result<(), String> {
         .ok_or("cannot determine project directory")?;
     let deps_dir = project_dir.join(".iris").join("deps");
     let mut missing = Vec::new();
-    for (name, _dep) in &manifest.deps {
+    for name in manifest.deps.keys() {
         let target = deps_dir.join(name);
         if !target.exists() {
             missing.push(name.clone());

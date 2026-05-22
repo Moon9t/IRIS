@@ -435,7 +435,18 @@ impl<'t> Parser<'t> {
                 })
             }
         };
-        Ok(name)
+        let mut full_name = name;
+        while matches!(self.peek_tok(), Token::Dot) {
+            if let Token::Ident(ref subname) = self.peek_next_tok() {
+                let subname = subname.clone();
+                self.advance(); // consume '.'
+                self.advance(); // consume subname
+                full_name = format!("{}__{}", full_name, subname);
+            } else {
+                break;
+            }
+        }
+        Ok(full_name)
     }
 
     /// Parses `trait Name { (def method(params) -> type)* }`.
@@ -1029,7 +1040,20 @@ impl<'t> Parser<'t> {
             }
             Token::Ident(name) => {
                 self.advance();
-                Ok(AstType::Named(name, span))
+                let mut full_name = name;
+                let mut current_span = span;
+                while matches!(self.peek_tok(), Token::Dot) {
+                    if let Token::Ident(ref subname) = self.peek_next_tok() {
+                        let subname = subname.clone();
+                        self.advance(); // consume '.'
+                        let next_span = self.advance().span; // consume subname
+                        full_name = format!("{}__{}", full_name, subname);
+                        current_span = current_span.merge(next_span);
+                    } else {
+                        break;
+                    }
+                }
+                Ok(AstType::Named(full_name, current_span))
             }
             Token::LParen => {
                 self.advance(); // consume '('
@@ -1830,8 +1854,22 @@ impl<'t> Parser<'t> {
                                 )
                             } else {
                                 // `EnumName.Variant` or `EnumName.Variant(a, b, ...)` — enum pattern
-                                self.expect(&Token::Dot)?;
-                                let variant_name = self.expect_ident()?.name;
+                                let mut parts = vec![first_name.clone()];
+                                while matches!(self.peek_tok(), Token::Dot) {
+                                    self.advance(); // consume '.'
+                                    let sub = self.expect_ident()?.name;
+                                    parts.push(sub);
+                                }
+                                if parts.len() < 2 {
+                                    return Err(ParseError::UnexpectedToken {
+                                        expected: "enum variant name pattern (e.g. Enum.Variant)"
+                                            .to_owned(),
+                                        found: format!("{}", self.peek_tok()),
+                                        span: self.current_span(),
+                                    });
+                                }
+                                let variant_name = parts.pop().unwrap();
+                                let enum_name = parts.join("__");
                                 // Optionally parse data bindings: `Variant(a, b, ...)`
                                 let bindings = if matches!(self.peek_tok(), Token::LParen) {
                                     self.advance(); // consume '('
@@ -1848,11 +1886,11 @@ impl<'t> Parser<'t> {
                                     Vec::new()
                                 };
                                 let pat = AstWhenPattern::EnumVariant {
-                                    enum_name: first_name.clone(),
+                                    enum_name: enum_name.clone(),
                                     variant_name: variant_name.clone(),
                                     bindings,
                                 };
-                                (pat, first_name, variant_name)
+                                (pat, enum_name, variant_name)
                             }
                         }
                     };
@@ -1944,11 +1982,43 @@ impl<'t> Parser<'t> {
                         };
                     } else {
                         let end = field.span;
-                        expr = AstExpr::FieldAccess {
-                            base: Box::new(expr),
-                            field: field.name,
-                            span: start.merge(end),
-                        };
+                        let is_struct_lit = matches!(self.peek_tok(), Token::LBrace)
+                            && (matches!(self.peek_next_tok(), Token::RBrace)
+                                || (matches!(self.peek_next_tok(), Token::Ident(_))
+                                    && matches!(self.peek_at(2), Token::Colon)));
+                        if is_struct_lit {
+                            self.advance(); // consume '{'
+                            let mut fields = Vec::new();
+                            while !matches!(self.peek_tok(), Token::RBrace | Token::Eof) {
+                                let field_name = self.expect_ident()?;
+                                self.expect(&Token::Colon)?;
+                                let val = self.parse_expr()?;
+                                fields.push((field_name.name, val));
+                                if matches!(self.peek_tok(), Token::Comma) {
+                                    self.advance();
+                                }
+                            }
+                            let end_brace = self.expect(&Token::RBrace)?;
+                            if let AstExpr::Ident(ref base_ident) = expr {
+                                expr = AstExpr::StructLit {
+                                    name: format!("{}__{}", base_ident.name, field.name),
+                                    fields,
+                                    span: start.merge(end_brace),
+                                };
+                            } else {
+                                expr = AstExpr::FieldAccess {
+                                    base: Box::new(expr),
+                                    field: field.name,
+                                    span: start.merge(end),
+                                };
+                            }
+                        } else {
+                            expr = AstExpr::FieldAccess {
+                                base: Box::new(expr),
+                                field: field.name,
+                                span: start.merge(end),
+                            };
+                        }
                     }
                 }
             } else if matches!(self.peek_tok(), Token::Question) {

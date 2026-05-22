@@ -286,7 +286,7 @@ fn expr_has_exit(expr: &AstExpr) -> bool {
             then_block,
             else_block,
             ..
-        } => body_has_exit(then_block) || else_block.as_ref().is_some_and(|b| body_has_exit(b)),
+        } => body_has_exit(then_block) || else_block.as_ref().is_some_and(body_has_exit),
         AstExpr::Block(b) => body_has_exit(b),
         _ => false,
     }

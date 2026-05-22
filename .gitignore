@@ -59,6 +59,38 @@ tests/_all_tests.txt
 
 # ── Miscellaneous ──
 *.env
+
+# ── VS Code extension build artifacts ──
+vscode-iris/node_modules/
+vscode-iris/out/
+vscode-iris/*.vsix
+
+# ── Release archives & generated docs ──
+*.zip
+*.pdf
+
+# ── Backup files ──
+*.bak
+
+# ── Claude / AI agent state ──
+.claude/
+
+# ── Misc temp files ──
+*.log
+test_output*.txt
+
+# ── Stale build / debug artifacts in repo root ──
+/*.exe
+/*.tmp
+/*.o
+/*.obj
+
+# Test output
+test_results.txt
+tests/_all_tests.txt
+
+# ── Miscellaneous ──
+*.env
 *.local
 *.ll
 *.typst
@@ -66,3 +98,8 @@ tests/_all_tests.txt
 .typst
 *.pdb
 *.json
+
+# ── ML Models & Visualizations ──
+models/
+*.svg
+projects/*/*.exe

@@ -110,10 +110,7 @@ fn compile_c_runtime() {
         println!("cargo:rustc-cfg=tensorflow_enabled");
         build.define("TENSORFLOW_ENABLED", None);
         build.include(format!("{}/include", tf_dir));
-        println!(
-            "cargo:rustc-link-search=native={}",
-            format!("{}/lib", tf_dir)
-        );
+        println!("cargo:rustc-link-search=native={}/lib", tf_dir);
         println!("cargo:rustc-link-lib=tensorflow");
     }
     build.flag_if_supported("-std=c11");

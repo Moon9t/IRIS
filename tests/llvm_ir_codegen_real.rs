@@ -1,4 +1,4 @@
-// phase48.rs — LLVM IR Codegen (Real)
+// llvm_ir_codegen_real.rs — LLVM IR Codegen (Real)
 //
 // Tests that the LLVM emitter now produces proper LLVM IR with:
 //   - target triple and data layout header

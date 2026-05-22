@@ -613,7 +613,7 @@ impl<'m> Interpreter<'m> {
                             TensorOp::Reshape => {
                                 // Reshape: takes the tensor input and the result_ty
                                 // to determine the new shape
-                                if inputs.len() >= 1 {
+                                if !inputs.is_empty() {
                                     let tv = self.get(inputs[0])?;
                                     if let IrValue::Tensor(data, old_shape) = tv {
                                         // Extract new shape from result_ty or from
@@ -1278,7 +1278,7 @@ impl<'m> Interpreter<'m> {
                                     sub.run(&callee, &call_args)?;
                                 }
                             } else {
-                                let chunk_size = (n_iters + n_threads - 1) / n_threads;
+                                let chunk_size = n_iters.div_ceil(n_threads);
                                 let first_err: std::sync::Mutex<Option<InterpError>> =
                                     std::sync::Mutex::new(None);
                                 // Use a dedicated scope so ParFor blocks until all

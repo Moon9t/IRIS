@@ -455,3 +455,14 @@ pub def tensor_batch_matmul(a: Tensor, b: Tensor, batch: i64, m: i64, k: i64, n:
     }
     out
 }
+
+extern def iris_tensor_pool_init(limit_bytes: i64) -> i64
+extern def iris_tensor_pool_destroy() -> i64
+
+pub def tensor_pool_init(limit_bytes: i64) -> i64 {
+    iris_tensor_pool_init(limit_bytes)
+}
+
+pub def tensor_pool_destroy() -> i64 {
+    iris_tensor_pool_destroy()
+}

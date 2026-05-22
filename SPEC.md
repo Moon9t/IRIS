@@ -1342,7 +1342,7 @@ Declares a function with C linkage that is resolved at link time.
 
 ## 16. Standard Library
 
-IRIS ships with 25 standard library modules, imported via `bring std.NAME`:
+IRIS ships with 34 standard library modules, imported via `bring std.NAME`:
 
 | Module | Contents |
 |--------|----------|
@@ -1354,6 +1354,7 @@ IRIS ships with 25 standard library modules, imported via `bring std.NAME`:
 | `std.csv` | `csv_parse_row`, `csv_emit_row` |
 | `std.http` | `http_get`, `http_post` |
 | `std.time` | `now`, `sleep`, `elapsed` |
+| `std.stochastic` | `normal`, `brownian_path`, `gbm_path` |
 | `std.crypto` | `sha256`, `uuid`, `hex_encode`, `hex_decode` |
 | `std.ffi` | `ffi_open`, `ffi_call_*`, `python_*`, `rust_*` |
 | `std.os` | `env_get`, `env_set`, `exec_cmd`, `pid`, `exit_code` |

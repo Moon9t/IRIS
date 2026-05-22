@@ -154,7 +154,7 @@ impl Pass for GcAnnotatePass {
                         !returned_heap_vals.contains(value)
                             && dom
                                 .get(&bid)
-                                .map_or(false, |dom_set| dom_set.contains(def_bid))
+                                .is_some_and(|dom_set| dom_set.contains(def_bid))
                     })
                     .map(|(v, ty, _)| (*v, ty.clone()))
                     .collect();
@@ -312,10 +312,7 @@ fn escape_sources_for_value(
     }
 }
 
-fn defining_instr<'a>(
-    func: &'a crate::ir::function::IrFunction,
-    value: ValueId,
-) -> Option<&'a IrInstr> {
+fn defining_instr(func: &crate::ir::function::IrFunction, value: ValueId) -> Option<&IrInstr> {
     for block in &func.blocks {
         if block.params.iter().any(|param| param.id == value) {
             return None;

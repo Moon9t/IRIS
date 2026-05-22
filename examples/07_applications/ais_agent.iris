@@ -1,0 +1,179 @@
+// ais_agent.iris — Autonomous Intelligent System Example
+// Demonstrates the IRIS AIS framework: agent loop, Q-learning, and decision strategies.
+//
+// Run: iris run examples/ais_agent.iris
+
+bring std.ais
+bring std.rl
+
+// ---------------------------------------------------------------------------
+// A Q-learning agent that learns to navigate a grid world.
+// The grid is a 1D array: [start, ..., ..., goal]
+// Actions: 0 = move left, 1 = move right
+// Reward: +1 at goal, -0.01 per step
+// ---------------------------------------------------------------------------
+
+def train_agent(grid_size: i64, n_episodes: i64, alpha: f64,
+                gamma: f64, epsilon_start: f64) -> list<f64> {
+    val n_actions = 2;
+    val q = q_table_new(grid_size, n_actions);
+
+    for episode in 0 .. n_episodes {
+        var state = 0;
+        var done = false;
+        var steps = 0;
+
+        // Decay epsilon over episodes
+        val epsilon = epsilon_start * (1.0 - to_f64(episode) / to_f64(n_episodes));
+
+        while !done && steps < grid_size * 4 {
+            // Get Q-values for current state
+            val q_values : list<f64> = list();
+            list_push(q_values, q_get(q, state, 0, n_actions));
+            list_push(q_values, q_get(q, state, 1, n_actions));
+
+            // Epsilon-greedy action selection
+            val action = epsilon_greedy(q_values, epsilon);
+
+            // Take action in environment
+            val (next_state, reward, step_done) = grid_step(state, action, grid_size);
+            done = step_done;
+
+            // Q-learning update
+            q_learning_update(q, state, action, reward, next_state,
+                              n_actions, alpha, gamma);
+
+            state = next_state;
+            steps = steps + 1;
+        }
+
+        // Print progress every 100 episodes
+        if episode % 100 == 0 {
+            print(concat("Episode ", concat(to_str(episode),
+                  concat(": steps = ", to_str(steps)))));
+        }
+    }
+
+    q
+}
+
+def evaluate_agent(q: list<f64>, grid_size: i64, n_actions: i64) -> i64 {
+    var state = 0;
+    var steps = 0;
+    var done = false;
+
+    print("");
+    print("=== Agent Evaluation (greedy policy) ===");
+
+    while !done && steps < grid_size * 2 {
+        val action = q_best_action(q, state, n_actions);
+        val action_name = if action == 0 { "LEFT " } else { "RIGHT" };
+
+        val (next_state, reward, step_done) = grid_step(state, action, grid_size);
+        done = step_done;
+
+        print(concat("  State ", concat(to_str(state),
+              concat(" → action=", concat(action_name,
+              concat(" → state=", concat(to_str(next_state),
+              concat(" reward=", to_str(reward)))))))));
+
+        state = next_state;
+        steps = steps + 1;
+    }
+
+    if done {
+        print(concat("Agent reached the goal in ", concat(to_str(steps), " steps!")));
+    } else {
+        print("Agent failed to reach the goal.");
+    }
+
+    steps
+}
+
+def demo_decision_strategies() -> i64 {
+    print("");
+    print("=== Decision Strategy Demo ===");
+
+    val logits : list<f64> = list();
+    list_push(logits, 1.0);
+    list_push(logits, 2.5);
+    list_push(logits, 0.5);
+    list_push(logits, 3.0);
+
+    // Argmax — always picks the best
+    val best = argmax(logits);
+    print(concat("  argmax([1.0, 2.5, 0.5, 3.0]) = ", to_str(best)));
+
+    // Epsilon-greedy — explores with probability epsilon
+    val eg = epsilon_greedy(logits, 0.1);
+    print(concat("  epsilon_greedy(eps=0.1) chose action ", to_str(eg)));
+
+    // Softmax sampling — proportional to exp(logit)
+    val sm = softmax_sample(logits);
+    print(concat("  softmax_sample chose action ", to_str(sm)));
+
+    // Boltzmann — temperature-controlled exploration
+    val hot = boltzmann_sample(logits, 2.0);
+    print(concat("  boltzmann(temp=2.0) chose action ", to_str(hot)));
+    val cold = boltzmann_sample(logits, 0.1);
+    print(concat("  boltzmann(temp=0.1) chose action ", to_str(cold)));
+
+    0
+}
+
+def demo_reward_processing() -> i64 {
+    print("");
+    print("=== Reward Processing Demo ===");
+
+    val rewards : list<f64> = list();
+    list_push(rewards, 0.0);
+    list_push(rewards, 0.0);
+    list_push(rewards, 0.0);
+    list_push(rewards, 1.0);
+
+    val returns = discount_rewards(rewards, 0.99);
+    print("  Raw rewards:        [0, 0, 0, 1]");
+    print(concat("  Discounted (γ=0.99): [",
+        concat(to_str(list_get(returns, 0)), concat(", ",
+        concat(to_str(list_get(returns, 1)), concat(", ",
+        concat(to_str(list_get(returns, 2)), concat(", ",
+        concat(to_str(list_get(returns, 3)), "]")))))))));
+
+    val normalized = normalize_list(returns);
+    print(concat("  Normalized:          [",
+        concat(to_str(list_get(normalized, 0)), concat(", ",
+        concat(to_str(list_get(normalized, 1)), concat(", ",
+        concat(to_str(list_get(normalized, 2)), concat(", ",
+        concat(to_str(list_get(normalized, 3)), "]")))))))));
+
+    0
+}
+
+def main() -> i64 {
+    print("╔══════════════════════════════════════════════════╗");
+    print("║  IRIS — Autonomous Intelligent Systems Demo     ║");
+    print("║  The C of Machine Learning                      ║");
+    print("╚══════════════════════════════════════════════════╝");
+    print("");
+
+    // --- Q-Learning Agent ---
+    print("=== Training Q-Learning Agent ===");
+    print("Environment: 1D grid world (10 cells, goal at right)");
+    print("");
+
+    val grid_size = 10;
+    val q = train_agent(grid_size, 500, 0.1, 0.99, 1.0);
+
+    // Evaluate the trained agent
+    evaluate_agent(q, grid_size, 2);
+
+    // --- Decision Strategies ---
+    demo_decision_strategies();
+
+    // --- Reward Processing ---
+    demo_reward_processing();
+
+    print("");
+    print("All AIS demos completed successfully.");
+    0
+}

@@ -1,4 +1,4 @@
-// phase50.rs — CUDA Kernel Codegen
+// cuda_kernel_codegen.rs — CUDA Kernel Codegen
 //
 // Tests for the CUDA/NVPTX IR emitter (EmitKind::Cuda):
 //   - NVPTX64 target triple

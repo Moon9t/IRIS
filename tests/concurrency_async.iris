@@ -1,0 +1,314 @@
+def ok(b: bool) -> i64 { if b { 0 } else { 1 } }
+
+async def add1(x: i64) -> i64 { x + 1 }
+async def mul2(x: i64) -> i64 { x * 2 }
+async def sum3(a: i64, b: i64, c: i64) -> i64 { a + b + c }
+async def chain(x: i64) -> i64 {
+    val a = await add1(x)
+    val b = await mul2(a)
+    b
+}
+
+def test_channel_send_recv_1() -> i64 {
+    val ch = channel()
+    send(ch, 1);
+    ok(recv(ch) == 1)
+}
+
+def test_channel_send_recv_2() -> i64 {
+    val ch = channel()
+    send(ch, 2);
+    ok(recv(ch) == 2)
+}
+
+def test_channel_send_recv_3() -> i64 {
+    val ch = channel()
+    send(ch, 3);
+    ok(recv(ch) == 3)
+}
+
+def test_channel_send_recv_4() -> i64 {
+    val ch = channel()
+    send(ch, 4);
+    ok(recv(ch) == 4)
+}
+
+def test_channel_send_recv_5() -> i64 {
+    val ch = channel()
+    send(ch, 5);
+    ok(recv(ch) == 5)
+}
+
+def test_channel_send_recv_6() -> i64 {
+    val ch = channel()
+    send(ch, 6);
+    ok(recv(ch) == 6)
+}
+
+def test_channel_send_recv_7() -> i64 {
+    val ch = channel()
+    send(ch, 7);
+    ok(recv(ch) == 7)
+}
+
+def test_channel_send_recv_8() -> i64 {
+    val ch = channel()
+    send(ch, 8);
+    ok(recv(ch) == 8)
+}
+
+def test_channel_send_recv_9() -> i64 {
+    val ch = channel()
+    send(ch, 9);
+    ok(recv(ch) == 9)
+}
+
+def test_channel_send_recv_10() -> i64 {
+    val ch = channel()
+    send(ch, 10);
+    ok(recv(ch) == 10)
+}
+
+def test_spawn_send_recv_1() -> i64 {
+    val ch = channel()
+    spawn { send(ch, 1) }
+    ok(recv(ch) == 1)
+}
+
+def test_spawn_send_recv_2() -> i64 {
+    val ch = channel()
+    spawn { send(ch, 2) }
+    ok(recv(ch) == 2)
+}
+
+def test_spawn_send_recv_3() -> i64 {
+    val ch = channel()
+    spawn { send(ch, 3) }
+    ok(recv(ch) == 3)
+}
+
+def test_spawn_send_recv_4() -> i64 {
+    val ch = channel()
+    spawn { send(ch, 4) }
+    ok(recv(ch) == 4)
+}
+
+def test_spawn_send_recv_5() -> i64 {
+    val ch = channel()
+    spawn { send(ch, 5) }
+    ok(recv(ch) == 5)
+}
+
+def test_spawn_send_recv_6() -> i64 {
+    val ch = channel()
+    spawn { send(ch, 6) }
+    ok(recv(ch) == 6)
+}
+
+def test_spawn_send_recv_7() -> i64 {
+    val ch = channel()
+    spawn { send(ch, 7) }
+    ok(recv(ch) == 7)
+}
+
+def test_spawn_send_recv_8() -> i64 {
+    val ch = channel()
+    spawn { send(ch, 8) }
+    ok(recv(ch) == 8)
+}
+
+def test_spawn_send_recv_9() -> i64 {
+    val ch = channel()
+    spawn { send(ch, 9) }
+    ok(recv(ch) == 9)
+}
+
+def test_spawn_send_recv_10() -> i64 {
+    val ch = channel()
+    spawn { send(ch, 10) }
+    ok(recv(ch) == 10)
+}
+
+def test_atomic_load_initial() -> i64 {
+    val a = atomic(0)
+    ok(atomic_load(a) == 0)
+}
+
+def test_atomic_store() -> i64 {
+    val a = atomic(0)
+    atomic_store(a, 5)
+    ok(atomic_load(a) == 5)
+}
+
+def test_atomic_add_1() -> i64 {
+    val a = atomic(0)
+    atomic_add(a, 1)
+    ok(atomic_load(a) == 1)
+}
+
+def test_atomic_add_2() -> i64 {
+    val a = atomic(0)
+    atomic_add(a, 2)
+    ok(atomic_load(a) == 2)
+}
+
+def test_atomic_add_3() -> i64 {
+    val a = atomic(0)
+    atomic_add(a, 3)
+    ok(atomic_load(a) == 3)
+}
+
+def test_atomic_add_4() -> i64 {
+    val a = atomic(0)
+    atomic_add(a, 4)
+    ok(atomic_load(a) == 4)
+}
+
+def test_atomic_add_5() -> i64 {
+    val a = atomic(0)
+    atomic_add(a, 5)
+    ok(atomic_load(a) == 5)
+}
+
+def test_atomic_add_6() -> i64 {
+    val a = atomic(0)
+    atomic_add(a, 6)
+    ok(atomic_load(a) == 6)
+}
+
+def test_atomic_add_7() -> i64 {
+    val a = atomic(0)
+    atomic_add(a, 7)
+    ok(atomic_load(a) == 7)
+}
+
+def test_atomic_add_8() -> i64 {
+    val a = atomic(0)
+    atomic_add(a, 8)
+    ok(atomic_load(a) == 8)
+}
+
+def test_async_add1_1() -> i64 { ok(await add1(1) == 2) }
+def test_async_add1_2() -> i64 { ok(await add1(2) == 3) }
+def test_async_add1_3() -> i64 { ok(await add1(3) == 4) }
+def test_async_add1_4() -> i64 { ok(await add1(4) == 5) }
+def test_async_add1_5() -> i64 { ok(await add1(5) == 6) }
+def test_async_add1_6() -> i64 { ok(await add1(6) == 7) }
+def test_async_add1_7() -> i64 { ok(await add1(7) == 8) }
+def test_async_add1_8() -> i64 { ok(await add1(8) == 9) }
+
+def test_async_chain_1() -> i64 { ok(await chain(1) == 4) }
+def test_async_chain_2() -> i64 { ok(await chain(2) == 6) }
+def test_async_chain_3() -> i64 { ok(await chain(3) == 8) }
+def test_async_chain_4() -> i64 { ok(await chain(4) == 10) }
+def test_async_chain_5() -> i64 { ok(await chain(5) == 12) }
+def test_async_chain_6() -> i64 { ok(await chain(6) == 14) }
+def test_async_chain_7() -> i64 { ok(await chain(7) == 16) }
+def test_async_chain_8() -> i64 { ok(await chain(8) == 18) }
+
+def test_async_multi_await() -> i64 {
+    val a = await add1(3)
+    val b = await mul2(4)
+    ok(a + b == 12)
+}
+
+def test_async_sum3() -> i64 { ok(await sum3(1, 2, 3) == 6) }
+
+def test_async_await_loop() -> i64 {
+    var i = 0
+    var sum = 0
+    while i < 3 {
+        sum = sum + await add1(i)
+        i = i + 1
+    }
+    ok(sum == 6)
+}
+
+def test_async_no_await_recv() -> i64 {
+    val ch = add1(5)
+    ok(recv(ch) == 6)
+}
+
+def test_barrier_basic() -> i64 {
+    barrier();
+    ok(true)
+}
+
+def test_barrier_value() -> i64 {
+    val x = 3
+    barrier();
+    ok(x == 3)
+}
+
+def test_barrier_conditional() -> i64 {
+    val x = 1
+    if x == 1 {
+        barrier();
+        ok(true)
+    } else {
+        ok(false)
+    }
+}
+
+def test_barrier_loop() -> i64 {
+    var i = 0
+    while i < 2 {
+        barrier();
+        i = i + 1
+    }
+    ok(i == 2)
+}
+
+def test_par_for_atomic_1() -> i64 {
+    val a = atomic(0)
+    par for i in 0..4 {
+        atomic_add(a, 1)
+    }
+    barrier();
+    ok(atomic_load(a) == 4)
+}
+
+def test_par_for_atomic_2() -> i64 {
+    val a = atomic(0)
+    par for i in 0..6 {
+        atomic_add(a, 1)
+    }
+    barrier();
+    ok(atomic_load(a) == 6)
+}
+
+def test_par_for_atomic_3() -> i64 {
+    val a = atomic(0)
+    par for i in 0..1 {
+        atomic_add(a, 1)
+    }
+    barrier();
+    ok(atomic_load(a) == 1)
+}
+
+def test_par_for_atomic_4() -> i64 {
+    val a = atomic(0)
+    par for i in 0..0 {
+        atomic_add(a, 1)
+    }
+    barrier();
+    ok(atomic_load(a) == 0)
+}
+
+def test_par_for_atomic_5() -> i64 {
+    val a = atomic(0)
+    par for i in 0..3 {
+        atomic_add(a, 1)
+    }
+    barrier();
+    ok(atomic_load(a) == 3)
+}
+
+def test_par_for_atomic_6() -> i64 {
+    val a = atomic(0)
+    par for i in 0..5 {
+        atomic_add(a, 1)
+    }
+    barrier();
+    ok(atomic_load(a) == 5)
+}

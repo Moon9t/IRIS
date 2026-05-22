@@ -437,6 +437,8 @@ struct IrisTensor {
 
 IrisTensor* iris_tensor_alloc(int32_t ndim, const int64_t* shape);
 void        iris_tensor_free(IrisTensor* t);
+int64_t     iris_tensor_pool_init(int64_t limit_bytes);
+int64_t     iris_tensor_pool_destroy(void);
 IrisTensor* iris_tensor_zeros(int32_t ndim, const int64_t* shape);
 IrisTensor* iris_tensor_fill(int32_t ndim, const int64_t* shape, float val);
 float       iris_tensor_get(IrisTensor* t, int64_t flat_idx);
@@ -661,11 +663,20 @@ char*     iris_hex_decode(const char* input);
 
 // -- Deque --
 IrisList* iris_deque_new(void);
-void      iris_deque_push_front(IrisList* dq, IrisVal* val);
-void      iris_deque_push_back(IrisList* dq, IrisVal* val);
-IrisVal*  iris_deque_pop_front(IrisList* dq);
-IrisVal*  iris_deque_pop_back(IrisList* dq);
+IrisList* iris_deque_push_front(IrisList* dq, int64_t val);
+IrisList* iris_deque_push_back(IrisList* dq, int64_t val);
+int64_t   iris_deque_pop_front(IrisList* dq);
+int64_t   iris_deque_pop_back(IrisList* dq);
 int64_t   iris_deque_len(IrisList* dq);
+int64_t   iris_deque_front(IrisList* dq);
+int64_t   iris_deque_back(IrisList* dq);
+
+// -- BitSet --
+IrisList* iris_bitset_new(int64_t nbits);
+IrisList* iris_bitset_set(IrisList* bs, int64_t pos);
+int       iris_bitset_get(IrisList* bs, int64_t pos);
+int64_t   iris_bitset_count(IrisList* bs);
+IrisList* iris_bitset_clear(IrisList* bs, int64_t pos);
 
 // -- FFI --
 void*     iris_ffi_open(const char* path);

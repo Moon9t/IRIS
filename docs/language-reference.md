@@ -55,15 +55,15 @@ Statements are separated by semicolons `;` when they appear inside blocks and ar
 
 ### Compound types
 
-| Type              | Description                              |
-|-------------------|------------------------------------------|
-| `list<T>`         | Growable array                           |
-| `map<str, T>`     | Hash map with string keys                |
-| `option<T>`       | Nullable wrapper (`some(v)` / `none`)    |
-| `result<T, E>`    | Success/error wrapper (`ok(v)` / `err(e)`) |
-| `(T1, T2, ...)`   | Tuple                                    |
-| `[T; N]`          | Fixed-size array                         |
-| `tensor<f32, [M, N]>` | Multi-dimensional tensor            |
+| Type                   | Description                                  |
+|------------------------|----------------------------------------------|
+| `list<T>`              | Growable array                               |
+| `map<str, T>`          | Hash map with string keys                    |
+| `option<T>`            | Nullable wrapper (`some(v)` / `none`)        |
+| `result<T, E>`         | Success/error wrapper (`ok(v)` / `err(e)`)   |
+| `(T1, T2, ...)`        | Tuple                                        |
+| `[T; N]`               | Fixed-size array                             |
+| `tensor<f32, [M, N]>`  | Multi-dimensional tensor                     |
 
 ### Type aliases
 
@@ -86,6 +86,7 @@ as inferred bindings. Use an explicit annotation when the type should be part of
 the source contract.
 
 Reassigning a `var`:
+
 ```iris
 var counter = 0
 counter = counter + 1
@@ -168,6 +169,7 @@ val msg = when dir {
 ```
 
 Also works with `option<T>`:
+
 ```iris
 val result = when my_option {
     some(v) => v * 2,
@@ -176,6 +178,7 @@ val result = when my_option {
 ```
 
 And `result<T, E>`:
+
 ```iris
 val value = when my_result {
     ok(v)  => v,
@@ -421,7 +424,7 @@ bring std.time
 bring std.testing
 ```
 
-Available stdlib modules: `math`, `string`, `fmt`, `set`, `queue`, `heap`, `deque`, `bitset`, `iter`, `time`, `path`, `fs`, `json`, `csv`, `http`, `kv`, `table`, `dataset`, `dataframe`, `os`, `ffi`, `crypto`, `async`, `testing`, `log`, `ml`, `nn`.
+Available stdlib modules: `math`, `string`, `fmt`, `set`, `queue`, `heap`, `deque`, `bitset`, `iter`, `time`, `stochastic`, `path`, `fs`, `json`, `csv`, `http`, `kv`, `table`, `dataset`, `dataframe`, `os`, `ffi`, `crypto`, `async`, `testing`, `log`, `ml`, `nn`.
 
 ### File modules
 
@@ -473,8 +476,8 @@ bring "path/to/other.iris"
 | `contains(s, sub)`            | `(str, str) -> bool`             | Substring check          |
 | `starts_with(s, p)`           | `(str, str) -> bool`             | Prefix check             |
 | `ends_with(s, p)`             | `(str, str) -> bool`             | Suffix check             |
-| `slice(s, lo, hi)`            | `(str, i64, i64) -> str`         | Substring               |
-| `find(s, sub)`                | `(str, str) -> option<i64>`      | Find index              |
+| `slice(s, lo, hi)`            | `(str, i64, i64) -> str`         | Substring                |
+| `find(s, sub)`                | `(str, str) -> option<i64>`      | Find index               |
 | `split(s, delim)`             | `(str, str) -> list<str>`        | Split string            |
 | `join(lst, delim)`            | `(list<str>, str) -> str`        | Join strings            |
 | `format(fmt, ...)`            | `(str, ...) -> str`              | Format string (`{}`)    |

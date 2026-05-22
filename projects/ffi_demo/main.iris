@@ -1,0 +1,17 @@
+bring std.ffi
+
+def main() -> i64 {
+    print("=== IRIS FFI Interop Demo ===");
+    print("Executing Python code directly from IRIS...");
+    
+    // Evaluate a simple python snippet
+    val py_code = "abs(-42) + 10";
+    val result = ffi.py_eval(py_code);
+    print(concat("Python py_eval result: ", result));
+    
+    // Call python function (e.g. built-in math module)
+    val math_res = ffi.py_call("math", "pow", "2, 10");
+    print(concat("Python math.pow(2, 10) result: ", math_res));
+    
+    return 0;
+}

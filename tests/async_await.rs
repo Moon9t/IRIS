@@ -1,11 +1,11 @@
 //! Phase 28 integration tests: async/await
 //!
-//! async def is syntactic sugar -- it compiles to a normal IR function.
-//! await expr lowers to a normal function call.
+//! async def returns chan<T> and spawns the body on a worker thread.
+//! await expr lowers to a channel recv.
 
 use iris::{compile, EmitKind};
 
-// 1. async def compiles to IR (checking IR contains both functions)
+// 1. async def compiles to IR (wrapper + inner + spawn body)
 #[test]
 fn test_async_def_compiles_to_ir() {
     let src = r#"
@@ -19,6 +19,16 @@ async def fetch(id: i64) -> i64 { id * 2 }
     assert!(
         out.contains("fetch"),
         "IR should contain fetch function, got:\n{}",
+        out
+    );
+    assert!(
+        out.contains("__async_inner_fetch"),
+        "IR should contain async inner function, got:\n{}",
+        out
+    );
+    assert!(
+        out.contains("__async_spawn_fetch"),
+        "IR should contain async spawn wrapper, got:\n{}",
         out
     );
     assert!(
@@ -86,12 +96,13 @@ async def triple(x: i64) -> i64 { x * 3 }
     );
 }
 
-// 5. async function can be called without await
+// 5. async function can be called without await (returns channel)
 #[test]
 fn test_async_no_await_still_works() {
     let src = r#"
 def run() -> i64 {
-    pure_fn(4)
+    val ch = pure_fn(4)
+    recv(ch)
 }
 async def pure_fn(x: i64) -> i64 { x * x }
 "#;

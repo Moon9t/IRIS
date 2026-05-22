@@ -1,4 +1,4 @@
-// phase52.rs — JIT Compilation
+// jit_compilation_backend.rs — JIT Compilation
 //
 // Tests for the JIT backend (EmitKind::Jit):
 //   - JIT plan header identifies module name and IR hash

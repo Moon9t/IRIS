@@ -38,6 +38,12 @@ pub const RUNTIME_C_SRC: &str = include_str!("../runtime/iris_runtime.c");
 pub const ONNX_SHIM_H_SRC: &str = include_str!("../runtime/onnx_shim.h");
 pub const ONNX_SHIM_C_SRC: &str = include_str!("../runtime/onnx_shim.c");
 pub const TF_SHIM_C_SRC: &str = include_str!("../runtime/tf_shim.c");
+pub const PYTORCH_SHIM_CPP_SRC: &str = include_str!("../runtime/pytorch_shim.cpp");
+
+/// ML compute kernels header — convolution, pooling, losses, optimizers, etc.
+pub const ML_KERNELS_H_SRC: &str = include_str!("../runtime/iris_ml_kernels.h");
+/// ML compute kernels implementation.
+pub const ML_KERNELS_C_SRC: &str = include_str!("../runtime/iris_ml_kernels.c");
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -237,6 +243,7 @@ fn build_binary_impl(
     let onnx_h_path = tmp_dir.join("onnx_shim.h");
     let onnx_c_path = tmp_dir.join("onnx_shim.c");
     let tf_c_path = tmp_dir.join("tf_shim.c");
+    let pytorch_cpp_path = tmp_dir.join("pytorch_shim.cpp");
     std::fs::write(&h_path, RUNTIME_H_SRC).map_err(|e| CodegenError::Unsupported {
         backend: "binary".into(),
         detail: format!("failed to write runtime header: {}", e),
@@ -256,6 +263,24 @@ fn build_binary_impl(
     std::fs::write(&tf_c_path, TF_SHIM_C_SRC).map_err(|e| CodegenError::Unsupported {
         backend: "binary".into(),
         detail: format!("failed to write TensorFlow shim source: {}", e),
+    })?;
+    std::fs::write(&pytorch_cpp_path, PYTORCH_SHIM_CPP_SRC).map_err(|e| {
+        CodegenError::Unsupported {
+            backend: "binary".into(),
+            detail: format!("failed to write PyTorch shim source: {}", e),
+        }
+    })?;
+
+    // ML compute kernels (conv2d, softmax, losses, optimizers, blocked matmul)
+    let ml_h_path = tmp_dir.join("iris_ml_kernels.h");
+    let ml_c_path = tmp_dir.join("iris_ml_kernels.c");
+    std::fs::write(&ml_h_path, ML_KERNELS_H_SRC).map_err(|e| CodegenError::Unsupported {
+        backend: "binary".into(),
+        detail: format!("failed to write ML kernels header: {}", e),
+    })?;
+    std::fs::write(&ml_c_path, ML_KERNELS_C_SRC).map_err(|e| CodegenError::Unsupported {
+        backend: "binary".into(),
+        detail: format!("failed to write ML kernels source: {}", e),
     })?;
 
     // Locate compiler tools.
@@ -280,6 +305,14 @@ fn build_binary_impl(
     let native_ml_backends = std::env::var("IRIS_NATIVE_ML_BACKENDS")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
+    let use_blas = std::env::var("IRIS_USE_BLAS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let openblas_dir = if use_blas {
+        std::env::var("OPENBLAS_DIR").ok().map(PathBuf::from)
+    } else {
+        None
+    };
     let onnx_sdk = if native_ml_backends {
         std::env::var("ONNXRUNTIME_DIR").ok().map(PathBuf::from)
     } else {
@@ -287,6 +320,17 @@ fn build_binary_impl(
     };
     let tf_sdk = if native_ml_backends {
         std::env::var("TENSORFLOW_DIR").ok().map(PathBuf::from)
+    } else {
+        None
+    };
+    let libtorch_sdk = if native_ml_backends {
+        if let Ok(dir) = std::env::var("LIBTORCH_DIR") {
+            Some(PathBuf::from(dir))
+        } else if Path::new("C:\\libtorch").exists() {
+            Some(PathBuf::from("C:\\libtorch"))
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -336,6 +380,8 @@ fn build_binary_impl(
     for (src, obj_name, backend_name) in [
         (&onnx_c_path, "onnx_shim.o", "ONNX shim"),
         (&tf_c_path, "tf_shim.o", "TensorFlow shim"),
+        (&pytorch_cpp_path, "pytorch_shim.o", "PyTorch shim"),
+        (&ml_c_path, "iris_ml_kernels.o", "ML kernels"),
     ] {
         let obj = tmp_dir.join(obj_name);
         let mut shim_cmd = Command::new(&clang);
@@ -367,6 +413,23 @@ fn build_binary_impl(
                 shim_cmd.arg("-I").arg(sdk.join("include"));
             }
         }
+        if backend_name == "PyTorch shim" {
+            shim_cmd.arg("-x").arg("c++");
+            if let Some(ref sdk) = libtorch_sdk {
+                shim_cmd.arg("-DLIBTORCH_ENABLED");
+                shim_cmd.arg("-std=c++17");
+                shim_cmd.arg("-I").arg(sdk.join("include"));
+                shim_cmd
+                    .arg("-I")
+                    .arg(sdk.join("include/torch/csrc/api/include"));
+            }
+        }
+        if backend_name == "ML kernels" && use_blas {
+            shim_cmd.arg("-DIRIS_USE_BLAS");
+            if let Some(ref dir) = openblas_dir {
+                shim_cmd.arg("-I").arg(dir.join("include"));
+            }
+        }
 
         let shim_output = shim_cmd.output().map_err(|e| CodegenError::Unsupported {
             backend: "binary".into(),
@@ -390,12 +453,12 @@ fn build_binary_impl(
         support_objs.push(obj);
     }
 
-    // Use -O1 for user IR to avoid clang 17 optimizer crashes with complex IR patterns.
+    // Use -O2 for user IR — we bundle LLVM 18 which handles complex IR patterns.
     let mod_obj = tmp_dir.join("module.o");
     let mut ir_cmd = Command::new(&clang);
     ir_cmd.args(&target_args);
     ir_cmd.args([
-        "-O1",
+        "-O2",
         "-c",
         path_str(&ll_path)?,
         "-o",
@@ -444,6 +507,19 @@ fn build_binary_impl(
     if let Some(ref sdk) = tf_sdk {
         link_cmd.arg(format!("-L{}", sdk.join("lib").display()));
         link_cmd.arg("-ltensorflow");
+    }
+    if let Some(ref sdk) = libtorch_sdk {
+        link_cmd.arg(format!("-L{}", sdk.join("lib").display()));
+        link_cmd.arg("-ltorch");
+        link_cmd.arg("-ltorch_cpu");
+        link_cmd.arg("-lc10");
+        link_cmd.arg("-lstdc++");
+    }
+    if use_blas {
+        if let Some(ref dir) = openblas_dir {
+            link_cmd.arg(format!("-L{}", dir.join("lib").display()));
+        }
+        link_cmd.arg("-lopenblas");
     }
     if !resolved_target.contains("windows") {
         // Non-Windows targets keep relying on the target toolchain's standard sysroot.

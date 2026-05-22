@@ -160,7 +160,7 @@ jobs:
           COMMIT=$(git rev-parse --short HEAD)
           echo "{ \"timestamp\": \"${TIMESTAMP}\", \"commit\": \"${COMMIT}\", \"benchmarks\": [" > bench-results/results.json
           FIRST=true
-          for f in benches/*.iris examples/fibonacci.iris examples/factorial.iris examples/sorting.iris examples/fizzbuzz.iris; do
+          for f in benches/*.iris examples/*/*.iris; do
             if [ -f "$f" ]; then
               BENCH_NAME=$(basename "$f" .iris)
               echo "=== Benchmarking $f ==="

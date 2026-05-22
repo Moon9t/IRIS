@@ -50,6 +50,27 @@ fn local_contains_infer(ty: &IrType) -> bool {
     }
 }
 
+// Replace unresolved Infer nodes with a conservative scalar default.
+fn default_infer(ty: &IrType) -> IrType {
+    match ty {
+        IrType::Infer => IrType::Scalar(DType::I64),
+        IrType::Tuple(elems) => IrType::Tuple(elems.iter().map(default_infer).collect()),
+        IrType::Array { elem, len } => IrType::Array {
+            elem: Box::new(default_infer(elem)),
+            len: *len,
+        },
+        IrType::Grad(inner) => IrType::Grad(Box::new(default_infer(inner))),
+        IrType::Sparse(inner) => IrType::Sparse(Box::new(default_infer(inner))),
+        IrType::List(inner) => IrType::List(Box::new(default_infer(inner))),
+        IrType::Map(k, v) => IrType::Map(Box::new(default_infer(k)), Box::new(default_infer(v))),
+        IrType::Fn { params, ret } => IrType::Fn {
+            params: params.iter().map(default_infer).collect(),
+            ret: Box::new(default_infer(ret)),
+        },
+        other => other.clone(),
+    }
+}
+
 #[derive(Clone)]
 enum Slot {
     /// Points to another slot (union-find parent).
@@ -162,11 +183,20 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
     // Map from ValueId → slot index in union-find.
     let mut slots: HashMap<ValueId, usize> = HashMap::new();
     let mut errors: Vec<String> = Vec::new();
+    let initial_return_ty = module.functions[fn_idx].return_ty.clone();
+    let ret_slot = uf.new_slot(if local_contains_infer(&initial_return_ty) {
+        None
+    } else {
+        Some(initial_return_ty.clone())
+    });
 
     // Pass 1: collect constraints by walking all instructions.
     let num_blocks = module.functions[fn_idx].blocks.len();
     // Track a union-find slot for each list value's element type.
     let mut list_elem_slots: HashMap<ValueId, usize> = HashMap::new();
+    // Track number of captured values for closures (MakeClosure result -> captures.len()).
+    // Map from MakeClosure result -> captured ValueIds
+    let mut closure_captures: HashMap<ValueId, Vec<ValueId>> = HashMap::new();
     for bi in 0..num_blocks {
         let num_instrs = module.functions[fn_idx].blocks[bi].instrs.len();
         for ii in 0..num_instrs {
@@ -177,6 +207,8 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
                 &mut slots,
                 &mut errors,
                 &mut list_elem_slots,
+                &mut closure_captures,
+                ret_slot,
             );
         }
     }
@@ -204,6 +236,53 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
                         } else if let Some(&s) = slots.get(&vid) {
                             let resolved = uf.get_type(s).unwrap_or(IrType::Scalar(DType::I64));
                             module.functions[fn_idx].value_types.insert(vid, resolved);
+                        } else {
+                            module.functions[fn_idx]
+                                .value_types
+                                .insert(vid, IrType::List(Box::new(IrType::Scalar(DType::I64))));
+                        }
+                    }
+                    IrType::Fn { params, ret } => {
+                        // Try to substitute nested Infer inside lifted function
+                        // signatures using captured values recorded earlier.
+                        if let Some(captures) = closure_captures.get(&vid) {
+                            let mut new_params: Vec<IrType> = Vec::new();
+                            for (i, p) in params.iter().enumerate() {
+                                let mut p_new = p.clone();
+                                // If this param corresponds to a captured value,
+                                // try to replace List(Infer) or Infer with the
+                                // captured value's concrete type.
+                                if i < captures.len() {
+                                    let cap_vid = captures[i];
+                                    if let Some(&elem_slot) = list_elem_slots.get(&cap_vid) {
+                                        let cap_elem_ty = uf
+                                            .get_type(elem_slot)
+                                            .unwrap_or(IrType::Scalar(DType::I64));
+                                        if matches!(p_new, IrType::List(_)) {
+                                            p_new = IrType::List(Box::new(cap_elem_ty));
+                                        }
+                                    } else if let Some(&s) = slots.get(&cap_vid) {
+                                        if let Some(cap_ty) = uf.get_type(s) {
+                                            if matches!(p_new, IrType::Infer) {
+                                                p_new = cap_ty;
+                                            }
+                                        }
+                                    }
+                                }
+                                new_params.push(p_new);
+                            }
+                            let new_ret = if local_contains_infer(&ret) {
+                                // If return contains infer, try to leave it as-is
+                                // (other passes or constraints may resolve it).
+                                *ret.clone()
+                            } else {
+                                *ret.clone()
+                            };
+                            let resolved = IrType::Fn {
+                                params: new_params,
+                                ret: Box::new(new_ret),
+                            };
+                            module.functions[fn_idx].value_types.insert(vid, resolved);
                         }
                     }
                     IrType::Infer => {
@@ -213,10 +292,38 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
                         }
                     }
                     _ => {
-                        // Other compound types with nested Infer are not expected
-                        // here for now; skip and let the validator catch them.
+                        module.functions[fn_idx]
+                            .value_types
+                            .insert(vid, default_infer(&ty));
                     }
                 }
+            }
+        }
+    }
+
+    // Resolve function return type from accumulated return constraints.
+    let inferred_ret = uf
+        .get_type(ret_slot)
+        .unwrap_or_else(|| default_infer(&module.functions[fn_idx].return_ty));
+    module.functions[fn_idx].return_ty = if local_contains_infer(&inferred_ret) {
+        default_infer(&inferred_ret)
+    } else {
+        inferred_ret
+    };
+
+    // Final sweep: normalize any remaining nested Infer to defaults so
+    // ValidatePass does not fail on partially unresolved compounds.
+    let value_ids: Vec<ValueId> = module.functions[fn_idx]
+        .value_types
+        .keys()
+        .cloned()
+        .collect();
+    for vid in value_ids {
+        if let Some(ty) = module.functions[fn_idx].value_types.get(&vid).cloned() {
+            if local_contains_infer(&ty) {
+                module.functions[fn_idx]
+                    .value_types
+                    .insert(vid, default_infer(&ty));
             }
         }
     }
@@ -246,6 +353,14 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
         }
         diag.push_str("--- function blocks ---\n");
         diag.push_str(&format!("{:?}\n", module.functions[fn_idx].blocks));
+        diag.push_str("--- value types ---\n");
+        for (vid, ty) in module.functions[fn_idx].value_types.iter() {
+            diag.push_str(&format!("Value {:?} => {:?}\n", vid, ty));
+        }
+        diag.push_str("--- closure captures ---\n");
+        for (vid, caps) in closure_captures.iter() {
+            diag.push_str(&format!("Closure {:?} captures {:?}\n", vid, caps));
+        }
         return Err(PassError::TypeError {
             func: module.functions[fn_idx].name.clone(),
             detail: format!("{}\n{}", errors.join("; "), diag),
@@ -279,6 +394,14 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
         }
         detail.push_str("--- function blocks ---\n");
         detail.push_str(&format!("{:?}\n", module.functions[fn_idx].blocks));
+        detail.push_str("--- value types ---\n");
+        for (vid, ty) in module.functions[fn_idx].value_types.iter() {
+            detail.push_str(&format!("Value {:?} => {:?}\n", vid, ty));
+        }
+        detail.push_str("--- closure captures ---\n");
+        for (vid, caps) in closure_captures.iter() {
+            detail.push_str(&format!("Closure {:?} captures {:?}\n", vid, caps));
+        }
         return Err(PassError::TypeError {
             func: module.functions[fn_idx].name.clone(),
             detail,
@@ -294,6 +417,8 @@ fn collect_constraints(
     slots: &mut HashMap<ValueId, usize>,
     errors: &mut Vec<String>,
     list_elem_slots: &mut HashMap<ValueId, usize>,
+    closure_captures: &mut HashMap<ValueId, Vec<ValueId>>,
+    ret_slot: usize,
 ) {
     // Helper to get-or-create a slot for a value id.
     fn get_or_create_slot(
@@ -305,7 +430,12 @@ fn collect_constraints(
         if let Some(&s) = slots.get(&v) {
             s
         } else {
-            let s = uf.new_slot(known);
+            // Treat `Infer` as unknown: don't register it as a concrete type.
+            let concrete = match known {
+                Some(t) if local_contains_infer(&t) => None,
+                other => other,
+            };
+            let s = uf.new_slot(concrete);
             slots.insert(v, s);
             s
         }
@@ -423,12 +553,114 @@ fn collect_constraints(
                 &format!("ListGet result {:?} list {:?}", result, list),
             );
         }
+        IrInstr::MakeClosure {
+            result,
+            result_ty,
+            captures,
+            ..
+        } => {
+            // Record the closure value's concrete function type (if any).
+            let _ = get_or_create_slot(uf, slots, *result, Some(result_ty.clone()));
+            // Remember the captured value ids so substitution can resolve
+            // nested Infer types within the lifted function signature.
+            closure_captures.insert(*result, captures.clone());
+        }
+        IrInstr::CallClosure {
+            result,
+            closure,
+            args,
+            result_ty,
+        } => {
+            // If the call produces a result, register its expected type.
+            if let Some(rid) = result {
+                let _ = get_or_create_slot(uf, slots, *rid, Some(result_ty.clone()));
+            }
+            // Try to inspect the closure's known function type and unify
+            // argument slots with parameter types, and unify return type.
+            if let Some(&cslot) = slots.get(closure) {
+                if let Some(IrType::Fn { params, ret }) = uf.get_type(cslot) {
+                    // Unify each argument with the corresponding param type.
+                    // Skip leading captured params (if any): the MakeClosure
+                    // encodes captures as leading parameters in the lifted
+                    // function type, but CallClosure supplies only the user
+                    // visible args.
+                    let skip = closure_captures.get(closure).map(|v| v.len()).unwrap_or(0);
+                    for (i, arg) in args.iter().enumerate() {
+                        let param_idx = skip + i;
+                        if param_idx < params.len() {
+                            let arg_slot = get_or_create_slot(uf, slots, *arg, None);
+                            let p_ty = params[param_idx].clone();
+                            if !matches!(p_ty, IrType::Infer) {
+                                let p_slot = uf.new_slot(Some(p_ty));
+                                try_unify(
+                                    uf,
+                                    errors,
+                                    arg_slot,
+                                    p_slot,
+                                    &format!("CallClosure arg {:?} param {}", arg, param_idx),
+                                );
+                            }
+                        }
+                    }
+                    // Unify result with function return type.
+                    if let Some(rid) = result {
+                        let res_slot = get_or_create_slot(uf, slots, *rid, None);
+                        let ret_ty = *ret.clone();
+                        if !matches!(ret_ty, IrType::Infer) {
+                            let rslot = uf.new_slot(Some(ret_ty));
+                            try_unify(
+                                uf,
+                                errors,
+                                res_slot,
+                                rslot,
+                                &format!("CallClosure result {:?}", rid),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        IrInstr::ListSlice { result, list, .. } => {
+            // The resulting slice has the same element type as the source list.
+            let elem_slot = *list_elem_slots
+                .entry(*list)
+                .or_insert_with(|| uf.new_slot(None));
+            // Propagate the element slot to the result list value.
+            list_elem_slots.insert(*result, elem_slot);
+            let _ = get_or_create_slot(uf, slots, *result, None);
+        }
+        IrInstr::ListConcat { result, lhs, rhs } => {
+            // Concatenation produces a list whose element type must unify
+            // with both operands' element types.
+            let lhs_slot = *list_elem_slots
+                .entry(*lhs)
+                .or_insert_with(|| uf.new_slot(None));
+            let rhs_slot = *list_elem_slots
+                .entry(*rhs)
+                .or_insert_with(|| uf.new_slot(None));
+            // Ensure lhs and rhs element types unify.
+            try_unify(
+                uf,
+                errors,
+                lhs_slot,
+                rhs_slot,
+                &format!("ListConcat lhs {:?} rhs {:?}", lhs, rhs),
+            );
+            // Result list shares the same element slot.
+            list_elem_slots.insert(*result, lhs_slot);
+            let _ = get_or_create_slot(uf, slots, *result, None);
+        }
         IrInstr::Cast { result, to_ty, .. } => {
             let _ = get_or_create_slot(uf, slots, *result, Some(to_ty.clone()));
         }
         // Return: each returned value should match the corresponding function return type.
         // (We don't have function return_ty here; leave for a separate pass.)
-        IrInstr::Return { .. } => {}
+        IrInstr::Return { values } => {
+            for v in values {
+                let sv = get_or_create_slot(uf, slots, *v, None);
+                try_unify(uf, errors, sv, ret_slot, &format!("Return value {:?}", v));
+            }
+        }
         // Everything else: if there's a result with a known result_ty, record it.
         _ => {
             if let Some(r) = instr.result() {

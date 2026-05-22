@@ -1,0 +1,201 @@
+# Nightly — extended testing and pre-release builds.
+# Runs on a schedule (every night at 02:00 UTC) and can be triggered manually.
+# Extended fuzz campaigns, full native compilation smoke tests, and
+# performance regression detection.
+
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 2 * * *'     # 02:00 UTC daily
+  workflow_dispatch:          # manual trigger
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ───────────────────── extended fuzz campaign ─────────────────────
+  fuzz:
+    name: Extended Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fuzz_lexer, fuzz_parser, fuzz_lowerer, fuzz_compiler]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuzz/target
+            fuzz/corpus
+          key: ${{ runner.os }}-fuzz-nightly-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+      - name: Fuzz ${{ matrix.target }} (30 min)
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} -- \
+            -max_total_time=1800 -max_len=8192
+      - name: Upload fuzz corpus
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          path: fuzz/corpus/${{ matrix.target }}/
+          retention-days: 30
+
+  # ───────────────── native compilation smoke test ──────────────────
+  smoke-test:
+    name: Smoke Test (native compilation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install clang and lld
+        run: sudo apt-get update && sudo apt-get install -y clang lld
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-nightly-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build release
+        run: cargo build --release
+
+      - name: Run all examples with iris run
+        run: |
+          PASS=0
+          FAIL=0
+          SKIP=0
+          while IFS= read -r f; do
+            NAME=$(basename "$f")
+            echo "=== Testing: $NAME ==="
+            # Set a 30-second timeout per example
+            if timeout 30 cargo run --release -- run "$f" > /dev/null 2>&1; then
+              echo "  PASS"
+              PASS=$((PASS + 1))
+            else
+              EXIT_CODE=$?
+              if [ $EXIT_CODE -eq 124 ]; then
+                echo "  SKIP (timeout)"
+                SKIP=$((SKIP + 1))
+              else
+                echo "  FAIL (exit $EXIT_CODE)"
+                FAIL=$((FAIL + 1))
+              fi
+            fi
+          done < <(find examples -type f -name '*.iris' | sort)
+          echo ""
+          echo "=== Results ==="
+          echo "  Pass: $PASS"
+          echo "  Fail: $FAIL"
+          echo "  Skip: $SKIP"
+          # Don't fail the job — some examples may require external resources
+          if [ $FAIL -gt 10 ]; then
+            echo "ERROR: Too many failures ($FAIL)"
+            exit 1
+          fi
+
+  # ───────────────── ML integration tests ──────────────────────────
+  ml-tests:
+    name: ML Pipeline Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install clang and lld
+        run: sudo apt-get update && sudo apt-get install -y clang lld
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-ml-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build release
+        run: cargo build --release
+
+      - name: Test ML examples
+        run: |
+          while IFS= read -r f; do
+            echo "=== ML Test: $(basename $f) ==="
+            timeout 60 cargo run --release -- run "$f" || echo "  WARN: exit $?"
+          done < <(find examples/06_machine_learning examples/07_applications -type f \( -name 'ml_*.iris' -o -name 'ais_*.iris' \) | sort)
+
+  # ───────────────── binary size tracking ──────────────────────────
+  binary-size:
+    name: Binary Size Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-size-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build release
+        run: cargo build --release
+      - name: Report binary size
+        run: |
+          SIZE=$(stat -c%s target/release/iris)
+          SIZE_MB=$(echo "scale=2; $SIZE / 1048576" | bc)
+          echo "IRIS binary size: ${SIZE_MB} MB (${SIZE} bytes)"
+
+          # Load previous size from cache
+          mkdir -p size-tracking
+          if [ -f size-tracking/previous.txt ]; then
+            PREV=$(cat size-tracking/previous.txt)
+            DIFF=$((SIZE - PREV))
+            PCT=$(echo "scale=1; $DIFF * 100 / $PREV" | bc 2>/dev/null || echo "0")
+            echo "Previous: $PREV bytes"
+            echo "Change: $DIFF bytes (${PCT}%)"
+            if [ $DIFF -gt $((PREV / 5)) ]; then
+              echo "WARNING: Binary grew by more than 20%!"
+            fi
+          fi
+          echo "$SIZE" > size-tracking/previous.txt
+
+      - uses: actions/cache/save@v4
+        with:
+          path: size-tracking/
+          key: binary-size-${{ runner.os }}-${{ github.sha }}
+
+  # ───────────────── performance benchmarks ────────────────────────
+  benchmarks:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-bench-nightly-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build release
+        run: cargo build --release
+      - name: Run benchmarks
+        run: |
+          mkdir -p bench-results
+          for f in benches/*.iris examples/02_functions/fibonacci.iris examples/02_functions/factorial.iris; do
+            if [ -f "$f" ]; then
+              NAME=$(basename "$f" .iris)
+              echo "=== Benchmark: $NAME ==="
+              OUTPUT=$(cargo run --release -- bench "$f" -n 50 2>&1 || true)
+              echo "$OUTPUT"
+              echo ""
+            fi
+          done

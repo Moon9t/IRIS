@@ -1,0 +1,59 @@
+bring "models.iris"
+
+pub def init_db() -> i64 {
+    val db = db_open("tasks.db");
+    db_exec(db, "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, status INTEGER DEFAULT 0)");
+    return db;
+}
+
+pub def close_db(db: i64) -> i64 {
+    db_close(db);
+    return 0;
+}
+
+pub def add_task(db: i64, title: str) -> i64 {
+    val params = list();
+    list_push(params, title);
+    db_exec_params(db, "INSERT INTO tasks (title, status) VALUES (?, 0)", params);
+    print(concat("Added task: ", title));
+    return 0;
+}
+
+pub def complete_task(db: i64, id_str: str) -> i64 {
+    val params = list();
+    list_push(params, id_str);
+    db_exec_params(db, "UPDATE tasks SET status = 1 WHERE id = ?", params);
+    print(concat("Completed task ID: ", id_str));
+    return 0;
+}
+
+pub def delete_task(db: i64, id_str: str) -> i64 {
+    val params = list();
+    list_push(params, id_str);
+    db_exec_params(db, "DELETE FROM tasks WHERE id = ?", params);
+    print(concat("Deleted task ID: ", id_str));
+    return 0;
+}
+
+pub def list_tasks(db: i64) -> i64 {
+    val rows = db_query(db, "SELECT id, title, status FROM tasks ORDER BY id");
+    val len = list_len(rows);
+    if len == 0 {
+        print("No tasks found.");
+        return 0;
+    }
+
+    print(concat("Found tasks: ", to_str(len)));
+    var i = 0;
+    while i < len {
+        val row = list_get(rows, i);
+        val id_val = unwrap(parse_i64(list_get(row, 0)));
+        val title_val = list_get(row, 1);
+        val status_val = unwrap(parse_i64(list_get(row, 2)));
+
+        val t = models.Task { id: id_val, title: title_val, status: status_val };
+        print(models.format_task(t));
+        i = i + 1;
+    }
+    return 0;
+}

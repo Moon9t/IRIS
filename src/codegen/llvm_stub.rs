@@ -46,12 +46,15 @@ pub fn emit_llvm_stub(module: &IrModule) -> Result<String, CodegenError> {
     for func in module.functions() {
         for block in func.blocks() {
             for instr in &block.instrs {
-                if let IrInstr::ConstStr { value, .. } = instr {
-                    if !str_table.contains_key(value) {
-                        let idx = str_vec.len();
-                        str_table.insert(value.clone(), idx);
-                        str_vec.push(value.clone());
+                match instr {
+                    IrInstr::ConstStr { value, .. } | IrInstr::TapeRecord { op: value, .. } => {
+                        if !str_table.contains_key(value) {
+                            let idx = str_vec.len();
+                            str_table.insert(value.clone(), idx);
+                            str_vec.push(value.clone());
+                        }
                     }
+                    _ => {}
                 }
             }
         }
@@ -1154,27 +1157,6 @@ fn emit_llvm_instr(
             writeln!(out, "  %v{} = call ptr @iris_grad_tangent()", result.0)?;
         }
 
-        IrInstr::TapeRecord { .. } => {
-            return Err(CodegenError::Unsupported {
-                backend: "llvm-stub".into(),
-                detail: "reverse-mode AD (TapeRecord) is only supported in the interpreter".into(),
-            });
-        }
-
-        IrInstr::Backward { .. } => {
-            return Err(CodegenError::Unsupported {
-                backend: "llvm-stub".into(),
-                detail: "reverse-mode AD (Backward) is only supported in the interpreter".into(),
-            });
-        }
-
-        IrInstr::TapeGrad { .. } => {
-            return Err(CodegenError::Unsupported {
-                backend: "llvm-stub".into(),
-                detail: "reverse-mode AD (TapeGrad) is only supported in the interpreter".into(),
-            });
-        }
-
         IrInstr::Sparsify { result, .. } => {
             writeln!(out, "  %v{} = call ptr @iris_sparsify()", result.0)?;
         }
@@ -1968,6 +1950,142 @@ fn emit_llvm_instr(
                 arg_strs.join(", ")
             )?;
         }
+        IrInstr::TapeRecord {
+            result,
+            value,
+            op,
+            parents,
+        } => {
+            let primal = coerce_scalar_to_f64(*value, consts, func, gep_counter, out)?;
+            let op_idx = str_table
+                .get(op)
+                .copied()
+                .ok_or_else(|| CodegenError::Unsupported {
+                    backend: "llvm".into(),
+                    detail: format!("missing reverse-mode AD op string constant '{}'", op),
+                })?;
+            let op_len = op.len() + 1;
+            *gep_counter += 1;
+            let op_ptr = format!("%tape_op{}", gep_counter);
+            writeln!(
+                out,
+                "  {} = getelementptr inbounds [{} x i8], ptr @.str.{}, i32 0, i32 0",
+                op_ptr, op_len, op_idx
+            )?;
+
+            if parents.is_empty() {
+                writeln!(
+                    out,
+                    "  %v{} = call ptr @iris_tape_record(double {}, ptr {}, i64 0, ptr null, ptr null)",
+                    result.0, primal, op_ptr
+                )?;
+            } else {
+                *gep_counter += 1;
+                let handle_arr = format!("%tape_handles{}", gep_counter);
+                *gep_counter += 1;
+                let primal_arr = format!("%tape_parent_primals{}", gep_counter);
+                writeln!(
+                    out,
+                    "  {} = alloca [{} x ptr], align 8",
+                    handle_arr,
+                    parents.len()
+                )?;
+                writeln!(
+                    out,
+                    "  {} = alloca [{} x double], align 8",
+                    primal_arr,
+                    parents.len()
+                )?;
+
+                for (idx, parent) in parents.iter().enumerate() {
+                    *gep_counter += 1;
+                    let handle_slot = format!("%tape_handle_slot{}", gep_counter);
+                    writeln!(
+                        out,
+                        "  {} = getelementptr inbounds [{} x ptr], ptr {}, i64 0, i64 {}",
+                        handle_slot,
+                        parents.len(),
+                        handle_arr,
+                        idx
+                    )?;
+
+                    let p_ty = func.value_type(*parent);
+                    if matches!(p_ty, Some(IrType::Grad(_)) | Some(IrType::Tensor { .. })) {
+                        writeln!(
+                            out,
+                            "  store ptr {}, ptr {}, align 8",
+                            val(*parent),
+                            handle_slot
+                        )?;
+                    } else {
+                        writeln!(out, "  store ptr null, ptr {}, align 8", handle_slot)?;
+                    }
+
+                    *gep_counter += 1;
+                    let primal_slot = format!("%tape_primal_slot{}", gep_counter);
+                    writeln!(
+                        out,
+                        "  {} = getelementptr inbounds [{} x double], ptr {}, i64 0, i64 {}",
+                        primal_slot,
+                        parents.len(),
+                        primal_arr,
+                        idx
+                    )?;
+                    if matches!(p_ty, Some(IrType::Grad(_)) | Some(IrType::Tensor { .. })) {
+                        writeln!(out, "  store double 0.0, ptr {}, align 8", primal_slot)?;
+                    } else {
+                        let parent_primal =
+                            coerce_scalar_to_f64(*parent, consts, func, gep_counter, out)?;
+                        writeln!(
+                            out,
+                            "  store double {}, ptr {}, align 8",
+                            parent_primal, primal_slot
+                        )?;
+                    }
+                }
+
+                *gep_counter += 1;
+                let handle_base = format!("%tape_handles_base{}", gep_counter);
+                writeln!(
+                    out,
+                    "  {} = getelementptr inbounds [{} x ptr], ptr {}, i64 0, i64 0",
+                    handle_base,
+                    parents.len(),
+                    handle_arr
+                )?;
+                *gep_counter += 1;
+                let primal_base = format!("%tape_primal_base{}", gep_counter);
+                writeln!(
+                    out,
+                    "  {} = getelementptr inbounds [{} x double], ptr {}, i64 0, i64 0",
+                    primal_base,
+                    parents.len(),
+                    primal_arr
+                )?;
+                writeln!(
+                    out,
+                    "  %v{} = call ptr @iris_tape_record(double {}, ptr {}, i64 {}, ptr {}, ptr {})",
+                    result.0,
+                    primal,
+                    op_ptr,
+                    parents.len(),
+                    handle_base,
+                    primal_base
+                )?;
+            }
+        }
+        IrInstr::Backward { result, loss } => {
+            writeln!(out, "  call void @iris_backward(ptr {})", val(*loss))?;
+            writeln!(out, "  %v{} = add i64 0, 0", result.0)?;
+        }
+        IrInstr::TapeGrad { result, tape_node } => {
+            writeln!(
+                out,
+                "  %v{} = call double @iris_tape_grad(ptr {})",
+                result.0,
+                val(*tape_node)
+            )?;
+        }
     }
     Ok(())
 }
@@ -2158,6 +2276,9 @@ fn emit_iris_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_grad_tangent()",
         "declare ptr @iris_sparsify()",
         "declare ptr @iris_densify()",
+        "declare ptr @iris_tape_record(double, ptr, i64, ptr, ptr)",
+        "declare void @iris_backward(ptr)",
+        "declare double @iris_tape_grad(ptr)",
         // Math helpers (non-llvm-intrinsic)
         "declare i64 @iris_pow_i64(i64, i64)",
         "declare i64 @iris_min_i64(i64, i64)",
@@ -2171,4 +2292,45 @@ fn emit_iris_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
     }
     writeln!(out)?;
     Ok(())
+}
+
+fn coerce_scalar_to_f64(
+    v: ValueId,
+    consts: &HashMap<ValueId, String>,
+    func: &IrFunction,
+    gep_counter: &mut u32,
+    out: &mut String,
+) -> Result<String, CodegenError> {
+    let v_str = llvm_val(v, consts, func);
+    match func.value_type(v) {
+        Some(IrType::Scalar(DType::F64)) => Ok(v_str),
+        Some(IrType::Scalar(DType::F32)) => {
+            *gep_counter += 1;
+            let tmp = format!("%coerce_f64{}", gep_counter);
+            if consts.contains_key(&v) {
+                writeln!(out, "  {} = fadd double {}, 0.0", tmp, v_str)?;
+            } else {
+                writeln!(out, "  {} = fpext float {} to double", tmp, v_str)?;
+            }
+            Ok(tmp)
+        }
+        Some(IrType::Scalar(DType::I64)) => {
+            *gep_counter += 1;
+            let tmp = format!("%coerce_f64{}", gep_counter);
+            writeln!(out, "  {} = sitofp i64 {} to double", tmp, v_str)?;
+            Ok(tmp)
+        }
+        Some(IrType::Scalar(DType::I32)) => {
+            *gep_counter += 1;
+            let tmp = format!("%coerce_f64{}", gep_counter);
+            writeln!(out, "  {} = sitofp i32 {} to double", tmp, v_str)?;
+            Ok(tmp)
+        }
+        _ => {
+            *gep_counter += 1;
+            let tmp = format!("%coerce_f64{}", gep_counter);
+            writeln!(out, "  {} = sitofp i64 {} to double", tmp, v_str)?;
+            Ok(tmp)
+        }
+    }
 }

@@ -1,0 +1,268 @@
+// std.ais — Autonomous Intelligent Systems framework
+// IRIS v0.5.0 "The C of Machine Learning"
+//
+// Build autonomous systems that perceive, decide, and act.
+// This module provides the agent lifecycle, decision strategies,
+// reward processing, and model persistence for AIS applications.
+
+bring std.ml
+bring std.fs
+
+// ---------------------------------------------------------------------------
+// Agent Lifecycle
+// ---------------------------------------------------------------------------
+
+/// Run an autonomous agent loop: perceive → decide → act, repeat.
+/// Returns the total number of steps executed.
+///
+/// Example:
+///   agent_loop(|| sensor_read(), |obs| predict(weights, obs), |a| actuate(a), 1000)
+///
+pub def agent_loop(perceive: () -> list<f64>,
+                    decide: (list<f64>) -> i64,
+                    act: (i64) -> bool,
+                    max_steps: i64) -> i64 {
+    var step = 0
+    var running = true
+    while running && step < max_steps {
+        val observation = perceive()
+        val action = decide(observation)
+        running = act(action)
+        step = step + 1
+    }
+    step
+}
+
+/// Agent loop with reward tracking: returns (steps, total_reward).
+pub def agent_loop_rewards(perceive: () -> list<f64>,
+                            decide: (list<f64>) -> i64,
+                            act: (i64) -> (bool, f64),
+                            max_steps: i64) -> (i64, f64) {
+    var step = 0
+    var total_reward = 0.0
+    var running = true
+    while running && step < max_steps {
+        val observation = perceive()
+        val action = decide(observation)
+        val result = act(action)
+        running = result.0
+        total_reward = total_reward + result.1
+        step = step + 1
+    }
+    (step, total_reward)
+}
+
+// ---------------------------------------------------------------------------
+// Decision Strategies
+// ---------------------------------------------------------------------------
+
+/// Argmax: return the index of the highest value in a list.
+pub def argmax(values: list<f64>) -> i64 {
+    val n = list_len(values)
+    if n == 0 { return -1 }
+    var best_idx = 0
+    var best_val = list_get(values, 0)
+    for i in 1 .. n {
+        val v = list_get(values, i)
+        if v > best_val {
+            best_val = v
+            best_idx = i
+        }
+    }
+    best_idx
+}
+
+/// Epsilon-greedy: with probability epsilon, pick a random action;
+/// otherwise pick the argmax.
+pub def epsilon_greedy(values: list<f64>, epsilon: f64) -> i64 {
+    if random() < epsilon {
+        random_range(0, list_len(values) - 1)
+    } else {
+        argmax(values)
+    }
+}
+
+/// Softmax sampling: sample an action proportional to exp(logit).
+pub def softmax_sample(logits: list<f64>) -> i64 {
+    val n = list_len(logits)
+    if n == 0 { return -1 }
+
+    // Find max for numerical stability
+    var mx = list_get(logits, 0)
+    for i in 1 .. n {
+        val v = list_get(logits, i)
+        if v > mx { mx = v }
+    }
+
+    // Compute softmax probabilities
+    val probs : list<f64> = list()
+    var total = 0.0
+    for i in 0 .. n {
+        val e = exp(list_get(logits, i) - mx)
+        list_push(probs, e);
+        total = total + e
+    }
+
+    // Normalize and sample
+    val r = random() * total
+    var cumulative = 0.0
+    for i in 0 .. n {
+        cumulative = cumulative + list_get(probs, i)
+        if cumulative >= r { return i }
+    }
+    n - 1
+}
+
+/// Boltzmann (temperature-scaled) sampling.
+/// Higher temperature → more random; lower → more deterministic.
+pub def boltzmann_sample(logits: list<f64>, temperature: f64) -> i64 {
+    val n = list_len(logits)
+    val scaled : list<f64> = list()
+    val temp = if temperature < 0.001 { 0.001 } else { temperature }
+    for i in 0 .. n {
+        list_push(scaled, list_get(logits, i) / temp)
+    }
+    softmax_sample(scaled)
+}
+
+// ---------------------------------------------------------------------------
+// Reward Processing
+// ---------------------------------------------------------------------------
+
+/// Compute discounted cumulative rewards (returns).
+/// G_t = r_t + gamma * G_{t+1}
+pub def discount_rewards(rewards: list<f64>, gamma: f64) -> list<f64> {
+    val n = list_len(rewards)
+    val returns : list<f64> = list()
+    // Initialize with zeros
+    for i in 0 .. n { list_push(returns, 0.0) }
+
+    var running_sum = 0.0
+    var i = n - 1
+    while i >= 0 {
+        running_sum = list_get(rewards, i) + gamma * running_sum
+        list_set(returns, i, running_sum);
+        i = i - 1
+    }
+    returns
+}
+
+/// Generalized Advantage Estimation (GAE).
+/// advantages_t = delta_t + gamma * lambda * advantages_{t+1}
+/// where delta_t = reward_t + gamma * V(s_{t+1}) - V(s_t)
+pub def gae(rewards: list<f64>, values: list<f64>,
+            gamma: f64, lambda: f64) -> list<f64> {
+    val n = list_len(rewards)
+    val advantages : list<f64> = list()
+    for i in 0 .. n { list_push(advantages, 0.0) }
+
+    var running = 0.0
+    var i = n - 1
+    while i >= 0 {
+        val next_val = if i + 1 < list_len(values) { list_get(values, i + 1) } else { 0.0 }
+        val delta = list_get(rewards, i) + gamma * next_val - list_get(values, i)
+        running = delta + gamma * lambda * running
+        list_set(advantages, i, running);
+        i = i - 1
+    }
+    advantages
+}
+
+/// Normalize a list of values to zero mean and unit variance.
+pub def normalize_list(values: list<f64>) -> list<f64> {
+    val n = list_len(values)
+    if n == 0 { return values }
+
+    // Compute mean
+    var sum = 0.0
+    for i in 0 .. n { sum = sum + list_get(values, i) }
+    val mean = sum / to_f64(n)
+
+    // Compute std
+    var var_sum = 0.0
+    for i in 0 .. n {
+        val d = list_get(values, i) - mean
+        var_sum = var_sum + d * d
+    }
+    val std = sqrt(var_sum / to_f64(n) + 1.0e-8)
+
+    // Normalize
+    val result : list<f64> = list()
+    for i in 0 .. n {
+        list_push(result, (list_get(values, i) - mean) / std)
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Perception Pipeline Helpers
+// ---------------------------------------------------------------------------
+
+/// Normalize input features to [0, 1] range.
+pub def normalize_input(data: list<f64>) -> list<f64> {
+    val n = list_len(data)
+    if n == 0 { return data }
+
+    var mn = list_get(data, 0)
+    var mx = list_get(data, 0)
+    for i in 1 .. n {
+        val v = list_get(data, i)
+        if v < mn { mn = v }
+        if v > mx { mx = v }
+    }
+
+    val range = mx - mn
+    val result : list<f64> = list()
+    if range < 1.0e-10 {
+        for i in 0 .. n { list_push(result, 0.0) }
+    } else {
+        for i in 0 .. n {
+            list_push(result, (list_get(data, i) - mn) / range)
+        }
+    }
+    result
+}
+
+/// Clip values to [low, high] range.
+pub def clip_list(values: list<f64>, low: f64, high: f64) -> list<f64> {
+    val result : list<f64> = list()
+    for i in 0 .. list_len(values) {
+        val v = list_get(values, i)
+        val clipped = if v < low { low } else { if v > high { high } else { v } }
+        list_push(result, clipped)
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Model Persistence
+// ---------------------------------------------------------------------------
+
+/// Save model weights to a text file (one weight per line).
+pub def model_save(weights: list<f64>, path: str) -> bool {
+    var content = ""
+    for i in 0 .. list_len(weights) {
+        content = concat(content, concat(to_str(list_get(weights, i)), "\n"))
+    }
+    write_text(path, content);
+    true
+}
+
+/// Load model weights from a text file (one weight per line).
+pub def model_load(path: str) -> list<f64> {
+    val weights : list<f64> = list()
+    if path_exists(path) {
+        val content = read_text(path)
+        val lines = split(content, "\n")
+        for i in 0 .. list_len(lines) {
+            val line = trim(list_get(lines, i))
+            if len(line) > 0 {
+                val parsed = parse_f64(line)
+                if is_some(parsed) {
+                    list_push(weights, unwrap(parsed))
+                }
+            }
+        }
+    }
+    weights
+}

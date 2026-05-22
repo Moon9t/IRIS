@@ -1,0 +1,10 @@
+pub record Task {
+    id: i64,
+    title: str,
+    status: i64,
+}
+
+pub def format_task(task: Task) -> str {
+    val status_str = if task.status == 0 { "[ ]" } else { "[x]" };
+    concat(concat(concat(to_str(task.id), ": "), status_str), concat(" ", task.title))
+}
