@@ -14,8 +14,7 @@ use std::path::{Path, PathBuf};
 use crate::cache::BuildCache;
 use crate::error::Error;
 use crate::parser::ast::{
-    AstBlock, AstExpr, AstModule, AstStmt, AstType,
-    AstWhenPattern, BringPath,
+    AstBlock, AstExpr, AstModule, AstStmt, AstType, AstWhenPattern, BringPath,
 };
 use crate::parser::lexer::Lexer;
 use crate::parser::parse::Parser;

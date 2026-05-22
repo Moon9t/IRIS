@@ -46,10 +46,9 @@ fn did_you_mean<'a>(name: &str, candidates: impl Iterator<Item = &'a str>) -> Op
     let mut best: Option<(usize, &str)> = None;
     for c in candidates {
         let d = levenshtein(name, c);
-        if d <= 2
-            && best.map(|(bd, _)| d < bd).unwrap_or(true) {
-                best = Some((d, c));
-            }
+        if d <= 2 && best.map(|(bd, _)| d < bd).unwrap_or(true) {
+            best = Some((d, c));
+        }
     }
     best.map(|(_, s)| s.to_owned())
 }
@@ -11924,7 +11923,7 @@ impl<'m> Lowerer<'m> {
                                     span: *span,
                                 })?;
                             let (value_val, _) = self.lower_expr(value)?;
-                            
+
                             let mut new_fields = Vec::with_capacity(struct_fields.len());
                             for i in 0..struct_fields.len() {
                                 if i == field_index {
@@ -11982,7 +11981,7 @@ impl<'m> Lowerer<'m> {
                                 });
                             }
                             let (value_val, _) = self.lower_expr(value)?;
-                            
+
                             let mut new_elements = Vec::with_capacity(elem_types.len());
                             for i in 0..elem_types.len() {
                                 if i == *index {

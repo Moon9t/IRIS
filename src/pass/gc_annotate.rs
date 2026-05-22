@@ -312,10 +312,7 @@ fn escape_sources_for_value(
     }
 }
 
-fn defining_instr(
-    func: &crate::ir::function::IrFunction,
-    value: ValueId,
-) -> Option<&IrInstr> {
+fn defining_instr(func: &crate::ir::function::IrFunction, value: ValueId) -> Option<&IrInstr> {
     for block in &func.blocks {
         if block.params.iter().any(|param| param.id == value) {
             return None;
