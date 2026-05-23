@@ -499,6 +499,65 @@ fn emit_llvm_ir_impl(
         writeln!(out, "  unreachable")?;
         writeln!(out, "}}\n")?;
     }
+    // Post-process emitted IR to correct occasional FP-width mismatches
+    // where an instruction like `fptosi float %vN to i64` was emitted but
+    // the `%vN` value is actually defined as `double` earlier in the IR.
+    // This can happen when value-type bookkeeping and emitted instructions
+    // get out of sync for constants/folded expressions. Fixing here avoids
+    // clang rejecting the IR.
+    {
+        let mut lines: Vec<String> = out.lines().map(|s| s.to_owned()).collect();
+        // Build a map of value -> its first-definition line (to check its type).
+        let mut val_type: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for ln in &lines {
+            if let Some(idx) = ln.find(" = ") {
+                let lhs = ln[..idx].trim();
+                if lhs.starts_with('%') {
+                    // lhs like "%v3"
+                    // Try to extract a type from the rhs, e.g. "fmul double ..." or "fadd float ..."
+                    let rhs = ln[idx + 3..].trim();
+                    if rhs.starts_with("fmul ")
+                        || rhs.starts_with("fadd ")
+                        || rhs.starts_with("fsub ")
+                    {
+                        if rhs.contains(" double ") {
+                            val_type.insert(lhs.to_string(), "double".to_string());
+                        } else if rhs.contains(" float ") {
+                            val_type.insert(lhs.to_string(), "float".to_string());
+                        }
+                    } else if rhs.starts_with("fpext ") || rhs.starts_with("fptrunc ") {
+                        if rhs.contains(" double ") {
+                            val_type.insert(lhs.to_string(), "double".to_string());
+                        } else if rhs.contains(" float ") {
+                            val_type.insert(lhs.to_string(), "float".to_string());
+                        }
+                    }
+                }
+            }
+        }
+        // Now fix fptosi float %vN occurrences when val_type says %vN is double.
+        for ln in &mut lines {
+            if ln.contains("fptosi float %") {
+                // find the %vN
+                if let Some(p) = ln.find("fptosi float %") {
+                    let rest = &ln[p + "fptosi float ".len()..];
+                    if let Some(end) = rest.find(' ') {
+                        let vname = &rest[..end];
+                        let key = vname.to_string();
+                        if let Some(t) = val_type.get(&key) {
+                            if t == "double" {
+                                *ln = ln.replacen("fptosi float ", "fptosi double ", 1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out = lines.join("\n");
+        out.push('\n');
+    }
+
     Ok(out)
 }
 
@@ -1653,10 +1712,33 @@ fn coerce_to_type(
                     };
                     writeln!(out, "  {} = {}", tmp, cmp)?;
                 } else {
+                    // Ensure the operand is represented with the authoritative
+                    // FP width (`actual_ty_str`) before performing the
+                    // float->int conversion. This avoids emitting e.g.
+                    // `fptosi float %x to i64` when `%x` is actually a
+                    // `double` value, which clang rejects.
+                    let v_use = if actual_ty != &actual_ty_str {
+                        *gep_counter += 1;
+                        let tmp2 = format!("%coerce{}", *gep_counter);
+                        if actual_ty == "double" && actual_ty_str == "float" {
+                            writeln!(out, "  {} = fptrunc double {} to float", tmp2, v_str)?;
+                        } else if actual_ty == "float" && actual_ty_str == "double" {
+                            writeln!(out, "  {} = fpext float {} to double", tmp2, v_str)?;
+                        } else {
+                            writeln!(
+                                out,
+                                "  {} = bitcast {} {} to {}",
+                                tmp2, actual_ty, v_str, actual_ty_str
+                            )?;
+                        }
+                        tmp2
+                    } else {
+                        v_str
+                    };
                     writeln!(
                         out,
                         "  {} = fptosi {} {} to {}",
-                        tmp, actual_ty_str, v_str, expected_ty
+                        tmp, actual_ty_str, v_use, expected_ty
                     )?;
                 }
             } else if actual_ty.starts_with('i')
@@ -2110,16 +2192,52 @@ fn emit_instr_ir(
                     result.0, from_s, ov, to_s
                 )?;
             } else if is_from_float && is_to_int {
+                // Ensure the operand is represented with `actual_from_s` width
+                // (e.g. f32 vs f64). Coerce if necessary to avoid emitting
+                // instructions that reference the wrong FP width for the
+                // operand value (which clang rejects).
+                // Use the operand's emitted LLVM type when performing the
+                // float->int conversion so the instruction's source type
+                // matches the actual value. Coerce constants as needed.
+                let src_ty = emitted_types
+                    .get(operand)
+                    .cloned()
+                    .unwrap_or_else(|| from_s.clone());
+                let ov_coerced = coerce_to_type(
+                    *operand,
+                    &src_ty,
+                    consts,
+                    func,
+                    emitted_types,
+                    gep_counter,
+                    out,
+                )?;
                 writeln!(
                     out,
                     "  %v{} = fptosi {} {} to {}",
-                    result.0, actual_from_s, ov, to_s
+                    result.0, src_ty, ov_coerced, to_s
                 )?;
             } else if is_from_int && is_to_float {
+                // Coerce integer operand to the expected integer type width
+                // before emitting `sitofp` so the src operand matches the
+                // emitted type string used in the instruction.
+                let src_ty = emitted_types
+                    .get(operand)
+                    .cloned()
+                    .unwrap_or_else(|| from_s.clone());
+                let ov_coerced = coerce_to_type(
+                    *operand,
+                    &src_ty,
+                    consts,
+                    func,
+                    emitted_types,
+                    gep_counter,
+                    out,
+                )?;
                 writeln!(
                     out,
                     "  %v{} = sitofp {} {} to {}",
-                    result.0, actual_from_s, ov, to_s
+                    result.0, src_ty, ov_coerced, to_s
                 )?;
             } else if is_from_float && is_to_float {
                 if !is_from_f64 && is_to_f64 {
@@ -2135,7 +2253,11 @@ fn emit_instr_ir(
                         if actual_from_s == "float" && to_s == "double" {
                             writeln!(out, "  %v{} = fpext float {} to double", result.0, ov)?;
                         } else {
-                            writeln!(out, "  %v{} = fpext {} {} to {}", result.0, actual_from_s, ov, to_s)?;
+                            writeln!(
+                                out,
+                                "  %v{} = fpext {} {} to {}",
+                                result.0, actual_from_s, ov, to_s
+                            )?;
                         }
                     }
                 } else {
@@ -5209,7 +5331,11 @@ fn f32_to_llvm_hex(f: f32) -> String {
         return "0x7fc00000".to_owned();
     }
     if f.is_infinite() {
-        return if f.is_sign_negative() { "-inf".to_owned() } else { "inf".to_owned() };
+        return if f.is_sign_negative() {
+            "-inf".to_owned()
+        } else {
+            "inf".to_owned()
+        };
     }
     let bits = f.to_bits();
     let sign = (bits >> 31) & 1;

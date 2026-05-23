@@ -19,7 +19,11 @@ fn arrays_example_runs() {
 #[test]
 fn concurrency_example_runs() {
     let out = compile_file(&example_path("05_systems/concurrency.iris"), EmitKind::Eval).unwrap();
-    assert!(out.contains("messages received = 5"), "output was:\n{}", out);
+    assert!(
+        out.contains("messages received = 5"),
+        "output was:\n{}",
+        out
+    );
     assert!(out.contains("message total = 15"), "output was:\n{}", out);
     assert!(out.contains("atomic counter = 5"), "output was:\n{}", out);
 }
@@ -49,7 +53,11 @@ fn loops_example_runs() {
 
 #[test]
 fn neural_net_example_runs() {
-    let out = compile_file(&example_path("06_machine_learning/neural_net.iris"), EmitKind::Eval).unwrap();
+    let out = compile_file(
+        &example_path("06_machine_learning/neural_net.iris"),
+        EmitKind::Eval,
+    )
+    .unwrap();
     assert!(out.contains("pred(0,0) = "), "output was:\n{}", out);
     assert!(out.contains("pred(1,1) = "), "output was:\n{}", out);
     assert!(out.contains("xor loss = "), "output was:\n{}", out);
@@ -57,7 +65,11 @@ fn neural_net_example_runs() {
 
 #[test]
 fn ml_full_pipeline_example_runs() {
-    let out = compile_file(&example_path("06_machine_learning/ml_full_pipeline.iris"), EmitKind::Eval).unwrap();
+    let out = compile_file(
+        &example_path("06_machine_learning/ml_full_pipeline.iris"),
+        EmitKind::Eval,
+    )
+    .unwrap();
     assert!(out.contains("ingested rows = 8"), "output was:\n{}", out);
     assert!(out.contains("updated accuracy = "), "output was:\n{}", out);
     assert!(
