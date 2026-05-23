@@ -1,0 +1,64 @@
+bring std.fs
+bring std.fmt
+
+pub record SVGContext {
+    width: i64,
+    height: i64,
+    content: str
+}
+
+pub def svg_new(width: i64, height: i64) -> SVGContext {
+    val header = concat(concat("<svg width=\"", to_str(width)), concat("\" height=\"", to_str(height)));
+    val ctx = SVGContext {
+        width: width,
+        height: height,
+        content: concat(header, "\" xmlns=\"http://www.w3.org/2000/svg\">\n")
+    }
+    ctx
+}
+
+pub def svg_rect(ctx: SVGContext, x: f64, y: f64, w: f64, h: f64, color: str) -> i64 {
+    val args = list();
+    list_push(args, to_str(x));
+    list_push(args, to_str(y));
+    list_push(args, to_str(w));
+    list_push(args, to_str(h));
+    list_push(args, color);
+
+    val rect = fmt.sprintf("  <rect x=\"%.2f\" y=\"%.2f\" width=\"%.2f\" height=\"%.2f\" fill=\"%s\" />\n", args);
+    ctx.content = concat(ctx.content, rect);
+    return 0;
+}
+
+pub def svg_line(ctx: SVGContext, x1: f64, y1: f64, x2: f64, y2: f64, color: str, stroke_width: f64) -> i64 {
+    val args = list();
+    list_push(args, to_str(x1));
+    list_push(args, to_str(y1));
+    list_push(args, to_str(x2));
+    list_push(args, to_str(y2));
+    list_push(args, color);
+    list_push(args, to_str(stroke_width));
+
+    val line = fmt.sprintf("  <line x1=\"%.2f\" y1=\"%.2f\" x2=\"%.2f\" y2=\"%.2f\" stroke=\"%s\" stroke-width=\"%.2f\" />\n", args);
+    ctx.content = concat(ctx.content, line);
+    return 0;
+}
+
+pub def svg_text(ctx: SVGContext, x: f64, y: f64, text: str, color: str, size: i64) -> i64 {
+    val args = list();
+    list_push(args, to_str(x));
+    list_push(args, to_str(y));
+    list_push(args, color);
+    list_push(args, to_str(size));
+    list_push(args, text);
+
+    val text_tag = fmt.sprintf("  <text x=\"%.2f\" y=\"%.2f\" fill=\"%s\" font-size=\"%d\" font-family=\"sans-serif\">%s</text>\n", args);
+    ctx.content = concat(ctx.content, text_tag);
+    return 0;
+}
+
+pub def svg_save(ctx: SVGContext, path: str) -> i64 {
+    val final_content = concat(ctx.content, "</svg>\n");
+    fs.write_text(path, final_content);
+    return 0;
+}

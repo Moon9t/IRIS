@@ -1,0 +1,5 @@
+C:\Users\Moon\Desktop\Projects\IRIS\target-local-ci\debug\deps\blas_bindings_matmul_list_dot_blas_list_axpy_blas_list_scale_blas-984f8f10b97b07f4.d: tests\blas_bindings_matmul_list_dot_blas_list_axpy_blas_list_scale_blas.rs
+
+C:\Users\Moon\Desktop\Projects\IRIS\target-local-ci\debug\deps\blas_bindings_matmul_list_dot_blas_list_axpy_blas_list_scale_blas-984f8f10b97b07f4.exe: tests\blas_bindings_matmul_list_dot_blas_list_axpy_blas_list_scale_blas.rs
+
+tests\blas_bindings_matmul_list_dot_blas_list_axpy_blas_list_scale_blas.rs:

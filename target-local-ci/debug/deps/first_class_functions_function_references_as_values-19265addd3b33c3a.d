@@ -1,0 +1,5 @@
+C:\Users\Moon\Desktop\Projects\IRIS\target-local-ci\debug\deps\first_class_functions_function_references_as_values-19265addd3b33c3a.d: tests\first_class_functions_function_references_as_values.rs
+
+C:\Users\Moon\Desktop\Projects\IRIS\target-local-ci\debug\deps\first_class_functions_function_references_as_values-19265addd3b33c3a.exe: tests\first_class_functions_function_references_as_values.rs
+
+tests\first_class_functions_function_references_as_values.rs:

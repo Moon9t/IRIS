@@ -2,9 +2,9 @@ name: v1-checks
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   verify:
@@ -30,10 +30,14 @@ jobs:
 
       - name: Run differential tests (interpreter vs native)
         run: |
-          python3 tools/iris_diff_runner.py examples/hello.iris examples/factorial.iris projects/showcase/mathlab.iris --iris target/debug/iris
+          python3 tools/iris_diff_runner.py \
+            examples/hello.iris \
+            examples/factorial.iris \
+            projects/showcase/mathlab.iris \
+            --iris target/debug/iris
 
       - name: Run perf gate (requires baseline committed)
         run: |
-          python3 tools/iris_perf_gate.py benches/binary_search_bench.iris --runs 3 --iris target/debug/iris
-
-*** End File
+          python3 tools/iris_perf_gate.py benches/binary_search_bench.iris \
+            --runs 3 \
+            --iris target/debug/iris

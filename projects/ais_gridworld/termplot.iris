@@ -1,0 +1,36 @@
+bring std.fmt
+
+pub def term_plot_bar(values: list<f64>, max_width: i64, title: str) -> i64 {
+    val n = list_len(values);
+    if n == 0 {
+        return 0;
+    }
+
+    var mx = list_get(values, 0);
+    var i = 1;
+    while i < n {
+        val v = list_get(values, i);
+        if v > mx { mx = v; }
+        i = i + 1;
+    }
+
+    print(concat("--- ", concat(title, " ---")));
+    i = 0;
+    while i < n {
+        val v = list_get(values, i);
+        val blocks = if mx > 0.0 { (v / mx) * (max_width to f64) } else { 0.0 };
+        val blocks_int = blocks to i64;
+
+        var bar = "";
+        var j = 0;
+        while j < blocks_int {
+            bar = concat(bar, "#");
+            j = j + 1;
+        }
+
+        print(concat(concat(to_str(i), " | "), concat(bar, concat(" ", to_str(v)))));
+        i = i + 1;
+    }
+    print("");
+    return 0;
+}

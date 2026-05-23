@@ -158,7 +158,10 @@ jobs:
           mkdir -p bench-results
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           COMMIT=$(git rev-parse --short HEAD)
-          echo "{ \"timestamp\": \"${TIMESTAMP}\", \"commit\": \"${COMMIT}\", \"benchmarks\": [" > bench-results/results.json
+          echo "{" > bench-results/results.json
+          echo "  \"timestamp\": \"${TIMESTAMP}\"," >> bench-results/results.json
+          echo "  \"commit\": \"${COMMIT}\"," >> bench-results/results.json
+          echo "  \"benchmarks\": [" >> bench-results/results.json
           FIRST=true
           for f in benches/*.iris examples/*/*.iris; do
             if [ -f "$f" ]; then
@@ -166,14 +169,20 @@ jobs:
               echo "=== Benchmarking $f ==="
               OUTPUT=$(cargo run --release -- bench "$f" -n 20 2>&1 || true)
               # Extract the mean time in ms (the bench command prints it)
-              MEAN=$(echo "$OUTPUT" | grep -oP '[\d.]+\s*ms' | head -1 | grep -oP '[\d.]+' || echo "0")
-              if [ "$FIRST" = true ]; then FIRST=false; else echo "," >> bench-results/results.json; fi
-              echo "  { \"name\": \"${BENCH_NAME}\", \"mean_ms\": ${MEAN:-0} }" >> bench-results/results.json
+              TMP_MEAN=$(echo "$OUTPUT" | grep -oP '[\d.]+\s*ms' | head -1)
+              MEAN=$(echo "$TMP_MEAN" | grep -oP '[\d.]+' || echo "0")
+              if [ "$FIRST" = true ]; then
+                FIRST=false
+              else
+                echo "," >> bench-results/results.json
+              fi
+              echo "  { \"name\": \"${BENCH_NAME}\"," >> bench-results/results.json
+              echo "    \"mean_ms\": ${MEAN:-0} }" >> bench-results/results.json
               echo "$OUTPUT"
               echo ""
             fi
           done
-          echo "] }" >> bench-results/results.json
+          echo "  ] }" >> bench-results/results.json
           cat bench-results/results.json
 
       - name: Upload benchmark results
@@ -195,32 +204,7 @@ jobs:
         run: |
           if [ -f bench-baseline/results.json ]; then
             echo "=== Comparing against baseline ==="
-            python3 -c "
-          import json, sys
-          with open('bench-baseline/results.json') as f:
-              baseline = {b['name']: b['mean_ms'] for b in json.load(f)['benchmarks']}
-          with open('bench-results/results.json') as f:
-              current = {b['name']: b['mean_ms'] for b in json.load(f)['benchmarks']}
-          regression = False
-          for name, cur in sorted(current.items()):
-              base = baseline.get(name)
-              if base and base > 0:
-                  pct = ((cur - base) / base) * 100
-                  status = 'REGRESSION' if pct > 15 else ('improved' if pct < -5 else 'ok')
-                  if status == 'REGRESSION':
-                      regression = True
-                  print(f'  {name:20s}  base={base:8.2f}ms  now={cur:8.2f}ms  {pct:+.1f}%  [{status}]')
-              else:
-                  print(f'  {name:20s}  new benchmark  now={cur:.2f}ms')
-          if regression:
-              print()
-              print('WARNING: Performance regression detected (>15% slower)')
-              print('Review the benchmarks above before merging.')
-              sys.exit(1)
-          else:
-              print()
-              print('All benchmarks within acceptable range.')
-          "
+            python3 .github/scripts/compare_benchmarks.py bench-baseline/results.json bench-results/results.json
           else
             echo "No baseline found — this run becomes the baseline."
           fi

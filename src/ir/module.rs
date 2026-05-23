@@ -22,7 +22,7 @@ pub struct IrExternFn {
     pub ret_ty: IrType,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct IrModule {
     pub name: String,
     pub(crate) functions: Vec<IrFunction>,

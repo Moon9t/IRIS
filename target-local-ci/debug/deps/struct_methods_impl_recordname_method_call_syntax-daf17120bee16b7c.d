@@ -1,0 +1,5 @@
+C:\Users\Moon\Desktop\Projects\IRIS\target-local-ci\debug\deps\struct_methods_impl_recordname_method_call_syntax-daf17120bee16b7c.d: tests\struct_methods_impl_recordname_method_call_syntax.rs
+
+C:\Users\Moon\Desktop\Projects\IRIS\target-local-ci\debug\deps\struct_methods_impl_recordname_method_call_syntax-daf17120bee16b7c.exe: tests\struct_methods_impl_recordname_method_call_syntax.rs
+
+tests\struct_methods_impl_recordname_method_call_syntax.rs:

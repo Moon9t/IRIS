@@ -1,0 +1,5 @@
+C:\Users\Moon\Desktop\Projects\IRIS\target-local-ci\debug\deps\cuda_end_to_end_kernel_attribute_nvvm_annotations-d814ec9493484319.d: tests\cuda_end_to_end_kernel_attribute_nvvm_annotations.rs
+
+C:\Users\Moon\Desktop\Projects\IRIS\target-local-ci\debug\deps\cuda_end_to_end_kernel_attribute_nvvm_annotations-d814ec9493484319.exe: tests\cuda_end_to_end_kernel_attribute_nvvm_annotations.rs
+
+tests\cuda_end_to_end_kernel_attribute_nvvm_annotations.rs:

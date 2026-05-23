@@ -11648,33 +11648,93 @@ impl<'m> Lowerer<'m> {
 
     /// Lowers a `loop { body }` (infinite loop). `break` exits to merge_bb.
     fn lower_loop(&mut self, body: &AstBlock, span: Span) -> Result<(), LowerError> {
-        let loop_bb = self.builder.create_block(Some("loop_body"));
+        // Pre-scan body to find which variables get rebound inside the loop.
+        let rebound = find_rebound_vars(body);
+
+        // Collect the loop variables that exist in the current scope.
+        let mut loop_vars: Vec<(String, ValueId, IrType)> = Vec::new();
+        for name in &rebound {
+            if let Some((val, ty)) = self.scope.get(name).cloned() {
+                loop_vars.push((name.clone(), val, ty));
+            }
+        }
+
+        let initial_vals: Vec<ValueId> = loop_vars.iter().map(|(_, v, _)| *v).collect();
+
+        // Create header/body/merge blocks with SSA block params for loop vars.
+        let header_bb = self.builder.create_block(Some("loop_header"));
+        let body_bb = self.builder.create_block(Some("loop_body"));
         let merge_bb = self.builder.create_block(Some("loop_merge"));
 
+        // Header block params (one per loop variable).
+        let mut header_params: Vec<ValueId> = Vec::new();
+        for (name, _, ty) in &loop_vars {
+            let p = self.builder.add_block_param(header_bb, Some(name), ty.clone());
+            header_params.push(p);
+        }
+
+        // Merge block params (receive final values on loop exit).
+        let mut merge_params: Vec<ValueId> = Vec::new();
+        for (name, _, ty) in &loop_vars {
+            let p = self.builder.add_block_param(merge_bb, Some(name), ty.clone());
+            merge_params.push(p);
+        }
+
+        // Branch from current block to header with initial values.
         self.builder.push_instr(
             IrInstr::Br {
-                target: loop_bb,
+                target: header_bb,
+                args: initial_vals,
+            },
+            None,
+        );
+
+        // Header: update scope with params and jump to body.
+        self.builder.set_current_block(header_bb);
+        for ((name, _, ty), &param_val) in loop_vars.iter().zip(header_params.iter()) {
+            self.scope.insert(name.clone(), (param_val, ty.clone()));
+        }
+        self.builder.push_instr(
+            IrInstr::Br {
+                target: body_bb,
                 args: vec![],
             },
             None,
         );
 
-        self.builder.set_current_block(loop_bb);
-        self.loop_stack.push((loop_bb, merge_bb, vec![]));
+        // Lower body block.
+        self.builder.set_current_block(body_bb);
+        let loop_var_names: Vec<String> = loop_vars.iter().map(|(n, _, _)| n.clone()).collect();
+        self.loop_stack.push((header_bb, merge_bb, loop_var_names.clone()));
         let _ = self.lower_block(body)?;
         self.loop_stack.pop();
 
+        // Emit back-edge Br if the body wasn't terminated by break/continue.
         if !self.builder.is_current_block_terminated() {
+            let updated_vals: Vec<ValueId> = loop_vars
+                .iter()
+                .map(|(name, original_val, _)| {
+                    self.scope
+                        .get(name)
+                        .map(|(v, _)| *v)
+                        .unwrap_or(*original_val)
+                })
+                .collect();
             self.builder.push_instr(
                 IrInstr::Br {
-                    target: loop_bb,
-                    args: vec![],
+                    target: header_bb,
+                    args: updated_vals,
                 },
                 None,
             );
         }
 
+        // Move to merge block and update scope with final values.
         self.builder.set_current_block(merge_bb);
+        for ((name, _, ty), &merge_val) in loop_vars.iter().zip(merge_params.iter()) {
+            self.scope.insert(name.clone(), (merge_val, ty.clone()));
+        }
+
         let _ = span;
         Ok(())
     }
