@@ -762,8 +762,9 @@ impl<'m> Lowerer<'m> {
             }
 
             AstExpr::FloatLit { value, .. } => {
+                // Float literals default to f32 in the language frontend.
                 let result = self.builder.fresh_value();
-                let ty = IrType::Scalar(DType::F64);
+                let ty = IrType::Scalar(DType::F32);
                 self.builder.push_instr(
                     IrInstr::ConstFloat {
                         result,
