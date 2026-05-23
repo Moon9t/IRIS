@@ -81,14 +81,23 @@ jobs:
       - name: Build debug compiler
         run: cargo build --verbose
 
-      - name: Native regression tests
-        # Run a focused, explicit set of regression tests. Previous combined
-        # line was malformed and could hang on some shells/runners.
+      - name: Native regression tests (Unix)
+        if: matrix.shell_family == 'unix'
         run: |
           set -e
-          echo "Running regression test suite (focused)"
-          # Run all unit/integration tests but avoid long-running or flaky suites.
-          cargo test --tests -- --nocapture
+          echo "Running focused native regression tests"
+          ${{ matrix.timeout_cmd }} 20m cargo test --test mutable_bindings_var_keyword_ident_assign test_nested_if_mutations_threaded_through_while_ir -- --nocapture
+          ${{ matrix.timeout_cmd }} 20m cargo test --test native_only_execution_http_server_stdlib_regex native_returned_ -- --nocapture
+
+      - name: Native regression tests (Windows)
+        if: matrix.shell_family == 'windows'
+        shell: powershell
+        run: |
+          Write-Host "Running focused native regression tests"
+          $proc = Start-Process -FilePath cargo -ArgumentList @('test', '--test', 'mutable_bindings_var_keyword_ident_assign', 'test_nested_if_mutations_threaded_through_while_ir', '--', '--nocapture') -PassThru -NoNewWindow -Wait
+          if ($proc.ExitCode -ne 0) { throw "mutable_bindings_var_keyword_ident_assign failed with exit code $($proc.ExitCode)" }
+          $proc = Start-Process -FilePath cargo -ArgumentList @('test', '--test', 'native_only_execution_http_server_stdlib_regex', 'native_returned_', '--', '--nocapture') -PassThru -NoNewWindow -Wait
+          if ($proc.ExitCode -ne 0) { throw "native_only_execution_http_server_stdlib_regex failed with exit code $($proc.ExitCode)" }
 
       - name: Native example smoke (Unix)
         if: matrix.shell_family == 'unix'

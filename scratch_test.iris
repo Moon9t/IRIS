@@ -1,0 +1,3 @@
+@differentiable
+def square(x: f32) -> f32 { x * x }
+def f() -> i64 { square(3.0) to i64 }

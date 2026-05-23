@@ -622,7 +622,7 @@ fn emit_cuda_instr(
                             result.0, ty_s, ty_s, ov
                         )?;
                     }
-                }
+                },
                 ScalarUnaryOp::BitNot => {
                     writeln!(out, "  %v{} = xor {} {}, -1", result.0, ty_s, ov)?
                 }

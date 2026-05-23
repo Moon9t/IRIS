@@ -583,8 +583,8 @@ fn emit_function_body(
     for block in func.blocks() {
         for instr in &block.instrs {
             match instr {
-                IrInstr::ConstFloat { result, value, ty } => {
-                    consts.insert(*result, fmt_float_typed(*value, ty));
+                IrInstr::ConstFloat { result, value, .. } => {
+                    consts.insert(*result, fmt_float(*value));
                 }
                 IrInstr::ConstInt { result, value, .. } => {
                     consts.insert(*result, value.to_string());
@@ -726,40 +726,8 @@ fn emit_function_body(
                         emitted_types.insert(*r, ty_s);
                     }
                 }
-                IrInstr::BinOp {
-                    result,
-                    op,
-                    lhs,
-                    rhs,
-                    ty,
-                } => {
-                    let comparison_op = matches!(
-                        op,
-                        BinOp::CmpEq
-                            | BinOp::CmpNe
-                            | BinOp::CmpLt
-                            | BinOp::CmpLe
-                            | BinOp::CmpGt
-                            | BinOp::CmpGe
-                    );
-                    let semantic_operand_ty =
-                        func.value_type(*lhs).or_else(|| func.value_type(*rhs));
-                    let lhs_ety = emitted_types.get(lhs).map(|s| s.as_str());
-                    let rhs_ety = emitted_types.get(rhs).map(|s| s.as_str());
-                    let is_str_cmp = semantic_operand_ty == Some(&IrType::Str)
-                        || lhs_ety == Some("ptr")
-                            && rhs_ety == Some("ptr")
-                            && matches!(op, BinOp::CmpEq | BinOp::CmpNe);
-                    let s = if let Some(IrType::Grad(_)) = semantic_operand_ty {
-                        "ptr".to_owned()
-                    } else if is_str_cmp && matches!(op, BinOp::CmpEq | BinOp::CmpNe) {
-                        "i1".to_owned()
-                    } else if comparison_op {
-                        "i1".to_owned()
-                    } else {
-                        llvm_type_complete(semantic_operand_ty.unwrap_or(ty))
-                            .unwrap_or_else(|_| "i64".to_owned())
-                    };
+                IrInstr::BinOp { result, ty, .. } => {
+                    let s = llvm_type_complete(ty).unwrap_or_else(|_| "i64".to_owned());
                     emitted_types.insert(*result, s);
                 }
                 IrInstr::IsSome { result, .. } | IrInstr::IsOk { result, .. } => {
@@ -1625,19 +1593,44 @@ fn coerce_to_type(
     out: &mut String,
 ) -> Result<String, CodegenError> {
     let v_str = llvm_val(v, consts, func);
-    // Constants don't need coercion — their type is determined by context.
+    // Constants: when used in an expected type context we may need to
+    // materialize a properly-typed temporary. In particular, LLVM expects
+    // `float` constants to be written as hexadecimal float literals; so
+    // for inline constants used as `float` we emit a small tmp holding the
+    // properly-typed float literal.
     if consts.contains_key(&v) {
+        if expected_ty == "float" {
+            // Parse stored decimal and produce an f32 hex literal.
+            let dv = consts[&v].clone();
+            if let Ok(_d) = dv.parse::<f64>() {
+                *gep_counter += 1;
+                let tmp = format!("%coerce{}", gep_counter);
+                // Use fptrunc from a double literal to produce a correctly-typed
+                // float value. Decimal double literals are accepted by clang.
+                writeln!(out, "  {} = fptrunc double {} to float", tmp, dv)?;
+                return Ok(tmp);
+            }
+            return Ok(v_str);
+        }
         return Ok(v_str);
     }
     if let Some(actual_ty) = emitted_types.get(&v) {
         if actual_ty != expected_ty {
             *gep_counter += 1;
             let tmp = format!("%coerce{}", gep_counter);
-            if actual_ty == "ptr" && expected_ty.starts_with('i') {
+            // Resolve the real LLVM type for the value from the function's
+            // recorded `value_type` if available to avoid inconsistencies
+            // between `emitted_types` and the IR's authoritative types.
+            let actual_ty_str = if let Some(ty) = func.value_type(v) {
+                llvm_type_complete(ty).unwrap_or(actual_ty.clone())
+            } else {
+                actual_ty.clone()
+            };
+            if actual_ty_str == "ptr" && expected_ty.starts_with('i') {
                 writeln!(out, "  {} = ptrtoint ptr {} to {}", tmp, v_str, expected_ty)?;
-            } else if expected_ty == "ptr" && actual_ty.starts_with('i') {
+            } else if expected_ty == "ptr" && actual_ty_str.starts_with('i') {
                 writeln!(out, "  {} = inttoptr {} {} to ptr", tmp, actual_ty, v_str)?;
-            } else if actual_ty.starts_with('i') && expected_ty.starts_with('i') {
+            } else if actual_ty_str.starts_with('i') && expected_ty.starts_with('i') {
                 let op = if bit_width(actual_ty) > bit_width(expected_ty) {
                     "trunc"
                 } else {
@@ -1646,7 +1639,7 @@ fn coerce_to_type(
                 writeln!(
                     out,
                     "  {} = {} {} {} to {}",
-                    tmp, op, actual_ty, v_str, expected_ty
+                    tmp, op, actual_ty_str, v_str, expected_ty
                 )?;
             } else if (actual_ty == "float" || actual_ty == "double")
                 && expected_ty.starts_with('i')
@@ -1663,7 +1656,7 @@ fn coerce_to_type(
                     writeln!(
                         out,
                         "  {} = fptosi {} {} to {}",
-                        tmp, actual_ty, v_str, expected_ty
+                        tmp, actual_ty_str, v_str, expected_ty
                     )?;
                 }
             } else if actual_ty.starts_with('i')
@@ -1672,13 +1665,13 @@ fn coerce_to_type(
                 writeln!(
                     out,
                     "  {} = sitofp {} {} to {}",
-                    tmp, actual_ty, v_str, expected_ty
+                    tmp, actual_ty_str, v_str, expected_ty
                 )?;
             } else {
                 writeln!(
                     out,
                     "  {} = bitcast {} {} to {}",
-                    tmp, actual_ty, v_str, expected_ty
+                    tmp, actual_ty_str, v_str, expected_ty
                 )?;
             }
             return Ok(tmp);
@@ -1848,133 +1841,7 @@ fn emit_instr_ir(
                 || lhs_ety == Some("ptr")
                     && rhs_ety == Some("ptr")
                     && matches!(op, BinOp::CmpEq | BinOp::CmpNe);
-            if let Some(IrType::Grad(_)) = semantic_operand_ty {
-                let lv =
-                    coerce_to_type(*lhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
-                let rv =
-                    coerce_to_type(*rhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
-
-                // Extract primal values
-                let val_lhs = format!("%grad_val_lhs{}", gep_counter);
-                *gep_counter += 1;
-                writeln!(
-                    out,
-                    "  {} = call double @iris_grad_value(ptr {})",
-                    val_lhs, lv
-                )?;
-
-                let val_rhs = format!("%grad_val_rhs{}", gep_counter);
-                *gep_counter += 1;
-                writeln!(
-                    out,
-                    "  {} = call double @iris_grad_value(ptr {})",
-                    val_rhs, rv
-                )?;
-
-                // Extract tangents
-                let tan_lhs = format!("%grad_tan_lhs{}", gep_counter);
-                *gep_counter += 1;
-                writeln!(
-                    out,
-                    "  {} = call double @iris_grad_tangent(ptr {})",
-                    tan_lhs, lv
-                )?;
-
-                let tan_rhs = format!("%grad_tan_rhs{}", gep_counter);
-                *gep_counter += 1;
-                writeln!(
-                    out,
-                    "  {} = call double @iris_grad_tangent(ptr {})",
-                    tan_rhs, rv
-                )?;
-
-                // Compute new primal and tangent
-                let (val_res, tan_res) = match op {
-                    BinOp::Add => {
-                        let vr = format!("%grad_val_res{}", gep_counter);
-                        *gep_counter += 1;
-                        writeln!(out, "  {} = fadd double {}, {}", vr, val_lhs, val_rhs)?;
-
-                        let tr = format!("%grad_tan_res{}", gep_counter);
-                        *gep_counter += 1;
-                        writeln!(out, "  {} = fadd double {}, {}", tr, tan_lhs, tan_rhs)?;
-
-                        (vr, tr)
-                    }
-                    BinOp::Sub => {
-                        let vr = format!("%grad_val_res{}", gep_counter);
-                        *gep_counter += 1;
-                        writeln!(out, "  {} = fsub double {}, {}", vr, val_lhs, val_rhs)?;
-
-                        let tr = format!("%grad_tan_res{}", gep_counter);
-                        *gep_counter += 1;
-                        writeln!(out, "  {} = fsub double {}, {}", tr, tan_lhs, tan_rhs)?;
-
-                        (vr, tr)
-                    }
-                    BinOp::Mul => {
-                        let vr = format!("%grad_val_res{}", gep_counter);
-                        *gep_counter += 1;
-                        writeln!(out, "  {} = fmul double {}, {}", vr, val_lhs, val_rhs)?;
-
-                        // tan_res = val_lhs * tan_rhs + tan_lhs * val_rhs
-                        let t1 = format!("%grad_mul_t1{}", gep_counter);
-                        *gep_counter += 1;
-                        writeln!(out, "  {} = fmul double {}, {}", t1, val_lhs, tan_rhs)?;
-
-                        let t2 = format!("%grad_mul_t2{}", gep_counter);
-                        *gep_counter += 1;
-                        writeln!(out, "  {} = fmul double {}, {}", t2, tan_lhs, val_rhs)?;
-
-                        let tr = format!("%grad_tan_res{}", gep_counter);
-                        *gep_counter += 1;
-                        writeln!(out, "  {} = fadd double {}, {}", tr, t1, t2)?;
-
-                        (vr, tr)
-                    }
-                    BinOp::Div => {
-                        let vr = format!("%grad_val_res{}", gep_counter);
-                        *gep_counter += 1;
-                        writeln!(out, "  {} = fdiv double {}, {}", vr, val_lhs, val_rhs)?;
-
-                        // tan_res = (tan_lhs * val_rhs - val_lhs * tan_rhs) / (val_rhs * val_rhs)
-                        let t1 = format!("%grad_div_t1{}", gep_counter);
-                        *gep_counter += 1;
-                        writeln!(out, "  {} = fmul double {}, {}", t1, tan_lhs, val_rhs)?;
-
-                        let t2 = format!("%grad_div_t2{}", gep_counter);
-                        *gep_counter += 1;
-                        writeln!(out, "  {} = fmul double {}, {}", t2, val_lhs, tan_rhs)?;
-
-                        let t3 = format!("%grad_div_t3{}", gep_counter);
-                        *gep_counter += 1;
-                        writeln!(out, "  {} = fsub double {}, {}", t3, t1, t2)?;
-
-                        let t4 = format!("%grad_div_t4{}", gep_counter);
-                        *gep_counter += 1;
-                        writeln!(out, "  {} = fmul double {}, {}", t4, val_rhs, val_rhs)?;
-
-                        let tr = format!("%grad_tan_res{}", gep_counter);
-                        *gep_counter += 1;
-                        writeln!(out, "  {} = fdiv double {}, {}", tr, t3, t4)?;
-
-                        (vr, tr)
-                    }
-                    _ => {
-                        return Err(CodegenError::Unsupported {
-                            backend: "llvm-ir".into(),
-                            detail: format!("Unsupported binary operator {:?} on grad<T>", op),
-                        });
-                    }
-                };
-
-                // Create the new grad struct
-                writeln!(
-                    out,
-                    "  %v{} = call ptr @iris_make_grad(double {}, double {})",
-                    result.0, val_res, tan_res
-                )?;
-            } else if is_str_cmp && matches!(op, BinOp::CmpEq | BinOp::CmpNe) {
+            if is_str_cmp && matches!(op, BinOp::CmpEq | BinOp::CmpNe) {
                 let lv =
                     coerce_to_type(*lhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
                 let rv =
@@ -2180,6 +2047,8 @@ fn emit_instr_ir(
                     )?;
                 }
                 ScalarUnaryOp::Round => {
+                    // Prefer standard C `round`/`roundf` functions instead of
+                    // LLVM intrinsics to avoid linker issues with intrinsics.
                     if ty_s == "double" {
                         writeln!(out, "  %v{} = call double @round(double {})", result.0, ov)?;
                     } else if ty_s == "float" {
@@ -2209,20 +2078,32 @@ fn emit_instr_ir(
             to_ty,
         } => {
             let ov = val(*operand);
-            let from_s = emitted_types
+            let from_s = llvm_type_complete(from_ty)?;
+            let to_s = llvm_type_complete(to_ty)?;
+            // If we know the emitted LLVM type for the operand, prefer that
+            // when emitting cast instructions — this prevents generating
+            // ops that use the wrong floating-point width for the operand.
+            let mut actual_from_s = emitted_types
                 .get(operand)
                 .cloned()
-                .unwrap_or_else(|| llvm_type_complete(from_ty).unwrap_or_default());
-            let to_s = llvm_type_complete(to_ty)?;
-            let is_from_float = from_s == "float" || from_s == "double";
+                .unwrap_or_else(|| from_s.clone());
+            // Prefer the authoritative IR value type when available to avoid
+            // emitting casts with the wrong source width (e.g., using
+            // `float` when the actual value is `double`).
+            if let Some(fty) = func.value_type(*operand) {
+                if let Ok(s) = llvm_type_complete(fty) {
+                    actual_from_s = s;
+                }
+            }
+            let is_from_float = matches!(from_ty, IrType::Scalar(DType::F32 | DType::F64));
             let is_to_float = matches!(to_ty, IrType::Scalar(DType::F32 | DType::F64));
-            let is_from_int = from_s == "i32" || from_s == "i64" || from_s == "i8";
+            let is_from_int = matches!(from_ty, IrType::Scalar(DType::I32 | DType::I64));
             let is_to_int = matches!(to_ty, IrType::Scalar(DType::I32 | DType::I64));
-            let is_from_f64 = from_s == "double";
+            let is_from_f64 = matches!(from_ty, IrType::Scalar(DType::F64));
             let is_to_f64 = matches!(to_ty, IrType::Scalar(DType::F64));
-            let is_from_i64 = from_s == "i64";
+            let is_from_i64 = matches!(from_ty, IrType::Scalar(DType::I64));
             let is_to_i64 = matches!(to_ty, IrType::Scalar(DType::I64));
-            if from_s == to_s {
+            if from_ty == to_ty {
                 writeln!(
                     out,
                     "  %v{} = bitcast {} {} to {}",
@@ -2232,13 +2113,13 @@ fn emit_instr_ir(
                 writeln!(
                     out,
                     "  %v{} = fptosi {} {} to {}",
-                    result.0, from_s, ov, to_s
+                    result.0, actual_from_s, ov, to_s
                 )?;
             } else if is_from_int && is_to_float {
                 writeln!(
                     out,
                     "  %v{} = sitofp {} {} to {}",
-                    result.0, from_s, ov, to_s
+                    result.0, actual_from_s, ov, to_s
                 )?;
             } else if is_from_float && is_to_float {
                 if !is_from_f64 && is_to_f64 {
@@ -2249,11 +2130,13 @@ fn emit_instr_ir(
                         let dv = consts[operand].clone();
                         writeln!(out, "  %v{} = fadd double {}, 0.0", result.0, dv)?;
                     } else {
-                        writeln!(
-                            out,
-                            "  %v{} = fpext {} {} to {}",
-                            result.0, from_s, ov, to_s
-                        )?;
+                        // Use the actual operand type when emitting the FP
+                        // extension instruction.
+                        if actual_from_s == "float" && to_s == "double" {
+                            writeln!(out, "  %v{} = fpext float {} to double", result.0, ov)?;
+                        } else {
+                            writeln!(out, "  %v{} = fpext {} {} to {}", result.0, actual_from_s, ov, to_s)?;
+                        }
                     }
                 } else {
                     writeln!(
@@ -4863,19 +4746,11 @@ fn emit_instr_ir(
         }
         // Phase 61: Pattern matching helpers
         IrInstr::GetVariantTag { result, operand } => {
-            let ov = coerce_to_type(
-                *operand,
-                "ptr",
-                consts,
-                func,
-                emitted_types,
-                gep_counter,
-                out,
-            )?;
             writeln!(
                 out,
-                "  %v{} = call i64 @iris_get_variant_tag(ptr {})",
-                result.0, ov
+                "  %v{} = call i64 @iris_get_variant_tag({})",
+                result.0,
+                val(*operand)
             )?;
         }
         IrInstr::StrEq { result, lhs, rhs } => {
@@ -5285,6 +5160,10 @@ fn is_side_effecting(instr: &IrInstr) -> bool {
 
 fn llvm_val(v: ValueId, consts: &HashMap<ValueId, String>, func: &IrFunction) -> String {
     if let Some(c) = consts.get(&v) {
+        // Emit the stored literal string unchanged.  Emit decimal literals
+        // for both `float` and `double` cases — keeping the formatting
+        // consistent avoids producing hex literals that may be parsed in
+        // a mismatched type context later.
         return c.clone();
     }
     for param in &func.blocks()[0].params {
@@ -5310,25 +5189,45 @@ fn block_label_by_id(blocks: &[crate::ir::block::IrBlock], id: BlockId) -> Strin
 }
 
 fn fmt_float(v: f64) -> String {
-    let is_exact = (v * 1024.0).fract() == 0.0;
-    if is_exact {
-        let s = format!("{}", v);
-        if s.contains('.') || s.contains('e') || s.contains('E') {
-            s
-        } else {
-            format!("{}.0", s)
-        }
+    let s = format!("{}", v);
+    if s.contains('.') || s.contains('e') || s.contains('E') {
+        s
     } else {
-        format!("0x{:016x}", v.to_bits())
+        format!("{}.0", s)
     }
 }
 
-fn fmt_float_typed(v: f64, ty: &IrType) -> String {
-    let is_f32 = matches!(ty, IrType::Scalar(DType::F32));
-    if is_f32 {
-        format!("0x{:016x}", ((v as f32) as f64).to_bits())
+fn f32_to_llvm_hex(f: f32) -> String {
+    if f == 0.0 {
+        if f.is_sign_negative() {
+            return "-0x0.0p+0".to_owned();
+        } else {
+            return "0x0.0p+0".to_owned();
+        }
+    }
+    if f.is_nan() {
+        return "0x7fc00000".to_owned();
+    }
+    if f.is_infinite() {
+        return if f.is_sign_negative() { "-inf".to_owned() } else { "inf".to_owned() };
+    }
+    let bits = f.to_bits();
+    let sign = (bits >> 31) & 1;
+    let exp = ((bits >> 23) & 0xff) as i32;
+    let mant = bits & 0x7fffff;
+    if exp == 0 {
+        // subnormal: fall back to decimal formatting
+        return format!("{}", f);
+    }
+    let exponent = exp - 127;
+    // mantissa_val includes the implicit leading 1 (24 bits)
+    let mantissa_val = mant | 0x800000;
+    // hex6 = 2 * (mantissa_val - 2^23)
+    let hex6 = 2u32.wrapping_mul(mantissa_val.wrapping_sub(0x800000));
+    if sign == 1 {
+        format!("-0x1.{:06x}p{:+}", hex6, exponent)
     } else {
-        fmt_float(v)
+        format!("0x1.{:06x}p{:+}", hex6, exponent)
     }
 }
 
@@ -5543,14 +5442,14 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare i64 @iris_abs_i64(i64)",
         "declare double @iris_sign_f64(double)",
         "declare double @tan(double)",
-        "declare double @round(double)",
-        "declare float @roundf(float)",
         // LLVM intrinsics
         "declare double @llvm.sqrt.f64(double)",
         "declare double @llvm.fabs.f64(double)",
         "declare double @llvm.floor.f64(double)",
         "declare double @llvm.ceil.f64(double)",
-        "declare double @llvm.round.f64(double)",
+        // Prefer C math library `round` functions rather than llvm intrinsics
+        "declare double @round(double)",
+        "declare float @roundf(float)",
         "declare double @llvm.sin.f64(double)",
         "declare double @llvm.cos.f64(double)",
         "declare double @llvm.exp.f64(double)",
