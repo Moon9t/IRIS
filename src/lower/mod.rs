@@ -11669,14 +11669,18 @@ impl<'m> Lowerer<'m> {
         // Header block params (one per loop variable).
         let mut header_params: Vec<ValueId> = Vec::new();
         for (name, _, ty) in &loop_vars {
-            let p = self.builder.add_block_param(header_bb, Some(name), ty.clone());
+            let p = self
+                .builder
+                .add_block_param(header_bb, Some(name), ty.clone());
             header_params.push(p);
         }
 
         // Merge block params (receive final values on loop exit).
         let mut merge_params: Vec<ValueId> = Vec::new();
         for (name, _, ty) in &loop_vars {
-            let p = self.builder.add_block_param(merge_bb, Some(name), ty.clone());
+            let p = self
+                .builder
+                .add_block_param(merge_bb, Some(name), ty.clone());
             merge_params.push(p);
         }
 
@@ -11705,7 +11709,8 @@ impl<'m> Lowerer<'m> {
         // Lower body block.
         self.builder.set_current_block(body_bb);
         let loop_var_names: Vec<String> = loop_vars.iter().map(|(n, _, _)| n.clone()).collect();
-        self.loop_stack.push((header_bb, merge_bb, loop_var_names.clone()));
+        self.loop_stack
+            .push((header_bb, merge_bb, loop_var_names.clone()));
         let _ = self.lower_block(body)?;
         self.loop_stack.pop();
 

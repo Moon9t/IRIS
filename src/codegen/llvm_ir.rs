@@ -1621,7 +1621,7 @@ fn coerce_to_type(
             } else if (actual_ty == "float" || actual_ty == "double")
                 && expected_ty.starts_with('i')
             {
-                    if expected_ty == "i1" {
+                if expected_ty == "i1" {
                     let zero = "0.0";
                     let cmp = if actual_ty == "float" {
                         format!("fcmp one float {}, {}", v_str, zero)

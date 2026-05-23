@@ -782,7 +782,9 @@ mod tests {
     #[test]
     fn lex_float_literals() {
         let tokens = toks("3.14 0.5 1.0e10 2.5E3");
-        assert!(matches!(tokens[0], Token::FloatLit(v) if (v - std::f64::consts::PI).abs() < 1e-10));
+        assert!(
+            matches!(tokens[0], Token::FloatLit(v) if (v - std::f64::consts::PI).abs() < 1e-10)
+        );
         assert!(matches!(tokens[1], Token::FloatLit(v) if (v - 0.5).abs() < 1e-10));
         assert!(matches!(tokens[2], Token::FloatLit(v) if (v - 1.0e10).abs() < 1e5));
         assert!(matches!(tokens[3], Token::FloatLit(v) if (v - 2.5e3).abs() < 1e-10));
