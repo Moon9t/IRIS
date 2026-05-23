@@ -54,8 +54,8 @@ jobs:
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config clang lld
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -yq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq build-essential pkg-config clang lld
           echo "IRIS_CLANG=/usr/bin/clang" >> "$GITHUB_ENV"
 
       - name: Install LLVM toolchain (macOS)
