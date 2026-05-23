@@ -38,4 +38,5 @@ jobs:
         run: |
           python3 tools/iris_perf_gate.py benches/binary_search_bench.iris \
             --runs 3 \
+            --allow-record \
             --iris target/debug/iris

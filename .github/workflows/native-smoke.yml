@@ -83,8 +83,8 @@ jobs:
 
       - name: Native regression tests
         run: |
-          cargo test --test phase16 test_nested_if_mutations_threaded_through_while_ir
-          cargo test --test phase134 native_returned_
+          cargo test --test mutable_bindings_var_keyword_ident_assign test_nested_if_mutations_threaded_through_while_ir
+          cargo test --test native_only_execution_http_server_stdlib_regex native_returned_
 
       - name: Native example smoke (Unix)
         if: matrix.shell_family == 'unix'
