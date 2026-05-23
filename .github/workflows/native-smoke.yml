@@ -55,7 +55,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          choco install llvm --version=18.1.8 --no-progress -y
+          choco install llvm --no-progress -y
           $llvmBin = Join-Path $env:ProgramFiles 'LLVM\bin'
           $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           "IRIS_CLANG=$llvmBin\clang.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
