@@ -372,7 +372,6 @@ fn compile_ast(
     pm.add_pass(CsePass);
     pm.add_pass(ShapeCheckPass);
     pm.add_pass(GcAnnotatePass);
-    let eval_module = ir_module.clone();
     if let Some(pass_name) = dump_ir_after {
         pm.set_dump_after(pass_name);
     }
@@ -388,7 +387,7 @@ fn compile_ast(
         EmitKind::PgoInstrument => Ok(emit_pgo_instrument(&ir_module)?),
         EmitKind::PgoOptimize => Ok(emit_pgo_optimize(&ir_module, "")?),
         EmitKind::Graph | EmitKind::Onnx | EmitKind::OnnxBinary => unreachable!(),
-        EmitKind::Eval => eval_ir_module_internal(&eval_module),
+        EmitKind::Eval => eval_ir_module_internal(&ir_module),
     }
 }
 

@@ -3445,7 +3445,7 @@ fn eval_einsum(
     let mut result = vec![0.0f32; out_numel];
 
     // Iterate over all output positions
-    for out_flat in 0..out_numel {
+    for (out_flat, out_slot) in result.iter_mut().enumerate().take(out_numel) {
         // Decompose output flat index into per-dimension coords
         let mut out_coords: std::collections::HashMap<char, usize> =
             std::collections::HashMap::new();
@@ -3499,7 +3499,7 @@ fn eval_einsum(
                 sum += a_data[a_flat] * b_data[b_flat];
             }
         }
-        result[out_flat] = sum;
+        *out_slot = sum;
     }
 
     if out_shape.is_empty() {
@@ -3556,7 +3556,7 @@ fn eval_einsum_single(
 
     let mut result = vec![0.0f32; out_numel];
 
-    for out_flat in 0..out_numel {
+    for (out_flat, out_slot) in result.iter_mut().enumerate().take(out_numel) {
         let mut coords: std::collections::HashMap<char, usize> = std::collections::HashMap::new();
         let mut rem = out_flat;
         for (d, &c) in out_idx.iter().enumerate() {
@@ -3590,7 +3590,7 @@ fn eval_einsum_single(
                 sum += data[in_flat];
             }
         }
-        result[out_flat] = sum;
+        *out_slot = sum;
     }
 
     if out_shape.is_empty() {
@@ -3637,13 +3637,13 @@ fn eval_reduce(
 
     // Compute output shape
     let mut out_shape: Vec<usize> = Vec::new();
-    for d in 0..ndim {
+    for (d, dim) in shape.iter().enumerate().take(ndim) {
         if reduce_axes.contains(&d) {
             if keepdims {
                 out_shape.push(1);
             }
         } else {
-            out_shape.push(shape[d]);
+            out_shape.push(*dim);
         }
     }
     let out_numel: usize = out_shape.iter().product::<usize>().max(1);
@@ -3665,19 +3665,19 @@ fn eval_reduce(
     let mut counts = vec![0usize; out_numel];
 
     let total: usize = shape.iter().product::<usize>();
-    for flat in 0..total {
+    for (flat, &val) in data.iter().enumerate().take(total) {
         // Decompose into coords
         let mut coords = vec![0usize; ndim];
         let mut rem = flat;
-        for d in 0..ndim {
-            coords[d] = rem / strides[d];
+        for (d, coord) in coords.iter_mut().enumerate() {
+            *coord = rem / strides[d];
             rem %= strides[d];
         }
 
         // Compute output flat index (skip reduced dims)
         let mut out_flat = 0usize;
         let mut out_d = 0usize;
-        for d in 0..ndim {
+        for (d, coord) in coords.iter().enumerate().take(ndim) {
             if reduce_axes.contains(&d) {
                 if keepdims {
                     // This dim is 1, contributes 0 to flat index
@@ -3685,13 +3685,12 @@ fn eval_reduce(
                 }
             } else {
                 if out_d < out_strides.len() {
-                    out_flat += coords[d] * out_strides[out_d];
+                    out_flat += *coord * out_strides[out_d];
                 }
                 out_d += 1;
             }
         }
 
-        let val = data[flat];
         match op {
             "sum" | "mean" => result[out_flat] += val,
             "max" => {

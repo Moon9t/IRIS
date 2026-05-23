@@ -428,9 +428,7 @@ fn emit_llvm_ir_impl(
     // trampoline wrapper that takes a single `ptr` (array of boxed captures),
     // unpacks them, and calls the real spawn body function.
     for func in module.functions() {
-        if !(func.name.starts_with("__spawn_") || func.name.starts_with("__async_spawn_"))
-            || func.params.is_empty()
-        {
+        if !(func.name.starts_with("__spawn_") || func.name.starts_with("__async_spawn_")) {
             continue;
         }
         let tramp_name = format!("{}_trampoline", func.name);
@@ -3037,20 +3035,30 @@ fn emit_instr_ir(
             }
         }
         IrInstr::Spawn { body_fn, args } => {
+            let tramp_name = format!("{}_trampoline", body_fn);
             if args.is_empty() {
-                // No captures — call the lifted body directly.
-                writeln!(out, "  call i64 @{}()", body_fn)?;
+                writeln!(out, "  call void @iris_spawn_fn(ptr @{}, ptr null)", tramp_name)?;
             } else {
-                // Captured values are passed directly to the lifted body.
-                let mut call_args = Vec::new();
-                for arg_id in args {
-                    let ty = func
-                        .value_type(*arg_id)
-                        .map(|ty| llvm_type_complete(ty).unwrap_or_else(|_| "ptr".to_owned()))
-                        .unwrap_or_else(|| "ptr".to_owned());
-                    call_args.push(format!("{} {}", ty, val(*arg_id)));
+                let arg_buf = format!("%spawn_args{}", gep_counter);
+                *gep_counter += 1;
+                let alloc_size = (args.len() as i64) * 8;
+                writeln!(out, "  {} = call ptr @malloc(i64 {})", arg_buf, alloc_size)?;
+                for (i, arg_id) in args.iter().enumerate() {
+                    let slot = format!("%spawn_arg_slot{}_{}", gep_counter, i);
+                    writeln!(out, "  {} = getelementptr ptr, ptr {}, i64 {}", slot, arg_buf, i)?;
+                    let arg_val = val(*arg_id);
+                    let boxed = box_to_ptr(
+                        out,
+                        func,
+                        *arg_id,
+                        &arg_val,
+                        func.value_type(*arg_id),
+                        emitted_types.get(arg_id).map(|s| s.as_str()),
+                        gep_counter,
+                    )?;
+                    writeln!(out, "  store ptr {}, ptr {}", boxed, slot)?;
                 }
-                writeln!(out, "  call i64 @{}({})", body_fn, call_args.join(", "))?;
+                writeln!(out, "  call void @iris_spawn_fn(ptr @{}, ptr {})", tramp_name, arg_buf)?;
             }
         }
 

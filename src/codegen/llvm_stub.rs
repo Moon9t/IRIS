@@ -92,6 +92,68 @@ pub fn emit_llvm_stub(module: &IrModule) -> Result<String, CodegenError> {
         emit_llvm_body(func, &str_table, &mut out)?;
         writeln!(out, "}}\n")?;
     }
+
+    // Spawn trampolines are emitted once per lifted spawn body so the runtime
+    // can invoke them on a detached thread.
+    for func in module.functions() {
+        if !(func.name.starts_with("__spawn_") || func.name.starts_with("__async_spawn_")) {
+            continue;
+        }
+
+        let tramp_name = format!("{}_trampoline", func.name);
+        writeln!(out, "define ptr @{}(ptr %arg) {{", tramp_name)?;
+        writeln!(out, "entry:")?;
+        for (i, p) in func.params.iter().enumerate() {
+            let slot = format!("%slot{}", i);
+            writeln!(out, "  {} = getelementptr ptr, ptr %arg, i64 {}", slot, i)?;
+            let raw = format!("%raw{}", i);
+            writeln!(out, "  {} = load ptr, ptr {}", raw, slot)?;
+            let param_ty = llvm_type_name(&p.ty)?;
+            if param_ty == "i64" {
+                writeln!(out, "  %p{} = call i64 @iris_unbox_i64(ptr {})", i, raw)?;
+            } else if param_ty == "i32" {
+                writeln!(out, "  %p{} = call i64 @iris_unbox_i64(ptr {})", i, raw)?;
+                writeln!(out, "  %p{}t = trunc i64 %p{} to i32", i, i)?;
+            } else if param_ty == "double" {
+                writeln!(out, "  %p{} = call double @iris_unbox_f64(ptr {})", i, raw)?;
+            } else if param_ty == "float" {
+                writeln!(out, "  %p{}d = call double @iris_unbox_f64(ptr {})", i, raw)?;
+                writeln!(out, "  %p{} = fptrunc double %p{}d to float", i, i)?;
+            } else if param_ty == "i1" {
+                writeln!(out, "  %p{}i = call i32 @iris_unbox_bool(ptr {})", i, raw)?;
+                writeln!(out, "  %p{} = trunc i32 %p{}i to i1", i, i)?;
+            } else {
+                writeln!(out, "  %p{} = bitcast ptr {} to ptr", i, raw)?;
+            }
+        }
+
+        let call_args: Vec<String> = func
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let ty = llvm_type_name(&p.ty).unwrap_or_else(|_| "ptr".to_owned());
+                if ty == "i32" {
+                    format!("i32 %p{}t", i)
+                } else if ty == "float" {
+                    format!("float %p{}", i)
+                } else if ty == "i1" {
+                    format!("i1 %p{}", i)
+                } else {
+                    format!("{} %p{}", ty, i)
+                }
+            })
+            .collect();
+        let ret_ty = llvm_type_name(&func.return_ty)?;
+        if ret_ty == "void" {
+            writeln!(out, "  call void @{}({})", func.name, call_args.join(", "))?;
+        } else {
+            writeln!(out, "  %spawn_ret = call {} @{}({})", ret_ty, func.name, call_args.join(", "))?;
+        }
+        writeln!(out, "  call void @free(ptr %arg)")?;
+        writeln!(out, "  ret ptr null")?;
+        writeln!(out, "}}\n")?;
+    }
     Ok(out)
 }
 
@@ -985,19 +1047,29 @@ fn emit_llvm_instr(
             }
         }
         IrInstr::Spawn { body_fn, args } => {
+            let tramp_name = format!("{}_trampoline", body_fn);
             if args.is_empty() {
-                writeln!(out, "  call i64 @{}()", body_fn)?;
+                writeln!(out, "  call void @iris_spawn_fn(ptr @{}, ptr null)", tramp_name)?;
             } else {
-                let mut call_args = Vec::new();
-                for arg_id in args {
-                    let v = val(*arg_id);
-                    let ty = func
-                        .value_type(*arg_id)
-                        .map(|ty| llvm_type_name(ty).unwrap_or_else(|_| "ptr".to_owned()))
-                        .unwrap_or_else(|| "ptr".to_owned());
-                    call_args.push(format!("{} {}", ty, v));
+                let arg_buf = format!("%spawn_args{}", gep_counter);
+                *gep_counter += 1;
+                let alloc_size = (args.len() as i64) * 8;
+                writeln!(out, "  {} = call ptr @malloc(i64 {})", arg_buf, alloc_size)?;
+                for (i, arg_id) in args.iter().enumerate() {
+                    let slot = format!("%spawn_arg_slot{}_{}", gep_counter, i);
+                    writeln!(out, "  {} = getelementptr ptr, ptr {}, i64 {}", slot, arg_buf, i)?;
+                    let value = val(*arg_id);
+                    let boxed = box_spawn_capture(
+                        out,
+                        func,
+                        *arg_id,
+                        &value,
+                        const_llvm_types.get(arg_id).copied(),
+                        gep_counter,
+                    )?;
+                    writeln!(out, "  store ptr {}, ptr {}", boxed, slot)?;
                 }
-                writeln!(out, "  call i64 @{}({})", body_fn, call_args.join(", "))?;
+                writeln!(out, "  call void @iris_spawn_fn(ptr @{}, ptr {})", tramp_name, arg_buf)?;
             }
         }
 
@@ -2091,6 +2163,54 @@ fn emit_llvm_instr(
     Ok(())
 }
 
+fn box_spawn_capture(
+    out: &mut String,
+    func: &IrFunction,
+    value_id: ValueId,
+    value_str: &str,
+    const_llvm_ty: Option<&str>,
+    counter: &mut u32,
+) -> Result<String, CodegenError> {
+    let inferred_ty = func
+        .value_type(value_id)
+        .map(|ty| llvm_type_name(ty).unwrap_or_else(|_| "ptr".to_owned()))
+        .or_else(|| const_llvm_ty.map(str::to_owned));
+
+    match inferred_ty.as_deref() {
+        Some("i64") => {
+            let boxed = format!("%box{}", *counter);
+            *counter += 1;
+            writeln!(out, "  {} = call ptr @iris_box_i64(i64 {})", boxed, value_str)?;
+            Ok(boxed)
+        }
+        Some("i32") => {
+            let boxed = format!("%box{}", *counter);
+            *counter += 1;
+            writeln!(out, "  {} = call ptr @iris_box_i32(i32 {})", boxed, value_str)?;
+            Ok(boxed)
+        }
+        Some("double") => {
+            let boxed = format!("%box{}", *counter);
+            *counter += 1;
+            writeln!(out, "  {} = call ptr @iris_box_f64(double {})", boxed, value_str)?;
+            Ok(boxed)
+        }
+        Some("float") => {
+            let boxed = format!("%box{}", *counter);
+            *counter += 1;
+            writeln!(out, "  {} = call ptr @iris_box_f32(float {})", boxed, value_str)?;
+            Ok(boxed)
+        }
+        Some("i1") => {
+            let boxed = format!("%box{}", *counter);
+            *counter += 1;
+            writeln!(out, "  {} = call ptr @iris_box_bool(i1 {})", boxed, value_str)?;
+            Ok(boxed)
+        }
+        _ => Ok(value_str.to_owned()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -2252,6 +2372,8 @@ fn emit_iris_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_chan_recv(ptr)",
         "declare void @iris_spawn_fn(ptr, ptr)",
         "declare void @iris_par_for(ptr, i64, i64)",
+        "declare ptr @malloc(i64)",
+        "declare void @free(ptr)",
         // Atomics / Mutex
         "declare ptr @iris_atomic_new()",
         "declare ptr @iris_atomic_load(ptr)",
@@ -2275,6 +2397,12 @@ fn emit_iris_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_make_grad()",
         "declare ptr @iris_grad_value()",
         "declare ptr @iris_grad_tangent()",
+        "declare ptr @iris_box_i64(i64)",
+        "declare ptr @iris_box_i32(i32)",
+        "declare ptr @iris_box_f64(double)",
+        "declare ptr @iris_box_f32(float)",
+        "declare ptr @iris_box_bool(i1)",
+        "declare ptr @iris_box_str(ptr)",
         "declare ptr @iris_sparsify()",
         "declare ptr @iris_densify()",
         "declare ptr @iris_tape_record(double, ptr, i64, ptr, ptr)",

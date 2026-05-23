@@ -415,6 +415,7 @@ fn compare_values(lhs: &str, op: &str, rhs: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 

@@ -23,11 +23,11 @@ fn levenshtein(a: &str, b: &str) -> usize {
         return 5;
     }
     let mut dp = vec![vec![0usize; n + 1]; m + 1];
-    for i in 0..=m {
-        dp[i][0] = i;
+    for (i, row) in dp.iter_mut().enumerate().take(m + 1) {
+        row[0] = i;
     }
-    for j in 0..=n {
-        dp[0][j] = j;
+    for (j, cell) in dp[0].iter_mut().enumerate().take(n + 1) {
+        *cell = j;
     }
     for i in 1..=m {
         for j in 1..=n {
@@ -5240,17 +5240,9 @@ impl<'m> Lowerer<'m> {
         // Only use chain if there are guards or non-enum literal patterns.
         let is_enum_scrut = matches!(&scrut_ty, IrType::Enum { .. });
         let has_guard = arms.iter().any(|a| a.guard.is_some());
-        let has_non_enum_literal = arms.iter().any(|a| {
-            matches!(
-                a.pattern,
-                AstWhenPattern::IntLit(_)
-                    | AstWhenPattern::BoolLit(_)
-                    | AstWhenPattern::StringLit(_)
-            )
-        });
 
         // Use chain only if: has guard OR not enum type OR has literal patterns (non-wildcard)
-        let needs_chain = has_guard || !is_enum_scrut || (has_non_enum_literal && !is_enum_scrut);
+        let needs_chain = has_guard || !is_enum_scrut;
         if needs_chain {
             return self.lower_when_as_chain(scrut_val, &scrut_ty, arms, span);
         }
@@ -11755,10 +11747,16 @@ impl<'m> Lowerer<'m> {
                     span,
                 })?;
 
-        let args: Vec<ValueId> = loop_var_names
-            .iter()
-            .filter_map(|name| self.scope.get(name).map(|(v, _)| *v))
-            .collect();
+        let mut args = Vec::with_capacity(loop_var_names.len());
+        for name in &loop_var_names {
+            let Some((value, _)) = self.scope.get(name) else {
+                return Err(LowerError::Unsupported {
+                    detail: format!("missing loop variable '{}' in break", name),
+                    span,
+                });
+            };
+            args.push(*value);
+        }
 
         self.builder.push_instr(
             IrInstr::Br {
@@ -11781,10 +11779,16 @@ impl<'m> Lowerer<'m> {
                     span,
                 })?;
 
-        let args: Vec<ValueId> = loop_var_names
-            .iter()
-            .filter_map(|name| self.scope.get(name).map(|(v, _)| *v))
-            .collect();
+        let mut args = Vec::with_capacity(loop_var_names.len());
+        for name in &loop_var_names {
+            let Some((value, _)) = self.scope.get(name) else {
+                return Err(LowerError::Unsupported {
+                    detail: format!("missing loop variable '{}' in continue", name),
+                    span,
+                });
+            };
+            args.push(*value);
+        }
 
         self.builder.push_instr(
             IrInstr::Br {
@@ -11995,11 +11999,11 @@ impl<'m> Lowerer<'m> {
                             let (value_val, _) = self.lower_expr(value)?;
 
                             let mut new_fields = Vec::with_capacity(struct_fields.len());
-                            for i in 0..struct_fields.len() {
+                            for (i, field_info) in struct_fields.iter().enumerate() {
                                 if i == field_index {
                                     new_fields.push(value_val);
                                 } else {
-                                    let f_ty = struct_fields[i].1.clone();
+                                    let f_ty = field_info.1.clone();
                                     let f_val = self.builder.fresh_value();
                                     self.builder.push_instr(
                                         IrInstr::GetField {
@@ -12053,11 +12057,11 @@ impl<'m> Lowerer<'m> {
                             let (value_val, _) = self.lower_expr(value)?;
 
                             let mut new_elements = Vec::with_capacity(elem_types.len());
-                            for i in 0..elem_types.len() {
+                            for (i, elem_ty) in elem_types.iter().enumerate() {
                                 if i == *index {
                                     new_elements.push(value_val);
                                 } else {
-                                    let f_ty = elem_types[i].clone();
+                                    let f_ty = elem_ty.clone();
                                     let f_val = self.builder.fresh_value();
                                     self.builder.push_instr(
                                         IrInstr::GetElement {

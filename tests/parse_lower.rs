@@ -148,7 +148,7 @@ def also_ok() -> i64 { 2 }
 
     let (ast, errors) = iris::compile_with_recovery(src);
     assert!(
-        errors.len() >= 1,
+        !errors.is_empty(),
         "recovery mode should report at least one parse error"
     );
     assert!(
