@@ -622,8 +622,8 @@ impl<'m> Interpreter<'m> {
                                             if inputs.len() > 1 {
                                                 // Shape provided as additional i64 inputs
                                                 let mut s = Vec::new();
-                                                for i in 1..inputs.len() {
-                                                    match self.get(inputs[i])? {
+                                                for input in inputs.iter().skip(1) {
+                                                    match self.get(*input)? {
                                                         IrValue::I64(n) => s.push(n as usize),
                                                         IrValue::I32(n) => s.push(n as usize),
                                                         _ => return Err(InterpError::TypeError {
@@ -700,7 +700,7 @@ impl<'m> Interpreter<'m> {
                                         }
 
                                         let mut coords = vec![0usize; ndim];
-                                        for flat in 0..numel {
+                                        for (flat, &val) in data.iter().enumerate().take(numel) {
                                             // Decompose flat index into coords using source strides
                                             let mut rem = flat;
                                             for d in 0..ndim {
@@ -712,7 +712,7 @@ impl<'m> Interpreter<'m> {
                                             for d in 0..ndim {
                                                 dst_flat += coords[perm[d]] * dst_strides[d];
                                             }
-                                            new_data[dst_flat] = data[flat];
+                                            new_data[dst_flat] = val;
                                         }
 
                                         self.values

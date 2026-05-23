@@ -1373,7 +1373,7 @@ mod tests {
     fn result_const_float() {
         let i = IrInstr::ConstFloat {
             result: ValueId(1),
-            value: 3.14,
+            value: std::f64::consts::PI,
             ty: IrType::Scalar(crate::ir::types::DType::F64),
         };
         assert_eq!(i.result(), Some(ValueId(1)));

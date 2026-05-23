@@ -1621,8 +1621,8 @@ fn coerce_to_type(
             } else if (actual_ty == "float" || actual_ty == "double")
                 && expected_ty.starts_with('i')
             {
-                if expected_ty == "i1" {
-                    let zero = if actual_ty == "float" { "0.0" } else { "0.0" };
+                    if expected_ty == "i1" {
+                    let zero = "0.0";
                     let cmp = if actual_ty == "float" {
                         format!("fcmp one float {}, {}", v_str, zero)
                     } else {
@@ -3510,12 +3510,8 @@ fn emit_instr_ir(
         } => {
             // If elem_ty is Infer, resolve from the list's value type
             let resolved_elem_ty = if matches!(elem_ty, IrType::Infer) {
-                if let Some(list_ty) = func.value_type(*list) {
-                    if let IrType::List(inner) = list_ty {
-                        (**inner).clone()
-                    } else {
-                        elem_ty.clone()
-                    }
+                if let Some(IrType::List(inner)) = func.value_type(*list) {
+                    (**inner).clone()
                 } else {
                     elem_ty.clone()
                 }
@@ -3663,12 +3659,8 @@ fn emit_instr_ir(
         } => {
             // If elem_ty is Infer, resolve from the list's value type
             let resolved_elem_ty = if matches!(elem_ty, IrType::Infer) {
-                if let Some(list_ty) = func.value_type(*list) {
-                    if let IrType::List(inner) = list_ty {
-                        (**inner).clone()
-                    } else {
-                        elem_ty.clone()
-                    }
+                if let Some(IrType::List(inner)) = func.value_type(*list) {
+                    (**inner).clone()
                 } else {
                     elem_ty.clone()
                 }
