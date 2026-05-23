@@ -83,12 +83,12 @@ jobs:
 
       - name: Build soak binary (Unix)
         if: matrix.shell_family == 'unix'
-        run: ./target/debug/iris build examples/runtime_soak.iris -o runtime_soak
+        run: ./target/debug/iris build examples/07_applications/runtime_soak.iris -o runtime_soak
 
       - name: Build soak binary (Windows)
         if: matrix.shell_family == 'windows'
         shell: powershell
-        run: .\target\debug\iris.exe build examples/runtime_soak.iris -o runtime_soak.exe
+        run: .\target\debug\iris.exe build examples/07_applications/runtime_soak.iris -o runtime_soak.exe
 
       - name: Run soak binary (Unix)
         if: matrix.shell_family == 'unix'

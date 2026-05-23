@@ -89,12 +89,12 @@ jobs:
       - name: Native example smoke (Unix)
         if: matrix.shell_family == 'unix'
         run: |
-          ${{ matrix.timeout_cmd }} 120s ./target/debug/iris run examples/algorithms.iris
-          ${{ matrix.timeout_cmd }} 120s ./target/debug/iris run examples/closures_functional.iris
-          ${{ matrix.timeout_cmd }} 120s ./target/debug/iris run examples/matrix_ops.iris
-          ${{ matrix.timeout_cmd }} 120s ./target/debug/iris run examples/concurrency.iris
-          ${{ matrix.timeout_cmd }} 120s ./target/debug/iris run examples/http_server_smoke.iris
-          IRIS_SOAK_DURATION_MS=5000 IRIS_SOAK_REPORT_MS=1000 ${{ matrix.timeout_cmd }} 60s ./target/debug/iris run examples/runtime_soak.iris
+          ${{ matrix.timeout_cmd }} 120s ./target/debug/iris run examples/03_data_structures_algorithms/algorithms.iris
+          ${{ matrix.timeout_cmd }} 120s ./target/debug/iris run examples/02_functions/closures_functional.iris
+          ${{ matrix.timeout_cmd }} 120s ./target/debug/iris run examples/06_machine_learning/matrix_ops.iris
+          ${{ matrix.timeout_cmd }} 120s ./target/debug/iris run examples/05_systems/concurrency.iris
+          ${{ matrix.timeout_cmd }} 120s ./target/debug/iris run examples/05_systems/http_server_smoke.iris
+          IRIS_SOAK_DURATION_MS=5000 IRIS_SOAK_REPORT_MS=1000 ${{ matrix.timeout_cmd }} 60s ./target/debug/iris run examples/07_applications/runtime_soak.iris
 
       - name: Native example smoke (Windows)
         if: matrix.shell_family == 'windows'
@@ -135,12 +135,12 @@ jobs:
             }
           }
 
-          Invoke-IrisRun -Example 'examples/algorithms.iris'
-          Invoke-IrisRun -Example 'examples/closures_functional.iris'
-          Invoke-IrisRun -Example 'examples/matrix_ops.iris'
-          Invoke-IrisRun -Example 'examples/concurrency.iris'
-          Invoke-IrisRun -Example 'examples/http_server_smoke.iris'
-          Invoke-IrisRun -Example 'examples/runtime_soak.iris' -TimeoutMs 60000 -ExtraEnv @{
+          Invoke-IrisRun -Example 'examples/03_data_structures_algorithms/algorithms.iris'
+          Invoke-IrisRun -Example 'examples/02_functions/closures_functional.iris'
+          Invoke-IrisRun -Example 'examples/06_machine_learning/matrix_ops.iris'
+          Invoke-IrisRun -Example 'examples/05_systems/concurrency.iris'
+          Invoke-IrisRun -Example 'examples/05_systems/http_server_smoke.iris'
+          Invoke-IrisRun -Example 'examples/07_applications/runtime_soak.iris' -TimeoutMs 60000 -ExtraEnv @{
             IRIS_SOAK_DURATION_MS = '5000'
             IRIS_SOAK_REPORT_MS = '1000'
           }

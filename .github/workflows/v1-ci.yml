@@ -2,9 +2,9 @@ name: v1-checks
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
   pull_request:
-    branches: [main]
+    branches: [master, main]
 
 jobs:
   verify:
@@ -18,11 +18,9 @@ jobs:
           python-version: '3.x'
 
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          profile: minimal
-          override: true
+          components: clippy,rustfmt
 
       - name: Build IRIS
         run: |
@@ -31,8 +29,8 @@ jobs:
       - name: Run differential tests (interpreter vs native)
         run: |
           python3 tools/iris_diff_runner.py \
-            examples/hello.iris \
-            examples/factorial.iris \
+            examples/01_basics/hello.iris \
+            examples/02_functions/factorial.iris \
             projects/showcase/mathlab.iris \
             --iris target/debug/iris
 
