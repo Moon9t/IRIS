@@ -1,5 +1,0 @@
-C:\Users\Moon\Desktop\Projects\IRIS\target-local-ci\debug\deps\elementwise_ops_list_add_list_sub_list_mul_elem_list_scale-d426007a962c83c8.d: tests\elementwise_ops_list_add_list_sub_list_mul_elem_list_scale.rs
-
-C:\Users\Moon\Desktop\Projects\IRIS\target-local-ci\debug\deps\elementwise_ops_list_add_list_sub_list_mul_elem_list_scale-d426007a962c83c8.exe: tests\elementwise_ops_list_add_list_sub_list_mul_elem_list_scale.rs
-
-tests\elementwise_ops_list_add_list_sub_list_mul_elem_list_scale.rs:

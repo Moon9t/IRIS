@@ -1,3 +1,21 @@
+# Ignore Rust build artifacts and common editor files
+# Build
+/target
+/target-*
+**/target-*
+
+# Cargo
+/Cargo.lock
+
+# Compiled files
+*.rlib
+*.rmeta
+
+# Editor/IDE
+.vscode/
+/.idea/
+*.swp
+*.swo
 # ── Build artifacts ──
 /target/
 /fuzz/target/

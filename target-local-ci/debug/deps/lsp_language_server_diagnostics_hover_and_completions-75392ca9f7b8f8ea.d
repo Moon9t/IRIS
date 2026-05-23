@@ -1,5 +1,0 @@
-C:\Users\Moon\Desktop\Projects\IRIS\target-local-ci\debug\deps\lsp_language_server_diagnostics_hover_and_completions-75392ca9f7b8f8ea.d: tests\lsp_language_server_diagnostics_hover_and_completions.rs
-
-C:\Users\Moon\Desktop\Projects\IRIS\target-local-ci\debug\deps\lsp_language_server_diagnostics_hover_and_completions-75392ca9f7b8f8ea.exe: tests\lsp_language_server_diagnostics_hover_and_completions.rs
-
-tests\lsp_language_server_diagnostics_hover_and_completions.rs:
