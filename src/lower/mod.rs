@@ -762,9 +762,8 @@ impl<'m> Lowerer<'m> {
             }
 
             AstExpr::FloatLit { value, .. } => {
-                // Float literals default to f32 in the language frontend.
                 let result = self.builder.fresh_value();
-                let ty = IrType::Scalar(DType::F32);
+                let ty = IrType::Scalar(DType::F64);
                 self.builder.push_instr(
                     IrInstr::ConstFloat {
                         result,
@@ -3801,9 +3800,31 @@ impl<'m> Lowerer<'m> {
                     span,
                 });
             }
-            let (closure_val, _closure_ty) = self.lower_expr(&args[0])?;
-            let (x_val, x_ty) = self.lower_expr(&args[1])?;
-            // Use x's type for all arithmetic so types stay consistent
+            let (closure_val, closure_ty) = self.lower_expr(&args[0])?;
+            let (mut x_val, mut x_ty) = self.lower_expr(&args[1])?;
+            // Prefer the closure's param type for arithmetic and calls so
+            // CallClosure args/results match the closure signature.
+            let (param_ty, ret_ty): (IrType, IrType) = match &closure_ty {
+                IrType::Fn { params, ret } if !params.is_empty() => {
+                    (params[0].clone(), (*ret).as_ref().clone())
+                }
+                _ => (x_ty.clone(), x_ty.clone()),
+            };
+            // If the provided x has a different type, cast it to the closure param type.
+            if x_ty != param_ty {
+                let cast = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::Cast {
+                        result: cast,
+                        operand: x_val,
+                        from_ty: x_ty.clone(),
+                        to_ty: param_ty.clone(),
+                    },
+                    Some(param_ty.clone()),
+                );
+                x_val = cast;
+                x_ty = param_ty.clone();
+            }
             // h = 1e-3 (step for central finite difference; large enough for f32 precision)
             let h_val = self.builder.fresh_value();
             self.builder.push_instr(
@@ -3840,26 +3861,58 @@ impl<'m> Lowerer<'m> {
             );
             // f_plus = closure(x_plus)
             let f_plus = self.builder.fresh_value();
+            // Cast arg to closure param type if needed, call closure.
+            let f_plus_call_arg = if x_ty != param_ty {
+                let cast_arg = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::Cast {
+                        result: cast_arg,
+                        operand: x_plus,
+                        from_ty: x_ty.clone(),
+                        to_ty: param_ty.clone(),
+                    },
+                    Some(param_ty.clone()),
+                );
+                cast_arg
+            } else {
+                x_plus
+            };
             self.builder.push_instr(
                 IrInstr::CallClosure {
                     result: Some(f_plus),
                     closure: closure_val,
-                    args: vec![x_plus],
-                    result_ty: x_ty.clone(),
+                    args: vec![f_plus_call_arg],
+                    result_ty: ret_ty.clone(),
                 },
-                Some(x_ty.clone()),
+                Some(ret_ty.clone()),
             );
             // f_minus = closure(x_minus)
             let f_minus = self.builder.fresh_value();
+            let f_minus_call_arg = if x_ty != param_ty {
+                let cast_arg = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::Cast {
+                        result: cast_arg,
+                        operand: x_minus,
+                        from_ty: x_ty.clone(),
+                        to_ty: param_ty.clone(),
+                    },
+                    Some(param_ty.clone()),
+                );
+                cast_arg
+            } else {
+                x_minus
+            };
             self.builder.push_instr(
                 IrInstr::CallClosure {
                     result: Some(f_minus),
                     closure: closure_val,
-                    args: vec![x_minus],
-                    result_ty: x_ty.clone(),
+                    args: vec![f_minus_call_arg],
+                    result_ty: ret_ty.clone(),
                 },
-                Some(x_ty.clone()),
+                Some(ret_ty.clone()),
             );
+            // Perform arithmetic in the closure's return type (conservative fix).
             // diff = f_plus - f_minus
             let diff = self.builder.fresh_value();
             self.builder.push_instr(
@@ -3868,32 +3921,49 @@ impl<'m> Lowerer<'m> {
                     op: BinOp::Sub,
                     lhs: f_plus,
                     rhs: f_minus,
-                    ty: x_ty.clone(),
+                    ty: ret_ty.clone(),
                 },
-                Some(x_ty.clone()),
+                Some(ret_ty.clone()),
             );
-            // two_h = 2.0 * h
+            // two_h = 2.0 * h (compute in return type)
             let two = self.builder.fresh_value();
             self.builder.push_instr(
                 IrInstr::ConstFloat {
                     result: two,
                     value: 2.0,
-                    ty: x_ty.clone(),
+                    ty: ret_ty.clone(),
                 },
-                Some(x_ty.clone()),
+                Some(ret_ty.clone()),
             );
+            // Cast h (which is in param type x_ty) to return type if needed
+            // so multiplication happens in the same type.
+            let h_val_ret = if x_ty != ret_ty {
+                let cf = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::Cast {
+                        result: cf,
+                        operand: h_val,
+                        from_ty: x_ty.clone(),
+                        to_ty: ret_ty.clone(),
+                    },
+                    Some(ret_ty.clone()),
+                );
+                cf
+            } else {
+                h_val
+            };
             let two_h = self.builder.fresh_value();
             self.builder.push_instr(
                 IrInstr::BinOp {
                     result: two_h,
                     op: BinOp::Mul,
                     lhs: two,
-                    rhs: h_val,
-                    ty: x_ty.clone(),
+                    rhs: h_val_ret,
+                    ty: ret_ty.clone(),
                 },
-                Some(x_ty.clone()),
+                Some(ret_ty.clone()),
             );
-            // result = diff / two_h
+            // result = diff / two_h (in return type)
             let result = self.builder.fresh_value();
             self.builder.push_instr(
                 IrInstr::BinOp {
@@ -3901,11 +3971,11 @@ impl<'m> Lowerer<'m> {
                     op: BinOp::Div,
                     lhs: diff,
                     rhs: two_h,
-                    ty: x_ty.clone(),
+                    ty: ret_ty.clone(),
                 },
-                Some(x_ty.clone()),
+                Some(ret_ty.clone()),
             );
-            return Ok((result, x_ty));
+            return Ok((result, ret_ty));
         }
 
         // Built-in: sparsify(arr) → Sparsify (convert dense array to sparse representation)

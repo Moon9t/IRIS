@@ -610,11 +610,19 @@ fn emit_cuda_instr(
                     "  %v{} = call {} @llvm.log2.f64({} {})",
                     result.0, ty_s, ty_s, ov
                 )?,
-                ScalarUnaryOp::Round => writeln!(
-                    out,
-                    "  %v{} = call {} @llvm.round.f64({} {})",
-                    result.0, ty_s, ty_s, ov
-                )?,
+                ScalarUnaryOp::Round => {
+                    if ty_s == "double" {
+                        writeln!(out, "  %v{} = call double @round(double {})", result.0, ov)?;
+                    } else if ty_s == "float" {
+                        writeln!(out, "  %v{} = call float @roundf(float {})", result.0, ov)?;
+                    } else {
+                        writeln!(
+                            out,
+                            "  %v{} = call {} @llvm.round.f64({} {})",
+                            result.0, ty_s, ty_s, ov
+                        )?;
+                    }
+                },
                 ScalarUnaryOp::BitNot => {
                     writeln!(out, "  %v{} = xor {} {}, -1", result.0, ty_s, ov)?
                 }
@@ -1142,7 +1150,8 @@ fn emit_nvptx_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare double @llvm.fabs.f64(double)",
         "declare double @llvm.floor.f64(double)",
         "declare double @llvm.ceil.f64(double)",
-        "declare double @llvm.round.f64(double)",
+        "declare double @round(double)",
+        "declare float @roundf(float)",
         "declare double @llvm.sin.f64(double)",
         "declare double @llvm.cos.f64(double)",
         "declare double @llvm.exp.f64(double)",

@@ -496,11 +496,17 @@ fn emit_llvm_instr(
                     )?;
                 }
                 ScalarUnaryOp::Round => {
-                    writeln!(
-                        out,
-                        "  %v{} = call {} @llvm.round.f64({} {})",
-                        result.0, ty_s, ty_s, ov
-                    )?;
+                    if ty_s == "double" {
+                        writeln!(out, "  %v{} = call double @round(double {})", result.0, ov)?;
+                    } else if ty_s == "float" {
+                        writeln!(out, "  %v{} = call float @roundf(float {})", result.0, ov)?;
+                    } else {
+                        writeln!(
+                            out,
+                            "  %v{} = call {} @llvm.round.f64({} {})",
+                            result.0, ty_s, ty_s, ov
+                        )?;
+                    }
                 }
                 ScalarUnaryOp::Sign => {
                     writeln!(

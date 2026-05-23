@@ -583,8 +583,8 @@ fn emit_function_body(
     for block in func.blocks() {
         for instr in &block.instrs {
             match instr {
-                IrInstr::ConstFloat { result, value, .. } => {
-                    consts.insert(*result, fmt_float(*value));
+                IrInstr::ConstFloat { result, value, ty } => {
+                    consts.insert(*result, fmt_float_typed(*value, ty));
                 }
                 IrInstr::ConstInt { result, value, .. } => {
                     consts.insert(*result, value.to_string());
@@ -726,8 +726,32 @@ fn emit_function_body(
                         emitted_types.insert(*r, ty_s);
                     }
                 }
-                IrInstr::BinOp { result, ty, .. } => {
-                    let s = llvm_type_complete(ty).unwrap_or_else(|_| "i64".to_owned());
+                IrInstr::BinOp { result, op, lhs, rhs, ty } => {
+                    let comparison_op = matches!(
+                        op,
+                        BinOp::CmpEq
+                            | BinOp::CmpNe
+                            | BinOp::CmpLt
+                            | BinOp::CmpLe
+                            | BinOp::CmpGt
+                            | BinOp::CmpGe
+                    );
+                    let semantic_operand_ty = func.value_type(*lhs).or_else(|| func.value_type(*rhs));
+                    let lhs_ety = emitted_types.get(lhs).map(|s| s.as_str());
+                    let rhs_ety = emitted_types.get(rhs).map(|s| s.as_str());
+                    let is_str_cmp = semantic_operand_ty == Some(&IrType::Str)
+                        || lhs_ety == Some("ptr")
+                            && rhs_ety == Some("ptr")
+                            && matches!(op, BinOp::CmpEq | BinOp::CmpNe);
+                    let s = if let Some(IrType::Grad(_)) = semantic_operand_ty {
+                        "ptr".to_owned()
+                    } else if is_str_cmp && matches!(op, BinOp::CmpEq | BinOp::CmpNe) {
+                        "i1".to_owned()
+                    } else if comparison_op {
+                        "i1".to_owned()
+                    } else {
+                        llvm_type_complete(semantic_operand_ty.unwrap_or(ty)).unwrap_or_else(|_| "i64".to_owned())
+                    };
                     emitted_types.insert(*result, s);
                 }
                 IrInstr::IsSome { result, .. } | IrInstr::IsOk { result, .. } => {
@@ -1816,7 +1840,117 @@ fn emit_instr_ir(
                 || lhs_ety == Some("ptr")
                     && rhs_ety == Some("ptr")
                     && matches!(op, BinOp::CmpEq | BinOp::CmpNe);
-            if is_str_cmp && matches!(op, BinOp::CmpEq | BinOp::CmpNe) {
+            if let Some(IrType::Grad(_)) = semantic_operand_ty {
+                let lv =
+                    coerce_to_type(*lhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
+                let rv =
+                    coerce_to_type(*rhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
+                
+                // Extract primal values
+                let val_lhs = format!("%grad_val_lhs{}", gep_counter);
+                *gep_counter += 1;
+                writeln!(out, "  {} = call double @iris_grad_value(ptr {})", val_lhs, lv)?;
+                
+                let val_rhs = format!("%grad_val_rhs{}", gep_counter);
+                *gep_counter += 1;
+                writeln!(out, "  {} = call double @iris_grad_value(ptr {})", val_rhs, rv)?;
+
+                // Extract tangents
+                let tan_lhs = format!("%grad_tan_lhs{}", gep_counter);
+                *gep_counter += 1;
+                writeln!(out, "  {} = call double @iris_grad_tangent(ptr {})", tan_lhs, lv)?;
+                
+                let tan_rhs = format!("%grad_tan_rhs{}", gep_counter);
+                *gep_counter += 1;
+                writeln!(out, "  {} = call double @iris_grad_tangent(ptr {})", tan_rhs, rv)?;
+
+                // Compute new primal and tangent
+                let (val_res, tan_res) = match op {
+                    BinOp::Add => {
+                        let vr = format!("%grad_val_res{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = fadd double {}, {}", vr, val_lhs, val_rhs)?;
+                        
+                        let tr = format!("%grad_tan_res{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = fadd double {}, {}", tr, tan_lhs, tan_rhs)?;
+                        
+                        (vr, tr)
+                    }
+                    BinOp::Sub => {
+                        let vr = format!("%grad_val_res{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = fsub double {}, {}", vr, val_lhs, val_rhs)?;
+                        
+                        let tr = format!("%grad_tan_res{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = fsub double {}, {}", tr, tan_lhs, tan_rhs)?;
+                        
+                        (vr, tr)
+                    }
+                    BinOp::Mul => {
+                        let vr = format!("%grad_val_res{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = fmul double {}, {}", vr, val_lhs, val_rhs)?;
+                        
+                        // tan_res = val_lhs * tan_rhs + tan_lhs * val_rhs
+                        let t1 = format!("%grad_mul_t1{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = fmul double {}, {}", t1, val_lhs, tan_rhs)?;
+                        
+                        let t2 = format!("%grad_mul_t2{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = fmul double {}, {}", t2, tan_lhs, val_rhs)?;
+                        
+                        let tr = format!("%grad_tan_res{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = fadd double {}, {}", tr, t1, t2)?;
+                        
+                        (vr, tr)
+                    }
+                    BinOp::Div => {
+                        let vr = format!("%grad_val_res{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = fdiv double {}, {}", vr, val_lhs, val_rhs)?;
+                        
+                        // tan_res = (tan_lhs * val_rhs - val_lhs * tan_rhs) / (val_rhs * val_rhs)
+                        let t1 = format!("%grad_div_t1{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = fmul double {}, {}", t1, tan_lhs, val_rhs)?;
+                        
+                        let t2 = format!("%grad_div_t2{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = fmul double {}, {}", t2, val_lhs, tan_rhs)?;
+                        
+                        let t3 = format!("%grad_div_t3{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = fsub double {}, {}", t3, t1, t2)?;
+                        
+                        let t4 = format!("%grad_div_t4{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = fmul double {}, {}", t4, val_rhs, val_rhs)?;
+                        
+                        let tr = format!("%grad_tan_res{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(out, "  {} = fdiv double {}, {}", tr, t3, t4)?;
+                        
+                        (vr, tr)
+                    }
+                    _ => {
+                        return Err(CodegenError::Unsupported {
+                            backend: "llvm-ir".into(),
+                            detail: format!("Unsupported binary operator {:?} on grad<T>", op),
+                        });
+                    }
+                };
+
+                // Create the new grad struct
+                writeln!(
+                    out,
+                    "  %v{} = call ptr @iris_make_grad(double {}, double {})",
+                    result.0, val_res, tan_res
+                )?;
+            } else if is_str_cmp && matches!(op, BinOp::CmpEq | BinOp::CmpNe) {
                 let lv =
                     coerce_to_type(*lhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
                 let rv =
@@ -2022,11 +2156,17 @@ fn emit_instr_ir(
                     )?;
                 }
                 ScalarUnaryOp::Round => {
-                    writeln!(
-                        out,
-                        "  %v{} = call {} @llvm.round.f64({} {})",
-                        result.0, ty_s, ty_s, ov
-                    )?;
+                    if ty_s == "double" {
+                        writeln!(out, "  %v{} = call double @round(double {})", result.0, ov)?;
+                    } else if ty_s == "float" {
+                        writeln!(out, "  %v{} = call float @roundf(float {})", result.0, ov)?;
+                    } else {
+                        writeln!(
+                            out,
+                            "  %v{} = call {} @llvm.round.f64({} {})",
+                            result.0, ty_s, ty_s, ov
+                        )?;
+                    }
                 }
                 ScalarUnaryOp::Sign => {
                     writeln!(
@@ -2045,17 +2185,20 @@ fn emit_instr_ir(
             to_ty,
         } => {
             let ov = val(*operand);
-            let from_s = llvm_type_complete(from_ty)?;
+            let from_s = emitted_types
+                .get(operand)
+                .cloned()
+                .unwrap_or_else(|| llvm_type_complete(from_ty).unwrap_or_default());
             let to_s = llvm_type_complete(to_ty)?;
-            let is_from_float = matches!(from_ty, IrType::Scalar(DType::F32 | DType::F64));
+            let is_from_float = from_s == "float" || from_s == "double";
             let is_to_float = matches!(to_ty, IrType::Scalar(DType::F32 | DType::F64));
-            let is_from_int = matches!(from_ty, IrType::Scalar(DType::I32 | DType::I64));
+            let is_from_int = from_s == "i32" || from_s == "i64" || from_s == "i8";
             let is_to_int = matches!(to_ty, IrType::Scalar(DType::I32 | DType::I64));
-            let is_from_f64 = matches!(from_ty, IrType::Scalar(DType::F64));
+            let is_from_f64 = from_s == "double";
             let is_to_f64 = matches!(to_ty, IrType::Scalar(DType::F64));
-            let is_from_i64 = matches!(from_ty, IrType::Scalar(DType::I64));
+            let is_from_i64 = from_s == "i64";
             let is_to_i64 = matches!(to_ty, IrType::Scalar(DType::I64));
-            if from_ty == to_ty {
+            if from_s == to_s {
                 writeln!(
                     out,
                     "  %v{} = bitcast {} {} to {}",
@@ -4696,11 +4839,12 @@ fn emit_instr_ir(
         }
         // Phase 61: Pattern matching helpers
         IrInstr::GetVariantTag { result, operand } => {
+            let ov = coerce_to_type(*operand, "ptr", consts, func, emitted_types, gep_counter, out)?;
             writeln!(
                 out,
-                "  %v{} = call i64 @iris_get_variant_tag({})",
+                "  %v{} = call i64 @iris_get_variant_tag(ptr {})",
                 result.0,
-                val(*operand)
+                ov
             )?;
         }
         IrInstr::StrEq { result, lhs, rhs } => {
@@ -5135,11 +5279,25 @@ fn block_label_by_id(blocks: &[crate::ir::block::IrBlock], id: BlockId) -> Strin
 }
 
 fn fmt_float(v: f64) -> String {
-    let s = format!("{}", v);
-    if s.contains('.') || s.contains('e') || s.contains('E') {
-        s
+    let is_exact = (v * 1024.0).fract() == 0.0;
+    if is_exact {
+        let s = format!("{}", v);
+        if s.contains('.') || s.contains('e') || s.contains('E') {
+            s
+        } else {
+            format!("{}.0", s)
+        }
     } else {
-        format!("{}.0", s)
+        format!("0x{:016x}", v.to_bits())
+    }
+}
+
+fn fmt_float_typed(v: f64, ty: &IrType) -> String {
+    let is_f32 = matches!(ty, IrType::Scalar(DType::F32));
+    if is_f32 {
+        format!("0x{:016x}", ((v as f32) as f64).to_bits())
+    } else {
+        fmt_float(v)
     }
 }
 
@@ -5354,6 +5512,8 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare i64 @iris_abs_i64(i64)",
         "declare double @iris_sign_f64(double)",
         "declare double @tan(double)",
+        "declare double @round(double)",
+        "declare float @roundf(float)",
         // LLVM intrinsics
         "declare double @llvm.sqrt.f64(double)",
         "declare double @llvm.fabs.f64(double)",
