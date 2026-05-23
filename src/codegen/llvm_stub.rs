@@ -148,7 +148,13 @@ pub fn emit_llvm_stub(module: &IrModule) -> Result<String, CodegenError> {
         if ret_ty == "void" {
             writeln!(out, "  call void @{}({})", func.name, call_args.join(", "))?;
         } else {
-            writeln!(out, "  %spawn_ret = call {} @{}({})", ret_ty, func.name, call_args.join(", "))?;
+            writeln!(
+                out,
+                "  %spawn_ret = call {} @{}({})",
+                ret_ty,
+                func.name,
+                call_args.join(", ")
+            )?;
         }
         writeln!(out, "  call void @free(ptr %arg)")?;
         writeln!(out, "  ret ptr null")?;
@@ -1049,7 +1055,11 @@ fn emit_llvm_instr(
         IrInstr::Spawn { body_fn, args } => {
             let tramp_name = format!("{}_trampoline", body_fn);
             if args.is_empty() {
-                writeln!(out, "  call void @iris_spawn_fn(ptr @{}, ptr null)", tramp_name)?;
+                writeln!(
+                    out,
+                    "  call void @iris_spawn_fn(ptr @{}, ptr null)",
+                    tramp_name
+                )?;
             } else {
                 let arg_buf = format!("%spawn_args{}", gep_counter);
                 *gep_counter += 1;
@@ -1057,7 +1067,11 @@ fn emit_llvm_instr(
                 writeln!(out, "  {} = call ptr @malloc(i64 {})", arg_buf, alloc_size)?;
                 for (i, arg_id) in args.iter().enumerate() {
                     let slot = format!("%spawn_arg_slot{}_{}", gep_counter, i);
-                    writeln!(out, "  {} = getelementptr ptr, ptr {}, i64 {}", slot, arg_buf, i)?;
+                    writeln!(
+                        out,
+                        "  {} = getelementptr ptr, ptr {}, i64 {}",
+                        slot, arg_buf, i
+                    )?;
                     let value = val(*arg_id);
                     let boxed = box_spawn_capture(
                         out,
@@ -1069,7 +1083,11 @@ fn emit_llvm_instr(
                     )?;
                     writeln!(out, "  store ptr {}, ptr {}", boxed, slot)?;
                 }
-                writeln!(out, "  call void @iris_spawn_fn(ptr @{}, ptr {})", tramp_name, arg_buf)?;
+                writeln!(
+                    out,
+                    "  call void @iris_spawn_fn(ptr @{}, ptr {})",
+                    tramp_name, arg_buf
+                )?;
             }
         }
 
@@ -2180,31 +2198,51 @@ fn box_spawn_capture(
         Some("i64") => {
             let boxed = format!("%box{}", *counter);
             *counter += 1;
-            writeln!(out, "  {} = call ptr @iris_box_i64(i64 {})", boxed, value_str)?;
+            writeln!(
+                out,
+                "  {} = call ptr @iris_box_i64(i64 {})",
+                boxed, value_str
+            )?;
             Ok(boxed)
         }
         Some("i32") => {
             let boxed = format!("%box{}", *counter);
             *counter += 1;
-            writeln!(out, "  {} = call ptr @iris_box_i32(i32 {})", boxed, value_str)?;
+            writeln!(
+                out,
+                "  {} = call ptr @iris_box_i32(i32 {})",
+                boxed, value_str
+            )?;
             Ok(boxed)
         }
         Some("double") => {
             let boxed = format!("%box{}", *counter);
             *counter += 1;
-            writeln!(out, "  {} = call ptr @iris_box_f64(double {})", boxed, value_str)?;
+            writeln!(
+                out,
+                "  {} = call ptr @iris_box_f64(double {})",
+                boxed, value_str
+            )?;
             Ok(boxed)
         }
         Some("float") => {
             let boxed = format!("%box{}", *counter);
             *counter += 1;
-            writeln!(out, "  {} = call ptr @iris_box_f32(float {})", boxed, value_str)?;
+            writeln!(
+                out,
+                "  {} = call ptr @iris_box_f32(float {})",
+                boxed, value_str
+            )?;
             Ok(boxed)
         }
         Some("i1") => {
             let boxed = format!("%box{}", *counter);
             *counter += 1;
-            writeln!(out, "  {} = call ptr @iris_box_bool(i1 {})", boxed, value_str)?;
+            writeln!(
+                out,
+                "  {} = call ptr @iris_box_bool(i1 {})",
+                boxed, value_str
+            )?;
             Ok(boxed)
         }
         _ => Ok(value_str.to_owned()),

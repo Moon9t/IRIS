@@ -3037,7 +3037,11 @@ fn emit_instr_ir(
         IrInstr::Spawn { body_fn, args } => {
             let tramp_name = format!("{}_trampoline", body_fn);
             if args.is_empty() {
-                writeln!(out, "  call void @iris_spawn_fn(ptr @{}, ptr null)", tramp_name)?;
+                writeln!(
+                    out,
+                    "  call void @iris_spawn_fn(ptr @{}, ptr null)",
+                    tramp_name
+                )?;
             } else {
                 let arg_buf = format!("%spawn_args{}", gep_counter);
                 *gep_counter += 1;
@@ -3045,7 +3049,11 @@ fn emit_instr_ir(
                 writeln!(out, "  {} = call ptr @malloc(i64 {})", arg_buf, alloc_size)?;
                 for (i, arg_id) in args.iter().enumerate() {
                     let slot = format!("%spawn_arg_slot{}_{}", gep_counter, i);
-                    writeln!(out, "  {} = getelementptr ptr, ptr {}, i64 {}", slot, arg_buf, i)?;
+                    writeln!(
+                        out,
+                        "  {} = getelementptr ptr, ptr {}, i64 {}",
+                        slot, arg_buf, i
+                    )?;
                     let arg_val = val(*arg_id);
                     let boxed = box_to_ptr(
                         out,
@@ -3058,7 +3066,11 @@ fn emit_instr_ir(
                     )?;
                     writeln!(out, "  store ptr {}, ptr {}", boxed, slot)?;
                 }
-                writeln!(out, "  call void @iris_spawn_fn(ptr @{}, ptr {})", tramp_name, arg_buf)?;
+                writeln!(
+                    out,
+                    "  call void @iris_spawn_fn(ptr @{}, ptr {})",
+                    tramp_name, arg_buf
+                )?;
             }
         }
 
