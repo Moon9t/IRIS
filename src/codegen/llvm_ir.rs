@@ -726,7 +726,13 @@ fn emit_function_body(
                         emitted_types.insert(*r, ty_s);
                     }
                 }
-                IrInstr::BinOp { result, op, lhs, rhs, ty } => {
+                IrInstr::BinOp {
+                    result,
+                    op,
+                    lhs,
+                    rhs,
+                    ty,
+                } => {
                     let comparison_op = matches!(
                         op,
                         BinOp::CmpEq
@@ -736,7 +742,8 @@ fn emit_function_body(
                             | BinOp::CmpGt
                             | BinOp::CmpGe
                     );
-                    let semantic_operand_ty = func.value_type(*lhs).or_else(|| func.value_type(*rhs));
+                    let semantic_operand_ty =
+                        func.value_type(*lhs).or_else(|| func.value_type(*rhs));
                     let lhs_ety = emitted_types.get(lhs).map(|s| s.as_str());
                     let rhs_ety = emitted_types.get(rhs).map(|s| s.as_str());
                     let is_str_cmp = semantic_operand_ty == Some(&IrType::Str)
@@ -750,7 +757,8 @@ fn emit_function_body(
                     } else if comparison_op {
                         "i1".to_owned()
                     } else {
-                        llvm_type_complete(semantic_operand_ty.unwrap_or(ty)).unwrap_or_else(|_| "i64".to_owned())
+                        llvm_type_complete(semantic_operand_ty.unwrap_or(ty))
+                            .unwrap_or_else(|_| "i64".to_owned())
                     };
                     emitted_types.insert(*result, s);
                 }
@@ -1845,24 +1853,40 @@ fn emit_instr_ir(
                     coerce_to_type(*lhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
                 let rv =
                     coerce_to_type(*rhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
-                
+
                 // Extract primal values
                 let val_lhs = format!("%grad_val_lhs{}", gep_counter);
                 *gep_counter += 1;
-                writeln!(out, "  {} = call double @iris_grad_value(ptr {})", val_lhs, lv)?;
-                
+                writeln!(
+                    out,
+                    "  {} = call double @iris_grad_value(ptr {})",
+                    val_lhs, lv
+                )?;
+
                 let val_rhs = format!("%grad_val_rhs{}", gep_counter);
                 *gep_counter += 1;
-                writeln!(out, "  {} = call double @iris_grad_value(ptr {})", val_rhs, rv)?;
+                writeln!(
+                    out,
+                    "  {} = call double @iris_grad_value(ptr {})",
+                    val_rhs, rv
+                )?;
 
                 // Extract tangents
                 let tan_lhs = format!("%grad_tan_lhs{}", gep_counter);
                 *gep_counter += 1;
-                writeln!(out, "  {} = call double @iris_grad_tangent(ptr {})", tan_lhs, lv)?;
-                
+                writeln!(
+                    out,
+                    "  {} = call double @iris_grad_tangent(ptr {})",
+                    tan_lhs, lv
+                )?;
+
                 let tan_rhs = format!("%grad_tan_rhs{}", gep_counter);
                 *gep_counter += 1;
-                writeln!(out, "  {} = call double @iris_grad_tangent(ptr {})", tan_rhs, rv)?;
+                writeln!(
+                    out,
+                    "  {} = call double @iris_grad_tangent(ptr {})",
+                    tan_rhs, rv
+                )?;
 
                 // Compute new primal and tangent
                 let (val_res, tan_res) = match op {
@@ -1870,70 +1894,70 @@ fn emit_instr_ir(
                         let vr = format!("%grad_val_res{}", gep_counter);
                         *gep_counter += 1;
                         writeln!(out, "  {} = fadd double {}, {}", vr, val_lhs, val_rhs)?;
-                        
+
                         let tr = format!("%grad_tan_res{}", gep_counter);
                         *gep_counter += 1;
                         writeln!(out, "  {} = fadd double {}, {}", tr, tan_lhs, tan_rhs)?;
-                        
+
                         (vr, tr)
                     }
                     BinOp::Sub => {
                         let vr = format!("%grad_val_res{}", gep_counter);
                         *gep_counter += 1;
                         writeln!(out, "  {} = fsub double {}, {}", vr, val_lhs, val_rhs)?;
-                        
+
                         let tr = format!("%grad_tan_res{}", gep_counter);
                         *gep_counter += 1;
                         writeln!(out, "  {} = fsub double {}, {}", tr, tan_lhs, tan_rhs)?;
-                        
+
                         (vr, tr)
                     }
                     BinOp::Mul => {
                         let vr = format!("%grad_val_res{}", gep_counter);
                         *gep_counter += 1;
                         writeln!(out, "  {} = fmul double {}, {}", vr, val_lhs, val_rhs)?;
-                        
+
                         // tan_res = val_lhs * tan_rhs + tan_lhs * val_rhs
                         let t1 = format!("%grad_mul_t1{}", gep_counter);
                         *gep_counter += 1;
                         writeln!(out, "  {} = fmul double {}, {}", t1, val_lhs, tan_rhs)?;
-                        
+
                         let t2 = format!("%grad_mul_t2{}", gep_counter);
                         *gep_counter += 1;
                         writeln!(out, "  {} = fmul double {}, {}", t2, tan_lhs, val_rhs)?;
-                        
+
                         let tr = format!("%grad_tan_res{}", gep_counter);
                         *gep_counter += 1;
                         writeln!(out, "  {} = fadd double {}, {}", tr, t1, t2)?;
-                        
+
                         (vr, tr)
                     }
                     BinOp::Div => {
                         let vr = format!("%grad_val_res{}", gep_counter);
                         *gep_counter += 1;
                         writeln!(out, "  {} = fdiv double {}, {}", vr, val_lhs, val_rhs)?;
-                        
+
                         // tan_res = (tan_lhs * val_rhs - val_lhs * tan_rhs) / (val_rhs * val_rhs)
                         let t1 = format!("%grad_div_t1{}", gep_counter);
                         *gep_counter += 1;
                         writeln!(out, "  {} = fmul double {}, {}", t1, tan_lhs, val_rhs)?;
-                        
+
                         let t2 = format!("%grad_div_t2{}", gep_counter);
                         *gep_counter += 1;
                         writeln!(out, "  {} = fmul double {}, {}", t2, val_lhs, tan_rhs)?;
-                        
+
                         let t3 = format!("%grad_div_t3{}", gep_counter);
                         *gep_counter += 1;
                         writeln!(out, "  {} = fsub double {}, {}", t3, t1, t2)?;
-                        
+
                         let t4 = format!("%grad_div_t4{}", gep_counter);
                         *gep_counter += 1;
                         writeln!(out, "  {} = fmul double {}, {}", t4, val_rhs, val_rhs)?;
-                        
+
                         let tr = format!("%grad_tan_res{}", gep_counter);
                         *gep_counter += 1;
                         writeln!(out, "  {} = fdiv double {}, {}", tr, t3, t4)?;
-                        
+
                         (vr, tr)
                     }
                     _ => {
@@ -4839,12 +4863,19 @@ fn emit_instr_ir(
         }
         // Phase 61: Pattern matching helpers
         IrInstr::GetVariantTag { result, operand } => {
-            let ov = coerce_to_type(*operand, "ptr", consts, func, emitted_types, gep_counter, out)?;
+            let ov = coerce_to_type(
+                *operand,
+                "ptr",
+                consts,
+                func,
+                emitted_types,
+                gep_counter,
+                out,
+            )?;
             writeln!(
                 out,
                 "  %v{} = call i64 @iris_get_variant_tag(ptr {})",
-                result.0,
-                ov
+                result.0, ov
             )?;
         }
         IrInstr::StrEq { result, lhs, rhs } => {
