@@ -439,7 +439,9 @@ fn eval_ir_module_internal(module: &IrModule) -> Result<String, Error> {
     match codegen::execute_binary_for_eval(module) {
         Ok(s) => Ok(s),
         Err(e) => match e {
-            crate::error::CodegenError::Unsupported { backend, .. } if backend == "native" => {
+            crate::error::CodegenError::Unsupported { backend, .. }
+                if backend == "native" || backend == "binary" =>
+            {
                 let func = module
                     .functions()
                     .iter()
