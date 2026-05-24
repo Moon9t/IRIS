@@ -79,7 +79,7 @@ def f() -> i64 { sum_of_squares(3, 4) }
 #[test]
 fn test_bring_struct() {
     let types_src = r#"
-record Vec2 { x: i64, y: i64 }
+pub record Vec2 { x: i64, y: i64 }
 pub def dot(a: Vec2, b: Vec2) -> i64 { a.x * b.x + a.y * b.y }
 "#;
     let main_src = r#"
