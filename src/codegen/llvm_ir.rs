@@ -785,8 +785,30 @@ fn emit_function_body(
                         emitted_types.insert(*r, ty_s);
                     }
                 }
-                IrInstr::BinOp { result, ty, .. } => {
-                    let s = llvm_type_complete(ty).unwrap_or_else(|_| "i64".to_owned());
+                IrInstr::BinOp {
+                    result,
+                    ty,
+                    lhs,
+                    rhs,
+                    op,
+                } => {
+                    let comparison_op = matches!(
+                        op,
+                        BinOp::CmpEq
+                            | BinOp::CmpNe
+                            | BinOp::CmpLt
+                            | BinOp::CmpLe
+                            | BinOp::CmpGt
+                            | BinOp::CmpGe
+                    );
+                    let s = if comparison_op {
+                        "i1".to_owned()
+                    } else {
+                        let semantic_operand_ty =
+                            func.value_type(*lhs).or_else(|| func.value_type(*rhs));
+                        let resolved_ty = semantic_operand_ty.unwrap_or(ty);
+                        llvm_type_complete(resolved_ty).unwrap_or_else(|_| "i64".to_owned())
+                    };
                     emitted_types.insert(*result, s);
                 }
                 IrInstr::IsSome { result, .. } | IrInstr::IsOk { result, .. } => {
