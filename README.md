@@ -1,6 +1,6 @@
 # IRIS — Intermediate Representation for Intelligent Systems
 
-**The C of Machine Learning — a compiled, statically-typed systems language for building Autonomous Intelligent Systems.**
+**A compiled, statically-typed systems language for building Autonomous Intelligent Systems.**
 
 Low-level control. High-level ML ergonomics. First-class tensors, autodiff, and ONNX/CUDA/SIMD backends. Build AIS that learn, adapt, and act.
 

@@ -1,6 +1,6 @@
 # IRIS System Requirements
 
-> **IRIS — The C of Machine Learning**
+> **IRIS**
 > Comprehensive platform requirements for running, building, and deploying IRIS programs.
 
 ---

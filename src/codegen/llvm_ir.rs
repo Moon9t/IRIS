@@ -1688,24 +1688,35 @@ fn coerce_to_type(
             if actual_ty_str == "ptr" && expected_ty.starts_with('i') {
                 writeln!(out, "  {} = ptrtoint ptr {} to {}", tmp, v_str, expected_ty)?;
             } else if expected_ty == "ptr" && actual_ty_str.starts_with('i') {
-                writeln!(out, "  {} = inttoptr {} {} to ptr", tmp, actual_ty, v_str)?;
+                writeln!(out, "  {} = inttoptr {} {} to ptr", tmp, actual_ty_str, v_str)?;
             } else if actual_ty_str.starts_with('i') && expected_ty.starts_with('i') {
-                let op = if bit_width(actual_ty) > bit_width(expected_ty) {
+                let src_w = bit_width(&actual_ty_str);
+                let dst_w = bit_width(expected_ty);
+                if src_w == dst_w {
+                    return Ok(v_str);
+                }
+                let zero_extend_src = matches!(
+                    func.value_type(v),
+                    Some(IrType::Scalar(DType::U8 | DType::U32 | DType::U64 | DType::USize | DType::Bool))
+                );
+                let op = if src_w > dst_w {
                     "trunc"
-                } else {
+                } else if zero_extend_src {
                     "zext"
+                } else {
+                    "sext"
                 };
                 writeln!(
                     out,
                     "  {} = {} {} {} to {}",
                     tmp, op, actual_ty_str, v_str, expected_ty
                 )?;
-            } else if (actual_ty == "float" || actual_ty == "double")
+            } else if (actual_ty_str == "float" || actual_ty_str == "double")
                 && expected_ty.starts_with('i')
             {
                 if expected_ty == "i1" {
                     let zero = "0.0";
-                    let cmp = if actual_ty == "float" {
+                    let cmp = if actual_ty_str == "float" {
                         format!("fcmp one float {}, {}", v_str, zero)
                     } else {
                         format!("fcmp one double {}, {}", v_str, zero)
@@ -1741,7 +1752,7 @@ fn coerce_to_type(
                         tmp, actual_ty_str, v_use, expected_ty
                     )?;
                 }
-            } else if actual_ty.starts_with('i')
+            } else if actual_ty_str.starts_with('i')
                 && (expected_ty == "float" || expected_ty == "double")
             {
                 writeln!(
@@ -2179,12 +2190,34 @@ fn emit_instr_ir(
             }
             let is_from_float = matches!(from_ty, IrType::Scalar(DType::F32 | DType::F64));
             let is_to_float = matches!(to_ty, IrType::Scalar(DType::F32 | DType::F64));
-            let is_from_int = matches!(from_ty, IrType::Scalar(DType::I32 | DType::I64));
-            let is_to_int = matches!(to_ty, IrType::Scalar(DType::I32 | DType::I64));
+            let is_from_int = matches!(
+                from_ty,
+                IrType::Scalar(
+                    DType::I8
+                        | DType::U8
+                        | DType::I32
+                        | DType::U32
+                        | DType::I64
+                        | DType::U64
+                        | DType::USize
+                        | DType::Bool
+                )
+            );
+            let is_to_int = matches!(
+                to_ty,
+                IrType::Scalar(
+                    DType::I8
+                        | DType::U8
+                        | DType::I32
+                        | DType::U32
+                        | DType::I64
+                        | DType::U64
+                        | DType::USize
+                        | DType::Bool
+                )
+            );
             let is_from_f64 = matches!(from_ty, IrType::Scalar(DType::F64));
             let is_to_f64 = matches!(to_ty, IrType::Scalar(DType::F64));
-            let is_from_i64 = matches!(from_ty, IrType::Scalar(DType::I64));
-            let is_to_i64 = matches!(to_ty, IrType::Scalar(DType::I64));
             if from_ty == to_ty {
                 writeln!(
                     out,
@@ -2192,20 +2225,9 @@ fn emit_instr_ir(
                     result.0, from_s, ov, to_s
                 )?;
             } else if is_from_float && is_to_int {
-                // Ensure the operand is represented with `actual_from_s` width
-                // (e.g. f32 vs f64). Coerce if necessary to avoid emitting
-                // instructions that reference the wrong FP width for the
-                // operand value (which clang rejects).
-                // Use the operand's emitted LLVM type when performing the
-                // float->int conversion so the instruction's source type
-                // matches the actual value. Coerce constants as needed.
-                let src_ty = emitted_types
-                    .get(operand)
-                    .cloned()
-                    .unwrap_or_else(|| from_s.clone());
                 let ov_coerced = coerce_to_type(
                     *operand,
-                    &src_ty,
+                    &from_s,
                     consts,
                     func,
                     emitted_types,
@@ -2215,19 +2237,12 @@ fn emit_instr_ir(
                 writeln!(
                     out,
                     "  %v{} = fptosi {} {} to {}",
-                    result.0, src_ty, ov_coerced, to_s
+                    result.0, from_s, ov_coerced, to_s
                 )?;
             } else if is_from_int && is_to_float {
-                // Coerce integer operand to the expected integer type width
-                // before emitting `sitofp` so the src operand matches the
-                // emitted type string used in the instruction.
-                let src_ty = emitted_types
-                    .get(operand)
-                    .cloned()
-                    .unwrap_or_else(|| from_s.clone());
                 let ov_coerced = coerce_to_type(
                     *operand,
-                    &src_ty,
+                    &from_s,
                     consts,
                     func,
                     emitted_types,
@@ -2237,7 +2252,7 @@ fn emit_instr_ir(
                 writeln!(
                     out,
                     "  %v{} = sitofp {} {} to {}",
-                    result.0, src_ty, ov_coerced, to_s
+                    result.0, from_s, ov_coerced, to_s
                 )?;
             } else if is_from_float && is_to_float {
                 if !is_from_f64 && is_to_f64 {
@@ -2268,14 +2283,47 @@ fn emit_instr_ir(
                     )?;
                 }
             } else if is_from_int && is_to_int {
-                if !is_from_i64 && is_to_i64 {
-                    writeln!(out, "  %v{} = sext {} {} to {}", result.0, from_s, ov, to_s)?;
-                } else {
+                let ov_coerced = coerce_to_type(
+                    *operand,
+                    &from_s,
+                    consts,
+                    func,
+                    emitted_types,
+                    gep_counter,
+                    out,
+                )?;
+                let src_w = bit_width(&from_s);
+                let dst_w = bit_width(&to_s);
+                if src_w == dst_w {
                     writeln!(
                         out,
-                        "  %v{} = trunc {} {} to {}",
-                        result.0, from_s, ov, to_s
+                        "  %v{} = bitcast {} {} to {}",
+                        result.0, from_s, ov_coerced, to_s
                     )?;
+                } else {
+                    let zero_extend_src = matches!(
+                        from_ty,
+                        IrType::Scalar(DType::U8 | DType::U32 | DType::U64 | DType::USize | DType::Bool)
+                    );
+                    if src_w > dst_w {
+                        writeln!(
+                            out,
+                            "  %v{} = trunc {} {} to {}",
+                            result.0, from_s, ov_coerced, to_s
+                        )?;
+                    } else if zero_extend_src {
+                        writeln!(
+                            out,
+                            "  %v{} = zext {} {} to {}",
+                            result.0, from_s, ov_coerced, to_s
+                        )?;
+                    } else {
+                        writeln!(
+                            out,
+                            "  %v{} = sext {} {} to {}",
+                            result.0, from_s, ov_coerced, to_s
+                        )?;
+                    }
                 }
             } else {
                 writeln!(
@@ -5319,6 +5367,7 @@ fn fmt_float(v: f64) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn f32_to_llvm_hex(f: f32) -> String {
     if f == 0.0 {
         if f.is_sign_negative() {

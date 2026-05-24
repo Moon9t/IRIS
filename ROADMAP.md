@@ -1,6 +1,6 @@
 # IRIS Roadmap
 
-> **Current version: 0.5.0** — "The C of Machine Learning" release. Pre-1.0, evolving rapidly.
+> **Current version: 0.5.0** —  release. Pre-1.0, evolving rapidly.
 
 This document outlines the planned milestones for IRIS from the current release
 line through the stable 1.0 release and beyond.
