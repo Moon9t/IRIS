@@ -4870,7 +4870,7 @@ fn emit_instr_ir(
         IrInstr::GetVariantTag { result, operand } => {
             writeln!(
                 out,
-                "  %v{} = call i64 @iris_get_variant_tag({})",
+                "  %v{} = call i64 @iris_get_variant_tag(ptr {})",
                 result.0,
                 val(*operand)
             )?;
