@@ -60,7 +60,33 @@ thread_local! {
     static CURRENT_BRING_PREFIXES: RefCell<Vec<Vec<String>>> = const { RefCell::new(Vec::new()) };
     static CURRENT_BRING_MAPPINGS: RefCell<Vec<HashMap<String, String>>> = const { RefCell::new(Vec::new()) };
     static CURRENT_FUNCTION_SIGNATURES: RefCell<HashMap<String, Vec<IrType>>> = RefCell::new(HashMap::new());
+    static CURRENT_CALLER_PREFIX: RefCell<Option<String>> = const { RefCell::new(None) };
+    static CURRENT_PUB_MAP: RefCell<HashMap<String, bool>> = RefCell::new(HashMap::new());
 }
+
+fn get_module_prefix(name: &str) -> Option<&str> {
+    if let Some(idx) = name.find("__") {
+        Some(&name[..idx])
+    } else {
+        None
+    }
+}
+
+fn is_visible_global(callee_name: &str) -> bool {
+    CURRENT_PUB_MAP.with(|map| {
+        if let Some(&is_pub) = map.borrow().get(callee_name) {
+            if is_pub {
+                return true;
+            }
+            let caller_prefix = CURRENT_CALLER_PREFIX.with(|prefix| prefix.borrow().clone());
+            let callee_prefix = get_module_prefix(callee_name).map(|s| s.to_string());
+            caller_prefix == callee_prefix
+        } else {
+            true
+        }
+    })
+}
+
 
 fn set_current_brings(brings: &[crate::parser::ast::AstBring]) {
     let mut prefixes = Vec::new();
@@ -125,9 +151,10 @@ pub(crate) fn resolve_brought_name(name: &str, module: &IrModule) -> String {
         if let Some(prefixes) = prefixes_stack.borrow().last() {
             for prefix in prefixes.iter() {
                 let candidate = format!("{}__{}", prefix, name);
-                if module.struct_def(&candidate).is_some()
+                if (module.struct_def(&candidate).is_some()
                     || module.enum_def(&candidate).is_some()
-                    || module.type_alias(&candidate).is_some()
+                    || module.type_alias(&candidate).is_some())
+                    && is_visible_global(&candidate)
                 {
                     return Some(candidate);
                 }
@@ -138,26 +165,27 @@ pub(crate) fn resolve_brought_name(name: &str, module: &IrModule) -> String {
     if let Some(res) = resolved {
         return res;
     }
-    if module.struct_def(name).is_some()
+    if (module.struct_def(name).is_some()
         || module.enum_def(name).is_some()
-        || module.type_alias(name).is_some()
+        || module.type_alias(name).is_some())
+        && is_visible_global(name)
     {
         return name.to_string();
     }
     // Fallback: scan all type registries for any mangled candidate matching `*__name`.
     let suffix = format!("__{}", name);
     for key in module.struct_defs.keys() {
-        if key.ends_with(&suffix) {
+        if key.ends_with(&suffix) && is_visible_global(key) {
             return key.clone();
         }
     }
     for key in module.enum_defs.keys() {
-        if key.ends_with(&suffix) {
+        if key.ends_with(&suffix) && is_visible_global(key) {
             return key.clone();
         }
     }
     for key in module.type_aliases.keys() {
-        if key.ends_with(&suffix) {
+        if key.ends_with(&suffix) && is_visible_global(key) {
             return key.clone();
         }
     }
@@ -194,11 +222,46 @@ fn pattern_has_bindings(pattern: &AstWhenPattern) -> bool {
 /// Lower an `AstModule` to an `IrModule`.
 pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError> {
     set_current_brings(&ast.brings);
+
+    let mut pm = HashMap::new();
+    for func in &ast.functions {
+        pm.insert(func.name.name.clone(), func.is_pub);
+    }
+    for s in &ast.structs {
+        pm.insert(s.name.name.clone(), s.is_pub);
+    }
+    for e in &ast.enums {
+        pm.insert(e.name.name.clone(), e.is_pub);
+    }
+    for c in &ast.consts {
+        pm.insert(c.name.name.clone(), c.is_pub);
+    }
+    for ta in &ast.type_aliases {
+        pm.insert(ta.name.clone(), ta.is_pub);
+    }
+    for impl_def in &ast.impls {
+        for method in &impl_def.methods {
+            let mangled = if impl_def.trait_name.is_empty() {
+                format!("{}__{}", impl_def.type_name, method.name.name)
+            } else {
+                format!(
+                    "{}__{}__{}",
+                    impl_def.trait_name, impl_def.type_name, method.name.name
+                )
+            };
+            pm.insert(mangled, method.is_pub);
+        }
+    }
+
+    CURRENT_PUB_MAP.with(|map| *map.borrow_mut() = pm);
+
     struct ScopeGuard;
     impl Drop for ScopeGuard {
         fn drop(&mut self) {
             clear_current_brings();
             CURRENT_FUNCTION_SIGNATURES.with(|sigs| sigs.borrow_mut().clear());
+            CURRENT_PUB_MAP.with(|map| map.borrow_mut().clear());
+            CURRENT_CALLER_PREFIX.with(|prefix| *prefix.borrow_mut() = None);
         }
     }
     let _guard = ScopeGuard;
@@ -538,12 +601,13 @@ impl<'m> Lowerer<'m> {
             if let Some(prefixes) = prefixes_stack.borrow().last() {
                 for prefix in prefixes.iter() {
                     let candidate = format!("{}__{}", prefix, name);
-                    if self.fn_sigs.contains_key(&candidate)
+                    if (self.fn_sigs.contains_key(&candidate)
                         || self.mono_sigs.borrow().contains_key(&candidate)
                         || self.const_defs.contains_key(&candidate)
                         || self.module.struct_def(&candidate).is_some()
                         || self.module.enum_def(&candidate).is_some()
-                        || self.module.type_alias(&candidate).is_some()
+                        || self.module.type_alias(&candidate).is_some())
+                        && is_visible_global(&candidate)
                     {
                         return Some(candidate);
                     }
@@ -554,12 +618,13 @@ impl<'m> Lowerer<'m> {
         if let Some(res) = resolved {
             return res;
         }
-        if self.fn_sigs.contains_key(name)
+        if (self.fn_sigs.contains_key(name)
             || self.mono_sigs.borrow().contains_key(name)
             || self.const_defs.contains_key(name)
             || self.module.struct_def(name).is_some()
             || self.module.enum_def(name).is_some()
-            || self.module.type_alias(name).is_some()
+            || self.module.type_alias(name).is_some())
+            && is_visible_global(name)
         {
             return name.to_string();
         }
@@ -570,17 +635,17 @@ impl<'m> Lowerer<'m> {
         // `ml__xavier_init` after mangling).
         let suffix = format!("__{}", name);
         for key in self.fn_sigs.keys() {
-            if key.ends_with(&suffix) {
+            if key.ends_with(&suffix) && is_visible_global(key) {
                 return key.clone();
             }
         }
         for key in self.mono_sigs.borrow().keys() {
-            if key.ends_with(&suffix) {
+            if key.ends_with(&suffix) && is_visible_global(key) {
                 return key.clone();
             }
         }
         for key in self.const_defs.keys() {
-            if key.ends_with(&suffix) {
+            if key.ends_with(&suffix) && is_visible_global(key) {
                 return key.clone();
             }
         }
@@ -12751,6 +12816,21 @@ fn lower_function_with_generics_and_subs(
     ),
     LowerError,
 > {
+    let old_prefix = CURRENT_CALLER_PREFIX.with(|prefix| {
+        let mut p = prefix.borrow_mut();
+        let old = p.clone();
+        *p = get_module_prefix(&func.name.name).map(|s| s.to_string());
+        old
+    });
+    struct PrefixGuard(Option<String>);
+    impl Drop for PrefixGuard {
+        fn drop(&mut self) {
+            CURRENT_CALLER_PREFIX.with(|prefix| {
+                *prefix.borrow_mut() = self.0.clone();
+            });
+        }
+    }
+    let _prefix_guard = PrefixGuard(old_prefix);
     // Resolve param and return types with substitution applied.
     let resolve = |ty: &AstType| -> IrType {
         if let AstType::Named(name, _) = ty {
