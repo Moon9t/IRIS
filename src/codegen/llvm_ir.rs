@@ -1680,15 +1680,25 @@ fn coerce_to_type(
             // Resolve the real LLVM type for the value from the function's
             // recorded `value_type` if available to avoid inconsistencies
             // between `emitted_types` and the IR's authoritative types.
+            // Only override with authoritative IR type if it is a float type.
             let actual_ty_str = if let Some(ty) = func.value_type(v) {
-                llvm_type_complete(ty).unwrap_or(actual_ty.clone())
+                let s = llvm_type_complete(ty).unwrap_or_else(|_| actual_ty.clone());
+                if s == "float" || s == "double" {
+                    s
+                } else {
+                    actual_ty.clone()
+                }
             } else {
                 actual_ty.clone()
             };
             if actual_ty_str == "ptr" && expected_ty.starts_with('i') {
                 writeln!(out, "  {} = ptrtoint ptr {} to {}", tmp, v_str, expected_ty)?;
             } else if expected_ty == "ptr" && actual_ty_str.starts_with('i') {
-                writeln!(out, "  {} = inttoptr {} {} to ptr", tmp, actual_ty_str, v_str)?;
+                writeln!(
+                    out,
+                    "  {} = inttoptr {} {} to ptr",
+                    tmp, actual_ty_str, v_str
+                )?;
             } else if actual_ty_str.starts_with('i') && expected_ty.starts_with('i') {
                 let src_w = bit_width(&actual_ty_str);
                 let dst_w = bit_width(expected_ty);
@@ -1697,7 +1707,9 @@ fn coerce_to_type(
                 }
                 let zero_extend_src = matches!(
                     func.value_type(v),
-                    Some(IrType::Scalar(DType::U8 | DType::U32 | DType::U64 | DType::USize | DType::Bool))
+                    Some(IrType::Scalar(
+                        DType::U8 | DType::U32 | DType::U64 | DType::USize | DType::Bool
+                    ))
                 );
                 let op = if src_w > dst_w {
                     "trunc"
@@ -2183,9 +2195,12 @@ fn emit_instr_ir(
             // Prefer the authoritative IR value type when available to avoid
             // emitting casts with the wrong source width (e.g., using
             // `float` when the actual value is `double`).
+            // Only override with authoritative IR type if it is a float type.
             if let Some(fty) = func.value_type(*operand) {
                 if let Ok(s) = llvm_type_complete(fty) {
-                    actual_from_s = s;
+                    if s == "float" || s == "double" {
+                        actual_from_s = s;
+                    }
                 }
             }
             let is_from_float = matches!(from_ty, IrType::Scalar(DType::F32 | DType::F64));
@@ -2303,7 +2318,9 @@ fn emit_instr_ir(
                 } else {
                     let zero_extend_src = matches!(
                         from_ty,
-                        IrType::Scalar(DType::U8 | DType::U32 | DType::U64 | DType::USize | DType::Bool)
+                        IrType::Scalar(
+                            DType::U8 | DType::U32 | DType::U64 | DType::USize | DType::Bool
+                        )
                     );
                     if src_w > dst_w {
                         writeln!(

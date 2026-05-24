@@ -78,10 +78,6 @@ fn ml_full_pipeline_example_runs() {
         EmitKind::Eval,
     )
     .unwrap();
-    if cfg!(target_os = "macos") {
-        assert_eq!(out.trim(), "list(8 items)", "output was:\n{}", out);
-        return;
-    }
     assert!(out.contains("ingested rows = 8"), "output was:\n{}", out);
     assert!(out.contains("updated accuracy = "), "output was:\n{}", out);
     assert!(
