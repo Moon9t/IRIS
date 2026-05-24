@@ -5107,15 +5107,27 @@ fn emit_instr_ir(
             result_ty,
         } => {
             let fn_name = format!("iris_{}", name);
-            // Use each arg's emitted LLVM type so scalars (i64, double, i1) are
-            // passed with the correct type instead of always "ptr".
-            let arg_strs: Vec<String> = args
-                .iter()
-                .map(|a| {
-                    let ty_s = emitted_types.get(a).map(|s| s.as_str()).unwrap_or("ptr");
-                    format!("{} {}", ty_s, val(*a))
-                })
-                .collect();
+            let mut arg_strs = Vec::new();
+            for &a in args {
+                if name == "json_stringify" || name == "type_of" {
+                    let val_str = val(a);
+                    let arg_ty = func.value_type(a);
+                    let emitted_ty = emitted_types.get(&a).map(|s| s.as_str());
+                    let boxed = box_to_ptr(
+                        out,
+                        func,
+                        a,
+                        &val_str,
+                        arg_ty,
+                        emitted_ty,
+                        gep_counter,
+                    )?;
+                    arg_strs.push(format!("ptr {}", boxed));
+                } else {
+                    let ty_s = emitted_types.get(&a).map(|s| s.as_str()).unwrap_or("ptr");
+                    arg_strs.push(format!("{} {}", ty_s, val(a)));
+                }
+            }
             // Determine LLVM return type from result_ty
             let ret_llvm = match result_ty {
                 IrType::Scalar(DType::I64) => "i64",
