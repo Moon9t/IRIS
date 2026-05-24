@@ -87,7 +87,6 @@ fn is_visible_global(callee_name: &str) -> bool {
     })
 }
 
-
 fn set_current_brings(brings: &[crate::parser::ast::AstBring]) {
     let mut prefixes = Vec::new();
     let mut mappings = HashMap::new();
