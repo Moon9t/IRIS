@@ -438,35 +438,42 @@ pub fn eval_ir_module(module: &IrModule) -> Result<String, Error> {
 fn eval_ir_module_internal(module: &IrModule) -> Result<String, Error> {
     match codegen::execute_binary_for_eval(module) {
         Ok(s) => Ok(s),
-        Err(e) => match e {
-            crate::error::CodegenError::Unsupported { backend, .. }
-                if backend == "native" || backend == "binary" =>
-            {
-                let func = module
-                    .functions()
-                    .iter()
-                    .find(|f| f.params.is_empty())
-                    .ok_or_else(|| {
-                        Error::Codegen(crate::error::CodegenError::Unsupported {
-                            backend: "native".into(),
-                            detail: "no zero-argument function found for eval".into(),
-                        })
-                    })?;
-                let opts = crate::interp::InterpOptions {
-                    max_steps: 10_000_000,
-                    max_depth: 5_000,
-                };
-                match crate::interp::eval_function_in_module_opts(module, func, &[], opts) {
-                    Ok(vals) => Ok(vals
-                        .into_iter()
-                        .map(|v| format!("{}", v))
-                        .collect::<Vec<_>>()
-                        .join("\n")),
-                    Err(ie) => Err(Error::Interp(ie)),
+        Err(e) => {
+            eprintln!(
+                "JIT/Native execution failed (falling back to interpreter): {:?}",
+                e
+            );
+            match e {
+                crate::error::CodegenError::Unsupported { backend, .. }
+                    if backend == "native" || backend == "binary" =>
+                {
+                    let func = module
+                        .functions()
+                        .iter()
+                        .find(|f| f.name == "main" && f.params.is_empty())
+                        .or_else(|| module.functions().iter().find(|f| f.params.is_empty()))
+                        .ok_or_else(|| {
+                            Error::Codegen(crate::error::CodegenError::Unsupported {
+                                backend: "native".into(),
+                                detail: "no zero-argument function found for eval".into(),
+                            })
+                        })?;
+                    let opts = crate::interp::InterpOptions {
+                        max_steps: 10_000_000,
+                        max_depth: 5_000,
+                    };
+                    match crate::interp::eval_function_in_module_opts(module, func, &[], opts) {
+                        Ok(vals) => Ok(vals
+                            .into_iter()
+                            .map(|v| format!("{}", v))
+                            .collect::<Vec<_>>()
+                            .join("\n")),
+                        Err(ie) => Err(Error::Interp(ie)),
+                    }
                 }
+                other => Err(Error::Codegen(other)),
             }
-            other => Err(Error::Codegen(other)),
-        },
+        }
     }
 }
 
