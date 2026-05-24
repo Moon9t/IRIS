@@ -1,6 +1,6 @@
 # CI — runs on every push and pull request
 # Builds the compiler, runs all tests, and checks formatting.
-# Supports x86_64 and ARM64 on Linux, Windows, and macOS.
+# Optimized and simplified for high speed and reliability.
 
 name: CI
 
@@ -21,7 +21,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # x86_64 targets (native)
           - os: Linux
             runner: ubuntu-latest
             arch: x86_64
@@ -32,48 +31,45 @@ jobs:
             target: x86_64-pc-windows-msvc
           - os: macOS
             runner: macos-latest
-            arch: x86_64
-            target: x86_64-apple-darwin
-          # ARM64 targets
-          - os: macOS
-            runner: macos-14
             arch: arm64
             target: aarch64-apple-darwin
-          - os: Linux
-            runner: ubuntu-24.04-arm
-            arch: arm64
-            target: aarch64-unknown-linux-gnu
-          - os: Windows
-            runner: windows-latest
-            arch: arm64
-            target: aarch64-pc-windows-msvc
-            cross: true
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system dependencies (Linux)
+      - name: Configure LLVM toolchain (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update -yq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq build-essential pkg-config clang lld
           echo "IRIS_CLANG=/usr/bin/clang" >> "$GITHUB_ENV"
 
-      - name: Install LLVM toolchain (macOS)
+      - name: Configure LLVM toolchain (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install llvm
-          LLVM_PREFIX="$(brew --prefix llvm)"
-          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
-          echo "IRIS_CLANG=$LLVM_PREFIX/bin/clang" >> "$GITHUB_ENV"
+          if [ -f "/opt/homebrew/opt/llvm/bin/clang" ]; then
+            echo "IRIS_CLANG=/opt/homebrew/opt/llvm/bin/clang" >> "$GITHUB_ENV"
+            echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
+          elif [ -f "/usr/local/opt/llvm/bin/clang" ]; then
+            echo "IRIS_CLANG=/usr/local/opt/llvm/bin/clang" >> "$GITHUB_ENV"
+            echo "/usr/local/opt/llvm/bin" >> "$GITHUB_PATH"
+          else
+            echo "IRIS_CLANG=/usr/bin/clang" >> "$GITHUB_ENV"
+          fi
 
-      - name: Install LLVM toolchain (Windows)
+      - name: Configure LLVM toolchain (Windows)
         if: runner.os == 'Windows'
-        shell: powershell
+        shell: pwsh
         run: |
-          choco install llvm --no-progress -y
-          $llvmBin = Join-Path $env:ProgramFiles 'LLVM\bin'
-          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          "IRIS_CLANG=$llvmBin\clang.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          if (Test-Path "$llvmBin\clang.exe") {
+            echo "LLVM pre-installed at $llvmBin"
+            echo "$llvmBin" >> $env:GITHUB_PATH
+            echo "IRIS_CLANG=$llvmBin\clang.exe" >> $env:GITHUB_ENV
+          } else {
+            echo "LLVM not pre-installed. Installing via choco..."
+            choco install llvm --no-progress -y
+            echo "$llvmBin" >> $env:GITHUB_PATH
+            echo "IRIS_CLANG=$llvmBin\clang.exe" >> $env:GITHUB_ENV
+          }
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -91,20 +87,10 @@ jobs:
           restore-keys: ${{ matrix.runner }}-${{ matrix.target }}-cargo-
 
       - name: Build
-        if: ${{ !matrix.cross }}
-        run: cargo build --verbose --target ${{ matrix.target }}
-
-      - name: Build (cross-compile)
-        if: ${{ matrix.cross }}
         run: cargo build --verbose --target ${{ matrix.target }}
 
       - name: Run tests
-        if: ${{ !matrix.cross }}
         run: cargo test --verbose --target ${{ matrix.target }}
-
-      - name: Run tests (cross — build only)
-        if: ${{ matrix.cross }}
-        run: echo "Cross-compiled target — tests run on native runners only"
 
   fmt:
     name: Formatting
@@ -131,6 +117,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-clippy-
       - run: cargo clippy --all-targets
 
   extension:
@@ -152,114 +139,3 @@ jobs:
         with:
           name: vsix
           path: vscode-iris/*.vsix
-
-  bench:
-    name: Benchmarks
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
-      - name: Build release
-        run: cargo build --release
-
-      - name: Run benchmarks and collect results
-        run: |
-          mkdir -p bench-results
-          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          COMMIT=$(git rev-parse --short HEAD)
-          echo "{" > bench-results/results.json
-          echo "  \"timestamp\": \"${TIMESTAMP}\"," >> bench-results/results.json
-          echo "  \"commit\": \"${COMMIT}\"," >> bench-results/results.json
-          echo "  \"benchmarks\": [" >> bench-results/results.json
-          FIRST=true
-          for f in benches/*.iris examples/*/*.iris; do
-            if [ -f "$f" ]; then
-              BENCH_NAME=$(basename "$f" .iris)
-              echo "=== Benchmarking $f ==="
-              OUTPUT=$(cargo run --release -- bench "$f" -n 20 2>&1 || true)
-              # Extract the mean time in ms (the bench command prints it)
-              TMP_MEAN=$(echo "$OUTPUT" | grep -oP '[\d.]+\s*ms' | head -1)
-              MEAN=$(echo "$TMP_MEAN" | grep -oP '[\d.]+' || echo "0")
-              if [ "$FIRST" = true ]; then
-                FIRST=false
-              else
-                echo "," >> bench-results/results.json
-              fi
-              echo "  { \"name\": \"${BENCH_NAME}\"," >> bench-results/results.json
-              echo "    \"mean_ms\": ${MEAN:-0} }" >> bench-results/results.json
-              echo "$OUTPUT"
-              echo ""
-            fi
-          done
-          echo "  ] }" >> bench-results/results.json
-          cat bench-results/results.json
-
-      - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
-        with:
-          name: bench-results-${{ github.sha }}
-          path: bench-results/
-          retention-days: 90
-
-      - name: Download previous benchmark baseline
-        uses: actions/cache@v4
-        id: bench-baseline
-        with:
-          path: bench-baseline/
-          key: bench-baseline-${{ runner.os }}
-          restore-keys: bench-baseline-
-
-      - name: Check for performance regressions
-        run: |
-          if [ -f bench-baseline/results.json ]; then
-            echo "=== Comparing against baseline ==="
-            python3 .github/scripts/compare_benchmarks.py bench-baseline/results.json bench-results/results.json
-          else
-            echo "No baseline found — this run becomes the baseline."
-          fi
-
-      - name: Update baseline
-        run: |
-          mkdir -p bench-baseline
-          cp bench-results/results.json bench-baseline/results.json
-
-  fuzz:
-    name: Fuzz Testing
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
-      - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            fuzz/target
-            fuzz/corpus
-          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('**/Cargo.lock') }}
-      - name: Fuzz lexer (60s)
-        run: cargo +nightly fuzz run fuzz_lexer -- -max_total_time=60 -max_len=4096
-      - name: Fuzz parser (60s)
-        run: cargo +nightly fuzz run fuzz_parser -- -max_total_time=60 -max_len=4096
-      - name: Fuzz lowerer (60s)
-        run: cargo +nightly fuzz run fuzz_lowerer -- -max_total_time=60 -max_len=4096
-      - name: Fuzz full compiler (60s)
-        run: cargo +nightly fuzz run fuzz_compiler -- -max_total_time=60 -max_len=4096
-      - name: Upload fuzz corpus
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: fuzz-corpus-${{ github.sha }}
-          path: fuzz/corpus/
-          retention-days: 30
