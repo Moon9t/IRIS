@@ -526,12 +526,10 @@ fn emit_llvm_ir_impl(
                         } else if rhs.contains(" float ") {
                             val_type.insert(lhs.to_string(), "float".to_string());
                         }
-                    } else if rhs.starts_with("fpext ") || rhs.starts_with("fptrunc ") {
-                        if rhs.contains(" double ") {
-                            val_type.insert(lhs.to_string(), "double".to_string());
-                        } else if rhs.contains(" float ") {
-                            val_type.insert(lhs.to_string(), "float".to_string());
-                        }
+                    } else if rhs.starts_with("fpext ") {
+                        val_type.insert(lhs.to_string(), "double".to_string());
+                    } else if rhs.starts_with("fptrunc ") {
+                        val_type.insert(lhs.to_string(), "float".to_string());
                     }
                 }
             }
@@ -1699,20 +1697,7 @@ fn coerce_to_type(
         if actual_ty != expected_ty {
             *gep_counter += 1;
             let tmp = format!("%coerce{}", gep_counter);
-            // Resolve the real LLVM type for the value from the function's
-            // recorded `value_type` if available to avoid inconsistencies
-            // between `emitted_types` and the IR's authoritative types.
-            // Only override with authoritative IR type if it is a float type.
-            let actual_ty_str = if let Some(ty) = func.value_type(v) {
-                let s = llvm_type_complete(ty).unwrap_or_else(|_| actual_ty.clone());
-                if s == "float" || s == "double" {
-                    s
-                } else {
-                    actual_ty.clone()
-                }
-            } else {
-                actual_ty.clone()
-            };
+            let actual_ty_str = actual_ty.clone();
             if actual_ty_str == "ptr" && expected_ty.starts_with('i') {
                 writeln!(out, "  {} = ptrtoint ptr {} to {}", tmp, v_str, expected_ty)?;
             } else if expected_ty == "ptr" && actual_ty_str.starts_with('i') {
@@ -1794,6 +1779,16 @@ fn coerce_to_type(
                     "  {} = sitofp {} {} to {}",
                     tmp, actual_ty_str, v_str, expected_ty
                 )?;
+            } else if (actual_ty_str == "float" || actual_ty_str == "double")
+                && (expected_ty == "float" || expected_ty == "double")
+            {
+                if actual_ty_str == "double" && expected_ty == "float" {
+                    writeln!(out, "  {} = fptrunc double {} to float", tmp, v_str)?;
+                } else if actual_ty_str == "float" && expected_ty == "double" {
+                    writeln!(out, "  {} = fpext float {} to double", tmp, v_str)?;
+                } else {
+                    return Ok(v_str);
+                }
             } else {
                 writeln!(
                     out,
@@ -2210,21 +2205,11 @@ fn emit_instr_ir(
             // If we know the emitted LLVM type for the operand, prefer that
             // when emitting cast instructions — this prevents generating
             // ops that use the wrong floating-point width for the operand.
-            let mut actual_from_s = emitted_types
+            let actual_from_s = emitted_types
                 .get(operand)
                 .cloned()
                 .unwrap_or_else(|| from_s.clone());
-            // Prefer the authoritative IR value type when available to avoid
-            // emitting casts with the wrong source width (e.g., using
-            // `float` when the actual value is `double`).
-            // Only override with authoritative IR type if it is a float type.
-            if let Some(fty) = func.value_type(*operand) {
-                if let Ok(s) = llvm_type_complete(fty) {
-                    if s == "float" || s == "double" {
-                        actual_from_s = s;
-                    }
-                }
-            }
+
             let is_from_float = matches!(from_ty, IrType::Scalar(DType::F32 | DType::F64));
             let is_to_float = matches!(to_ty, IrType::Scalar(DType::F32 | DType::F64));
             let is_from_int = matches!(
