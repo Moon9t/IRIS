@@ -1225,13 +1225,8 @@ fn emit_function_body(
 
         let mut panic_emitted = false; // track if we've already emitted unreachable via Panic
         for instr in &block.instrs {
-            // Skip branch/return terminators after Panic (which already emitted `unreachable`).
-            if panic_emitted
-                && matches!(
-                    instr,
-                    IrInstr::Br { .. } | IrInstr::CondBr { .. } | IrInstr::Return { .. }
-                )
-            {
+            // Skip any instructions after a `Panic` (we already emitted `unreachable`).
+            if panic_emitted {
                 continue;
             }
             // Emit phi coercion casts right before block terminators.
