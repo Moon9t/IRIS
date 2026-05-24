@@ -370,7 +370,8 @@ fn block_successors(block: &IrBlock) -> Vec<BlockId> {
 fn is_heap_ty(ty: &IrType) -> bool {
     matches!(
         ty,
-        IrType::List(_)
+        IrType::Str
+            | IrType::List(_)
             | IrType::Map(_, _)
             | IrType::Option(_)
             | IrType::ResultType(_, _)

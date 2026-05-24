@@ -50,25 +50,71 @@
 // Internal memory helpers
 // ---------------------------------------------------------------------------
 
+// Dynamic allocations registry to differentiate from static string constants
+static pthread_mutex_t ds_mu = PTHREAD_MUTEX_INITIALIZER;
+static void** ds_table = NULL;
+static size_t ds_len = 0;
+static size_t ds_cap = 0;
+
+static void ds_add(void* ptr) {
+    if (!ptr) return;
+    pthread_mutex_lock(&ds_mu);
+    if (ds_len >= ds_cap) {
+        ds_cap = ds_cap == 0 ? 1024 : ds_cap * 2;
+        ds_table = realloc(ds_table, ds_cap * sizeof(void*));
+    }
+    ds_table[ds_len++] = ptr;
+    pthread_mutex_unlock(&ds_mu);
+}
+
+static int ds_contains_and_remove(void* ptr) {
+    if (!ptr) return 0;
+    pthread_mutex_lock(&ds_mu);
+    for (size_t i = 0; i < ds_len; i++) {
+        if (ds_table[i] == ptr) {
+            ds_table[i] = ds_table[ds_len - 1];
+            ds_len--;
+            pthread_mutex_unlock(&ds_mu);
+            return 1;
+        }
+    }
+    pthread_mutex_unlock(&ds_mu);
+    return 0;
+}
+
 static void* xmalloc(size_t n) {
     void* p = malloc(n);
     if (!p) { fprintf(stderr, "iris: out of memory\n"); abort(); }
+    ds_add(p);
     return p;
 }
 
 static void* xcalloc(size_t n, size_t sz) {
     void* p = calloc(n, sz);
     if (!p) { fprintf(stderr, "iris: out of memory\n"); abort(); }
+    ds_add(p);
     return p;
 }
 
 static void* xrealloc(void* p, size_t n) {
+    pthread_mutex_lock(&ds_mu);
+    for (size_t i = 0; i < ds_len; i++) {
+        if (ds_table[i] == p) {
+            ds_table[i] = ds_table[ds_len - 1];
+            ds_len--;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&ds_mu);
+
     void* q = realloc(p, n);
     if (!q) { fprintf(stderr, "iris: out of memory\n"); abort(); }
+    ds_add(q);
     return q;
 }
 
 static char* xstrdup(const char* s) {
+    if (!s) return NULL;
     size_t n = strlen(s) + 1;
     char* d = xmalloc(n);
     memcpy(d, s, n);
@@ -122,6 +168,7 @@ IrisVal* iris_box_bool(int v) {
 IrisVal* iris_box_str(const char* s) {
     IrisVal* r = xmalloc(sizeof(IrisVal));
     r->tag = IRIS_TAG_STR;  r->str = xstrdup(s);
+    if (r->str) iris_retain_kind(r->str, IRIS_RC_STR);
     return r;
 }
 IrisVal* iris_box_list(IrisList* list) {
@@ -4313,7 +4360,11 @@ static void rc_deep_free_by_kind(void* ptr, int32_t kind) {
             IrisVal* val = (IrisVal*)ptr;
             switch (val->tag) {
                 case IRIS_TAG_STR:
-                    free(val->str);
+                    /* Release the underlying string via the RC table so ownership
+                     * and refcounts are consistent. If no RC entry exists the
+                     * call is a no-op; otherwise the string will be freed when
+                     * its count reaches zero. */
+                    if (val->str) iris_release_kind(val->str, IRIS_RC_STR);
                     break;
                 case IRIS_TAG_LIST:
                     iris_release_kind(val->ptr, IRIS_RC_LIST);
@@ -4361,7 +4412,9 @@ static void rc_deep_free_by_kind(void* ptr, int32_t kind) {
             break;
         }
         case IRIS_RC_STR:
-            free((char*)ptr);
+            if (ds_contains_and_remove(ptr)) {
+                free((char*)ptr);
+            }
             break;
         case IRIS_RC_LIST:
             rc_free_list_payload((IrisList*)ptr);

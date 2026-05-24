@@ -1681,7 +1681,7 @@ impl<'m> Lowerer<'m> {
                                 .unwrap_or(&empty_fields);
                             let mut field_vals = Vec::with_capacity(args.len());
                             for (i, arg) in args.iter().enumerate() {
-                                let (mut v, mut ty) = self.lower_expr(arg)?;
+                                let (mut v, ty) = self.lower_expr(arg)?;
                                 if i < field_tys.len() {
                                     let declared_ty = &field_tys[i];
                                     match (declared_ty, &ty) {
@@ -1700,7 +1700,6 @@ impl<'m> Lowerer<'m> {
                                                 Some(IrType::Scalar(DType::F32)),
                                             );
                                             v = cast;
-                                            ty = IrType::Scalar(DType::F32);
                                         }
                                         (
                                             IrType::Scalar(DType::F64),
@@ -1717,7 +1716,6 @@ impl<'m> Lowerer<'m> {
                                                 Some(IrType::Scalar(DType::F64)),
                                             );
                                             v = cast;
-                                            ty = IrType::Scalar(DType::F64);
                                         }
                                         _ => {}
                                     }
@@ -1755,7 +1753,7 @@ impl<'m> Lowerer<'m> {
                                 .unwrap_or(&empty_fields);
                             let mut field_vals = Vec::with_capacity(args.len());
                             for (i, arg) in args.iter().enumerate() {
-                                let (mut v, mut ty) = self.lower_expr(arg)?;
+                                let (mut v, ty) = self.lower_expr(arg)?;
                                 if i < field_tys.len() {
                                     let declared_ty = &field_tys[i];
                                     match (declared_ty, &ty) {
@@ -1774,7 +1772,6 @@ impl<'m> Lowerer<'m> {
                                                 Some(IrType::Scalar(DType::F32)),
                                             );
                                             v = cast;
-                                            ty = IrType::Scalar(DType::F32);
                                         }
                                         (
                                             IrType::Scalar(DType::F64),
@@ -1791,7 +1788,6 @@ impl<'m> Lowerer<'m> {
                                                 Some(IrType::Scalar(DType::F64)),
                                             );
                                             v = cast;
-                                            ty = IrType::Scalar(DType::F64);
                                         }
                                         _ => {}
                                     }
@@ -5766,7 +5762,7 @@ impl<'m> Lowerer<'m> {
                 }
             }
 
-            let (mut arm_val, mut arm_ty) = self.lower_expr(&arm.body)?;
+            let (mut arm_val, arm_ty) = self.lower_expr(&arm.body)?;
             if result_ty.is_none() {
                 result_ty = Some(arm_ty.clone());
             } else if let Some(ref rty) = result_ty {
@@ -5783,7 +5779,6 @@ impl<'m> Lowerer<'m> {
                             Some(IrType::Scalar(DType::F32)),
                         );
                         arm_val = cast;
-                        arm_ty = IrType::Scalar(DType::F32);
                     }
                     (IrType::Scalar(DType::F64), IrType::Scalar(DType::F32)) => {
                         let cast = self.builder.fresh_value();
@@ -5797,7 +5792,6 @@ impl<'m> Lowerer<'m> {
                             Some(IrType::Scalar(DType::F64)),
                         );
                         arm_val = cast;
-                        arm_ty = IrType::Scalar(DType::F64);
                     }
                     _ => {}
                 }
@@ -6317,7 +6311,7 @@ impl<'m> Lowerer<'m> {
                 )?;
             }
 
-            let (mut arm_val, mut arm_ty) = self.lower_expr(&arm.body)?;
+            let (mut arm_val, arm_ty) = self.lower_expr(&arm.body)?;
             if result_ty.is_none() {
                 result_ty = Some(arm_ty.clone());
             } else if let Some(ref rty) = result_ty {
@@ -6334,7 +6328,6 @@ impl<'m> Lowerer<'m> {
                             Some(IrType::Scalar(DType::F32)),
                         );
                         arm_val = cast;
-                        arm_ty = IrType::Scalar(DType::F32);
                     }
                     (IrType::Scalar(DType::F64), IrType::Scalar(DType::F32)) => {
                         let cast = self.builder.fresh_value();
@@ -6348,7 +6341,6 @@ impl<'m> Lowerer<'m> {
                             Some(IrType::Scalar(DType::F64)),
                         );
                         arm_val = cast;
-                        arm_ty = IrType::Scalar(DType::F64);
                     }
                     _ => {}
                 }
