@@ -1963,7 +1963,113 @@ fn emit_instr_ir(
                 || lhs_ety == Some("ptr")
                     && rhs_ety == Some("ptr")
                     && matches!(op, BinOp::CmpEq | BinOp::CmpNe);
-            if is_str_cmp && matches!(op, BinOp::CmpEq | BinOp::CmpNe) {
+            let lhs_ty = func.value_type(*lhs);
+            let rhs_ty = func.value_type(*rhs);
+            let is_grad_op =
+                matches!(lhs_ty, Some(IrType::Grad(_))) || matches!(rhs_ty, Some(IrType::Grad(_)));
+
+            if is_grad_op {
+                // Dual-number arithmetic (forward-mode AD)
+                let (av, at) = if matches!(lhs_ty, Some(IrType::Grad(_))) {
+                    let lv =
+                        coerce_to_type(*lhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
+                    *gep_counter += 1;
+                    let val_name = format!("%grad_val_l{}", *gep_counter);
+                    writeln!(
+                        out,
+                        "  {} = call double @iris_grad_value(ptr {})",
+                        val_name, lv
+                    )?;
+                    *gep_counter += 1;
+                    let tan_name = format!("%grad_tan_l{}", *gep_counter);
+                    writeln!(
+                        out,
+                        "  {} = call double @iris_grad_tangent(ptr {})",
+                        tan_name, lv
+                    )?;
+                    (val_name, tan_name)
+                } else {
+                    let lv = coerce_scalar_to_f64(*lhs, consts, func, gep_counter, out)?;
+                    (lv, "0.000000e+00".to_string())
+                };
+
+                let (bv, bt) = if matches!(rhs_ty, Some(IrType::Grad(_))) {
+                    let rv =
+                        coerce_to_type(*rhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
+                    *gep_counter += 1;
+                    let val_name = format!("%grad_val_r{}", *gep_counter);
+                    writeln!(
+                        out,
+                        "  {} = call double @iris_grad_value(ptr {})",
+                        val_name, rv
+                    )?;
+                    *gep_counter += 1;
+                    let tan_name = format!("%grad_tan_r{}", *gep_counter);
+                    writeln!(
+                        out,
+                        "  {} = call double @iris_grad_tangent(ptr {})",
+                        tan_name, rv
+                    )?;
+                    (val_name, tan_name)
+                } else {
+                    let rv = coerce_scalar_to_f64(*rhs, consts, func, gep_counter, out)?;
+                    (rv, "0.000000e+00".to_string())
+                };
+
+                *gep_counter += 1;
+                let res_val = format!("%grad_val_res{}", *gep_counter);
+                *gep_counter += 1;
+                let res_tan = format!("%grad_tan_res{}", *gep_counter);
+
+                match op {
+                    BinOp::Add => {
+                        writeln!(out, "  {} = fadd double {}, {}", res_val, av, bv)?;
+                        writeln!(out, "  {} = fadd double {}, {}", res_tan, at, bt)?;
+                    }
+                    BinOp::Sub => {
+                        writeln!(out, "  {} = fsub double {}, {}", res_val, av, bv)?;
+                        writeln!(out, "  {} = fsub double {}, {}", res_tan, at, bt)?;
+                    }
+                    BinOp::Mul => {
+                        writeln!(out, "  {} = fmul double {}, {}", res_val, av, bv)?;
+                        *gep_counter += 1;
+                        let t1 = format!("%mul_tan_t{}", *gep_counter);
+                        writeln!(out, "  {} = fmul double {}, {}", t1, av, bt)?;
+                        *gep_counter += 1;
+                        let t2 = format!("%mul_tan_t{}", *gep_counter);
+                        writeln!(out, "  {} = fmul double {}, {}", t2, at, bv)?;
+                        writeln!(out, "  {} = fadd double {}, {}", res_tan, t1, t2)?;
+                    }
+                    BinOp::Div => {
+                        writeln!(out, "  {} = fdiv double {}, {}", res_val, av, bv)?;
+                        *gep_counter += 1;
+                        let t1 = format!("%div_tan_t{}", *gep_counter);
+                        writeln!(out, "  {} = fmul double {}, {}", t1, at, bv)?;
+                        *gep_counter += 1;
+                        let t2 = format!("%div_tan_t{}", *gep_counter);
+                        writeln!(out, "  {} = fmul double {}, {}", t2, av, bt)?;
+                        *gep_counter += 1;
+                        let t3 = format!("%div_tan_t{}", *gep_counter);
+                        writeln!(out, "  {} = fsub double {}, {}", t3, t1, t2)?;
+                        *gep_counter += 1;
+                        let t4 = format!("%div_tan_t{}", *gep_counter);
+                        writeln!(out, "  {} = fmul double {}, {}", t4, bv, bv)?;
+                        writeln!(out, "  {} = fdiv double {}, {}", res_tan, t3, t4)?;
+                    }
+                    _ => {
+                        return Err(CodegenError::Unsupported {
+                            backend: "llvm".into(),
+                            detail: format!("unsupported binary operation {:?} on grad<T>", op),
+                        });
+                    }
+                }
+
+                writeln!(
+                    out,
+                    "  %v{} = call ptr @iris_make_grad(double {}, double {})",
+                    result.0, res_val, res_tan
+                )?;
+            } else if is_str_cmp && matches!(op, BinOp::CmpEq | BinOp::CmpNe) {
                 let lv =
                     coerce_to_type(*lhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
                 let rv =
@@ -2594,7 +2700,7 @@ fn emit_instr_ir(
                 }
                 writeln!(
                     out,
-                    "  %v{} = call ptr @iris_make_struct(i32 {}, {})",
+                    "  %v{} = call ptr (i32, ...) @iris_make_struct(i32 {}, {})",
                     result.0,
                     fields.len(),
                     args_str.join(", ")
@@ -2759,7 +2865,7 @@ fn emit_instr_ir(
             }
             writeln!(
                 out,
-                "  %v{} = call ptr @iris_make_tuple(i32 {}, {})",
+                "  %v{} = call ptr (i32, ...) @iris_make_tuple(i32 {}, {})",
                 result.0,
                 elements.len(),
                 args_str.join(", ")
@@ -4144,7 +4250,7 @@ fn emit_instr_ir(
             args.extend(cap_args);
             writeln!(
                 out,
-                "  %v{} = call ptr @iris_make_closure({})",
+                "  %v{} = call ptr (ptr, i32, ...) @iris_make_closure({})",
                 result.0,
                 args.join(", ")
             )?;
