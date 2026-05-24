@@ -5113,15 +5113,8 @@ fn emit_instr_ir(
                     let val_str = val(a);
                     let arg_ty = func.value_type(a);
                     let emitted_ty = emitted_types.get(&a).map(|s| s.as_str());
-                    let boxed = box_to_ptr(
-                        out,
-                        func,
-                        a,
-                        &val_str,
-                        arg_ty,
-                        emitted_ty,
-                        gep_counter,
-                    )?;
+                    let boxed =
+                        box_to_ptr(out, func, a, &val_str, arg_ty, emitted_ty, gep_counter)?;
                     arg_strs.push(format!("ptr {}", boxed));
                 } else {
                     let ty_s = emitted_types.get(&a).map(|s| s.as_str()).unwrap_or("ptr");
