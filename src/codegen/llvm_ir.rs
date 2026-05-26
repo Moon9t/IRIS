@@ -434,40 +434,47 @@ fn emit_llvm_ir_impl(
         let tramp_name = format!("{}_trampoline", func.name);
         writeln!(out, "define ptr @{}(ptr %arg) {{", tramp_name)?;
         writeln!(out, "entry:")?;
+        // Track the actual local names emitted for each parameter so we
+        // consistently reference them when emitting the call. This avoids
+        // mismatches where a different naming (e.g. `%pNt` for i32) was
+        // emitted but the call tried to use `%pN`.
+        let mut tramp_arg_names: Vec<String> = Vec::new();
         for (i, p) in func.params.iter().enumerate() {
             let slot = format!("%slot{}", i);
             writeln!(out, "  {} = getelementptr ptr, ptr %arg, i64 {}", slot, i)?;
             let raw = format!("%raw{}", i);
             writeln!(out, "  {} = load ptr, ptr {}", raw, slot)?;
-            // Unbox to the expected parameter type.
+            // Unbox to the expected parameter type and record the name.
             let param_llvm_ty = llvm_type_complete(&p.ty).unwrap_or_else(|_| "ptr".to_owned());
             if param_llvm_ty == "i64" {
                 writeln!(out, "  %p{} = call i64 @iris_unbox_i64(ptr {})", i, raw)?;
+                tramp_arg_names.push(format!("%p{}", i));
             } else if param_llvm_ty == "i32" {
                 writeln!(out, "  %p{} = call i64 @iris_unbox_i64(ptr {})", i, raw)?;
                 writeln!(out, "  %p{}t = trunc i64 %p{} to i32", i, i)?;
+                tramp_arg_names.push(format!("%p{}t", i));
             } else if param_llvm_ty == "double" {
                 writeln!(out, "  %p{} = call double @iris_unbox_f64(ptr {})", i, raw)?;
+                tramp_arg_names.push(format!("%p{}", i));
             } else if param_llvm_ty == "i1" {
                 writeln!(out, "  %p{}i = call i32 @iris_unbox_bool(ptr {})", i, raw)?;
                 writeln!(out, "  %p{} = trunc i32 %p{}i to i1", i, i)?;
+                tramp_arg_names.push(format!("%p{}", i));
             } else {
                 // ptr types (channels, structs, closures, etc.) — already ptr.
                 writeln!(out, "  %p{} = bitcast ptr {} to ptr", i, raw)?;
+                tramp_arg_names.push(format!("%p{}", i));
             }
         }
-        // Build call args.
+        // Build call args using the recorded names to guarantee consistency.
         let call_args: Vec<String> = func
             .params
             .iter()
             .enumerate()
             .map(|(i, p)| {
                 let ty_s = llvm_type_complete(&p.ty).unwrap_or_else(|_| "ptr".to_owned());
-                if ty_s == "i32" {
-                    format!("i32 %p{}t", i)
-                } else {
-                    format!("{} %p{}", ty_s, i)
-                }
+                let arg_name = &tramp_arg_names[i];
+                format!("{} {}", ty_s, arg_name)
             })
             .collect();
         let spawn_ret_ty = fn_sigs
@@ -611,7 +618,9 @@ fn emit_function_ir_with_name(
         .blocks()
         .iter()
         .all(|b| b.instrs.iter().all(|i| !is_side_effecting(i)));
-    let attrs = if is_pure { " nounwind willreturn" } else { "" };
+    // Keep the generated textual IR conservative so older clang/LLVM parsers
+    // do not reject otherwise valid function definitions.
+    let attrs = if is_pure { " nounwind" } else { "" };
 
     writeln!(
         out,

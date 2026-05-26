@@ -75,8 +75,11 @@ pub def argmax(values: list<f64>) -> i64 {
 /// Epsilon-greedy: with probability epsilon, pick a random action;
 /// otherwise pick the argmax.
 pub def epsilon_greedy(values: list<f64>, epsilon: f64) -> i64 {
+    val n = list_len(values)
+    if n == 0 { return -1 }
+
     if random() < epsilon {
-        random_range(0, list_len(values) - 1)
+        random_range(0, n - 1)
     } else {
         argmax(values)
     }
@@ -117,6 +120,8 @@ pub def softmax_sample(logits: list<f64>) -> i64 {
 /// Higher temperature → more random; lower → more deterministic.
 pub def boltzmann_sample(logits: list<f64>, temperature: f64) -> i64 {
     val n = list_len(logits)
+    if n == 0 { return -1 }
+
     val scaled : list<f64> = list()
     val temp = if temperature < 0.001 { 0.001 } else { temperature }
     for i in 0 .. n {

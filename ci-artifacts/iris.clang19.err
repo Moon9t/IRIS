@@ -1,0 +1,4 @@
+/work/ci-artifacts/iris-26e59a331c3c7647.ll:5274:118: error: expected ')' at end of argument list
+ 5274 | define internal fastcc void @_RNvMNtCslNYArtu3iFV_5alloc6stringNtB2_6String4push(ptr noalias noundef nonnull align 8 captures(none) dereferenceable(24) %self, i32 noundef range(i32 0, 1114112) %ch) unnamed_addr #0 {
+      |                                                                                                                      ^
+1 error generated.

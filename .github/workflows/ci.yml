@@ -13,6 +13,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_MIN_STACK: 16777216
 
 jobs:
   test:
@@ -91,7 +92,7 @@ jobs:
         run: cargo build --verbose --target ${{ matrix.target }}
 
       - name: Run tests
-        run: cargo test --verbose --target ${{ matrix.target }}
+        run: cargo test --verbose --target ${{ matrix.target }} -- --test-threads=1
 
   fmt:
     name: Formatting

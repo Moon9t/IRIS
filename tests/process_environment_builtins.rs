@@ -28,12 +28,9 @@ def f() -> i64 {
 
 #[test]
 fn test_env_var_exists() {
-    // Set a var specifically for this test
-    std::env::set_var("IRIS_TEST_VAR_123", "hello");
-
     let src = r#"
 def f() -> bool {
-    val v = env_var("IRIS_TEST_VAR_123")
+    val v = env_var("PATH")
     is_some(v)
 }
 "#;
@@ -139,11 +136,9 @@ def f() -> bool {
 
 #[test]
 fn test_env_var_value() {
-    std::env::set_var("IRIS_TEST_VAL_456", "world");
-
     let src = r#"
 def f() -> i64 {
-    val v = env_var("IRIS_TEST_VAL_456")
+    val v = env_var("PATH")
     if is_some(v) {
         42
     } else {

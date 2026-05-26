@@ -48,6 +48,10 @@ pub mod security;
 pub mod stdlib;
 pub mod test_runner;
 
+pub mod agent;
+pub mod inference;
+pub mod rl;
+
 pub use codegen::ir_serial::{deserialize_module, serialize_module};
 pub use compiler::FileCompiler;
 pub use debugger::{DebugSession, TraceEntry};

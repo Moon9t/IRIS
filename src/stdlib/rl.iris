@@ -28,7 +28,8 @@ record ReplayBuffer {
     next_states: list<list<f64>>,
     dones: list<bool>,
     capacity: i64,
-    size: i64
+    size: i64,
+    next_idx: i64
 }
 
 /// Create a new replay buffer with given capacity.
@@ -40,12 +41,15 @@ pub def replay_buffer_new(capacity: i64) -> ReplayBuffer {
         next_states: list(),
         dones: list(),
         capacity: capacity,
-        size: 0
+        size: 0,
+        next_idx: 0
     }
 }
 
 /// Add an experience to the buffer (FIFO eviction when full).
 pub def replay_buffer_push(buf: ReplayBuffer, exp: Experience) -> i64 {
+    if buf.capacity <= 0 { return 0 }
+
     if buf.size < buf.capacity {
         list_push(buf.states, exp.state);
         list_push(buf.actions, exp.action);
@@ -54,14 +58,14 @@ pub def replay_buffer_push(buf: ReplayBuffer, exp: Experience) -> i64 {
         list_push(buf.dones, exp.done);
         buf.size = buf.size + 1
     } else {
-        // Overwrite oldest (circular, approximate)
-        val idx = buf.size % buf.capacity
+        val idx = buf.next_idx
         list_set(buf.states, idx, exp.state);
         list_set(buf.actions, idx, exp.action);
         list_set(buf.rewards, idx, exp.reward);
         list_set(buf.next_states, idx, exp.next_state);
         list_set(buf.dones, idx, exp.done);
     }
+    buf.next_idx = (buf.next_idx + 1) % buf.capacity
     buf.size
 }
 
@@ -69,6 +73,8 @@ pub def replay_buffer_push(buf: ReplayBuffer, exp: Experience) -> i64 {
 pub def replay_buffer_sample_indices(buf: ReplayBuffer, batch_size: i64) -> list<i64> {
     val indices : list<i64> = list()
     val max_idx = if buf.size < buf.capacity { buf.size } else { buf.capacity }
+    if max_idx <= 0 { return indices }
+
     for i in 0 .. batch_size {
         list_push(indices, random_range(0, max_idx - 1))
     }

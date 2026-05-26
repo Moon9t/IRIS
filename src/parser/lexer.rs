@@ -307,7 +307,7 @@ impl<'src> Lexer<'src> {
                         depth -= 1;
                         self.pos += 2;
                     } else {
-                        self.pos += 1;
+                        self.advance_char();
                     }
                 }
             } else {
@@ -324,10 +324,20 @@ impl<'src> Lexer<'src> {
         self.src.as_bytes().get(self.pos + 1).copied()
     }
 
+    fn current_char(&self) -> Option<char> {
+        self.src.get(self.pos..)?.chars().next()
+    }
+
     fn advance(&mut self) -> u8 {
         let b = self.src.as_bytes()[self.pos];
         self.pos += 1;
         b
+    }
+
+    fn advance_char(&mut self) -> Option<char> {
+        let ch = self.current_char()?;
+        self.pos += ch.len_utf8();
+        Some(ch)
     }
 
     fn next_token(&mut self) -> Result<Spanned<Token>, ParseError> {
@@ -471,7 +481,7 @@ impl<'src> Lexer<'src> {
         }
 
         Err(ParseError::UnexpectedChar {
-            ch: ch as char,
+            ch: self.current_char().unwrap_or(ch as char),
             pos: start,
         })
     }
@@ -517,9 +527,10 @@ impl<'src> Lexer<'src> {
                         }
                     }
                 }
-                Some(b) => {
-                    self.advance();
-                    s.push(b as char);
+                Some(_) => {
+                    if let Some(ch) = self.advance_char() {
+                        s.push(ch);
+                    }
                 }
             }
         }
@@ -572,9 +583,10 @@ impl<'src> Lexer<'src> {
                         }
                     }
                 }
-                Some(b) => {
-                    self.advance();
-                    raw.push(b as char);
+                Some(_) => {
+                    if let Some(ch) = self.advance_char() {
+                        raw.push(ch);
+                    }
                 }
             }
         }
@@ -803,6 +815,12 @@ mod tests {
     }
 
     #[test]
+    fn lex_string_literal_keeps_unicode() {
+        let tokens = toks(r#""hello ޒ world""#);
+        assert_eq!(tokens[0], Token::StringLit("hello ޒ world".into()));
+    }
+
+    #[test]
     fn lex_string_escape_sequences() {
         let tokens = toks(r#""line1\nline2\ttab\\backslash\"quote""#);
         assert_eq!(
@@ -866,6 +884,14 @@ mod tests {
     #[test]
     fn lex_skips_line_comments() {
         let tokens = toks("def // this is a comment\nmain");
+        assert_eq!(tokens[0], Token::Def);
+        assert_eq!(tokens[1], Token::Ident("main".into()));
+        assert_eq!(tokens[2], Token::Eof);
+    }
+
+    #[test]
+    fn lex_skips_block_comments_with_unicode() {
+        let tokens = toks("def /* ޒ nested-ish text */ main");
         assert_eq!(tokens[0], Token::Def);
         assert_eq!(tokens[1], Token::Ident("main".into()));
         assert_eq!(tokens[2], Token::Eof);
