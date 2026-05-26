@@ -524,3 +524,77 @@ val line = csv_emit_row(cells)        // "a,b,c"
 ```
 
 **Functions:** `csv_row_count`, `csv_col_count`, `csv_get_row`, `csv_parse_row`, `csv_emit_row`
+
+---
+
+## rl
+
+Reinforcement learning primitives and experience replay buffers.
+
+```iris
+bring std.rl
+
+// Experience tuple
+val exp = Experience {
+    state: [1.0, 0.0],
+    action: 1,
+    reward: 1.0,
+    next_state: [1.0, 1.0],
+    done: false
+}
+
+// Experience replay buffer
+var buf = replay_buffer_new(100)
+buf = replay_buffer_push(buf, exp)
+val indices = replay_buffer_sample_indices(buf, 10)
+
+// Q-Learning updates
+val q = q_table_new(10, 2)
+val val_q = q_get(q, 3, 1, 2)
+q_set(q, 3, 1, 2, 0.5)
+val updated_q = q_learning_update(q, 3, 1, 1.0, 4, 2, 0.1, 0.99)
+val best_action = q_best_action(q, 3, 2)
+
+// Environment step simulations
+val step_res = grid_step(3, 1, 10) // (new_state, reward, done)
+val reward = bandit_pull(2, 4)
+```
+
+**Records:** `Experience`, `ReplayBuffer`
+
+**Functions:** `replay_buffer_new`, `replay_buffer_push`, `replay_buffer_sample_indices`, `q_table_new`, `q_get`, `q_set`, `q_learning_update`, `sarsa_update`, `q_best_action`, `policy_gradient_loss`, `log_prob_softmax`, `grid_step`, `bandit_pull`
+
+---
+
+## ais
+
+Autonomous Intelligent Systems framework for perceptions, decisions, actions, and persistence.
+
+```iris
+bring std.ais
+
+// Run autonomous agent loop
+val total_steps = agent_loop(
+    || sensor_read(), 
+    |obs| predict(obs), 
+    |act| actuate(act), 
+    1000
+)
+
+// Decision strategy sampling
+val best = argmax([1.0, 2.5, 0.5])         // 1
+val a1   = epsilon_greedy([1.0, 2.5], 0.1) // random or best
+val a2   = softmax_sample([1.0, 2.0, 0.5])
+val a3   = boltzmann_sample([1.0, 2.0], 1.5)
+
+// Reward engineering pipelines
+val returns = discount_rewards([0.0, 1.0], 0.99)
+val norm_returns = normalize_input(returns)
+val clipped = clip_list(norm_returns, 0.0, 1.0)
+
+// Model persistence
+val ok = model_save(weights, "weights.txt")
+val loaded_weights = model_load("weights.txt")
+```
+
+**Functions:** `agent_loop`, `agent_loop_rewards`, `argmax`, `epsilon_greedy`, `softmax_sample`, `boltzmann_sample`, `discount_rewards`, `gae`, `normalize_list`, `normalize_input`, `clip_list`, `model_save`, `model_load`

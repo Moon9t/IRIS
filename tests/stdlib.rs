@@ -1435,3 +1435,93 @@ fn ais_model_persistence() {
         "2"
     );
 }
+
+#[test]
+fn rl_replay_buffer_sample_batch() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.rl
+        def main() -> i64 {
+            var buf = replay_buffer_new(3)
+            val s1 : list<f64> = list()
+            val _ = list_push(s1, 10.0)
+            val s2 : list<f64> = list()
+            val _ = list_push(s2, 20.0)
+            val e1 = Experience { state: s1, action: 1, reward: 0.5, next_state: s2, done: false }
+
+            buf = replay_buffer_push(buf, e1)
+            val batch = replay_buffer_sample(buf, 2)
+
+            val len_ok = if list_len(batch) == 2 { 1 } else { 0 }
+            val first = list_get(batch, 0)
+            val val_ok = if list_get(first.state, 0) == 10.0 { 1 } else { 0 }
+
+            len_ok + val_ok
+        }
+    "#
+        ),
+        "2"
+    );
+}
+
+#[test]
+fn rl_ppo_clip_loss_calc() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.rl
+        def main() -> i64 {
+            val log_probs : list<f64> = list()
+            val _ = list_push(log_probs, 0.5)
+            val _ = list_push(log_probs, 1.2)
+            
+            val old_log_probs : list<f64> = list()
+            val _ = list_push(old_log_probs, 0.4)
+            val _ = list_push(old_log_probs, 1.3)
+            
+            val advantages : list<f64> = list()
+            val _ = list_push(advantages, 1.0)
+            val _ = list_push(advantages, 0.0 - 2.0)
+            
+            // i=0: ratio = exp(0.5 - 0.4) = exp(0.1) = 1.10517
+            //      surr1 = 1.10517 * 1.0 = 1.10517
+            //      surr2 = clamp(1.10517, 0.8, 1.2) * 1.0 = 1.10517
+            //      min_surr = 1.10517 -> loss_0 = -1.10517
+            // i=1: ratio = exp(1.2 - 1.3) = exp(-0.1) = 0.904837
+            //      surr1 = 0.904837 * -2.0 = -1.80967
+            //      surr2 = clamp(0.904837, 0.8, 1.2) * -2.0 = -1.80967
+            //      min_surr = -1.80967 -> loss_1 = 1.80967
+            // Total loss = (-1.10517 + 1.80967) / 2 = 0.35225
+            val loss = ppo_clip_loss(log_probs, old_log_probs, advantages, 0.2)
+            val ok = if loss > 0.35 { if loss < 0.36 { 1 } else { 0 } } else { 0 }
+            ok
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn rl_softmax_entropy_calc() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.rl
+        def main() -> i64 {
+            val logits : list<f64> = list()
+            val _ = list_push(logits, 0.0)
+            val _ = list_push(logits, 0.0)
+            
+            // probs = [0.5, 0.5]
+            // entropy = - (0.5 * ln(0.5) + 0.5 * ln(0.5)) = -ln(0.5) = 0.693147
+            val h = softmax_entropy(logits)
+            val ok = if h > 0.69 { if h < 0.70 { 1 } else { 0 } } else { 0 }
+            ok
+        }
+    "#
+        ),
+        "1"
+    );
+}

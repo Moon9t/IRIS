@@ -12282,7 +12282,7 @@ impl<'m> Lowerer<'m> {
                 // Set binding_ty from the annotation so constructors like list() can
                 // infer their element type (e.g. `val xs: list<f64> = list()`).
                 if let Some(ast_ty) = ann_ty {
-                    self.binding_ty = Some(crate::lower::lower_type(ast_ty));
+                    self.binding_ty = Some(self.resolve_ty(ast_ty));
                 }
                 let (val, ty) = self.lower_expr(init)?;
                 self.binding_ty = None;

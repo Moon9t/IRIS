@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [master, main]
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -21,6 +25,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
 
       - name: Build IRIS
         run: |

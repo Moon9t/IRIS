@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/moon9t/iris/master/installer/macos/
 
 ### Windows
 
-Download `IRIS-0.4.0-windows-x64-setup.exe` from the
+Download `IRIS-0.5.0-windows-x64-setup.exe` from the
 [latest release](https://github.com/moon9t/iris/releases/latest), or use
 PowerShell:
 
@@ -71,24 +71,24 @@ curl -fsSL https://raw.githubusercontent.com/moon9t/iris/master/installer/linux/
 **Debian/Ubuntu (.deb):**
 
 ```bash
-sudo dpkg -i iris_0.4.0_x86_64.deb
+sudo dpkg -i iris_0.5.0_x86_64.deb
 # or
-sudo apt install ./iris_0.4.0_x86_64.deb
+sudo apt install ./iris_0.5.0_x86_64.deb
 ```
 
 **Fedora/RHEL (.rpm):**
 
 ```bash
-sudo rpm -i iris-0.4.0-1.x86_64.rpm
+sudo rpm -i iris-0.5.0-1.x86_64.rpm
 # or
-sudo dnf install ./iris-0.4.0-1.x86_64.rpm
+sudo dnf install ./iris-0.5.0-1.x86_64.rpm
 ```
 
 **AppImage (portable, no root):**
 
 ```bash
-chmod +x IRIS-0.4.0-x86_64.AppImage
-./IRIS-0.4.0-x86_64.AppImage --version
+chmod +x IRIS-0.5.0-x86_64.AppImage
+./IRIS-0.5.0-x86_64.AppImage --version
 ```
 
 **Uninstall:**
@@ -116,7 +116,7 @@ curl -fsSL https://raw.githubusercontent.com/moon9t/iris/master/installer/macos/
 Double-click the `.pkg` file, or from the terminal:
 
 ```bash
-sudo installer -pkg IRIS-0.4.0-macos-aarch64.pkg -target /
+sudo installer -pkg IRIS-0.5.0-macos-aarch64.pkg -target /
 ```
 
 Installs to `/usr/local/bin/iris` with stdlib at `/usr/local/share/iris/`.
@@ -140,7 +140,7 @@ sudo pkgutil --forget dev.moon9t.iris
 
 **Inno Setup installer (.exe)** — the recommended method:
 
-1. Download `IRIS-0.4.0-windows-x64-setup.exe` from the latest release
+1. Download `IRIS-0.5.0-windows-x64-setup.exe` from the latest release
 2. Run the installer (no admin required — per-user install)
 3. Choose **Full** for compiler + LLVM + MinGW, or **Compact** for compiler only
 
@@ -153,7 +153,7 @@ powershell -ExecutionPolicy Bypass -File installer\install.ps1
 **Portable .zip** — extract and add to PATH:
 
 ```powershell
-Expand-Archive IRIS-0.4.0-windows-x86_64-portable.zip -DestinationPath C:\iris
+Expand-Archive IRIS-0.5.0-windows-x86_64-portable.zip -DestinationPath C:\iris
 $env:PATH += ";C:\iris"
 ```
 
@@ -188,7 +188,7 @@ bash installer/build-all.sh
 ```
 
 Options:
-- `--version 0.4.0` — set the version (default: 0.4.0)
+- `--version 0.5.0` — set the version (default: 0.5.0)
 - `--skip-build` — use an existing `target/release/iris` binary
 - `--format deb` — build only a specific format (deb, rpm, appimage, pkg, dmg, portable)
 
@@ -196,27 +196,27 @@ Options:
 
 **Linux .deb:**
 ```bash
-bash installer/linux/build-deb.sh --version 0.4.0 --arch x86_64
+bash installer/linux/build-deb.sh --version 0.5.0 --arch x86_64
 ```
 
 **Linux .rpm:**
 ```bash
-bash installer/linux/build-rpm.sh --version 0.4.0 --arch x86_64
+bash installer/linux/build-rpm.sh --version 0.5.0 --arch x86_64
 ```
 
 **Linux AppImage:**
 ```bash
-bash installer/linux/build-appimage.sh --version 0.4.0
+bash installer/linux/build-appimage.sh --version 0.5.0
 ```
 
 **macOS .pkg:**
 ```bash
-bash installer/macos/build-pkg.sh --version 0.4.0
+bash installer/macos/build-pkg.sh --version 0.5.0
 ```
 
 **macOS .dmg:**
 ```bash
-bash installer/macos/build-dmg.sh --version 0.4.0
+bash installer/macos/build-dmg.sh --version 0.5.0
 ```
 
 **Windows Inno Setup .exe:**
@@ -244,8 +244,8 @@ The [release workflow](../.github/workflows/release.yml) automatically builds
 all installer formats when a version tag (`v*`) is pushed:
 
 ```bash
-git tag v0.4.0
-git push origin v0.4.0
+git tag v0.5.0
+git push origin v0.5.0
 ```
 
 The GitHub Release will include:

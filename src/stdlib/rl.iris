@@ -83,6 +83,26 @@ pub def replay_buffer_sample_indices(buf: ReplayBuffer, batch_size: i64) -> list
     indices
 }
 
+/// Sample a random batch of full Experience records from the buffer.
+pub def replay_buffer_sample(buf: ReplayBuffer, batch_size: i64) -> list<Experience> {
+    val batch : list<Experience> = list()
+    val indices = replay_buffer_sample_indices(buf, batch_size)
+    for i in 0 .. list_len(indices) {
+        val idx = list_get(indices, i)
+        if idx >= 0 && idx < list_len(buf.states) {
+            val exp = Experience {
+                state: list_get(buf.states, idx),
+                action: list_get(buf.actions, idx),
+                reward: list_get(buf.rewards, idx),
+                next_state: list_get(buf.next_states, idx),
+                done: list_get(buf.dones, idx)
+            }
+            list_push(batch, exp);
+        }
+    }
+    batch
+}
+
 // ---------------------------------------------------------------------------
 // Q-Learning (Tabular)
 // ---------------------------------------------------------------------------
@@ -202,6 +222,71 @@ pub def log_prob_softmax(logits: list<f64>, action: i64) -> f64 {
         sum_exp = sum_exp + exp(list_get(logits, i) - mx)
     }
     list_get(logits, action) - mx - log(sum_exp)
+}
+
+/// Compute the PPO clipped policy loss over a batch of transitions.
+/// L_clip = -mean(min(r * A, clip(r, 1-eps, 1+eps) * A))
+pub def ppo_clip_loss(log_probs: list<f64>, old_log_probs: list<f64>,
+                      advantages: list<f64>, epsilon: f64) -> f64 {
+    val n = list_len(log_probs)
+    if n == 0 { return 0.0 }
+
+    val eps = if epsilon < 0.0 { 0.0 } else { epsilon }
+    val low = 1.0 - eps
+    val high = 1.0 + eps
+
+    var total_loss = 0.0
+    for i in 0 .. n {
+        val lp = list_get(log_probs, i)
+        val old_lp = list_get(old_log_probs, i)
+        val adv = list_get(advantages, i)
+
+        val r = exp(lp - old_lp)
+        val surr1 = r * adv
+
+        val clipped_r = if r < low { low } else { if r > high { high } else { r } }
+        val surr2 = clipped_r * adv
+
+        val min_surr = if surr1 < surr2 { surr1 } else { surr2 }
+        total_loss = total_loss - min_surr
+    }
+    total_loss / to_f64(n)
+}
+
+/// Compute the entropy of a softmax distribution from its logits.
+/// Entropy = -sum(prob * log(prob))
+pub def softmax_entropy(logits: list<f64>) -> f64 {
+    val n = list_len(logits)
+    if n <= 0 { return 0.0 }
+
+    // Find max for numerical stability
+    var mx = list_get(logits, 0)
+    for i in 1 .. n {
+        val v = list_get(logits, i)
+        if v > mx { mx = v }
+    }
+
+    // Compute probabilities and log-probabilities
+    val probs : list<f64> = list()
+    var sum_exp = 0.0
+    for i in 0 .. n {
+        val e = exp(list_get(logits, i) - mx)
+        list_push(probs, e);
+        sum_exp = sum_exp + e
+    }
+
+    if sum_exp <= 1.0e-15 {
+        return 0.0
+    }
+
+    var entropy = 0.0
+    for i in 0 .. n {
+        val p = list_get(probs, i) / sum_exp
+        if p > 1.0e-15 {
+            entropy = entropy - p * log(p)
+        }
+    }
+    entropy
 }
 
 // ---------------------------------------------------------------------------

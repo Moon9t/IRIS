@@ -46,6 +46,41 @@ impl<T> ReplayBuffer<T> {
             self.data.iter().skip(len - n).collect()
         }
     }
+
+    /// Sample `k` items randomly from the buffer using a simple xorshift RNG.
+    pub fn sample(&self, k: usize) -> Vec<&T> {
+        let len = self.data.len();
+        if len == 0 || k == 0 {
+            return vec![];
+        }
+        let mut out = Vec::with_capacity(k);
+        let mut rng = SimpleRng::new();
+        for _ in 0..k {
+            let idx = (rng.next_u64() % len as u64) as usize;
+            out.push(&self.data[idx]);
+        }
+        out
+    }
+}
+
+// Simple xorshift-based RNG for sampling (no external deps)
+struct SimpleRng(u64);
+impl SimpleRng {
+    fn new() -> Self {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        SimpleRng(t ^ 0x9E3779B97F4A7C15)
+    }
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
 }
 
 #[cfg(test)]
@@ -64,5 +99,18 @@ mod tests {
         let recent = buf.recent(2);
         assert_eq!(*recent[0], 3);
         assert_eq!(*recent[1], 4);
+    }
+
+    #[test]
+    fn test_sample() {
+        let mut buf = ReplayBuffer::with_capacity(5);
+        buf.push(10);
+        buf.push(20);
+        buf.push(30);
+        let s = buf.sample(3);
+        assert_eq!(s.len(), 3);
+        for item in s {
+            assert!(*item == 10 || *item == 20 || *item == 30);
+        }
     }
 }

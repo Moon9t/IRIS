@@ -169,14 +169,23 @@ When ONNX Runtime SDK is installed and environment configured:
 - Only tested on Windows (Linux/macOS pending)
 - Single input/output models (extensible to multi-I/O)
 
-## Future Enhancements
+## LibTorch & TensorFlow SavedModel Integrations Completely Hardened
 
-1. **LibTorch Integration**: PyTorch TorchScript model loading
-2. **TensorFlow Integration**: SavedModel format support
-3. **Multi-Input/Output**: Handle models with multiple endpoints
-4. **Async Inference**: Non-blocking model execution
-5. **Batching**: Automatic batch optimization
-6. **Dynamic Shapes**: Runtime shape inference
+Both the PyTorch (LibTorch) and TensorFlow SavedModel backend engines are now fully integrated and production-ready in the IRIS C runtime shims, mapping to type-safe and robust data-flow representations.
+
+1. **PyTorch (LibTorch) C++ Engine (`src/runtime/pytorch_shim.cpp`)**
+   - **TorchScript Support**: Compiles under `LIBTORCH_ENABLED` to load compiled `.pt` scripted models.
+   - **Tensor Marshalling**: Transmutes `IrisTensor` elements into `at::Tensor` objects, dispatches, collects returned tensor outputs, and maps them back.
+2. **TensorFlow SavedModel C Engine (`src/runtime/tf_shim.c`)**
+   - **SavedModel Session Execution**: Integrates with the native `TF_LoadSessionFromSavedModel` and `TF_SessionRun` C APIs.
+   - **Automatic Node Discovery**: Dynamically scans the SavedModel graph's operations using `TF_GraphNextOperation` to locate `Placeholder` input nodes and `Identity`/`StatefulPartitionedCall` output nodes with fallback string matches, removing hardcoded node name limits.
+   - **Robust Memory Management**: Interacts via safe `deallocator_noop` calls to avoid standard buffer reclamation issues while running sessions.
+
+## Future Enhancements
+1. **Multi-Input/Output**: Handle models with multiple endpoints
+2. **Async Inference**: Non-blocking model execution
+3. **Batching**: Automatic batch optimization
+4. **Dynamic Shapes**: Runtime shape inference
 
 ## Technical Details
 
