@@ -3310,6 +3310,91 @@ impl<'m> Interpreter<'m> {
                 Ok(IrValue::F64(x.sqrt()))
             }
             _ => {
+                if let Some(symbol_ptr) = lookup_dynamic_symbol(name) {
+                    // Check if we should dispatch as float or integer arguments
+                    let all_floats = !args.is_empty() && args.iter().all(|a| matches!(a, IrValue::F64(_) | IrValue::F32(_)));
+                    if all_floats && matches!(ret_ty, IrType::Scalar(crate::ir::types::DType::F64 | crate::ir::types::DType::F32)) {
+                        let float_args: Vec<f64> = args.iter().map(|a| match a {
+                            IrValue::F64(f) => *f,
+                            IrValue::F32(f) => *f as f64,
+                            _ => 0.0,
+                        }).collect();
+                        unsafe {
+                            let res = match float_args.len() {
+                                1 => {
+                                    let f: extern "C" fn(f64) -> f64 = std::mem::transmute(symbol_ptr);
+                                    f(float_args[0])
+                                }
+                                2 => {
+                                    let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(symbol_ptr);
+                                    f(float_args[0], float_args[1])
+                                }
+                                _ => 0.0,
+                            };
+                            return match ret_ty {
+                                IrType::Scalar(crate::ir::types::DType::F64) => Ok(IrValue::F64(res)),
+                                IrType::Scalar(crate::ir::types::DType::F32) => Ok(IrValue::F32(res as f32)),
+                                _ => Ok(IrValue::F64(res)),
+                            };
+                        }
+                    } else {
+                        // Dispatch as integer / pointer arguments
+                        let int_args: Vec<i64> = args.iter().map(|a| match a {
+                            IrValue::I64(n) => *n,
+                            IrValue::I32(n) => *n as i64,
+                            IrValue::Bool(b) => if *b { 1 } else { 0 },
+                            IrValue::Str(s) => s.as_ptr() as i64,
+                            _ => 0,
+                        }).collect();
+                        unsafe {
+                            let raw = match int_args.len() {
+                                0 => {
+                                    let f: extern "C" fn() -> i64 = std::mem::transmute(symbol_ptr);
+                                    f()
+                                }
+                                1 => {
+                                    let f: extern "C" fn(i64) -> i64 = std::mem::transmute(symbol_ptr);
+                                    f(int_args[0])
+                                }
+                                2 => {
+                                    let f: extern "C" fn(i64, i64) -> i64 = std::mem::transmute(symbol_ptr);
+                                    f(int_args[0], int_args[1])
+                                }
+                                3 => {
+                                    let f: extern "C" fn(i64, i64, i64) -> i64 = std::mem::transmute(symbol_ptr);
+                                    f(int_args[0], int_args[1], int_args[2])
+                                }
+                                4 => {
+                                    let f: extern "C" fn(i64, i64, i64, i64) -> i64 = std::mem::transmute(symbol_ptr);
+                                    f(int_args[0], int_args[1], int_args[2], int_args[3])
+                                }
+                                5 => {
+                                    let f: extern "C" fn(i64, i64, i64, i64, i64) -> i64 = std::mem::transmute(symbol_ptr);
+                                    f(int_args[0], int_args[1], int_args[2], int_args[3], int_args[4])
+                                }
+                                _ => {
+                                    let f: extern "C" fn(i64, i64, i64, i64, i64, i64) -> i64 = std::mem::transmute(symbol_ptr);
+                                    f(int_args[0], int_args[1], int_args[2], int_args[3], int_args[4], int_args[5])
+                                }
+                            };
+                            return match ret_ty {
+                                IrType::Scalar(crate::ir::types::DType::I64) => Ok(IrValue::I64(raw)),
+                                IrType::Scalar(crate::ir::types::DType::I32) => Ok(IrValue::I32(raw as i32)),
+                                IrType::Scalar(crate::ir::types::DType::Bool) => Ok(IrValue::Bool(raw != 0)),
+                                IrType::Str => {
+                                    if raw == 0 {
+                                        Ok(IrValue::Str(String::new()))
+                                    } else {
+                                        let cstr = std::ffi::CStr::from_ptr(raw as *const std::os::raw::c_char);
+                                        Ok(IrValue::Str(cstr.to_string_lossy().to_string()))
+                                    }
+                                }
+                                _ => Ok(IrValue::I64(raw)),
+                            };
+                        }
+                    }
+                }
+
                 // Return a zero value of the declared return type so tests can verify the call happened.
                 let zero = match ret_ty {
                     IrType::Scalar(crate::ir::types::DType::F64) => IrValue::F64(0.0),
@@ -4199,6 +4284,72 @@ unsafe fn ffi_dispatch_call(proc: *const u8, args: &[i64]) -> i64 {
         }
     }
 }
+
+#[cfg(windows)]
+fn lookup_dynamic_symbol(name: &str) -> Option<*const u8> {
+    use std::sync::OnceLock;
+    use std::ffi::CString;
+
+    static MSVCRT: OnceLock<usize> = OnceLock::new();
+    let msvcrt_handle = *MSVCRT.get_or_init(|| unsafe {
+        let name = CString::new("msvcrt.dll").unwrap();
+        winapi_LoadLibraryA(name.as_ptr()) as usize
+    }) as *mut u8;
+
+    let cs = CString::new(name.as_bytes()).unwrap_or_default();
+    
+    // 1. Search in loaded msvcrt.dll first
+    if !msvcrt_handle.is_null() {
+        let proc = unsafe { winapi_GetProcAddress(msvcrt_handle, cs.as_ptr()) };
+        if !proc.is_null() {
+            return Some(proc as *const u8);
+        }
+    }
+
+    // 2. Search in main process itself
+    unsafe {
+        let main_handle = GetModuleHandleA(std::ptr::null());
+        if !main_handle.is_null() {
+            let proc = winapi_GetProcAddress(main_handle, cs.as_ptr());
+            if !proc.is_null() {
+                return Some(proc as *const u8);
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(unix)]
+fn lookup_dynamic_symbol(name: &str) -> Option<*const u8> {
+    use std::ffi::CString;
+    use std::sync::OnceLock;
+
+    static GLOBAL_HANDLE: OnceLock<usize> = OnceLock::new();
+    let handle = *GLOBAL_HANDLE.get_or_init(|| unsafe {
+        libc_dlopen(std::ptr::null(), 1) as usize // RTLD_LAZY = 1
+    }) as *mut u8;
+
+    if handle.is_null() {
+        return None;
+    }
+
+    let cs = CString::new(name.as_bytes()).unwrap_or_default();
+    unsafe {
+        let sym = libc_dlsym(handle, cs.as_ptr());
+        if !sym.is_null() {
+            Some(sym as *const u8)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(not(any(windows, unix)))]
+fn lookup_dynamic_symbol(_name: &str) -> Option<*const u8> {
+    None
+}
+
 
 fn str_arg(v: &IrValue) -> String {
     match v {
@@ -5711,6 +5862,7 @@ extern "system" {
     fn LoadLibraryA(name: *const i8) -> *mut u8;
     fn GetProcAddress(module: *mut u8, name: *const i8) -> *mut u8;
     fn FreeLibrary(module: *mut u8) -> i32;
+    fn GetModuleHandleA(name: *const i8) -> *mut u8;
 }
 #[cfg(windows)]
 use self::FreeLibrary as winapi_FreeLibrary;

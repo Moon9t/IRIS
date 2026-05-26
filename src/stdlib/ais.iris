@@ -59,7 +59,7 @@ pub def agent_loop_rewards(perceive: () -> list<f64>,
 /// Argmax: return the index of the highest value in a list.
 pub def argmax(values: list<f64>) -> i64 {
     val n = list_len(values)
-    if n == 0 { return -1 }
+    if n <= 0 { return -1 }
     var best_idx = 0
     var best_val = list_get(values, 0)
     for i in 1 .. n {
@@ -76,9 +76,10 @@ pub def argmax(values: list<f64>) -> i64 {
 /// otherwise pick the argmax.
 pub def epsilon_greedy(values: list<f64>, epsilon: f64) -> i64 {
     val n = list_len(values)
-    if n == 0 { return -1 }
+    if n <= 0 { return -1 }
 
-    if random() < epsilon {
+    val eps = if epsilon < 0.0 { 0.0 } else { if epsilon > 1.0 { 1.0 } else { epsilon } }
+    if random() < eps {
         random_range(0, n - 1)
     } else {
         argmax(values)
@@ -88,7 +89,7 @@ pub def epsilon_greedy(values: list<f64>, epsilon: f64) -> i64 {
 /// Softmax sampling: sample an action proportional to exp(logit).
 pub def softmax_sample(logits: list<f64>) -> i64 {
     val n = list_len(logits)
-    if n == 0 { return -1 }
+    if n <= 0 { return -1 }
 
     // Find max for numerical stability
     var mx = list_get(logits, 0)
@@ -106,6 +107,10 @@ pub def softmax_sample(logits: list<f64>) -> i64 {
         total = total + e
     }
 
+    if total <= 1.0e-15 {
+        return 0
+    }
+
     // Normalize and sample
     val r = random() * total
     var cumulative = 0.0
@@ -120,7 +125,7 @@ pub def softmax_sample(logits: list<f64>) -> i64 {
 /// Higher temperature → more random; lower → more deterministic.
 pub def boltzmann_sample(logits: list<f64>, temperature: f64) -> i64 {
     val n = list_len(logits)
-    if n == 0 { return -1 }
+    if n <= 0 { return -1 }
 
     val scaled : list<f64> = list()
     val temp = if temperature < 0.001 { 0.001 } else { temperature }
@@ -139,6 +144,8 @@ pub def boltzmann_sample(logits: list<f64>, temperature: f64) -> i64 {
 pub def discount_rewards(rewards: list<f64>, gamma: f64) -> list<f64> {
     val n = list_len(rewards)
     val returns : list<f64> = list()
+    if n <= 0 { return returns }
+    
     // Initialize with zeros
     for i in 0 .. n { list_push(returns, 0.0) }
 
@@ -159,6 +166,8 @@ pub def gae(rewards: list<f64>, values: list<f64>,
             gamma: f64, lambda: f64) -> list<f64> {
     val n = list_len(rewards)
     val advantages : list<f64> = list()
+    if n <= 0 { return advantages }
+
     for i in 0 .. n { list_push(advantages, 0.0) }
 
     var running = 0.0
@@ -246,11 +255,11 @@ pub def clip_list(values: list<f64>, low: f64, high: f64) -> list<f64> {
 /// Save model weights to a text file (one weight per line).
 pub def model_save(weights: list<f64>, path: str) -> bool {
     var content = ""
-    for i in 0 .. list_len(weights) {
+    val n = list_len(weights)
+    for i in 0 .. n {
         content = concat(content, concat(to_str(list_get(weights, i)), "\n"))
     }
-    write_text(path, content);
-    true
+    write_text(path, content)
 }
 
 /// Load model weights from a text file (one weight per line).

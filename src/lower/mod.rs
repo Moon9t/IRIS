@@ -13346,6 +13346,18 @@ fn collect_rebound_vars_in_stmt(stmt: &AstStmt, names: &mut Vec<String>, include
                 if !names.contains(&ident.name) {
                     names.push(ident.name.clone());
                 }
+            } else if let AstExpr::FieldAccess { base, .. } = target.as_ref() {
+                if let AstExpr::Ident(ident) = base.as_ref() {
+                    if !names.contains(&ident.name) {
+                        names.push(ident.name.clone());
+                    }
+                }
+            } else if let AstExpr::TupleIndex { base, .. } = target.as_ref() {
+                if let AstExpr::Ident(ident) = base.as_ref() {
+                    if !names.contains(&ident.name) {
+                        names.push(ident.name.clone());
+                    }
+                }
             }
             collect_rebound_vars_in_expr(target, names);
             collect_rebound_vars_in_expr(value, names);

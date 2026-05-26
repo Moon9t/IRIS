@@ -2,16 +2,18 @@
 //! adding external dependencies; it provides FIFO push and a `recent(n)` view for
 //! simple learners.
 
+use std::collections::VecDeque;
+
 #[derive(Clone)]
 pub struct ReplayBuffer<T> {
-    data: Vec<T>,
+    data: VecDeque<T>,
     capacity: usize,
 }
 
 impl<T> ReplayBuffer<T> {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            data: Vec::with_capacity(capacity),
+            data: VecDeque::with_capacity(capacity),
             capacity,
         }
     }
@@ -22,9 +24,9 @@ impl<T> ReplayBuffer<T> {
         }
         if self.data.len() >= self.capacity {
             // drop the oldest
-            self.data.remove(0);
+            self.data.pop_front();
         }
-        self.data.push(item);
+        self.data.push_back(item);
     }
 
     pub fn len(&self) -> usize {
