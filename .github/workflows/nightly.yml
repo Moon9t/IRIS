@@ -44,6 +44,11 @@ jobs:
             fuzz/target
             fuzz/corpus
           key: ${{ runner.os }}-fuzz-nightly-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+      - name: Diagnostic Info
+        run: |
+          cargo --version
+          rustc --version
+          cargo fuzz --version
       - name: Fuzz ${{ matrix.target }} (30 min)
         run: |
           cargo +nightly fuzz run ${{ matrix.target }} -- \
