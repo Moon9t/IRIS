@@ -2042,7 +2042,15 @@ fn emit_instr_ir(
             let is_str_cmp = semantic_operand_ty == Some(&IrType::Str)
                 || lhs_ety == Some("ptr")
                     && rhs_ety == Some("ptr")
-                    && matches!(op, BinOp::CmpEq | BinOp::CmpNe);
+                    && matches!(
+                        op,
+                        BinOp::CmpEq
+                            | BinOp::CmpNe
+                            | BinOp::CmpLt
+                            | BinOp::CmpLe
+                            | BinOp::CmpGt
+                            | BinOp::CmpGe
+                    );
             let lhs_ty = func.value_type(*lhs);
             let rhs_ty = func.value_type(*rhs);
             let is_grad_op =
@@ -2149,28 +2157,57 @@ fn emit_instr_ir(
                     "  %v{} = call ptr @iris_make_grad(double {}, double {})",
                     result.0, res_val, res_tan
                 )?;
-            } else if is_str_cmp && matches!(op, BinOp::CmpEq | BinOp::CmpNe) {
+            } else if is_str_cmp {
                 let lv =
                     coerce_to_type(*lhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
                 let rv =
                     coerce_to_type(*rhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
-                if *op == BinOp::CmpEq {
-                    writeln!(
-                        out,
-                        "  %v{} = call i1 @iris_str_eq(ptr {}, ptr {})",
-                        result.0, lv, rv
-                    )?;
-                } else {
-                    let tmp = format!("%str_eq_tmp{}", gep_counter);
-                    *gep_counter += 1;
-                    writeln!(
-                        out,
-                        "  {} = call i1 @iris_str_eq(ptr {}, ptr {})",
-                        tmp, lv, rv
-                    )?;
-                    writeln!(out, "  %v{} = xor i1 {}, true", result.0, tmp)?;
+                match op {
+                    BinOp::CmpEq => {
+                        writeln!(
+                            out,
+                            "  %v{} = call i1 @iris_str_eq(ptr {}, ptr {})",
+                            result.0, lv, rv
+                        )?;
+                    }
+                    BinOp::CmpNe => {
+                        let tmp = format!("%str_eq_tmp{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(
+                            out,
+                            "  {} = call i1 @iris_str_eq(ptr {}, ptr {})",
+                            tmp, lv, rv
+                        )?;
+                        writeln!(out, "  %v{} = xor i1 {}, true", result.0, tmp)?;
+                    }
+                    BinOp::CmpLt | BinOp::CmpLe | BinOp::CmpGt | BinOp::CmpGe => {
+                        let strcmp_res = format!("%strcmp_res{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(
+                            out,
+                            "  {} = call i32 @strcmp(ptr {}, ptr {})",
+                            strcmp_res, lv, rv
+                        )?;
+                        let cond = match op {
+                            BinOp::CmpLt => "slt",
+                            BinOp::CmpLe => "sle",
+                            BinOp::CmpGt => "sgt",
+                            BinOp::CmpGe => "sge",
+                            _ => unreachable!(),
+                        };
+                        writeln!(
+                            out,
+                            "  %v{} = icmp {} i32 {}, 0",
+                            result.0, cond, strcmp_res
+                        )?;
+                    }
+                    _ => {
+                        return Err(CodegenError::Unsupported {
+                            backend: "llvm".into(),
+                            detail: format!("unsupported binary operation {:?} on str", op),
+                        });
+                    }
                 }
-                // skip the rest of BinOp handling
             } else {
                 let ty_s = if comparison_op {
                     lhs_ety
@@ -5736,6 +5773,7 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare i64 @iris_str_len(ptr)",
         "declare ptr @iris_str_concat(ptr, ptr)",
         "declare i1 @iris_str_eq(ptr, ptr)",
+        "declare i32 @strcmp(ptr, ptr)",
         "declare i1 @iris_str_contains(ptr, ptr)",
         "declare i1 @iris_str_starts_with(ptr, ptr)",
         "declare i1 @iris_str_ends_with(ptr, ptr)",

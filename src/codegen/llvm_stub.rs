@@ -430,62 +430,116 @@ fn emit_llvm_instr(
             // For comparisons the result `ty` is Bool; use the left operand's
             // type to choose float (fcmp) vs integer (icmp/add/sub/...) forms.
             let operand_ty = func.value_type(*lhs).unwrap_or(ty);
-            let ty_s = llvm_type_name(operand_ty)?;
-            let is_float = matches!(operand_ty, IrType::Scalar(DType::F32 | DType::F64));
-            let llvm_op = match (op, is_float) {
-                (BinOp::Add, true) => format!("fadd {} {}, {}", ty_s, lv, rv),
-                (BinOp::Sub, true) => format!("fsub {} {}, {}", ty_s, lv, rv),
-                (BinOp::Mul, true) => format!("fmul {} {}, {}", ty_s, lv, rv),
-                (BinOp::Div, true) => format!("fdiv {} {}, {}", ty_s, lv, rv),
-                (BinOp::Add, false) => format!("add {} {}, {}", ty_s, lv, rv),
-                (BinOp::Sub, false) => format!("sub {} {}, {}", ty_s, lv, rv),
-                (BinOp::Mul, false) => format!("mul {} {}, {}", ty_s, lv, rv),
-                (BinOp::Div, false) | (BinOp::FloorDiv, _) => {
-                    format!("sdiv {} {}, {}", ty_s, lv, rv)
+            let is_str = operand_ty == &IrType::Str;
+            if is_str {
+                match op {
+                    BinOp::CmpEq => {
+                        writeln!(
+                            out,
+                            "  %v{} = call i1 @iris_str_eq(ptr {}, ptr {})",
+                            result.0, lv, rv
+                        )?;
+                    }
+                    BinOp::CmpNe => {
+                        writeln!(
+                            out,
+                            "  %str_eq_{} = call i1 @iris_str_eq(ptr {}, ptr {})",
+                            result.0, lv, rv
+                        )?;
+                        writeln!(out, "  %v{} = xor i1 %str_eq_{}, true", result.0, result.0)?;
+                    }
+                    BinOp::CmpLt | BinOp::CmpLe | BinOp::CmpGt | BinOp::CmpGe => {
+                        writeln!(
+                            out,
+                            "  %strcmp_{} = call i32 @strcmp(ptr {}, ptr {})",
+                            result.0, lv, rv
+                        )?;
+                        let cond = match op {
+                            BinOp::CmpLt => "slt",
+                            BinOp::CmpLe => "sle",
+                            BinOp::CmpGt => "sgt",
+                            BinOp::CmpGe => "sge",
+                            _ => unreachable!(),
+                        };
+                        writeln!(
+                            out,
+                            "  %v{} = icmp {} i32 %strcmp_{}, 0",
+                            result.0, cond, result.0
+                        )?;
+                    }
+                    _ => {
+                        return Err(CodegenError::Unsupported {
+                            backend: "llvm_stub".into(),
+                            detail: format!("unsupported binary operation {:?} on str", op),
+                        });
+                    }
                 }
-                (BinOp::Mod, true) => format!("frem {} {}, {}", ty_s, lv, rv),
-                (BinOp::Mod, false) => format!("srem {} {}, {}", ty_s, lv, rv),
-                (BinOp::CmpEq, true) => format!("fcmp oeq {} {}, {}", ty_s, lv, rv),
-                (BinOp::CmpNe, true) => format!("fcmp one {} {}, {}", ty_s, lv, rv),
-                (BinOp::CmpLt, true) => format!("fcmp olt {} {}, {}", ty_s, lv, rv),
-                (BinOp::CmpLe, true) => format!("fcmp ole {} {}, {}", ty_s, lv, rv),
-                (BinOp::CmpGt, true) => format!("fcmp ogt {} {}, {}", ty_s, lv, rv),
-                (BinOp::CmpGe, true) => format!("fcmp oge {} {}, {}", ty_s, lv, rv),
-                (BinOp::CmpEq, false) => format!("icmp eq {} {}, {}", ty_s, lv, rv),
-                (BinOp::CmpNe, false) => format!("icmp ne {} {}, {}", ty_s, lv, rv),
-                (BinOp::CmpLt, false) => format!("icmp slt {} {}, {}", ty_s, lv, rv),
-                (BinOp::CmpLe, false) => format!("icmp sle {} {}, {}", ty_s, lv, rv),
-                (BinOp::CmpGt, false) => format!("icmp sgt {} {}, {}", ty_s, lv, rv),
-                (BinOp::CmpGe, false) => format!("icmp sge {} {}, {}", ty_s, lv, rv),
-                // Math builtins lower to LLVM intrinsic calls
-                (BinOp::Pow, true) => format!(
-                    "call {} @llvm.pow.f64({} {}, {} {})",
-                    ty_s, ty_s, lv, ty_s, rv
-                ),
-                (BinOp::Pow, false) => format!("call i64 @iris_pow_i64(i64 {}, i64 {})", lv, rv),
-                (BinOp::Min, true) => format!(
-                    "call {} @llvm.minnum.f64({} {}, {} {})",
-                    ty_s, ty_s, lv, ty_s, rv
-                ),
-                (BinOp::Min, false) => format!("call i64 @iris_min_i64(i64 {}, i64 {})", lv, rv),
-                (BinOp::Max, true) => format!(
-                    "call {} @llvm.maxnum.f64({} {}, {} {})",
-                    ty_s, ty_s, lv, ty_s, rv
-                ),
-                (BinOp::Max, false) => format!("call i64 @iris_max_i64(i64 {}, i64 {})", lv, rv),
-                // Bitwise ops — integers only
-                (BinOp::BitAnd, false) => format!("and {} {}, {}", ty_s, lv, rv),
-                (BinOp::BitOr, false) => format!("or {} {}, {}", ty_s, lv, rv),
-                (BinOp::BitXor, false) => format!("xor {} {}, {}", ty_s, lv, rv),
-                (BinOp::Shl, false) => format!("shl {} {}, {}", ty_s, lv, rv),
-                (BinOp::Shr, false) => format!("ashr {} {}, {}", ty_s, lv, rv),
-                (BinOp::BitAnd, true)
-                | (BinOp::BitOr, true)
-                | (BinOp::BitXor, true)
-                | (BinOp::Shl, true)
-                | (BinOp::Shr, true) => format!("call {} @iris_bitop_float_unsupported()", ty_s),
-            };
-            writeln!(out, "  %v{} = {}", result.0, llvm_op)?;
+            } else {
+                let ty_s = llvm_type_name(operand_ty)?;
+                let is_float = matches!(operand_ty, IrType::Scalar(DType::F32 | DType::F64));
+                let llvm_op = match (op, is_float) {
+                    (BinOp::Add, true) => format!("fadd {} {}, {}", ty_s, lv, rv),
+                    (BinOp::Sub, true) => format!("fsub {} {}, {}", ty_s, lv, rv),
+                    (BinOp::Mul, true) => format!("fmul {} {}, {}", ty_s, lv, rv),
+                    (BinOp::Div, true) => format!("fdiv {} {}, {}", ty_s, lv, rv),
+                    (BinOp::Add, false) => format!("add {} {}, {}", ty_s, lv, rv),
+                    (BinOp::Sub, false) => format!("sub {} {}, {}", ty_s, lv, rv),
+                    (BinOp::Mul, false) => format!("mul {} {}, {}", ty_s, lv, rv),
+                    (BinOp::Div, false) | (BinOp::FloorDiv, _) => {
+                        format!("sdiv {} {}, {}", ty_s, lv, rv)
+                    }
+                    (BinOp::Mod, true) => format!("frem {} {}, {}", ty_s, lv, rv),
+                    (BinOp::Mod, false) => format!("srem {} {}, {}", ty_s, lv, rv),
+                    (BinOp::CmpEq, true) => format!("fcmp oeq {} {}, {}", ty_s, lv, rv),
+                    (BinOp::CmpNe, true) => format!("fcmp one {} {}, {}", ty_s, lv, rv),
+                    (BinOp::CmpLt, true) => format!("fcmp olt {} {}, {}", ty_s, lv, rv),
+                    (BinOp::CmpLe, true) => format!("fcmp ole {} {}, {}", ty_s, lv, rv),
+                    (BinOp::CmpGt, true) => format!("fcmp ogt {} {}, {}", ty_s, lv, rv),
+                    (BinOp::CmpGe, true) => format!("fcmp oge {} {}, {}", ty_s, lv, rv),
+                    (BinOp::CmpEq, false) => format!("icmp eq {} {}, {}", ty_s, lv, rv),
+                    (BinOp::CmpNe, false) => format!("icmp ne {} {}, {}", ty_s, lv, rv),
+                    (BinOp::CmpLt, false) => format!("icmp slt {} {}, {}", ty_s, lv, rv),
+                    (BinOp::CmpLe, false) => format!("icmp sle {} {}, {}", ty_s, lv, rv),
+                    (BinOp::CmpGt, false) => format!("icmp sgt {} {}, {}", ty_s, lv, rv),
+                    (BinOp::CmpGe, false) => format!("icmp sge {} {}, {}", ty_s, lv, rv),
+                    // Math builtins lower to LLVM intrinsic calls
+                    (BinOp::Pow, true) => format!(
+                        "call {} @llvm.pow.f64({} {}, {} {})",
+                        ty_s, ty_s, lv, ty_s, rv
+                    ),
+                    (BinOp::Pow, false) => {
+                        format!("call i64 @iris_pow_i64(i64 {}, i64 {})", lv, rv)
+                    }
+                    (BinOp::Min, true) => format!(
+                        "call {} @llvm.minnum.f64({} {}, {} {})",
+                        ty_s, ty_s, lv, ty_s, rv
+                    ),
+                    (BinOp::Min, false) => {
+                        format!("call i64 @iris_min_i64(i64 {}, i64 {})", lv, rv)
+                    }
+                    (BinOp::Max, true) => format!(
+                        "call {} @llvm.maxnum.f64({} {}, {} {})",
+                        ty_s, ty_s, lv, ty_s, rv
+                    ),
+                    (BinOp::Max, false) => {
+                        format!("call i64 @iris_max_i64(i64 {}, i64 {})", lv, rv)
+                    }
+                    // Bitwise ops — integers only
+                    (BinOp::BitAnd, false) => format!("and {} {}, {}", ty_s, lv, rv),
+                    (BinOp::BitOr, false) => format!("or {} {}, {}", ty_s, lv, rv),
+                    (BinOp::BitXor, false) => format!("xor {} {}, {}", ty_s, lv, rv),
+                    (BinOp::Shl, false) => format!("shl {} {}, {}", ty_s, lv, rv),
+                    (BinOp::Shr, false) => format!("ashr {} {}, {}", ty_s, lv, rv),
+                    (BinOp::BitAnd, true)
+                    | (BinOp::BitOr, true)
+                    | (BinOp::BitXor, true)
+                    | (BinOp::Shl, true)
+                    | (BinOp::Shr, true) => {
+                        format!("call {} @iris_bitop_float_unsupported()", ty_s)
+                    }
+                };
+                writeln!(out, "  %v{} = {}", result.0, llvm_op)?;
+            }
         }
 
         IrInstr::UnaryOp {
@@ -2489,6 +2543,8 @@ fn emit_iris_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         // String ops
         "declare i64 @iris_str_len(ptr)",
         "declare ptr @iris_str_concat(ptr, ptr)",
+        "declare i1 @iris_str_eq(ptr, ptr)",
+        "declare i32 @strcmp(ptr, ptr)",
         "declare i1 @iris_str_contains(ptr, ptr)",
         "declare i1 @iris_str_starts_with(ptr, ptr)",
         "declare i1 @iris_str_ends_with(ptr, ptr)",

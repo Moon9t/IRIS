@@ -1170,9 +1170,23 @@ IrisList* iris_process_args(void) {
     return r;
 }
 
-char* iris_env_var(const char* key) {
+IrisOption* iris_env_var(const char* key) {
+#ifdef _WIN32
     const char* v = getenv(key);
-    return v ? xstrdup(v) : NULL;
+    if (!v) {
+        if (_stricmp(key, "PATH") == 0) {
+            v = getenv("Path");
+            if (!v) v = getenv("path");
+        }
+    }
+#else
+    const char* v = getenv(key);
+#endif
+    if (v) {
+        return iris_make_some(iris_box_str(v));
+    } else {
+        return iris_make_none();
+    }
 }
 
 // ---------------------------------------------------------------------------

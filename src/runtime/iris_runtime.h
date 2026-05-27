@@ -363,7 +363,7 @@ int64_t  iris_db_exec_params(int64_t db, const char* sql, IrisList* params);
 // ---------------------------------------------------------------------------
 void     iris_set_argv(int argc, char** argv);  /* call from generated main before user main */
 IrisList* iris_process_args(void);
-char*    iris_env_var(const char* key);
+IrisOption* iris_env_var(const char* key);
 
 // ---------------------------------------------------------------------------
 // Channels and concurrency
