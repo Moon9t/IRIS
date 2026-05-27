@@ -227,7 +227,7 @@ impl ProfileResult {
 
         // Sort functions by total_us descending.
         let mut funcs: Vec<&FunctionProfile> = self.functions.values().collect();
-        funcs.sort_by(|a, b| b.total_us.cmp(&a.total_us));
+        funcs.sort_by_key(|b| std::cmp::Reverse(b.total_us));
 
         out.push_str(&format!(
             " {:<30} {:>8} {:>12} {:>12} {:>12}\n",
