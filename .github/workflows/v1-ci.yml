@@ -23,6 +23,7 @@ on:
       - '.vscode/**'
       - '.gitignore'
       - '.yamllint'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
