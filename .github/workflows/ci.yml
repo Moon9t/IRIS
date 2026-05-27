@@ -161,9 +161,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin
+        uses: taiki-e/install-action@cargo-tarpaulin
       - name: Run code coverage
-        run: cargo tarpaulin --verbose --workspace --timeout 120 --out xml
+        run: cargo tarpaulin --verbose --lib --bins --timeout 120 --out xml
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
