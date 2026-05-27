@@ -3,8 +3,26 @@ name: v1-checks
 on:
   push:
     branches: [master, main]
+    paths-ignore:
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
+      - 'docs/**'
+      - 'logo/**'
+      - '.vscode/**'
+      - '.gitignore'
+      - '.yamllint'
   pull_request:
     branches: [master, main]
+    paths-ignore:
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
+      - 'docs/**'
+      - 'logo/**'
+      - '.vscode/**'
+      - '.gitignore'
+      - '.yamllint'
 
 env:
   CARGO_TERM_COLOR: always

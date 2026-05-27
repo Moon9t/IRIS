@@ -7,8 +7,26 @@ name: CI
 on:
   push:
     branches: [master, main, dev]
+    paths-ignore:
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
+      - 'docs/**'
+      - 'logo/**'
+      - '.vscode/**'
+      - '.gitignore'
+      - '.yamllint'
   pull_request:
     branches: [master, main]
+    paths-ignore:
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
+      - 'docs/**'
+      - 'logo/**'
+      - '.vscode/**'
+      - '.gitignore'
+      - '.yamllint'
   workflow_dispatch:
 
 env:
