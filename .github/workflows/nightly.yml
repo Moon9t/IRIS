@@ -33,7 +33,9 @@ jobs:
         with:
           components: rust-src
       - name: Install cargo-fuzz
-        uses: taiki-e/install-action@cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
       - uses: actions/cache@v4
         with:
           path: |
