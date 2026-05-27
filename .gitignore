@@ -5,7 +5,6 @@
 **/target-*
 
 # Cargo
-/Cargo.lock
 
 # Compiled files
 *.rlib

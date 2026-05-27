@@ -1823,22 +1823,27 @@ fn coerce_to_type(
                     writeln!(out, "  {} = {}", tmp, cmp)?;
                 } else {
                     // Ensure the operand is represented with the authoritative
-                    // FP width (`actual_ty_str`) before performing the
+                    // FP width (`auth_ty`) before performing the
                     // float->int conversion. This avoids emitting e.g.
                     // `fptosi float %x to i64` when `%x` is actually a
                     // `double` value, which clang rejects.
-                    let v_use = if actual_ty != &actual_ty_str {
+                    let auth_ty = match func.value_type(v) {
+                        Some(IrType::Scalar(DType::F32)) => "float",
+                        Some(IrType::Scalar(DType::F64)) => "double",
+                        _ => &actual_ty_str,
+                    };
+                    let v_use = if actual_ty != auth_ty {
                         *gep_counter += 1;
                         let tmp2 = format!("%coerce{}", *gep_counter);
-                        if actual_ty == "double" && actual_ty_str == "float" {
+                        if actual_ty == "double" && auth_ty == "float" {
                             writeln!(out, "  {} = fptrunc double {} to float", tmp2, v_str)?;
-                        } else if actual_ty == "float" && actual_ty_str == "double" {
+                        } else if actual_ty == "float" && auth_ty == "double" {
                             writeln!(out, "  {} = fpext float {} to double", tmp2, v_str)?;
                         } else {
                             writeln!(
                                 out,
                                 "  {} = bitcast {} {} to {}",
-                                tmp2, actual_ty, v_str, actual_ty_str
+                                tmp2, actual_ty, v_str, auth_ty
                             )?;
                         }
                         tmp2
@@ -1848,7 +1853,7 @@ fn coerce_to_type(
                     writeln!(
                         out,
                         "  {} = fptosi {} {} to {}",
-                        tmp, actual_ty_str, v_use, expected_ty
+                        tmp, auth_ty, v_use, expected_ty
                     )?;
                 }
             } else if actual_ty_str.starts_with('i')
