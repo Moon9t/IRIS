@@ -124,7 +124,9 @@ pub fn emit_llvm_stub(module: &IrModule) -> Result<String, CodegenError> {
                 writeln!(out, "  %p{} = trunc i32 %p{}i to i1", i, i)?;
             } else if p.ty == IrType::Str {
                 writeln!(out, "  %p{} = call ptr @iris_unbox_str(ptr {})", i, raw)?;
-            } else if let Some(unbox_fn) = crate::codegen::llvm_ir::runtime_unbox_helper_for_type(&p.ty) {
+            } else if let Some(unbox_fn) =
+                crate::codegen::llvm_ir::runtime_unbox_helper_for_type(&p.ty)
+            {
                 writeln!(out, "  %p{} = call ptr @{}(ptr {})", i, unbox_fn, raw)?;
             } else {
                 writeln!(out, "  %p{} = bitcast ptr {} to ptr", i, raw)?;
@@ -181,7 +183,11 @@ pub fn emit_llvm_stub(module: &IrModule) -> Result<String, CodegenError> {
         for (idx, p) in func.params.iter().enumerate().skip(1) {
             let capture_idx = idx - 1;
             let slot = format!("%slot{}", idx);
-            writeln!(out, "  {} = getelementptr ptr, ptr %arg, i64 {}", slot, capture_idx)?;
+            writeln!(
+                out,
+                "  {} = getelementptr ptr, ptr %arg, i64 {}",
+                slot, capture_idx
+            )?;
             let raw = format!("%raw{}", idx);
             writeln!(out, "  {} = load ptr, ptr {}", raw, slot)?;
             // Unbox to the expected parameter type.
@@ -192,16 +198,26 @@ pub fn emit_llvm_stub(module: &IrModule) -> Result<String, CodegenError> {
                 writeln!(out, "  %p{} = call i64 @iris_unbox_i64(ptr {})", idx, raw)?;
                 writeln!(out, "  %p{}t = trunc i64 %p{} to i32", idx, idx)?;
             } else if param_ty == "double" {
-                writeln!(out, "  %p{} = call double @iris_unbox_f64(ptr {})", idx, raw)?;
+                writeln!(
+                    out,
+                    "  %p{} = call double @iris_unbox_f64(ptr {})",
+                    idx, raw
+                )?;
             } else if param_ty == "float" {
-                writeln!(out, "  %p{}d = call double @iris_unbox_f64(ptr {})", idx, raw)?;
+                writeln!(
+                    out,
+                    "  %p{}d = call double @iris_unbox_f64(ptr {})",
+                    idx, raw
+                )?;
                 writeln!(out, "  %p{} = fptrunc double %p{}d to float", idx, idx)?;
             } else if param_ty == "i1" {
                 writeln!(out, "  %p{}i = call i32 @iris_unbox_bool(ptr {})", idx, raw)?;
                 writeln!(out, "  %p{} = trunc i32 %p{}i to i1", idx, idx)?;
             } else if p.ty == IrType::Str {
                 writeln!(out, "  %p{} = call ptr @iris_unbox_str(ptr {})", idx, raw)?;
-            } else if let Some(unbox_fn) = crate::codegen::llvm_ir::runtime_unbox_helper_for_type(&p.ty) {
+            } else if let Some(unbox_fn) =
+                crate::codegen::llvm_ir::runtime_unbox_helper_for_type(&p.ty)
+            {
                 writeln!(out, "  %p{} = call ptr @{}(ptr {})", idx, unbox_fn, raw)?;
             } else {
                 writeln!(out, "  %p{} = bitcast ptr {} to ptr", idx, raw)?;

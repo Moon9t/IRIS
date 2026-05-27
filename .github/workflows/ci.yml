@@ -105,6 +105,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Configure LLVM toolchain
+        run: |
+          echo "IRIS_CLANG=/usr/bin/clang" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy

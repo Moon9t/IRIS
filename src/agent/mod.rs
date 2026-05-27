@@ -197,7 +197,10 @@ where
     }
 
     pub fn get_q(&self, obs: &Obs, act: &Act) -> f32 {
-        *self.q_table.get(&(obs.clone(), act.clone())).unwrap_or(&0.0)
+        *self
+            .q_table
+            .get(&(obs.clone(), act.clone()))
+            .unwrap_or(&0.0)
     }
 
     pub fn set_q(&mut self, obs: Obs, act: Act, val: f32) {

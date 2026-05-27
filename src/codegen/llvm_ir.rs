@@ -519,7 +519,11 @@ fn emit_llvm_ir_impl(
         for (idx, p) in func.params.iter().enumerate().skip(1) {
             let capture_idx = idx - 1;
             let slot = format!("%slot{}", idx);
-            writeln!(out, "  {} = getelementptr ptr, ptr %arg, i64 {}", slot, capture_idx)?;
+            writeln!(
+                out,
+                "  {} = getelementptr ptr, ptr %arg, i64 {}",
+                slot, capture_idx
+            )?;
             let raw = format!("%raw{}", idx);
             writeln!(out, "  {} = load ptr, ptr {}", raw, slot)?;
             // Unbox to the expected parameter type.
@@ -532,7 +536,11 @@ fn emit_llvm_ir_impl(
                 writeln!(out, "  %p{}t = trunc i64 %p{} to i32", idx, idx)?;
                 tramp_arg_names.push(format!("%p{}t", idx));
             } else if param_llvm_ty == "double" {
-                writeln!(out, "  %p{} = call double @iris_unbox_f64(ptr {})", idx, raw)?;
+                writeln!(
+                    out,
+                    "  %p{} = call double @iris_unbox_f64(ptr {})",
+                    idx, raw
+                )?;
                 tramp_arg_names.push(format!("%p{}", idx));
             } else if param_llvm_ty == "i1" {
                 writeln!(out, "  %p{}i = call i32 @iris_unbox_bool(ptr {})", idx, raw)?;
@@ -5571,7 +5579,10 @@ fn find_alloc_size(func: &IrFunction, array_id: ValueId) -> Option<usize> {
 fn find_alloc_elem_ty(func: &IrFunction, array_id: ValueId) -> Option<IrType> {
     for block in func.blocks() {
         for instr in &block.instrs {
-            if let IrInstr::AllocArray { result, elem_ty, .. } = instr {
+            if let IrInstr::AllocArray {
+                result, elem_ty, ..
+            } = instr
+            {
                 if *result == array_id {
                     return Some(elem_ty.clone());
                 }

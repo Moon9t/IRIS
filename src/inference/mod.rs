@@ -2,8 +2,8 @@
 //! (ONNX, libtorch, TF) can implement. This file contains concrete struct
 //! implementations mapping to the native C/C++ shims in the IRIS runtime.
 
-use std::path::Path;
 use std::os::raw::{c_char, c_void};
+use std::path::Path;
 
 pub trait InferenceBackend {
     /// Load a model from path. Implementations may return errors.

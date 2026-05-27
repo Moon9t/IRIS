@@ -108,7 +108,7 @@ fn main() {
     for episode in 1..=num_episodes {
         let mut replay: ReplayBuffer<Experience<i32, i32>> = ReplayBuffer::with_capacity(128);
         let mut obs = env.reset();
-        
+
         let mut total_reward = 0.0f32;
         let mut steps = 0;
 
@@ -181,11 +181,11 @@ fn main() {
             };
 
             let ratio = probs[a] / old_probs[a].max(1e-10);
-            
+
             // Check clipping surrogate
             let low = 1.0 - agent.epsilon;
             let high = 1.0 + agent.epsilon;
-            
+
             let surr1 = ratio * adv;
             let surr2 = ratio.clamp(low, high) * adv;
             let is_clipped = surr2 < surr1;
