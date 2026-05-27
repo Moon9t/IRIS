@@ -1,5 +1,8 @@
 //! IRIS: Intermediate Representation for Intelligent Systems.
 //!
+#![allow(clippy::collapsible_match)]
+#![allow(clippy::useless_conversion)]
+
 //! Compiler pipeline:
 //!
 //! ```text

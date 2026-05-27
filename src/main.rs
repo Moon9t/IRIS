@@ -1,3 +1,6 @@
+#![allow(clippy::collapsible_match)]
+#![allow(clippy::useless_conversion)]
+
 use std::path::PathBuf;
 use std::process;
 
