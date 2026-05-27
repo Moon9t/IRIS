@@ -121,3 +121,6 @@ tests/_all_tests.txt
 models/
 *.svg
 projects/*/*.exe
+
+# ── CI Artifacts ──
+/ci-artifacts/

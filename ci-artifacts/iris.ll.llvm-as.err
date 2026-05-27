@@ -1,3 +1,0 @@
-llvm-as-21: /work/ci-artifacts/iris-26e59a331c3c7647.ll:649395:131: error: expected memory location (argmem, inaccessiblemem, errnomem) or access kind (none, read, write, readwrite)
-attributes #2 = { inlinehint nofree norecurse nosync nounwind nonlazybind memory(read, argmem: readwrite, inaccessiblemem: write, target_mem0: none, target_mem1: none) uwtable "probe-stack"="inline-asm" "target-cpu"="x86-64" }
-                                                                                                                                  ^

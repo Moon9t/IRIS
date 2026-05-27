@@ -1,4 +1,0 @@
-/work/ci-artifacts/iris-fixed.ll:292:101: error: '@alloc_864ae197cb54fad57f597a467723eba1' defined with type '[80 x i8]*' but expected 'i8*'
-@alloc_8c019c8403617377b367d2fe939bf46c = private unnamed_addr constant <{ i8*, [16 x i8] }> <{ i8* @alloc_864ae197cb54fad57f597a467723eba1, [16 x i8] c"O\00\00\00\00\00\00\00\09\02\00\007\00\00\00" }>, align 8
-                                                                                                    ^
-1 error generated.

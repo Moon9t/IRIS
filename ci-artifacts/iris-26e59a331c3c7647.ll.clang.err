@@ -1,4 +1,0 @@
-/work/ci-artifacts/iris-26e59a331c3c7647.ll:16:43: error: expected type
-%"hashbrown::raw::RawTableInner" = type { ptr, i64, i64, i64 }
-                                          ^
-1 error generated.
