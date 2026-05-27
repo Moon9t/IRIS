@@ -2577,7 +2577,6 @@ void iris_udp_send(int64_t fd, const char* addr_port, int64_t data_len) {
     char* port_colon = strrchr(p, ':');
     if (port_colon) { port = (uint16_t)atoi(port_colon + 1); *port_colon = '\0'; strncpy(host, p, sizeof(host)-1); }
     else { strncpy(host, p, sizeof(host)-1); }
-    free(p);
     struct sockaddr_in dst = {0};
     dst.sin_family = AF_INET;
     dst.sin_port = htons(port);
@@ -2588,6 +2587,7 @@ void iris_udp_send(int64_t fd, const char* addr_port, int64_t data_len) {
 #else
     sendto((int)fd, data, dlen, 0, (struct sockaddr*)&dst, sizeof(dst));
 #endif
+    free(p);
 }
 
 char* iris_udp_recv(int64_t fd) {

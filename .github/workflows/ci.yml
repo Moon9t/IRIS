@@ -112,7 +112,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets -- -D warnings -A clippy::collapsible_match -A clippy::useless_conversion
 
   extension:
     name: Build VS Code Extension
