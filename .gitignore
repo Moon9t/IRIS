@@ -124,3 +124,6 @@ projects/*/*.exe
 
 # ── CI Artifacts ──
 /ci-artifacts/
+/sqlite3.dll
+/scratch_test.iris
+/IRIS-Book.pdf
