@@ -1219,20 +1219,20 @@ void iris_spawn_fn(void* fn, void* arg) {
     pthread_detach(t);
 }
 
-typedef struct { void (*fn)(int64_t); int64_t i; } ParArg;
+typedef struct { void (*fn)(int64_t, void*); int64_t i; void* arg; } ParArg;
 static void* par_for_worker(void* arg) {
     ParArg* a = (ParArg*)arg;
-    a->fn(a->i);
+    a->fn(a->i, a->arg);
     free(a);
     return NULL;
 }
-void iris_par_for(void (*fn)(int64_t), int64_t start, int64_t end) {
+void iris_par_for(void (*fn)(int64_t, void*), int64_t start, int64_t end, void* arg) {
     int64_t n = end - start;
     if (n <= 0) return;
     pthread_t* threads = xmalloc(sizeof(pthread_t) * (size_t)n);
     for (int64_t i = start; i < end; i++) {
         ParArg* a = xmalloc(sizeof(ParArg));
-        a->fn = fn;  a->i = i;
+        a->fn = fn;  a->i = i;  a->arg = arg;
         pthread_create(&threads[i - start], NULL, par_for_worker, a);
     }
     for (int64_t i = 0; i < n; i++) pthread_join(threads[i], NULL);
@@ -1331,6 +1331,48 @@ IrisSparse* iris_sparsify(IrisList* dense) {
             }
             sp->indices[sp->len] = i;
             sp->values [sp->len] = v;
+            sp->len++;
+        }
+    }
+    return sp;
+}
+
+IrisSparse* iris_sparsify_i64_array(int64_t* data, int64_t len) {
+    IrisSparse* sp = xcalloc(1, sizeof(IrisSparse));
+    sp->cap     = 8;
+    sp->indices = xmalloc(sizeof(size_t)    * sp->cap);
+    sp->values  = xmalloc(sizeof(IrisVal*)  * sp->cap);
+    for (int64_t i = 0; i < len; i++) {
+        int64_t v = data[i];
+        if (v != 0) {
+            if (sp->len == sp->cap) {
+                sp->cap *= 2;
+                sp->indices = xrealloc(sp->indices, sizeof(size_t)   * sp->cap);
+                sp->values  = xrealloc(sp->values,  sizeof(IrisVal*) * sp->cap);
+            }
+            sp->indices[sp->len] = i;
+            sp->values [sp->len] = iris_box_i64(v);
+            sp->len++;
+        }
+    }
+    return sp;
+}
+
+IrisSparse* iris_sparsify_f64_array(double* data, int64_t len) {
+    IrisSparse* sp = xcalloc(1, sizeof(IrisSparse));
+    sp->cap     = 8;
+    sp->indices = xmalloc(sizeof(size_t)    * sp->cap);
+    sp->values  = xmalloc(sizeof(IrisVal*)  * sp->cap);
+    for (int64_t i = 0; i < len; i++) {
+        double v = data[i];
+        if (v != 0.0) {
+            if (sp->len == sp->cap) {
+                sp->cap *= 2;
+                sp->indices = xrealloc(sp->indices, sizeof(size_t)   * sp->cap);
+                sp->values  = xrealloc(sp->values,  sizeof(IrisVal*) * sp->cap);
+            }
+            sp->indices[sp->len] = i;
+            sp->values [sp->len] = iris_box_f64(v);
             sp->len++;
         }
     }

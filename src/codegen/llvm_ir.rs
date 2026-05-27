@@ -460,8 +460,13 @@ fn emit_llvm_ir_impl(
                 writeln!(out, "  %p{}i = call i32 @iris_unbox_bool(ptr {})", i, raw)?;
                 writeln!(out, "  %p{} = trunc i32 %p{}i to i1", i, i)?;
                 tramp_arg_names.push(format!("%p{}", i));
+            } else if p.ty == IrType::Str {
+                writeln!(out, "  %p{} = call ptr @iris_unbox_str(ptr {})", i, raw)?;
+                tramp_arg_names.push(format!("%p{}", i));
+            } else if let Some(unbox_fn) = runtime_unbox_helper_for_type(&p.ty) {
+                writeln!(out, "  %p{} = call ptr @{}(ptr {})", i, unbox_fn, raw)?;
+                tramp_arg_names.push(format!("%p{}", i));
             } else {
-                // ptr types (channels, structs, closures, etc.) — already ptr.
                 writeln!(out, "  %p{} = bitcast ptr {} to ptr", i, raw)?;
                 tramp_arg_names.push(format!("%p{}", i));
             }
@@ -494,6 +499,69 @@ fn emit_llvm_ir_impl(
         }
         writeln!(out, "  call void @free(ptr %arg)")?;
         writeln!(out, "  ret ptr null")?;
+        writeln!(out, "}}\n")?;
+    }
+
+    // ── ParFor trampolines ────────────────────────────────────────────────
+    // For each __par_body_N function, generate a trampoline that takes the
+    // loop index (%i) and the pointer array of captures (%arg), unpacks
+    // captures from %arg, and calls the original function.
+    for func in module.functions() {
+        if !func.name.starts_with("__par_body_") {
+            continue;
+        }
+        let tramp_name = format!("{}_trampoline", func.name);
+        writeln!(out, "define void @{}(i64 %i, ptr %arg) {{", tramp_name)?;
+        writeln!(out, "entry:")?;
+        let mut tramp_arg_names: Vec<String> = vec!["%i".to_owned()];
+
+        // The remaining arguments (starting from index 1) are captured variables packed into %arg.
+        for (idx, p) in func.params.iter().enumerate().skip(1) {
+            let capture_idx = idx - 1;
+            let slot = format!("%slot{}", idx);
+            writeln!(out, "  {} = getelementptr ptr, ptr %arg, i64 {}", slot, capture_idx)?;
+            let raw = format!("%raw{}", idx);
+            writeln!(out, "  {} = load ptr, ptr {}", raw, slot)?;
+            // Unbox to the expected parameter type.
+            let param_llvm_ty = llvm_type_complete(&p.ty).unwrap_or_else(|_| "ptr".to_owned());
+            if param_llvm_ty == "i64" {
+                writeln!(out, "  %p{} = call i64 @iris_unbox_i64(ptr {})", idx, raw)?;
+                tramp_arg_names.push(format!("%p{}", idx));
+            } else if param_llvm_ty == "i32" {
+                writeln!(out, "  %p{} = call i64 @iris_unbox_i64(ptr {})", idx, raw)?;
+                writeln!(out, "  %p{}t = trunc i64 %p{} to i32", idx, idx)?;
+                tramp_arg_names.push(format!("%p{}t", idx));
+            } else if param_llvm_ty == "double" {
+                writeln!(out, "  %p{} = call double @iris_unbox_f64(ptr {})", idx, raw)?;
+                tramp_arg_names.push(format!("%p{}", idx));
+            } else if param_llvm_ty == "i1" {
+                writeln!(out, "  %p{}i = call i32 @iris_unbox_bool(ptr {})", idx, raw)?;
+                writeln!(out, "  %p{} = trunc i32 %p{}i to i1", idx, idx)?;
+                tramp_arg_names.push(format!("%p{}", idx));
+            } else if p.ty == IrType::Str {
+                writeln!(out, "  %p{} = call ptr @iris_unbox_str(ptr {})", idx, raw)?;
+                tramp_arg_names.push(format!("%p{}", idx));
+            } else if let Some(unbox_fn) = runtime_unbox_helper_for_type(&p.ty) {
+                writeln!(out, "  %p{} = call ptr @{}(ptr {})", idx, unbox_fn, raw)?;
+                tramp_arg_names.push(format!("%p{}", idx));
+            } else {
+                writeln!(out, "  %p{} = bitcast ptr {} to ptr", idx, raw)?;
+                tramp_arg_names.push(format!("%p{}", idx));
+            }
+        }
+        // Build call args.
+        let call_args: Vec<String> = func
+            .params
+            .iter()
+            .enumerate()
+            .map(|(idx, p)| {
+                let ty_s = llvm_type_complete(&p.ty).unwrap_or_else(|_| "ptr".to_owned());
+                let arg_name = &tramp_arg_names[idx];
+                format!("{} {}", ty_s, arg_name)
+            })
+            .collect();
+        writeln!(out, "  call i64 @{}({})", func.name, call_args.join(", "))?;
+        writeln!(out, "  ret void")?;
         writeln!(out, "}}\n")?;
     }
 
@@ -1286,7 +1354,7 @@ fn runtime_box_helper_for_type(ty: &IrType) -> Option<&'static str> {
     }
 }
 
-fn runtime_unbox_helper_for_type(ty: &IrType) -> Option<&'static str> {
+pub(crate) fn runtime_unbox_helper_for_type(ty: &IrType) -> Option<&'static str> {
     match ty {
         IrType::List(_) => Some("iris_unbox_list"),
         IrType::Map(_, _) => Some("iris_unbox_map"),
@@ -3294,17 +3362,52 @@ fn emit_instr_ir(
             body_fn,
             start,
             end,
+            args,
             ..
         } => {
-            // Emit an OpenMP-compatible loop via iris_par_for runtime.
-            // The body function is referenced by name.
-            writeln!(
-                out,
-                "  call void @iris_par_for(ptr @{}, i64 {}, i64 {})",
-                body_fn,
-                val(*start),
-                val(*end)
-            )?;
+            let tramp_name = format!("{}_trampoline", body_fn);
+            if args.is_empty() {
+                writeln!(
+                    out,
+                    "  call void @iris_par_for(ptr @{}, i64 {}, i64 {}, ptr null)",
+                    tramp_name,
+                    val(*start),
+                    val(*end)
+                )?;
+            } else {
+                let arg_buf = format!("%par_args{}", gep_counter);
+                *gep_counter += 1;
+                let alloc_size = (args.len() as i64) * 8;
+                writeln!(out, "  {} = call ptr @malloc(i64 {})", arg_buf, alloc_size)?;
+                for (i, arg_id) in args.iter().enumerate() {
+                    let slot = format!("%par_arg_slot{}_{}", gep_counter, i);
+                    writeln!(
+                        out,
+                        "  {} = getelementptr ptr, ptr {}, i64 {}",
+                        slot, arg_buf, i
+                    )?;
+                    let arg_val = val(*arg_id);
+                    let boxed = box_to_ptr(
+                        out,
+                        func,
+                        *arg_id,
+                        &arg_val,
+                        func.value_type(*arg_id),
+                        emitted_types.get(arg_id).map(|s| s.as_str()),
+                        gep_counter,
+                    )?;
+                    writeln!(out, "  store ptr {}, ptr {}", boxed, slot)?;
+                }
+                writeln!(
+                    out,
+                    "  call void @iris_par_for(ptr @{}, i64 {}, i64 {}, ptr {})",
+                    tramp_name,
+                    val(*start),
+                    val(*end),
+                    arg_buf
+                )?;
+                writeln!(out, "  call void @free(ptr {})", arg_buf)?;
+            }
         }
 
         IrInstr::ChanNew { result, .. } => {
@@ -4512,19 +4615,48 @@ fn emit_instr_ir(
         IrInstr::Sparsify {
             result, operand, ..
         } => {
-            writeln!(
-                out,
-                "  %v{} = call ptr @iris_sparsify(ptr {})",
-                result.0,
-                val(*operand)
-            )?;
+            if scalar_arrays.contains(operand) {
+                let arr_size = find_alloc_size(func, *operand).unwrap_or(0);
+                let elem_ty = find_alloc_elem_ty(func, *operand);
+                match elem_ty {
+                    Some(IrType::Scalar(DType::I64)) => {
+                        writeln!(
+                            out,
+                            "  %v{} = call ptr @iris_sparsify_i64_array(ptr %v{}, i64 {})",
+                            result.0, operand.0, arr_size
+                        )?;
+                    }
+                    Some(IrType::Scalar(DType::F64)) => {
+                        writeln!(
+                            out,
+                            "  %v{} = call ptr @iris_sparsify_f64_array(ptr %v{}, i64 {})",
+                            result.0, operand.0, arr_size
+                        )?;
+                    }
+                    _ => {
+                        writeln!(
+                            out,
+                            "  %v{} = call ptr @iris_sparsify(ptr {})",
+                            result.0,
+                            val(*operand)
+                        )?;
+                    }
+                }
+            } else {
+                writeln!(
+                    out,
+                    "  %v{} = call ptr @iris_sparsify(ptr {})",
+                    result.0,
+                    val(*operand)
+                )?;
+            }
         }
         IrInstr::Densify {
             result, operand, ..
         } => {
             writeln!(
                 out,
-                "  %v{} = call ptr @iris_densify(ptr {})",
+                "  %v{} = call i64 @iris_sparse_nnz(ptr {})",
                 result.0,
                 val(*operand)
             )?;
@@ -5435,6 +5567,20 @@ fn find_alloc_size(func: &IrFunction, array_id: ValueId) -> Option<usize> {
     None
 }
 
+/// Look up the element type of an AllocArray for a given result ValueId.
+fn find_alloc_elem_ty(func: &IrFunction, array_id: ValueId) -> Option<IrType> {
+    for block in func.blocks() {
+        for instr in &block.instrs {
+            if let IrInstr::AllocArray { result, elem_ty, .. } = instr {
+                if *result == array_id {
+                    return Some(elem_ty.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Returns whether an instruction has side effects.
 fn is_side_effecting(instr: &IrInstr) -> bool {
     matches!(
@@ -5679,7 +5825,7 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare void @iris_chan_send(ptr, ptr)",
         "declare ptr @iris_chan_recv(ptr)",
         "declare void @iris_spawn_fn(ptr, ptr)",
-        "declare void @iris_par_for(ptr, i64, i64)",
+        "declare void @iris_par_for(ptr, i64, i64, ptr)",
         "declare void @iris_barrier()",
         // Structs / Tuples / Closures
         "declare ptr @iris_make_struct(i32, ...)",
@@ -5711,7 +5857,10 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare void @iris_backward(ptr)",
         "declare double @iris_tape_grad(ptr)",
         "declare ptr @iris_sparsify(ptr)",
+        "declare ptr @iris_sparsify_i64_array(ptr, i64)",
+        "declare ptr @iris_sparsify_f64_array(ptr, i64)",
         "declare ptr @iris_densify(ptr)",
+        "declare i64 @iris_sparse_nnz(ptr)",
         // Boxing helpers (scalar → IrisVal*)
         "declare ptr @iris_box_i64(i64)",
         "declare ptr @iris_box_i32(i32)",

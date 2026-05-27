@@ -121,8 +121,7 @@ pub fn execute_binary_for_eval_with_target(
 ) -> Result<String, CodegenError> {
     let output = run_binary_for_eval_entry_capture(module, None, target)?;
     let stdout = String::from_utf8_lossy(&output.stdout)
-        .replace("\r\n", "\n")
-        .replace('\r', "\n");
+        .replace('\r', "");
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(CodegenError::Unsupported {

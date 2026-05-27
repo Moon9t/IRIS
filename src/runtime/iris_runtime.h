@@ -372,7 +372,7 @@ IrisChannel* iris_chan_new(void);
 void         iris_chan_send(IrisChannel* chan, IrisVal* val);
 IrisVal*     iris_chan_recv(IrisChannel* chan);
 void         iris_spawn_fn(void* fn, void* arg);
-void         iris_par_for(void (*fn)(int64_t), int64_t start, int64_t end);
+void         iris_par_for(void (*fn)(int64_t, void*), int64_t start, int64_t end, void* arg);
 void         iris_barrier(void);
 
 // ---------------------------------------------------------------------------
@@ -400,7 +400,10 @@ typedef struct IrisTensor IrisTensor;
 // Sparse tensors
 // ---------------------------------------------------------------------------
 IrisSparse* iris_sparsify(IrisList* dense);
+IrisSparse* iris_sparsify_i64_array(int64_t* data, int64_t len);
+IrisSparse* iris_sparsify_f64_array(double* data, int64_t len);
 IrisList*   iris_densify(IrisSparse* sparse);
+int64_t     iris_sparse_nnz(IrisSparse* sparse);
 
 /// Sparsify a dense tensor: extract non-zero (index, value) pairs.
 IrisSparse* iris_tensor_sparsify(IrisTensor* t);

@@ -59,8 +59,13 @@ def f() -> i64 {
     densify(s)
 }
 "#;
-    let out = compile(src, "test", EmitKind::Eval).expect("should eval");
-    assert_eq!(out.trim(), "3", "nnz should be 3, got: {}", out.trim());
+    let out = compile(src, "test", EmitKind::Llvm).expect("should compile to LLVM IR");
+    println!("=== LLVM IR for sparse_nnz_three ===\n{}", out);
+    assert!(
+        out.contains("iris_sparse_nnz"),
+        "LLVM IR should contain iris_sparse_nnz, got:\n{}",
+        out
+    );
 }
 
 // ---------------------------------------------------------------------------

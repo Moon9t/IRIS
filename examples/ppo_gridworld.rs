@@ -81,14 +81,10 @@ impl GridWorldEnv {
     }
 
     fn step(&mut self, action: i32) -> (i32, f32, bool) {
-        if action == 0 {
-            if self.position > 0 {
-                self.position -= 1;
-            }
-        } else if action == 1 {
-            if self.position < self.size - 1 {
-                self.position += 1;
-            }
+        if action == 0 && self.position > 0 {
+            self.position -= 1;
+        } else if action == 1 && self.position < self.size - 1 {
+            self.position += 1;
         }
         let done = self.position == self.size - 1;
         let reward = if done { 10.0 } else { -0.1 };

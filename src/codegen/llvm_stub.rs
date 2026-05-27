@@ -122,6 +122,10 @@ pub fn emit_llvm_stub(module: &IrModule) -> Result<String, CodegenError> {
             } else if param_ty == "i1" {
                 writeln!(out, "  %p{}i = call i32 @iris_unbox_bool(ptr {})", i, raw)?;
                 writeln!(out, "  %p{} = trunc i32 %p{}i to i1", i, i)?;
+            } else if p.ty == IrType::Str {
+                writeln!(out, "  %p{} = call ptr @iris_unbox_str(ptr {})", i, raw)?;
+            } else if let Some(unbox_fn) = crate::codegen::llvm_ir::runtime_unbox_helper_for_type(&p.ty) {
+                writeln!(out, "  %p{} = call ptr @{}(ptr {})", i, unbox_fn, raw)?;
             } else {
                 writeln!(out, "  %p{} = bitcast ptr {} to ptr", i, raw)?;
             }
@@ -158,6 +162,73 @@ pub fn emit_llvm_stub(module: &IrModule) -> Result<String, CodegenError> {
         }
         writeln!(out, "  call void @free(ptr %arg)")?;
         writeln!(out, "  ret ptr null")?;
+        writeln!(out, "}}\n")?;
+    }
+
+    // ── ParFor trampolines ────────────────────────────────────────────────
+    // For each __par_body_N function, generate a trampoline that takes the
+    // loop index (%i) and the pointer array of captures (%arg), unpacks
+    // captures from %arg, and calls the original function.
+    for func in module.functions() {
+        if !func.name.starts_with("__par_body_") {
+            continue;
+        }
+        let tramp_name = format!("{}_trampoline", func.name);
+        writeln!(out, "define void @{}(i64 %i, ptr %arg) {{", tramp_name)?;
+        writeln!(out, "entry:")?;
+
+        // The remaining arguments (starting from index 1) are captured variables packed into %arg.
+        for (idx, p) in func.params.iter().enumerate().skip(1) {
+            let capture_idx = idx - 1;
+            let slot = format!("%slot{}", idx);
+            writeln!(out, "  {} = getelementptr ptr, ptr %arg, i64 {}", slot, capture_idx)?;
+            let raw = format!("%raw{}", idx);
+            writeln!(out, "  {} = load ptr, ptr {}", raw, slot)?;
+            // Unbox to the expected parameter type.
+            let param_ty = llvm_type_name(&p.ty)?;
+            if param_ty == "i64" {
+                writeln!(out, "  %p{} = call i64 @iris_unbox_i64(ptr {})", idx, raw)?;
+            } else if param_ty == "i32" {
+                writeln!(out, "  %p{} = call i64 @iris_unbox_i64(ptr {})", idx, raw)?;
+                writeln!(out, "  %p{}t = trunc i64 %p{} to i32", idx, idx)?;
+            } else if param_ty == "double" {
+                writeln!(out, "  %p{} = call double @iris_unbox_f64(ptr {})", idx, raw)?;
+            } else if param_ty == "float" {
+                writeln!(out, "  %p{}d = call double @iris_unbox_f64(ptr {})", idx, raw)?;
+                writeln!(out, "  %p{} = fptrunc double %p{}d to float", idx, idx)?;
+            } else if param_ty == "i1" {
+                writeln!(out, "  %p{}i = call i32 @iris_unbox_bool(ptr {})", idx, raw)?;
+                writeln!(out, "  %p{} = trunc i32 %p{}i to i1", idx, idx)?;
+            } else if p.ty == IrType::Str {
+                writeln!(out, "  %p{} = call ptr @iris_unbox_str(ptr {})", idx, raw)?;
+            } else if let Some(unbox_fn) = crate::codegen::llvm_ir::runtime_unbox_helper_for_type(&p.ty) {
+                writeln!(out, "  %p{} = call ptr @{}(ptr {})", idx, unbox_fn, raw)?;
+            } else {
+                writeln!(out, "  %p{} = bitcast ptr {} to ptr", idx, raw)?;
+            }
+        }
+        // Build call args.
+        let call_args: Vec<String> = func
+            .params
+            .iter()
+            .enumerate()
+            .map(|(idx, p)| {
+                let ty = llvm_type_name(&p.ty).unwrap_or_else(|_| "ptr".to_owned());
+                if idx == 0 {
+                    "i64 %i".to_owned()
+                } else if ty == "i32" {
+                    format!("i32 %p{}t", idx)
+                } else if ty == "float" {
+                    format!("float %p{}", idx)
+                } else if ty == "i1" {
+                    format!("i1 %p{}", idx)
+                } else {
+                    format!("{} %p{}", ty, idx)
+                }
+            })
+            .collect();
+        writeln!(out, "  call i64 @{}({})", func.name, call_args.join(", "))?;
+        writeln!(out, "  ret void")?;
         writeln!(out, "}}\n")?;
     }
     Ok(out)
@@ -975,15 +1046,51 @@ fn emit_llvm_instr(
             body_fn,
             start,
             end,
+            args,
             ..
         } => {
-            writeln!(
-                out,
-                "  call void @iris_par_for(ptr @{}, i64 {}, i64 {})",
-                body_fn,
-                val(*start),
-                val(*end)
-            )?;
+            let tramp_name = format!("{}_trampoline", body_fn);
+            if args.is_empty() {
+                writeln!(
+                    out,
+                    "  call void @iris_par_for(ptr @{}, i64 {}, i64 {}, ptr null)",
+                    tramp_name,
+                    val(*start),
+                    val(*end)
+                )?;
+            } else {
+                let arg_buf = format!("%par_args{}", gep_counter);
+                *gep_counter += 1;
+                let alloc_size = (args.len() as i64) * 8;
+                writeln!(out, "  {} = call ptr @malloc(i64 {})", arg_buf, alloc_size)?;
+                for (i, arg_id) in args.iter().enumerate() {
+                    let slot = format!("%par_arg_slot{}_{}", gep_counter, i);
+                    writeln!(
+                        out,
+                        "  {} = getelementptr ptr, ptr {}, i64 {}",
+                        slot, arg_buf, i
+                    )?;
+                    let value = val(*arg_id);
+                    let boxed = box_spawn_capture(
+                        out,
+                        func,
+                        *arg_id,
+                        &value,
+                        const_llvm_types.get(arg_id).copied(),
+                        gep_counter,
+                    )?;
+                    writeln!(out, "  store ptr {}, ptr {}", boxed, slot)?;
+                }
+                writeln!(
+                    out,
+                    "  call void @iris_par_for(ptr @{}, i64 {}, i64 {}, ptr {})",
+                    tramp_name,
+                    val(*start),
+                    val(*end),
+                    arg_buf
+                )?;
+                writeln!(out, "  call void @free(ptr {})", arg_buf)?;
+            }
         }
 
         // Channel ops: emit as opaque runtime calls.
@@ -1259,7 +1366,7 @@ fn emit_llvm_instr(
         }
 
         IrInstr::Densify { result, .. } => {
-            writeln!(out, "  %v{} = call ptr @iris_densify()", result.0)?;
+            writeln!(out, "  %v{} = call i64 @iris_sparse_nnz()", result.0)?;
         }
 
         IrInstr::Barrier => {
@@ -2415,7 +2522,7 @@ fn emit_iris_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare void @iris_chan_send(ptr, ptr)",
         "declare ptr @iris_chan_recv(ptr)",
         "declare void @iris_spawn_fn(ptr, ptr)",
-        "declare void @iris_par_for(ptr, i64, i64)",
+        "declare void @iris_par_for(ptr, i64, i64, ptr)",
         "declare ptr @malloc(i64)",
         "declare void @free(ptr)",
         // Atomics / Mutex
@@ -2448,7 +2555,10 @@ fn emit_iris_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_box_bool(i1)",
         "declare ptr @iris_box_str(ptr)",
         "declare ptr @iris_sparsify()",
+        "declare ptr @iris_sparsify_i64_array()",
+        "declare ptr @iris_sparsify_f64_array()",
         "declare ptr @iris_densify()",
+        "declare i64 @iris_sparse_nnz()",
         "declare ptr @iris_tape_record(double, ptr, i64, ptr, ptr)",
         "declare void @iris_backward(ptr)",
         "declare double @iris_tape_grad(ptr)",
