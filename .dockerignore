@@ -1,0 +1,31 @@
+# Keep the Docker build context small: only the files Cargo needs.
+*
+
+# Explicitly ignore dot-directories; `*` does not match them.
+.git/
+.github/
+.vscode/
+.idea/
+.claude/
+.cargo/
+
+# Generated build outputs.
+target/
+**/target/
+tmp/
+**/tmp/
+
+!Cargo.toml
+!Cargo.lock
+!build.rs
+!docker-entrypoint.sh
+!src/
+!src/**
+!tests/
+!tests/**
+!examples/
+!examples/**
+
+# Re-include these top-level files explicitly if needed by scripts.
+!README.md
+!LICENSE
