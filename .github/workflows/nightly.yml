@@ -76,7 +76,7 @@ jobs:
             NAME=$(basename "$f")
             echo "=== Testing: $NAME ==="
             # Set a 30-second timeout per example
-            if timeout 30 cargo run --release -- run "$f" > /dev/null 2>&1; then
+            if timeout 30 ./target/release/iris run "$f" > /dev/null 2>&1; then
               echo "  PASS"
               PASS=$((PASS + 1))
             else
@@ -118,7 +118,7 @@ jobs:
         run: |
           while IFS= read -r f; do
             echo "=== ML Test: $(basename $f) ==="
-            timeout 60 cargo run --release -- run "$f" || echo "  WARN: exit $?"
+            timeout 60 ./target/release/iris run "$f" || echo "  WARN: exit $?"
           done < <(find examples/06_machine_learning examples/07_applications -type f \( -name 'ml_*.iris' -o -name 'ais_*.iris' \) | sort)
 
   # ───────────────── binary size tracking ──────────────────────────
@@ -173,7 +173,7 @@ jobs:
             if [ -f "$f" ]; then
               NAME=$(basename "$f" .iris)
               echo "=== Benchmark: $NAME ==="
-              OUTPUT=$(cargo run --release -- bench "$f" -n 50 2>&1 || true)
+              OUTPUT=$(./target/release/iris bench "$f" -n 50 2>&1 || true)
               echo "$OUTPUT"
               echo ""
             fi
