@@ -40,7 +40,7 @@ jobs:
             os: ubuntu-latest
             ext: ''
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-13
             ext: ''
           - target: aarch64-apple-darwin
             os: macos-latest
@@ -109,11 +109,9 @@ jobs:
               mv toolchain-dl/clang+llvm-* toolchain-dl/llvm
               ;;
             x86_64-apple-darwin)
-              # No prebuilt x86_64-apple-darwin on LLVM 18.1.8.
-              # Runner is arm64; install x86_64 Homebrew + LLVM via Rosetta 2.
-              arch -x86_64 /bin/bash -c 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-              arch -x86_64 /usr/local/bin/brew install --quiet llvm@18
-              BREW_LLVM="$(arch -x86_64 /usr/local/bin/brew --prefix llvm@18)"
+              # Runner is native x86_64 (macos-13); install LLVM via Homebrew directly.
+              brew install --quiet llvm@18
+              BREW_LLVM="$(brew --prefix llvm@18)"
               mkdir -p toolchain-dl/llvm/bin toolchain-dl/llvm/lib
               cp -a "${BREW_LLVM}/bin/"* toolchain-dl/llvm/bin/ 2>/dev/null || true
               cp -a "${BREW_LLVM}/lib/"*.dylib toolchain-dl/llvm/lib/ 2>/dev/null || true
@@ -296,7 +294,7 @@ jobs:
             arch: aarch64
           # macOS x64 .pkg
           - installer: macos-x64-pkg
-            os: macos-latest
+            os: macos-13
             target: x86_64-apple-darwin
             format: pkg
             arch: x86_64
@@ -308,7 +306,7 @@ jobs:
             arch: aarch64
           # macOS x64 .dmg
           - installer: macos-x64-dmg
-            os: macos-latest
+            os: macos-13
             target: x86_64-apple-darwin
             format: dmg
             arch: x86_64
