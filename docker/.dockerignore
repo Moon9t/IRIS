@@ -18,7 +18,7 @@ tmp/
 !Cargo.toml
 !Cargo.lock
 !build.rs
-!docker-entrypoint.sh
+!docker/docker-entrypoint.sh
 !src/
 !src/**
 !tests/

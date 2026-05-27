@@ -5,7 +5,7 @@ import pathlib
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-OUT = ROOT / "iris-linguist.patch"
+OUT = ROOT / "tools" / "iris-linguist.patch"
 
 FILES = {
     "lib/linguist/languages.yml": "https://raw.githubusercontent.com/github/linguist/master/lib/linguist/languages.yml",

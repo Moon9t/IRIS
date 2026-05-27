@@ -25,7 +25,7 @@ RUN set -eux; \
 WORKDIR /work
 
 # Install the entrypoint separately so it is available even when /work is bind-mounted.
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

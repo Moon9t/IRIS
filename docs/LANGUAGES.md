@@ -25,7 +25,7 @@ Heuristics
 Updating the grammar or metadata
 - Steps to update the vendored grammar and metadata:
   1. Update the upstream TextMate grammar (source in this repo under `iris-tmLanguage/syntaxes/`).
- 2. Re-run `tools/generate_iris_linguist_patch.py` to regenerate `iris-linguist.patch`.
+ 2. Re-run `tools/generate_iris_linguist_patch.py` to regenerate `tools/iris-linguist.patch`.
  3. Apply the patch to a local clone of the Linguist repo and vendor the grammar under `vendor/grammars/`.
  4. Run Linguist helper scripts (recommended in Docker): build image in `tools/linguist-docker/`, mount the Linguist checkout, run `bundle install`, then `script/update-ids`.
  5. Run `rake test` in the Linguist checkout and review failures — many repository tests are unrelated to grammar changes; if CI fails for unrelated reasons, file a follow-up or ask maintainers for guidance.

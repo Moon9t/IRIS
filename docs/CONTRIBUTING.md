@@ -8,11 +8,11 @@ Local preparation (recommended via Docker)
 2. Regenerate the unified diff for Linguist:
 
 ```sh
-python tools/generate_iris_linguist_patch.py --out iris-linguist.patch
+python tools/generate_iris_linguist_patch.py
 ```
 
 3. Prepare a local checkout of `github-linguist/linguist` (fork if needed).
-4. Apply the generated patch to your local Linguist checkout and add the vendored grammar under `vendor/grammars/iris-tmLanguage`.
+4. Apply the generated patch to your local Linguist checkout (located in `tools/iris-linguist.patch`) and add the vendored grammar under `vendor/grammars/iris-tmLanguage`.
 
 Using Docker to run Linguist helpers (recommended)
 1. Build the helper image and run a container that mounts your local Linguist checkout (example helper included under `tools/linguist-docker/`).
