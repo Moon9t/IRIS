@@ -428,46 +428,58 @@ fn emit_llvm_ir_impl(
     // trampoline wrapper that takes a single `ptr` (array of boxed captures),
     // unpacks them, and calls the real spawn body function.
     for func in module.functions() {
-        if !(func.name.starts_with("__spawn_") || func.name.starts_with("__async_spawn_")) || func.params.is_empty() {
+        if !(func.name.starts_with("__spawn_") || func.name.starts_with("__async_spawn_")) {
             continue;
         }
         let tramp_name = format!("{}_trampoline", func.name);
         writeln!(out, "define ptr @{}(ptr %arg) {{", tramp_name)?;
         writeln!(out, "entry:")?;
+        // Track the actual local names emitted for each parameter so we
+        // consistently reference them when emitting the call. This avoids
+        // mismatches where a different naming (e.g. `%pNt` for i32) was
+        // emitted but the call tried to use `%pN`.
+        let mut tramp_arg_names: Vec<String> = Vec::new();
         for (i, p) in func.params.iter().enumerate() {
             let slot = format!("%slot{}", i);
             writeln!(out, "  {} = getelementptr ptr, ptr %arg, i64 {}", slot, i)?;
             let raw = format!("%raw{}", i);
             writeln!(out, "  {} = load ptr, ptr {}", raw, slot)?;
-            // Unbox to the expected parameter type.
+            // Unbox to the expected parameter type and record the name.
             let param_llvm_ty = llvm_type_complete(&p.ty).unwrap_or_else(|_| "ptr".to_owned());
             if param_llvm_ty == "i64" {
                 writeln!(out, "  %p{} = call i64 @iris_unbox_i64(ptr {})", i, raw)?;
+                tramp_arg_names.push(format!("%p{}", i));
             } else if param_llvm_ty == "i32" {
                 writeln!(out, "  %p{} = call i64 @iris_unbox_i64(ptr {})", i, raw)?;
                 writeln!(out, "  %p{}t = trunc i64 %p{} to i32", i, i)?;
+                tramp_arg_names.push(format!("%p{}t", i));
             } else if param_llvm_ty == "double" {
                 writeln!(out, "  %p{} = call double @iris_unbox_f64(ptr {})", i, raw)?;
+                tramp_arg_names.push(format!("%p{}", i));
             } else if param_llvm_ty == "i1" {
                 writeln!(out, "  %p{}i = call i32 @iris_unbox_bool(ptr {})", i, raw)?;
                 writeln!(out, "  %p{} = trunc i32 %p{}i to i1", i, i)?;
+                tramp_arg_names.push(format!("%p{}", i));
+            } else if p.ty == IrType::Str {
+                writeln!(out, "  %p{} = call ptr @iris_unbox_str(ptr {})", i, raw)?;
+                tramp_arg_names.push(format!("%p{}", i));
+            } else if let Some(unbox_fn) = runtime_unbox_helper_for_type(&p.ty) {
+                writeln!(out, "  %p{} = call ptr @{}(ptr {})", i, unbox_fn, raw)?;
+                tramp_arg_names.push(format!("%p{}", i));
             } else {
-                // ptr types (channels, structs, closures, etc.) — already ptr.
                 writeln!(out, "  %p{} = bitcast ptr {} to ptr", i, raw)?;
+                tramp_arg_names.push(format!("%p{}", i));
             }
         }
-        // Build call args.
+        // Build call args using the recorded names to guarantee consistency.
         let call_args: Vec<String> = func
             .params
             .iter()
             .enumerate()
             .map(|(i, p)| {
                 let ty_s = llvm_type_complete(&p.ty).unwrap_or_else(|_| "ptr".to_owned());
-                if ty_s == "i32" {
-                    format!("i32 %p{}t", i)
-                } else {
-                    format!("{} %p{}", ty_s, i)
-                }
+                let arg_name = &tramp_arg_names[i];
+                format!("{} {}", ty_s, arg_name)
             })
             .collect();
         let spawn_ret_ty = fn_sigs
@@ -490,6 +502,77 @@ fn emit_llvm_ir_impl(
         writeln!(out, "}}\n")?;
     }
 
+    // ── ParFor trampolines ────────────────────────────────────────────────
+    // For each __par_body_N function, generate a trampoline that takes the
+    // loop index (%i) and the pointer array of captures (%arg), unpacks
+    // captures from %arg, and calls the original function.
+    for func in module.functions() {
+        if !func.name.starts_with("__par_body_") {
+            continue;
+        }
+        let tramp_name = format!("{}_trampoline", func.name);
+        writeln!(out, "define void @{}(i64 %i, ptr %arg) {{", tramp_name)?;
+        writeln!(out, "entry:")?;
+        let mut tramp_arg_names: Vec<String> = vec!["%i".to_owned()];
+
+        // The remaining arguments (starting from index 1) are captured variables packed into %arg.
+        for (idx, p) in func.params.iter().enumerate().skip(1) {
+            let capture_idx = idx - 1;
+            let slot = format!("%slot{}", idx);
+            writeln!(
+                out,
+                "  {} = getelementptr ptr, ptr %arg, i64 {}",
+                slot, capture_idx
+            )?;
+            let raw = format!("%raw{}", idx);
+            writeln!(out, "  {} = load ptr, ptr {}", raw, slot)?;
+            // Unbox to the expected parameter type.
+            let param_llvm_ty = llvm_type_complete(&p.ty).unwrap_or_else(|_| "ptr".to_owned());
+            if param_llvm_ty == "i64" {
+                writeln!(out, "  %p{} = call i64 @iris_unbox_i64(ptr {})", idx, raw)?;
+                tramp_arg_names.push(format!("%p{}", idx));
+            } else if param_llvm_ty == "i32" {
+                writeln!(out, "  %p{} = call i64 @iris_unbox_i64(ptr {})", idx, raw)?;
+                writeln!(out, "  %p{}t = trunc i64 %p{} to i32", idx, idx)?;
+                tramp_arg_names.push(format!("%p{}t", idx));
+            } else if param_llvm_ty == "double" {
+                writeln!(
+                    out,
+                    "  %p{} = call double @iris_unbox_f64(ptr {})",
+                    idx, raw
+                )?;
+                tramp_arg_names.push(format!("%p{}", idx));
+            } else if param_llvm_ty == "i1" {
+                writeln!(out, "  %p{}i = call i32 @iris_unbox_bool(ptr {})", idx, raw)?;
+                writeln!(out, "  %p{} = trunc i32 %p{}i to i1", idx, idx)?;
+                tramp_arg_names.push(format!("%p{}", idx));
+            } else if p.ty == IrType::Str {
+                writeln!(out, "  %p{} = call ptr @iris_unbox_str(ptr {})", idx, raw)?;
+                tramp_arg_names.push(format!("%p{}", idx));
+            } else if let Some(unbox_fn) = runtime_unbox_helper_for_type(&p.ty) {
+                writeln!(out, "  %p{} = call ptr @{}(ptr {})", idx, unbox_fn, raw)?;
+                tramp_arg_names.push(format!("%p{}", idx));
+            } else {
+                writeln!(out, "  %p{} = bitcast ptr {} to ptr", idx, raw)?;
+                tramp_arg_names.push(format!("%p{}", idx));
+            }
+        }
+        // Build call args.
+        let call_args: Vec<String> = func
+            .params
+            .iter()
+            .enumerate()
+            .map(|(idx, p)| {
+                let ty_s = llvm_type_complete(&p.ty).unwrap_or_else(|_| "ptr".to_owned());
+                let arg_name = &tramp_arg_names[idx];
+                format!("{} {}", ty_s, arg_name)
+            })
+            .collect();
+        writeln!(out, "  call i64 @{}({})", func.name, call_args.join(", "))?;
+        writeln!(out, "  ret void")?;
+        writeln!(out, "}}\n")?;
+    }
+
     if entry_llvm_name.is_some() {
         writeln!(out, "define i32 @main(i32 %argc, ptr %argv) {{")?;
         writeln!(out, "  call void @iris_set_argv(i32 %argc, ptr %argv)")?;
@@ -499,6 +582,63 @@ fn emit_llvm_ir_impl(
         writeln!(out, "  unreachable")?;
         writeln!(out, "}}\n")?;
     }
+    // Post-process emitted IR to correct occasional FP-width mismatches
+    // where an instruction like `fptosi float %vN to i64` was emitted but
+    // the `%vN` value is actually defined as `double` earlier in the IR.
+    // This can happen when value-type bookkeeping and emitted instructions
+    // get out of sync for constants/folded expressions. Fixing here avoids
+    // clang rejecting the IR.
+    {
+        let mut lines: Vec<String> = out.lines().map(|s| s.to_owned()).collect();
+        // Build a map of value -> its first-definition line (to check its type).
+        let mut val_type: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for ln in &lines {
+            if let Some(idx) = ln.find(" = ") {
+                let lhs = ln[..idx].trim();
+                if lhs.starts_with('%') {
+                    // lhs like "%v3"
+                    // Try to extract a type from the rhs, e.g. "fmul double ..." or "fadd float ..."
+                    let rhs = ln[idx + 3..].trim();
+                    if rhs.starts_with("fmul ")
+                        || rhs.starts_with("fadd ")
+                        || rhs.starts_with("fsub ")
+                    {
+                        if rhs.contains(" double ") {
+                            val_type.insert(lhs.to_string(), "double".to_string());
+                        } else if rhs.contains(" float ") {
+                            val_type.insert(lhs.to_string(), "float".to_string());
+                        }
+                    } else if rhs.starts_with("fpext ") {
+                        val_type.insert(lhs.to_string(), "double".to_string());
+                    } else if rhs.starts_with("fptrunc ") {
+                        val_type.insert(lhs.to_string(), "float".to_string());
+                    }
+                }
+            }
+        }
+        // Now fix fptosi float %vN occurrences when val_type says %vN is double.
+        for ln in &mut lines {
+            if ln.contains("fptosi float %") {
+                // find the %vN
+                if let Some(p) = ln.find("fptosi float %") {
+                    let rest = &ln[p + "fptosi float ".len()..];
+                    if let Some(end) = rest.find(' ') {
+                        let vname = &rest[..end];
+                        let key = vname.to_string();
+                        if let Some(t) = val_type.get(&key) {
+                            if t == "double" {
+                                *ln = ln.replacen("fptosi float ", "fptosi double ", 1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out = lines.join("\n");
+        out.push('\n');
+    }
+
     Ok(out)
 }
 
@@ -554,7 +694,9 @@ fn emit_function_ir_with_name(
         .blocks()
         .iter()
         .all(|b| b.instrs.iter().all(|i| !is_side_effecting(i)));
-    let attrs = if is_pure { " nounwind willreturn" } else { "" };
+    // Keep the generated textual IR conservative so older clang/LLVM parsers
+    // do not reject otherwise valid function definitions.
+    let attrs = if is_pure { " nounwind" } else { "" };
 
     writeln!(
         out,
@@ -726,8 +868,30 @@ fn emit_function_body(
                         emitted_types.insert(*r, ty_s);
                     }
                 }
-                IrInstr::BinOp { result, ty, .. } => {
-                    let s = llvm_type_complete(ty).unwrap_or_else(|_| "i64".to_owned());
+                IrInstr::BinOp {
+                    result,
+                    ty,
+                    lhs,
+                    rhs,
+                    op,
+                } => {
+                    let comparison_op = matches!(
+                        op,
+                        BinOp::CmpEq
+                            | BinOp::CmpNe
+                            | BinOp::CmpLt
+                            | BinOp::CmpLe
+                            | BinOp::CmpGt
+                            | BinOp::CmpGe
+                    );
+                    let s = if comparison_op {
+                        "i1".to_owned()
+                    } else {
+                        let semantic_operand_ty =
+                            func.value_type(*lhs).or_else(|| func.value_type(*rhs));
+                        let resolved_ty = semantic_operand_ty.unwrap_or(ty);
+                        llvm_type_complete(resolved_ty).unwrap_or_else(|_| "i64".to_owned())
+                    };
                     emitted_types.insert(*result, s);
                 }
                 IrInstr::IsSome { result, .. } | IrInstr::IsOk { result, .. } => {
@@ -1146,13 +1310,8 @@ fn emit_function_body(
 
         let mut panic_emitted = false; // track if we've already emitted unreachable via Panic
         for instr in &block.instrs {
-            // Skip branch/return terminators after Panic (which already emitted `unreachable`).
-            if panic_emitted
-                && matches!(
-                    instr,
-                    IrInstr::Br { .. } | IrInstr::CondBr { .. } | IrInstr::Return { .. }
-                )
-            {
+            // Skip any instructions after a `Panic` (we already emitted `unreachable`).
+            if panic_emitted {
                 continue;
             }
             // Emit phi coercion casts right before block terminators.
@@ -1203,7 +1362,7 @@ fn runtime_box_helper_for_type(ty: &IrType) -> Option<&'static str> {
     }
 }
 
-fn runtime_unbox_helper_for_type(ty: &IrType) -> Option<&'static str> {
+pub(crate) fn runtime_unbox_helper_for_type(ty: &IrType) -> Option<&'static str> {
     match ty {
         IrType::List(_) => Some("iris_unbox_list"),
         IrType::Map(_, _) => Some("iris_unbox_map"),
@@ -1593,60 +1752,128 @@ fn coerce_to_type(
     out: &mut String,
 ) -> Result<String, CodegenError> {
     let v_str = llvm_val(v, consts, func);
-    // Constants don't need coercion — their type is determined by context.
+    // Constants: when used in an expected type context we may need to
+    // materialize a properly-typed temporary. In particular, LLVM expects
+    // `float` constants to be written as hexadecimal float literals; so
+    // for inline constants used as `float` we emit a small tmp holding the
+    // properly-typed float literal.
     if consts.contains_key(&v) {
+        if expected_ty == "float" {
+            // Parse stored decimal and produce an f32 hex literal.
+            let dv = consts[&v].clone();
+            if let Ok(_d) = dv.parse::<f64>() {
+                *gep_counter += 1;
+                let tmp = format!("%coerce{}", gep_counter);
+                // Use fptrunc from a double literal to produce a correctly-typed
+                // float value. Decimal double literals are accepted by clang.
+                writeln!(out, "  {} = fptrunc double {} to float", tmp, dv)?;
+                return Ok(tmp);
+            }
+            return Ok(v_str);
+        }
         return Ok(v_str);
     }
     if let Some(actual_ty) = emitted_types.get(&v) {
         if actual_ty != expected_ty {
             *gep_counter += 1;
             let tmp = format!("%coerce{}", gep_counter);
-            if actual_ty == "ptr" && expected_ty.starts_with('i') {
+            let actual_ty_str = actual_ty.clone();
+            if actual_ty_str == "ptr" && expected_ty.starts_with('i') {
                 writeln!(out, "  {} = ptrtoint ptr {} to {}", tmp, v_str, expected_ty)?;
-            } else if expected_ty == "ptr" && actual_ty.starts_with('i') {
-                writeln!(out, "  {} = inttoptr {} {} to ptr", tmp, actual_ty, v_str)?;
-            } else if actual_ty.starts_with('i') && expected_ty.starts_with('i') {
-                let op = if bit_width(actual_ty) > bit_width(expected_ty) {
+            } else if expected_ty == "ptr" && actual_ty_str.starts_with('i') {
+                writeln!(
+                    out,
+                    "  {} = inttoptr {} {} to ptr",
+                    tmp, actual_ty_str, v_str
+                )?;
+            } else if actual_ty_str.starts_with('i') && expected_ty.starts_with('i') {
+                let src_w = bit_width(&actual_ty_str);
+                let dst_w = bit_width(expected_ty);
+                if src_w == dst_w {
+                    return Ok(v_str);
+                }
+                let zero_extend_src = matches!(
+                    func.value_type(v),
+                    Some(IrType::Scalar(
+                        DType::U8 | DType::U32 | DType::U64 | DType::USize | DType::Bool
+                    ))
+                );
+                let op = if src_w > dst_w {
                     "trunc"
-                } else {
+                } else if zero_extend_src {
                     "zext"
+                } else {
+                    "sext"
                 };
                 writeln!(
                     out,
                     "  {} = {} {} {} to {}",
-                    tmp, op, actual_ty, v_str, expected_ty
+                    tmp, op, actual_ty_str, v_str, expected_ty
                 )?;
-            } else if (actual_ty == "float" || actual_ty == "double")
+            } else if (actual_ty_str == "float" || actual_ty_str == "double")
                 && expected_ty.starts_with('i')
             {
                 if expected_ty == "i1" {
-                    let zero = if actual_ty == "float" { "0.0" } else { "0.0" };
-                    let cmp = if actual_ty == "float" {
+                    let zero = "0.0";
+                    let cmp = if actual_ty_str == "float" {
                         format!("fcmp one float {}, {}", v_str, zero)
                     } else {
                         format!("fcmp one double {}, {}", v_str, zero)
                     };
                     writeln!(out, "  {} = {}", tmp, cmp)?;
                 } else {
+                    // Ensure the operand is represented with the authoritative
+                    // FP width (`actual_ty_str`) before performing the
+                    // float->int conversion. This avoids emitting e.g.
+                    // `fptosi float %x to i64` when `%x` is actually a
+                    // `double` value, which clang rejects.
+                    let v_use = if actual_ty != &actual_ty_str {
+                        *gep_counter += 1;
+                        let tmp2 = format!("%coerce{}", *gep_counter);
+                        if actual_ty == "double" && actual_ty_str == "float" {
+                            writeln!(out, "  {} = fptrunc double {} to float", tmp2, v_str)?;
+                        } else if actual_ty == "float" && actual_ty_str == "double" {
+                            writeln!(out, "  {} = fpext float {} to double", tmp2, v_str)?;
+                        } else {
+                            writeln!(
+                                out,
+                                "  {} = bitcast {} {} to {}",
+                                tmp2, actual_ty, v_str, actual_ty_str
+                            )?;
+                        }
+                        tmp2
+                    } else {
+                        v_str
+                    };
                     writeln!(
                         out,
                         "  {} = fptosi {} {} to {}",
-                        tmp, actual_ty, v_str, expected_ty
+                        tmp, actual_ty_str, v_use, expected_ty
                     )?;
                 }
-            } else if actual_ty.starts_with('i')
+            } else if actual_ty_str.starts_with('i')
                 && (expected_ty == "float" || expected_ty == "double")
             {
                 writeln!(
                     out,
                     "  {} = sitofp {} {} to {}",
-                    tmp, actual_ty, v_str, expected_ty
+                    tmp, actual_ty_str, v_str, expected_ty
                 )?;
+            } else if (actual_ty_str == "float" || actual_ty_str == "double")
+                && (expected_ty == "float" || expected_ty == "double")
+            {
+                if actual_ty_str == "double" && expected_ty == "float" {
+                    writeln!(out, "  {} = fptrunc double {} to float", tmp, v_str)?;
+                } else if actual_ty_str == "float" && expected_ty == "double" {
+                    writeln!(out, "  {} = fpext float {} to double", tmp, v_str)?;
+                } else {
+                    return Ok(v_str);
+                }
             } else {
                 writeln!(
                     out,
                     "  {} = bitcast {} {} to {}",
-                    tmp, actual_ty, v_str, expected_ty
+                    tmp, actual_ty_str, v_str, expected_ty
                 )?;
             }
             return Ok(tmp);
@@ -1815,29 +2042,172 @@ fn emit_instr_ir(
             let is_str_cmp = semantic_operand_ty == Some(&IrType::Str)
                 || lhs_ety == Some("ptr")
                     && rhs_ety == Some("ptr")
-                    && matches!(op, BinOp::CmpEq | BinOp::CmpNe);
-            if is_str_cmp && matches!(op, BinOp::CmpEq | BinOp::CmpNe) {
+                    && matches!(
+                        op,
+                        BinOp::CmpEq
+                            | BinOp::CmpNe
+                            | BinOp::CmpLt
+                            | BinOp::CmpLe
+                            | BinOp::CmpGt
+                            | BinOp::CmpGe
+                    );
+            let lhs_ty = func.value_type(*lhs);
+            let rhs_ty = func.value_type(*rhs);
+            let is_grad_op =
+                matches!(lhs_ty, Some(IrType::Grad(_))) || matches!(rhs_ty, Some(IrType::Grad(_)));
+
+            if is_grad_op {
+                // Dual-number arithmetic (forward-mode AD)
+                let (av, at) = if matches!(lhs_ty, Some(IrType::Grad(_))) {
+                    let lv =
+                        coerce_to_type(*lhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
+                    *gep_counter += 1;
+                    let val_name = format!("%grad_val_l{}", *gep_counter);
+                    writeln!(
+                        out,
+                        "  {} = call double @iris_grad_value(ptr {})",
+                        val_name, lv
+                    )?;
+                    *gep_counter += 1;
+                    let tan_name = format!("%grad_tan_l{}", *gep_counter);
+                    writeln!(
+                        out,
+                        "  {} = call double @iris_grad_tangent(ptr {})",
+                        tan_name, lv
+                    )?;
+                    (val_name, tan_name)
+                } else {
+                    let lv = coerce_scalar_to_f64(*lhs, consts, func, gep_counter, out)?;
+                    (lv, "0.000000e+00".to_string())
+                };
+
+                let (bv, bt) = if matches!(rhs_ty, Some(IrType::Grad(_))) {
+                    let rv =
+                        coerce_to_type(*rhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
+                    *gep_counter += 1;
+                    let val_name = format!("%grad_val_r{}", *gep_counter);
+                    writeln!(
+                        out,
+                        "  {} = call double @iris_grad_value(ptr {})",
+                        val_name, rv
+                    )?;
+                    *gep_counter += 1;
+                    let tan_name = format!("%grad_tan_r{}", *gep_counter);
+                    writeln!(
+                        out,
+                        "  {} = call double @iris_grad_tangent(ptr {})",
+                        tan_name, rv
+                    )?;
+                    (val_name, tan_name)
+                } else {
+                    let rv = coerce_scalar_to_f64(*rhs, consts, func, gep_counter, out)?;
+                    (rv, "0.000000e+00".to_string())
+                };
+
+                *gep_counter += 1;
+                let res_val = format!("%grad_val_res{}", *gep_counter);
+                *gep_counter += 1;
+                let res_tan = format!("%grad_tan_res{}", *gep_counter);
+
+                match op {
+                    BinOp::Add => {
+                        writeln!(out, "  {} = fadd double {}, {}", res_val, av, bv)?;
+                        writeln!(out, "  {} = fadd double {}, {}", res_tan, at, bt)?;
+                    }
+                    BinOp::Sub => {
+                        writeln!(out, "  {} = fsub double {}, {}", res_val, av, bv)?;
+                        writeln!(out, "  {} = fsub double {}, {}", res_tan, at, bt)?;
+                    }
+                    BinOp::Mul => {
+                        writeln!(out, "  {} = fmul double {}, {}", res_val, av, bv)?;
+                        *gep_counter += 1;
+                        let t1 = format!("%mul_tan_t{}", *gep_counter);
+                        writeln!(out, "  {} = fmul double {}, {}", t1, av, bt)?;
+                        *gep_counter += 1;
+                        let t2 = format!("%mul_tan_t{}", *gep_counter);
+                        writeln!(out, "  {} = fmul double {}, {}", t2, at, bv)?;
+                        writeln!(out, "  {} = fadd double {}, {}", res_tan, t1, t2)?;
+                    }
+                    BinOp::Div => {
+                        writeln!(out, "  {} = fdiv double {}, {}", res_val, av, bv)?;
+                        *gep_counter += 1;
+                        let t1 = format!("%div_tan_t{}", *gep_counter);
+                        writeln!(out, "  {} = fmul double {}, {}", t1, at, bv)?;
+                        *gep_counter += 1;
+                        let t2 = format!("%div_tan_t{}", *gep_counter);
+                        writeln!(out, "  {} = fmul double {}, {}", t2, av, bt)?;
+                        *gep_counter += 1;
+                        let t3 = format!("%div_tan_t{}", *gep_counter);
+                        writeln!(out, "  {} = fsub double {}, {}", t3, t1, t2)?;
+                        *gep_counter += 1;
+                        let t4 = format!("%div_tan_t{}", *gep_counter);
+                        writeln!(out, "  {} = fmul double {}, {}", t4, bv, bv)?;
+                        writeln!(out, "  {} = fdiv double {}, {}", res_tan, t3, t4)?;
+                    }
+                    _ => {
+                        return Err(CodegenError::Unsupported {
+                            backend: "llvm".into(),
+                            detail: format!("unsupported binary operation {:?} on grad<T>", op),
+                        });
+                    }
+                }
+
+                writeln!(
+                    out,
+                    "  %v{} = call ptr @iris_make_grad(double {}, double {})",
+                    result.0, res_val, res_tan
+                )?;
+            } else if is_str_cmp {
                 let lv =
                     coerce_to_type(*lhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
                 let rv =
                     coerce_to_type(*rhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
-                if *op == BinOp::CmpEq {
-                    writeln!(
-                        out,
-                        "  %v{} = call i1 @iris_str_eq(ptr {}, ptr {})",
-                        result.0, lv, rv
-                    )?;
-                } else {
-                    let tmp = format!("%str_eq_tmp{}", gep_counter);
-                    *gep_counter += 1;
-                    writeln!(
-                        out,
-                        "  {} = call i1 @iris_str_eq(ptr {}, ptr {})",
-                        tmp, lv, rv
-                    )?;
-                    writeln!(out, "  %v{} = xor i1 {}, true", result.0, tmp)?;
+                match op {
+                    BinOp::CmpEq => {
+                        writeln!(
+                            out,
+                            "  %v{} = call i1 @iris_str_eq(ptr {}, ptr {})",
+                            result.0, lv, rv
+                        )?;
+                    }
+                    BinOp::CmpNe => {
+                        let tmp = format!("%str_eq_tmp{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(
+                            out,
+                            "  {} = call i1 @iris_str_eq(ptr {}, ptr {})",
+                            tmp, lv, rv
+                        )?;
+                        writeln!(out, "  %v{} = xor i1 {}, true", result.0, tmp)?;
+                    }
+                    BinOp::CmpLt | BinOp::CmpLe | BinOp::CmpGt | BinOp::CmpGe => {
+                        let strcmp_res = format!("%strcmp_res{}", gep_counter);
+                        *gep_counter += 1;
+                        writeln!(
+                            out,
+                            "  {} = call i32 @strcmp(ptr {}, ptr {})",
+                            strcmp_res, lv, rv
+                        )?;
+                        let cond = match op {
+                            BinOp::CmpLt => "slt",
+                            BinOp::CmpLe => "sle",
+                            BinOp::CmpGt => "sgt",
+                            BinOp::CmpGe => "sge",
+                            _ => unreachable!(),
+                        };
+                        writeln!(
+                            out,
+                            "  %v{} = icmp {} i32 {}, 0",
+                            result.0, cond, strcmp_res
+                        )?;
+                    }
+                    _ => {
+                        return Err(CodegenError::Unsupported {
+                            backend: "llvm".into(),
+                            detail: format!("unsupported binary operation {:?} on str", op),
+                        });
+                    }
                 }
-                // skip the rest of BinOp handling
             } else {
                 let ty_s = if comparison_op {
                     lhs_ety
@@ -2022,11 +2392,19 @@ fn emit_instr_ir(
                     )?;
                 }
                 ScalarUnaryOp::Round => {
-                    writeln!(
-                        out,
-                        "  %v{} = call {} @llvm.round.f64({} {})",
-                        result.0, ty_s, ty_s, ov
-                    )?;
+                    // Prefer standard C `round`/`roundf` functions instead of
+                    // LLVM intrinsics to avoid linker issues with intrinsics.
+                    if ty_s == "double" {
+                        writeln!(out, "  %v{} = call double @round(double {})", result.0, ov)?;
+                    } else if ty_s == "float" {
+                        writeln!(out, "  %v{} = call float @roundf(float {})", result.0, ov)?;
+                    } else {
+                        writeln!(
+                            out,
+                            "  %v{} = call {} @llvm.round.f64({} {})",
+                            result.0, ty_s, ty_s, ov
+                        )?;
+                    }
                 }
                 ScalarUnaryOp::Sign => {
                     writeln!(
@@ -2047,14 +2425,44 @@ fn emit_instr_ir(
             let ov = val(*operand);
             let from_s = llvm_type_complete(from_ty)?;
             let to_s = llvm_type_complete(to_ty)?;
+            // If we know the emitted LLVM type for the operand, prefer that
+            // when emitting cast instructions — this prevents generating
+            // ops that use the wrong floating-point width for the operand.
+            let actual_from_s = emitted_types
+                .get(operand)
+                .cloned()
+                .unwrap_or_else(|| from_s.clone());
+
             let is_from_float = matches!(from_ty, IrType::Scalar(DType::F32 | DType::F64));
             let is_to_float = matches!(to_ty, IrType::Scalar(DType::F32 | DType::F64));
-            let is_from_int = matches!(from_ty, IrType::Scalar(DType::I32 | DType::I64));
-            let is_to_int = matches!(to_ty, IrType::Scalar(DType::I32 | DType::I64));
+            let is_from_int = matches!(
+                from_ty,
+                IrType::Scalar(
+                    DType::I8
+                        | DType::U8
+                        | DType::I32
+                        | DType::U32
+                        | DType::I64
+                        | DType::U64
+                        | DType::USize
+                        | DType::Bool
+                )
+            );
+            let is_to_int = matches!(
+                to_ty,
+                IrType::Scalar(
+                    DType::I8
+                        | DType::U8
+                        | DType::I32
+                        | DType::U32
+                        | DType::I64
+                        | DType::U64
+                        | DType::USize
+                        | DType::Bool
+                )
+            );
             let is_from_f64 = matches!(from_ty, IrType::Scalar(DType::F64));
             let is_to_f64 = matches!(to_ty, IrType::Scalar(DType::F64));
-            let is_from_i64 = matches!(from_ty, IrType::Scalar(DType::I64));
-            let is_to_i64 = matches!(to_ty, IrType::Scalar(DType::I64));
             if from_ty == to_ty {
                 writeln!(
                     out,
@@ -2062,16 +2470,34 @@ fn emit_instr_ir(
                     result.0, from_s, ov, to_s
                 )?;
             } else if is_from_float && is_to_int {
+                let ov_coerced = coerce_to_type(
+                    *operand,
+                    &from_s,
+                    consts,
+                    func,
+                    emitted_types,
+                    gep_counter,
+                    out,
+                )?;
                 writeln!(
                     out,
                     "  %v{} = fptosi {} {} to {}",
-                    result.0, from_s, ov, to_s
+                    result.0, from_s, ov_coerced, to_s
                 )?;
             } else if is_from_int && is_to_float {
+                let ov_coerced = coerce_to_type(
+                    *operand,
+                    &from_s,
+                    consts,
+                    func,
+                    emitted_types,
+                    gep_counter,
+                    out,
+                )?;
                 writeln!(
                     out,
                     "  %v{} = sitofp {} {} to {}",
-                    result.0, from_s, ov, to_s
+                    result.0, from_s, ov_coerced, to_s
                 )?;
             } else if is_from_float && is_to_float {
                 if !is_from_f64 && is_to_f64 {
@@ -2082,11 +2508,17 @@ fn emit_instr_ir(
                         let dv = consts[operand].clone();
                         writeln!(out, "  %v{} = fadd double {}, 0.0", result.0, dv)?;
                     } else {
-                        writeln!(
-                            out,
-                            "  %v{} = fpext {} {} to {}",
-                            result.0, from_s, ov, to_s
-                        )?;
+                        // Use the actual operand type when emitting the FP
+                        // extension instruction.
+                        if actual_from_s == "float" && to_s == "double" {
+                            writeln!(out, "  %v{} = fpext float {} to double", result.0, ov)?;
+                        } else {
+                            writeln!(
+                                out,
+                                "  %v{} = fpext {} {} to {}",
+                                result.0, actual_from_s, ov, to_s
+                            )?;
+                        }
                     }
                 } else {
                     writeln!(
@@ -2096,14 +2528,49 @@ fn emit_instr_ir(
                     )?;
                 }
             } else if is_from_int && is_to_int {
-                if !is_from_i64 && is_to_i64 {
-                    writeln!(out, "  %v{} = sext {} {} to {}", result.0, from_s, ov, to_s)?;
-                } else {
+                let ov_coerced = coerce_to_type(
+                    *operand,
+                    &from_s,
+                    consts,
+                    func,
+                    emitted_types,
+                    gep_counter,
+                    out,
+                )?;
+                let src_w = bit_width(&from_s);
+                let dst_w = bit_width(&to_s);
+                if src_w == dst_w {
                     writeln!(
                         out,
-                        "  %v{} = trunc {} {} to {}",
-                        result.0, from_s, ov, to_s
+                        "  %v{} = bitcast {} {} to {}",
+                        result.0, from_s, ov_coerced, to_s
                     )?;
+                } else {
+                    let zero_extend_src = matches!(
+                        from_ty,
+                        IrType::Scalar(
+                            DType::U8 | DType::U32 | DType::U64 | DType::USize | DType::Bool
+                        )
+                    );
+                    if src_w > dst_w {
+                        writeln!(
+                            out,
+                            "  %v{} = trunc {} {} to {}",
+                            result.0, from_s, ov_coerced, to_s
+                        )?;
+                    } else if zero_extend_src {
+                        writeln!(
+                            out,
+                            "  %v{} = zext {} {} to {}",
+                            result.0, from_s, ov_coerced, to_s
+                        )?;
+                    } else {
+                        writeln!(
+                            out,
+                            "  %v{} = sext {} {} to {}",
+                            result.0, from_s, ov_coerced, to_s
+                        )?;
+                    }
                 }
             } else {
                 writeln!(
@@ -2350,7 +2817,7 @@ fn emit_instr_ir(
                 }
                 writeln!(
                     out,
-                    "  %v{} = call ptr @iris_make_struct(i32 {}, {})",
+                    "  %v{} = call ptr (i32, ...) @iris_make_struct(i32 {}, {})",
                     result.0,
                     fields.len(),
                     args_str.join(", ")
@@ -2515,7 +2982,7 @@ fn emit_instr_ir(
             }
             writeln!(
                 out,
-                "  %v{} = call ptr @iris_make_tuple(i32 {}, {})",
+                "  %v{} = call ptr (i32, ...) @iris_make_tuple(i32 {}, {})",
                 result.0,
                 elements.len(),
                 args_str.join(", ")
@@ -2940,17 +3407,52 @@ fn emit_instr_ir(
             body_fn,
             start,
             end,
+            args,
             ..
         } => {
-            // Emit an OpenMP-compatible loop via iris_par_for runtime.
-            // The body function is referenced by name.
-            writeln!(
-                out,
-                "  call void @iris_par_for(ptr @{}, i64 {}, i64 {})",
-                body_fn,
-                val(*start),
-                val(*end)
-            )?;
+            let tramp_name = format!("{}_trampoline", body_fn);
+            if args.is_empty() {
+                writeln!(
+                    out,
+                    "  call void @iris_par_for(ptr @{}, i64 {}, i64 {}, ptr null)",
+                    tramp_name,
+                    val(*start),
+                    val(*end)
+                )?;
+            } else {
+                let arg_buf = format!("%par_args{}", gep_counter);
+                *gep_counter += 1;
+                let alloc_size = (args.len() as i64) * 8;
+                writeln!(out, "  {} = call ptr @malloc(i64 {})", arg_buf, alloc_size)?;
+                for (i, arg_id) in args.iter().enumerate() {
+                    let slot = format!("%par_arg_slot{}_{}", gep_counter, i);
+                    writeln!(
+                        out,
+                        "  {} = getelementptr ptr, ptr {}, i64 {}",
+                        slot, arg_buf, i
+                    )?;
+                    let arg_val = val(*arg_id);
+                    let boxed = box_to_ptr(
+                        out,
+                        func,
+                        *arg_id,
+                        &arg_val,
+                        func.value_type(*arg_id),
+                        emitted_types.get(arg_id).map(|s| s.as_str()),
+                        gep_counter,
+                    )?;
+                    writeln!(out, "  store ptr {}, ptr {}", boxed, slot)?;
+                }
+                writeln!(
+                    out,
+                    "  call void @iris_par_for(ptr @{}, i64 {}, i64 {}, ptr {})",
+                    tramp_name,
+                    val(*start),
+                    val(*end),
+                    arg_buf
+                )?;
+                writeln!(out, "  call void @free(ptr {})", arg_buf)?;
+            }
         }
 
         IrInstr::ChanNew { result, .. } => {
@@ -3035,51 +3537,41 @@ fn emit_instr_ir(
             }
         }
         IrInstr::Spawn { body_fn, args } => {
+            let tramp_name = format!("{}_trampoline", body_fn);
             if args.is_empty() {
-                // No captures — pass null as the arg.
                 writeln!(
                     out,
                     "  call void @iris_spawn_fn(ptr @{}, ptr null)",
-                    body_fn
+                    tramp_name
                 )?;
             } else {
-                // Pack captures into a heap-allocated array of ptr.
-                // Each capture is boxed first, then stored into the array.
-                let n = args.len();
-                let arr = format!("%spawn_arr{}", gep_counter);
+                let arg_buf = format!("%spawn_args{}", gep_counter);
                 *gep_counter += 1;
-                // Allocate n * 8 bytes (array of ptr).
-                writeln!(out, "  {} = call ptr @malloc(i64 {})", arr, n * 8)?;
+                let alloc_size = (args.len() as i64) * 8;
+                writeln!(out, "  {} = call ptr @malloc(i64 {})", arg_buf, alloc_size)?;
                 for (i, arg_id) in args.iter().enumerate() {
-                    let v = val(*arg_id);
-                    let vty = func.value_type(*arg_id);
+                    let slot = format!("%spawn_arg_slot{}_{}", gep_counter, i);
+                    writeln!(
+                        out,
+                        "  {} = getelementptr ptr, ptr {}, i64 {}",
+                        slot, arg_buf, i
+                    )?;
+                    let arg_val = val(*arg_id);
                     let boxed = box_to_ptr(
                         out,
                         func,
                         *arg_id,
-                        &v,
-                        vty,
+                        &arg_val,
+                        func.value_type(*arg_id),
                         emitted_types.get(arg_id).map(|s| s.as_str()),
                         gep_counter,
                     )?;
-                    let slot = format!("%spawn_slot{}_{}", gep_counter, i);
-                    *gep_counter += 1;
-                    writeln!(
-                        out,
-                        "  {} = getelementptr ptr, ptr {}, i64 {}",
-                        slot, arr, i
-                    )?;
                     writeln!(out, "  store ptr {}, ptr {}", boxed, slot)?;
                 }
-                // Generate a trampoline wrapper name (deferred to the
-                // trampoline_fns collection — emitted after all functions).
-                let trampoline_name = format!("{}_trampoline", body_fn);
-                // Record that we need to generate this trampoline.
-                // For now, emit the call using the trampoline.
                 writeln!(
                     out,
                     "  call void @iris_spawn_fn(ptr @{}, ptr {})",
-                    trampoline_name, arr
+                    tramp_name, arg_buf
                 )?;
             }
         }
@@ -3540,12 +4032,8 @@ fn emit_instr_ir(
         } => {
             // If elem_ty is Infer, resolve from the list's value type
             let resolved_elem_ty = if matches!(elem_ty, IrType::Infer) {
-                if let Some(list_ty) = func.value_type(*list) {
-                    if let IrType::List(inner) = list_ty {
-                        (**inner).clone()
-                    } else {
-                        elem_ty.clone()
-                    }
+                if let Some(IrType::List(inner)) = func.value_type(*list) {
+                    (**inner).clone()
                 } else {
                     elem_ty.clone()
                 }
@@ -3693,12 +4181,8 @@ fn emit_instr_ir(
         } => {
             // If elem_ty is Infer, resolve from the list's value type
             let resolved_elem_ty = if matches!(elem_ty, IrType::Infer) {
-                if let Some(list_ty) = func.value_type(*list) {
-                    if let IrType::List(inner) = list_ty {
-                        (**inner).clone()
-                    } else {
-                        elem_ty.clone()
-                    }
+                if let Some(IrType::List(inner)) = func.value_type(*list) {
+                    (**inner).clone()
                 } else {
                     elem_ty.clone()
                 }
@@ -3918,7 +4402,7 @@ fn emit_instr_ir(
             args.extend(cap_args);
             writeln!(
                 out,
-                "  %v{} = call ptr @iris_make_closure({})",
+                "  %v{} = call ptr (ptr, i32, ...) @iris_make_closure({})",
                 result.0,
                 args.join(", ")
             )?;
@@ -4176,19 +4660,48 @@ fn emit_instr_ir(
         IrInstr::Sparsify {
             result, operand, ..
         } => {
-            writeln!(
-                out,
-                "  %v{} = call ptr @iris_sparsify(ptr {})",
-                result.0,
-                val(*operand)
-            )?;
+            if scalar_arrays.contains(operand) {
+                let arr_size = find_alloc_size(func, *operand).unwrap_or(0);
+                let elem_ty = find_alloc_elem_ty(func, *operand);
+                match elem_ty {
+                    Some(IrType::Scalar(DType::I64)) => {
+                        writeln!(
+                            out,
+                            "  %v{} = call ptr @iris_sparsify_i64_array(ptr %v{}, i64 {})",
+                            result.0, operand.0, arr_size
+                        )?;
+                    }
+                    Some(IrType::Scalar(DType::F64)) => {
+                        writeln!(
+                            out,
+                            "  %v{} = call ptr @iris_sparsify_f64_array(ptr %v{}, i64 {})",
+                            result.0, operand.0, arr_size
+                        )?;
+                    }
+                    _ => {
+                        writeln!(
+                            out,
+                            "  %v{} = call ptr @iris_sparsify(ptr {})",
+                            result.0,
+                            val(*operand)
+                        )?;
+                    }
+                }
+            } else {
+                writeln!(
+                    out,
+                    "  %v{} = call ptr @iris_sparsify(ptr {})",
+                    result.0,
+                    val(*operand)
+                )?;
+            }
         }
         IrInstr::Densify {
             result, operand, ..
         } => {
             writeln!(
                 out,
-                "  %v{} = call ptr @iris_densify(ptr {})",
+                "  %v{} = call i64 @iris_sparse_nnz(ptr {})",
                 result.0,
                 val(*operand)
             )?;
@@ -4716,7 +5229,7 @@ fn emit_instr_ir(
         IrInstr::GetVariantTag { result, operand } => {
             writeln!(
                 out,
-                "  %v{} = call i64 @iris_get_variant_tag({})",
+                "  %v{} = call i64 @iris_get_variant_tag(ptr {})",
                 result.0,
                 val(*operand)
             )?;
@@ -4881,15 +5394,20 @@ fn emit_instr_ir(
             result_ty,
         } => {
             let fn_name = format!("iris_{}", name);
-            // Use each arg's emitted LLVM type so scalars (i64, double, i1) are
-            // passed with the correct type instead of always "ptr".
-            let arg_strs: Vec<String> = args
-                .iter()
-                .map(|a| {
-                    let ty_s = emitted_types.get(a).map(|s| s.as_str()).unwrap_or("ptr");
-                    format!("{} {}", ty_s, val(*a))
-                })
-                .collect();
+            let mut arg_strs = Vec::new();
+            for &a in args {
+                if name == "json_stringify" || name == "type_of" {
+                    let val_str = val(a);
+                    let arg_ty = func.value_type(a);
+                    let emitted_ty = emitted_types.get(&a).map(|s| s.as_str());
+                    let boxed =
+                        box_to_ptr(out, func, a, &val_str, arg_ty, emitted_ty, gep_counter)?;
+                    arg_strs.push(format!("ptr {}", boxed));
+                } else {
+                    let ty_s = emitted_types.get(&a).map(|s| s.as_str()).unwrap_or("ptr");
+                    arg_strs.push(format!("{} {}", ty_s, val(a)));
+                }
+            }
             // Determine LLVM return type from result_ty
             let ret_llvm = match result_ty {
                 IrType::Scalar(DType::I64) => "i64",
@@ -5094,6 +5612,23 @@ fn find_alloc_size(func: &IrFunction, array_id: ValueId) -> Option<usize> {
     None
 }
 
+/// Look up the element type of an AllocArray for a given result ValueId.
+fn find_alloc_elem_ty(func: &IrFunction, array_id: ValueId) -> Option<IrType> {
+    for block in func.blocks() {
+        for instr in &block.instrs {
+            if let IrInstr::AllocArray {
+                result, elem_ty, ..
+            } = instr
+            {
+                if *result == array_id {
+                    return Some(elem_ty.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Returns whether an instruction has side effects.
 fn is_side_effecting(instr: &IrInstr) -> bool {
     matches!(
@@ -5128,6 +5663,10 @@ fn is_side_effecting(instr: &IrInstr) -> bool {
 
 fn llvm_val(v: ValueId, consts: &HashMap<ValueId, String>, func: &IrFunction) -> String {
     if let Some(c) = consts.get(&v) {
+        // Emit the stored literal string unchanged.  Emit decimal literals
+        // for both `float` and `double` cases — keeping the formatting
+        // consistent avoids producing hex literals that may be parsed in
+        // a mismatched type context later.
         return c.clone();
     }
     for param in &func.blocks()[0].params {
@@ -5158,6 +5697,45 @@ fn fmt_float(v: f64) -> String {
         s
     } else {
         format!("{}.0", s)
+    }
+}
+
+#[allow(dead_code)]
+fn f32_to_llvm_hex(f: f32) -> String {
+    if f == 0.0 {
+        if f.is_sign_negative() {
+            return "-0x0.0p+0".to_owned();
+        } else {
+            return "0x0.0p+0".to_owned();
+        }
+    }
+    if f.is_nan() {
+        return "0x7fc00000".to_owned();
+    }
+    if f.is_infinite() {
+        return if f.is_sign_negative() {
+            "-inf".to_owned()
+        } else {
+            "inf".to_owned()
+        };
+    }
+    let bits = f.to_bits();
+    let sign = (bits >> 31) & 1;
+    let exp = ((bits >> 23) & 0xff) as i32;
+    let mant = bits & 0x7fffff;
+    if exp == 0 {
+        // subnormal: fall back to decimal formatting
+        return format!("{}", f);
+    }
+    let exponent = exp - 127;
+    // mantissa_val includes the implicit leading 1 (24 bits)
+    let mantissa_val = mant | 0x800000;
+    // hex6 = 2 * (mantissa_val - 2^23)
+    let hex6 = 2u32.wrapping_mul(mantissa_val.wrapping_sub(0x800000));
+    if sign == 1 {
+        format!("-0x1.{:06x}p{:+}", hex6, exponent)
+    } else {
+        format!("0x1.{:06x}p{:+}", hex6, exponent)
     }
 }
 
@@ -5195,6 +5773,7 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare i64 @iris_str_len(ptr)",
         "declare ptr @iris_str_concat(ptr, ptr)",
         "declare i1 @iris_str_eq(ptr, ptr)",
+        "declare i32 @strcmp(ptr, ptr)",
         "declare i1 @iris_str_contains(ptr, ptr)",
         "declare i1 @iris_str_starts_with(ptr, ptr)",
         "declare i1 @iris_str_ends_with(ptr, ptr)",
@@ -5295,7 +5874,7 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare void @iris_chan_send(ptr, ptr)",
         "declare ptr @iris_chan_recv(ptr)",
         "declare void @iris_spawn_fn(ptr, ptr)",
-        "declare void @iris_par_for(ptr, i64, i64)",
+        "declare void @iris_par_for(ptr, i64, i64, ptr)",
         "declare void @iris_barrier()",
         // Structs / Tuples / Closures
         "declare ptr @iris_make_struct(i32, ...)",
@@ -5327,7 +5906,10 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare void @iris_backward(ptr)",
         "declare double @iris_tape_grad(ptr)",
         "declare ptr @iris_sparsify(ptr)",
+        "declare ptr @iris_sparsify_i64_array(ptr, i64)",
+        "declare ptr @iris_sparsify_f64_array(ptr, i64)",
         "declare ptr @iris_densify(ptr)",
+        "declare i64 @iris_sparse_nnz(ptr)",
         // Boxing helpers (scalar → IrisVal*)
         "declare ptr @iris_box_i64(i64)",
         "declare ptr @iris_box_i32(i32)",
@@ -5377,7 +5959,9 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare double @llvm.fabs.f64(double)",
         "declare double @llvm.floor.f64(double)",
         "declare double @llvm.ceil.f64(double)",
-        "declare double @llvm.round.f64(double)",
+        // Prefer C math library `round` functions rather than llvm intrinsics
+        "declare double @round(double)",
+        "declare float @roundf(float)",
         "declare double @llvm.sin.f64(double)",
         "declare double @llvm.cos.f64(double)",
         "declare double @llvm.exp.f64(double)",

@@ -1,6 +1,6 @@
 # IRIS Roadmap
 
-> **Current version: 0.5.0** — "The C of Machine Learning" release. Pre-1.0, evolving rapidly.
+> **Current version: 0.5.0** — active release. Pre-1.0, evolving rapidly.
 
 This document outlines the planned milestones for IRIS from the current release
 line through the stable 1.0 release and beyond.
@@ -14,7 +14,7 @@ line through the stable 1.0 release and beyond.
 - LSP, DAP debugger, REPL — functional
 - 34 stdlib modules — registered and implemented (including std.ais, std.rl, std.ml, std.nn)
 - **1,400+ tests**, fuzz corpus expanded
-- VS Code extension v0.3.0 built (VSIX); marketplace publish pending
+- VS Code extension v0.5.0 built (VSIX); marketplace publish pending
 - Installer scripts for Windows, Linux, macOS
 - Package manager: `iris pkg init/add/install/update/list/check/build/run` (local + git deps, lockfile)
 - CHANGELOG.md, ROADMAP.md, SPEC.md, docs/ — all present and current
@@ -48,15 +48,15 @@ the latest tagged release yet.
 
 **Goal:** Make it easy to share and consume IRIS libraries.
 
-| # | Task | Priority |
-| --- | ------ | ---------- |
-| 1 | Package registry — central registry for `iris pkg add` | High |
-| 2 | Dependency resolution — semver solver, lockfile (`iris.lock`) | High |
-| 3 | `iris doc` — auto-generate HTML docs from comments | Medium |
-| 4 | `iris fmt` — standalone formatter (currently LSP-only) | Medium |
-| 5 | `iris lint` — standalone linter with BP001–BP006 rules | Medium |
-| 6 | Cross-compilation — `iris build --target aarch64-linux` | Medium |
-| 7 | Incremental compilation — use cache infrastructure for faster rebuilds | Low |
+| # | Task | Priority | Status |
+| --- | ------ | ---------- | -------- |
+| 1 | Package registry — central registry for `iris pkg add` | High | ✅ Done |
+| 2 | Dependency resolution — semver solver, lockfile (`iris.lock`) | High | ✅ Done |
+| 3 | `iris doc` — auto-generate HTML docs from comments | Medium | ✅ Done |
+| 4 | `iris fmt` — standalone formatter (currently LSP-only) | Medium | ✅ Done |
+| 5 | `iris lint` — standalone linter with BP001–BP006 rules | Medium | ✅ Done |
+| 6 | Cross-compilation — `iris build --target aarch64-linux` | Medium | ✅ Done |
+| 7 | Incremental compilation — use cache infrastructure for faster rebuilds | Low | ✅ Done |
 
 ---
 
@@ -64,27 +64,27 @@ the latest tagged release yet.
 
 **Goal:** Make the ML headline features real, not stubs.
 
-Release status: Unreleased. Items listed as done reflect implementation status on `main`.
+Release status: Released (May 2026)
 
 | # | Task | Priority | Status |
 | --- | ------ | ---------- | -------- |
-| 1 | Tensor runtime — replace shape-tracking stubs with real compute | Critical | **Done** |
-| 2 | `einsum` codegen — generate loop nests or dispatch to BLAS | High | **Done** |
-| 3 | ONNX export — binary protobuf, not just text format | High | **Done** |
-| 4 | GPU backend — CUDA or Vulkan compute shaders for tensor ops | Medium | **Done** |
-| 5 | SIMD codegen — auto-vectorize tight loops on x86/ARM | Medium | **Done** |
-| 6 | Automatic differentiation v2 — reverse-mode AD | Medium | **Done** |
-| 7 | Sparse tensor ops — CSR/COO kernels, sparse matmul | Low | **Done** |
-| 8 | ML compute kernels — conv2d, maxpool, batchnorm, softmax, GELU | Critical | **Done** |
-| 9 | Loss functions — MSE, cross-entropy, binary CE in C runtime | Critical | **Done** |
-| 10 | Optimizers — SGD, Adam with state management | Critical | **Done** |
-| 11 | BLAS dispatch — OpenBLAS/MKL via `-DIRIS_USE_BLAS` | High | **Done** |
-| 12 | Blocked matmul — 32×32 tiled for cache friendliness | High | **Done** |
-| 13 | AIS framework (`std.ais`) — agent loop, perception, decision | High | **Done** |
-| 14 | RL module (`std.rl`) — Q-learning, SARSA, policy gradient, replay | High | **Done** |
-| 15 | System requirements documentation (`REQUIREMENTS.md`) | Medium | **Done** |
-| 16 | Nightly CI workflow — extended fuzz, smoke tests, benchmarks | Medium | **Done** |
-| 17 | User IR optimization bump — `-O1` → `-O2` (LLVM 18) | Medium | **Done** |
+| 1 | Tensor runtime — replace shape-tracking stubs with real compute | Critical | ✅ Done |
+| 2 | `einsum` codegen — generate loop nests or dispatch to BLAS | High | ✅ Done |
+| 3 | ONNX export — binary protobuf, not just text format | High | ✅ Done |
+| 4 | GPU backend — CUDA or Vulkan compute shaders for tensor ops | Medium | ✅ Done |
+| 5 | SIMD codegen — auto-vectorize tight loops on x86/ARM | Medium | ✅ Done |
+| 6 | Automatic differentiation v2 — reverse-mode AD | Medium | ✅ Done |
+| 7 | Sparse tensor ops — CSR/COO kernels, sparse matmul | Low | ✅ Done |
+| 8 | ML compute kernels — conv2d, maxpool, batchnorm, softmax, GELU | Critical | ✅ Done |
+| 9 | Loss functions — MSE, cross-entropy, binary CE in C runtime | Critical | ✅ Done |
+| 10 | Optimizers — SGD, Adam with state management | Critical | ✅ Done |
+| 11 | BLAS dispatch — OpenBLAS/MKL via `-DIRIS_USE_BLAS` | High | ✅ Done |
+| 12 | Blocked matmul — 32×32 tiled for cache friendliness | High | ✅ Done |
+| 13 | AIS framework (`std.ais`) — agent loop, perception, decision | High | ✅ Done |
+| 14 | RL module (`std.rl`) — Q-learning, SARSA, policy gradient, replay | High | ✅ Done |
+| 15 | System requirements documentation (`REQUIREMENTS.md`) | Medium | ✅ Done |
+| 16 | Nightly CI workflow — extended fuzz, smoke tests, benchmarks | Medium | ✅ Done |
+| 17 | User IR optimization bump — `-O1` → `-O2` (LLVM 18) | Medium | ✅ Done |
 
 ---
 

@@ -165,7 +165,9 @@ fn stage_runtime_dlls(lib_dir: &str) {
     }
 
     let deps_dir = profile_dir.join("deps");
+    let examples_dir = profile_dir.join("examples");
     let _ = std::fs::create_dir_all(&deps_dir);
+    let _ = std::fs::create_dir_all(&examples_dir);
 
     let entries = match std::fs::read_dir(lib_dir) {
         Ok(entries) => entries,
@@ -186,8 +188,10 @@ fn stage_runtime_dlls(lib_dir: &str) {
         if let Some(file_name) = path.file_name() {
             let profile_target = profile_dir.join(file_name);
             let deps_target = deps_dir.join(file_name);
+            let examples_target = examples_dir.join(file_name);
             let _ = std::fs::copy(&path, profile_target);
             let _ = std::fs::copy(&path, deps_target);
+            let _ = std::fs::copy(&path, examples_target);
         }
     }
 }
@@ -234,12 +238,16 @@ fn stage_sqlite_runtime_dll() {
     }
 
     let deps_dir = profile_dir.join("deps");
+    let examples_dir = profile_dir.join("examples");
     let _ = std::fs::create_dir_all(&deps_dir);
+    let _ = std::fs::create_dir_all(&examples_dir);
     if let Some(file_name) = source_path.file_name() {
         let profile_target = profile_dir.join(file_name);
         let deps_target = deps_dir.join(file_name);
+        let examples_target = examples_dir.join(file_name);
         let _ = std::fs::copy(&source_path, profile_target);
         let _ = std::fs::copy(&source_path, deps_target);
+        let _ = std::fs::copy(&source_path, examples_target);
     }
 }
 

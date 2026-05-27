@@ -20,8 +20,8 @@ fn test_target_triple() {
         ir
     );
     assert!(
-        ir.contains("x86_64"),
-        "expected 'x86_64' in target triple:\n{}",
+        ir.contains("x86_64") || ir.contains("aarch64") || ir.contains("arm64"),
+        "expected 'x86_64' or 'aarch64' in target triple:\n{}",
         ir
     );
 }

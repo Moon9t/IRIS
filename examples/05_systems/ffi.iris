@@ -35,7 +35,7 @@ def main() -> i64 {
         print("lib_open: unavailable (not found, as expected)")
     } else {
         print(concat("lib_open handle = ", to_str(lh)));
-        lib_close(lh)
+        lib_close(lh);
     };
 
     print("\n=== Rust Library ===");

@@ -66,7 +66,7 @@ def f() -> f64 {
 "#;
     let result = compile(src, "test", EmitKind::Eval).unwrap();
     let v: f64 = result.trim().parse().unwrap();
-    assert!((v - 2.718).abs() < 0.001);
+    assert!((v - std::f64::consts::E).abs() < 0.001);
 }
 
 // ── 6. parse_i64 with negative number ───────────────────────────────────────

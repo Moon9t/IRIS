@@ -1,5 +1,5 @@
 bring std.fmt
-bring std.termplot
+bring "termplot.iris"
 bring "environment.iris"
 bring "agent.iris"
 
@@ -47,7 +47,7 @@ def main() -> i64 {
     val q_vals = list();
     list_push(q_vals, rl.q_get(ag.q_table, 0, 0, 2));
     list_push(q_vals, rl.q_get(ag.q_table, 0, 1, 2));
-    termplot.term_plot_bar(q_vals, 40, "Q-Values (Left vs Right)");
+    term_plot_bar(q_vals, 40, "Q-Values (Left vs Right)");
     
     return 0;
 }

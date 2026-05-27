@@ -55,7 +55,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          choco install llvm --version=18.1.8 --no-progress -y
+          choco install llvm --no-progress -y
           $llvmBin = Join-Path $env:ProgramFiles 'LLVM\bin'
           $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           "IRIS_CLANG=$llvmBin\clang.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -83,12 +83,12 @@ jobs:
 
       - name: Build soak binary (Unix)
         if: matrix.shell_family == 'unix'
-        run: ./target/debug/iris build examples/runtime_soak.iris -o runtime_soak
+        run: ./target/debug/iris build examples/07_applications/runtime_soak.iris -o runtime_soak
 
       - name: Build soak binary (Windows)
         if: matrix.shell_family == 'windows'
         shell: powershell
-        run: .\target\debug\iris.exe build examples/runtime_soak.iris -o runtime_soak.exe
+        run: .\target\debug\iris.exe build examples/07_applications/runtime_soak.iris -o runtime_soak.exe
 
       - name: Run soak binary (Unix)
         if: matrix.shell_family == 'unix'

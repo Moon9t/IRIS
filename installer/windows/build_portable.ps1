@@ -8,7 +8,7 @@
 # ──────────────────────────────────────────────────────────────────────────
 
 param(
-    [string]$Version = "0.4.0",
+    [string]$Version = "0.5.0",
     [string]$Arch = "x64",
     [switch]$SkipBuild
 )

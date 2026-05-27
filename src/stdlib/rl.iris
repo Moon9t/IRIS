@@ -1,5 +1,5 @@
 // std.rl — Reinforcement Learning Primitives
-// IRIS v0.5.0 "The C of Machine Learning"
+// IRIS v0.5.0 
 //
 // Tabular and function-approximation RL algorithms.
 // Use with std.ais for complete autonomous system development.
@@ -13,7 +13,7 @@ bring std.ml
 /// A single experience tuple: (state, action, reward, next_state, done)
 /// Stored as flat lists for memory efficiency.
 
-record Experience {
+pub record Experience {
     state: list<f64>,
     action: i64,
     reward: f64,
@@ -21,14 +21,15 @@ record Experience {
     done: bool
 }
 
-record ReplayBuffer {
+pub record ReplayBuffer {
     states: list<list<f64>>,
     actions: list<i64>,
     rewards: list<f64>,
     next_states: list<list<f64>>,
     dones: list<bool>,
     capacity: i64,
-    size: i64
+    size: i64,
+    next_idx: i64
 }
 
 /// Create a new replay buffer with given capacity.
@@ -40,12 +41,15 @@ pub def replay_buffer_new(capacity: i64) -> ReplayBuffer {
         next_states: list(),
         dones: list(),
         capacity: capacity,
-        size: 0
+        size: 0,
+        next_idx: 0
     }
 }
 
 /// Add an experience to the buffer (FIFO eviction when full).
-pub def replay_buffer_push(buf: ReplayBuffer, exp: Experience) -> i64 {
+pub def replay_buffer_push(buf: ReplayBuffer, exp: Experience) -> ReplayBuffer {
+    if buf.capacity <= 0 { return buf }
+
     if buf.size < buf.capacity {
         list_push(buf.states, exp.state);
         list_push(buf.actions, exp.action);
@@ -54,25 +58,49 @@ pub def replay_buffer_push(buf: ReplayBuffer, exp: Experience) -> i64 {
         list_push(buf.dones, exp.done);
         buf.size = buf.size + 1
     } else {
-        // Overwrite oldest (circular, approximate)
-        val idx = buf.size % buf.capacity
-        list_set(buf.states, idx, exp.state);
-        list_set(buf.actions, idx, exp.action);
-        list_set(buf.rewards, idx, exp.reward);
-        list_set(buf.next_states, idx, exp.next_state);
-        list_set(buf.dones, idx, exp.done);
+        val idx = buf.next_idx
+        if idx >= 0 && idx < list_len(buf.states) {
+            list_set(buf.states, idx, exp.state);
+            list_set(buf.actions, idx, exp.action);
+            list_set(buf.rewards, idx, exp.reward);
+            list_set(buf.next_states, idx, exp.next_state);
+            list_set(buf.dones, idx, exp.done);
+        }
     }
-    buf.size
+    buf.next_idx = (buf.next_idx + 1) % buf.capacity
+    buf
 }
 
 /// Sample a random batch of indices from the buffer.
 pub def replay_buffer_sample_indices(buf: ReplayBuffer, batch_size: i64) -> list<i64> {
     val indices : list<i64> = list()
     val max_idx = if buf.size < buf.capacity { buf.size } else { buf.capacity }
+    if max_idx <= 0 { return indices }
+
     for i in 0 .. batch_size {
         list_push(indices, random_range(0, max_idx - 1))
     }
     indices
+}
+
+/// Sample a random batch of full Experience records from the buffer.
+pub def replay_buffer_sample(buf: ReplayBuffer, batch_size: i64) -> list<Experience> {
+    val batch : list<Experience> = list()
+    val indices = replay_buffer_sample_indices(buf, batch_size)
+    for i in 0 .. list_len(indices) {
+        val idx = list_get(indices, i)
+        if idx >= 0 && idx < list_len(buf.states) {
+            val exp = Experience {
+                state: list_get(buf.states, idx),
+                action: list_get(buf.actions, idx),
+                reward: list_get(buf.rewards, idx),
+                next_state: list_get(buf.next_states, idx),
+                done: list_get(buf.dones, idx)
+            }
+            list_push(batch, exp);
+        }
+    }
+    batch
 }
 
 // ---------------------------------------------------------------------------
@@ -83,7 +111,8 @@ pub def replay_buffer_sample_indices(buf: ReplayBuffer, batch_size: i64) -> list
 /// Indexed as: Q[state * n_actions + action]
 pub def q_table_new(n_states: i64, n_actions: i64) -> list<f64> {
     val q : list<f64> = list()
-    for i in 0 .. n_states * n_actions {
+    val total = if n_states * n_actions <= 0 { 0 } else { n_states * n_actions }
+    for i in 0 .. total {
         list_push(q, 0.0)
     }
     q
@@ -91,12 +120,17 @@ pub def q_table_new(n_states: i64, n_actions: i64) -> list<f64> {
 
 /// Get Q-value: Q(state, action)
 pub def q_get(q: list<f64>, state: i64, action: i64, n_actions: i64) -> f64 {
-    list_get(q, state * n_actions + action)
+    val idx = state * n_actions + action
+    if idx < 0 || idx >= list_len(q) { return 0.0 }
+    list_get(q, idx)
 }
 
 /// Set Q-value: Q(state, action) = value
 pub def q_set(q: list<f64>, state: i64, action: i64, n_actions: i64, value: f64) -> i64 {
-    list_set(q, state * n_actions + action, value);
+    val idx = state * n_actions + action
+    if idx >= 0 && idx < list_len(q) {
+        list_set(q, idx, value);
+    }
     0
 }
 
@@ -105,13 +139,19 @@ pub def q_set(q: list<f64>, state: i64, action: i64, n_actions: i64, value: f64)
 pub def q_learning_update(q: list<f64>, state: i64, action: i64,
                            reward: f64, next_state: i64, n_actions: i64,
                            alpha: f64, gamma: f64) -> f64 {
+    val idx = state * n_actions + action
+    if idx < 0 || idx >= list_len(q) { return 0.0 }
     val current = q_get(q, state, action, n_actions)
 
     // Find max Q(s', a')
-    var max_next = q_get(q, next_state, 0, n_actions)
-    for a in 1 .. n_actions {
-        val v = q_get(q, next_state, a, n_actions)
-        if v > max_next { max_next = v }
+    var max_next = 0.0
+    val next_idx_base = next_state * n_actions
+    if next_idx_base >= 0 && next_idx_base < list_len(q) {
+        max_next = q_get(q, next_state, 0, n_actions)
+        for a in 1 .. n_actions {
+            val v = q_get(q, next_state, a, n_actions)
+            if v > max_next { max_next = v }
+        }
     }
 
     val td_target = reward + gamma * max_next
@@ -125,6 +165,8 @@ pub def q_learning_update(q: list<f64>, state: i64, action: i64,
 pub def sarsa_update(q: list<f64>, state: i64, action: i64,
                       reward: f64, next_state: i64, next_action: i64,
                       n_actions: i64, alpha: f64, gamma: f64) -> f64 {
+    val idx = state * n_actions + action
+    if idx < 0 || idx >= list_len(q) { return 0.0 }
     val current = q_get(q, state, action, n_actions)
     val next_q = q_get(q, next_state, next_action, n_actions)
     val new_value = current + alpha * (reward + gamma * next_q - current)
@@ -134,6 +176,7 @@ pub def sarsa_update(q: list<f64>, state: i64, action: i64,
 
 /// Choose the best action for a state from the Q-table (greedy).
 pub def q_best_action(q: list<f64>, state: i64, n_actions: i64) -> i64 {
+    if n_actions <= 0 { return -1 }
     var best = 0
     var best_val = q_get(q, state, 0, n_actions)
     for a in 1 .. n_actions {
@@ -179,6 +222,71 @@ pub def log_prob_softmax(logits: list<f64>, action: i64) -> f64 {
         sum_exp = sum_exp + exp(list_get(logits, i) - mx)
     }
     list_get(logits, action) - mx - log(sum_exp)
+}
+
+/// Compute the PPO clipped policy loss over a batch of transitions.
+/// L_clip = -mean(min(r * A, clip(r, 1-eps, 1+eps) * A))
+pub def ppo_clip_loss(log_probs: list<f64>, old_log_probs: list<f64>,
+                      advantages: list<f64>, epsilon: f64) -> f64 {
+    val n = list_len(log_probs)
+    if n == 0 { return 0.0 }
+
+    val eps = if epsilon < 0.0 { 0.0 } else { epsilon }
+    val low = 1.0 - eps
+    val high = 1.0 + eps
+
+    var total_loss = 0.0
+    for i in 0 .. n {
+        val lp = list_get(log_probs, i)
+        val old_lp = list_get(old_log_probs, i)
+        val adv = list_get(advantages, i)
+
+        val r = exp(lp - old_lp)
+        val surr1 = r * adv
+
+        val clipped_r = if r < low { low } else { if r > high { high } else { r } }
+        val surr2 = clipped_r * adv
+
+        val min_surr = if surr1 < surr2 { surr1 } else { surr2 }
+        total_loss = total_loss - min_surr
+    }
+    total_loss / to_f64(n)
+}
+
+/// Compute the entropy of a softmax distribution from its logits.
+/// Entropy = -sum(prob * log(prob))
+pub def softmax_entropy(logits: list<f64>) -> f64 {
+    val n = list_len(logits)
+    if n <= 0 { return 0.0 }
+
+    // Find max for numerical stability
+    var mx = list_get(logits, 0)
+    for i in 1 .. n {
+        val v = list_get(logits, i)
+        if v > mx { mx = v }
+    }
+
+    // Compute probabilities and log-probabilities
+    val probs : list<f64> = list()
+    var sum_exp = 0.0
+    for i in 0 .. n {
+        val e = exp(list_get(logits, i) - mx)
+        list_push(probs, e);
+        sum_exp = sum_exp + e
+    }
+
+    if sum_exp <= 1.0e-15 {
+        return 0.0
+    }
+
+    var entropy = 0.0
+    for i in 0 .. n {
+        val p = list_get(probs, i) / sum_exp
+        if p > 1.0e-15 {
+            entropy = entropy - p * log(p)
+        }
+    }
+    entropy
 }
 
 // ---------------------------------------------------------------------------

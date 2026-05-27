@@ -1,7 +1,7 @@
 # IRIS Language Specification
 
-**Version 0.4.0**
-**Last updated: 2025-06-03**
+**Version 0.5.0**
+**Last updated: 2026-05-26**
 
 > This document defines the syntax, semantics, and type system of the IRIS
 > programming language. It serves as the authoritative reference for compiler
@@ -944,9 +944,8 @@ when x {
 }
 ```
 
-> **Implementation note (v0.4.0):** Guard expressions are parsed but have
-> limited runtime support. Use `if`/`else` chains as a workaround until
-> guard evaluation is fully implemented in a future release.
+> **Implementation note (v0.5.0):** Guard expressions are fully supported and
+> integrated natively at runtime in both JIT and compiled binary builds.
 
 ### 7.3 Exhaustiveness
 

@@ -50,25 +50,71 @@
 // Internal memory helpers
 // ---------------------------------------------------------------------------
 
+// Dynamic allocations registry to differentiate from static string constants
+static pthread_mutex_t ds_mu = PTHREAD_MUTEX_INITIALIZER;
+static void** ds_table = NULL;
+static size_t ds_len = 0;
+static size_t ds_cap = 0;
+
+static void ds_add(void* ptr) {
+    if (!ptr) return;
+    pthread_mutex_lock(&ds_mu);
+    if (ds_len >= ds_cap) {
+        ds_cap = ds_cap == 0 ? 1024 : ds_cap * 2;
+        ds_table = realloc(ds_table, ds_cap * sizeof(void*));
+    }
+    ds_table[ds_len++] = ptr;
+    pthread_mutex_unlock(&ds_mu);
+}
+
+static int ds_contains_and_remove(void* ptr) {
+    if (!ptr) return 0;
+    pthread_mutex_lock(&ds_mu);
+    for (size_t i = 0; i < ds_len; i++) {
+        if (ds_table[i] == ptr) {
+            ds_table[i] = ds_table[ds_len - 1];
+            ds_len--;
+            pthread_mutex_unlock(&ds_mu);
+            return 1;
+        }
+    }
+    pthread_mutex_unlock(&ds_mu);
+    return 0;
+}
+
 static void* xmalloc(size_t n) {
     void* p = malloc(n);
     if (!p) { fprintf(stderr, "iris: out of memory\n"); abort(); }
+    ds_add(p);
     return p;
 }
 
 static void* xcalloc(size_t n, size_t sz) {
     void* p = calloc(n, sz);
     if (!p) { fprintf(stderr, "iris: out of memory\n"); abort(); }
+    ds_add(p);
     return p;
 }
 
 static void* xrealloc(void* p, size_t n) {
+    pthread_mutex_lock(&ds_mu);
+    for (size_t i = 0; i < ds_len; i++) {
+        if (ds_table[i] == p) {
+            ds_table[i] = ds_table[ds_len - 1];
+            ds_len--;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&ds_mu);
+
     void* q = realloc(p, n);
     if (!q) { fprintf(stderr, "iris: out of memory\n"); abort(); }
+    ds_add(q);
     return q;
 }
 
 static char* xstrdup(const char* s) {
+    if (!s) return NULL;
     size_t n = strlen(s) + 1;
     char* d = xmalloc(n);
     memcpy(d, s, n);
@@ -122,6 +168,7 @@ IrisVal* iris_box_bool(int v) {
 IrisVal* iris_box_str(const char* s) {
     IrisVal* r = xmalloc(sizeof(IrisVal));
     r->tag = IRIS_TAG_STR;  r->str = xstrdup(s);
+    if (r->str) iris_retain_kind(r->str, IRIS_RC_STR);
     return r;
 }
 IrisVal* iris_box_list(IrisList* list) {
@@ -1123,9 +1170,23 @@ IrisList* iris_process_args(void) {
     return r;
 }
 
-char* iris_env_var(const char* key) {
+IrisOption* iris_env_var(const char* key) {
+#ifdef _WIN32
     const char* v = getenv(key);
-    return v ? xstrdup(v) : NULL;
+    if (!v) {
+        if (_stricmp(key, "PATH") == 0) {
+            v = getenv("Path");
+            if (!v) v = getenv("path");
+        }
+    }
+#else
+    const char* v = getenv(key);
+#endif
+    if (v) {
+        return iris_make_some(iris_box_str(v));
+    } else {
+        return iris_make_none();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1172,20 +1233,20 @@ void iris_spawn_fn(void* fn, void* arg) {
     pthread_detach(t);
 }
 
-typedef struct { void (*fn)(int64_t); int64_t i; } ParArg;
+typedef struct { void (*fn)(int64_t, void*); int64_t i; void* arg; } ParArg;
 static void* par_for_worker(void* arg) {
     ParArg* a = (ParArg*)arg;
-    a->fn(a->i);
+    a->fn(a->i, a->arg);
     free(a);
     return NULL;
 }
-void iris_par_for(void (*fn)(int64_t), int64_t start, int64_t end) {
+void iris_par_for(void (*fn)(int64_t, void*), int64_t start, int64_t end, void* arg) {
     int64_t n = end - start;
     if (n <= 0) return;
     pthread_t* threads = xmalloc(sizeof(pthread_t) * (size_t)n);
     for (int64_t i = start; i < end; i++) {
         ParArg* a = xmalloc(sizeof(ParArg));
-        a->fn = fn;  a->i = i;
+        a->fn = fn;  a->i = i;  a->arg = arg;
         pthread_create(&threads[i - start], NULL, par_for_worker, a);
     }
     for (int64_t i = 0; i < n; i++) pthread_join(threads[i], NULL);
@@ -1284,6 +1345,48 @@ IrisSparse* iris_sparsify(IrisList* dense) {
             }
             sp->indices[sp->len] = i;
             sp->values [sp->len] = v;
+            sp->len++;
+        }
+    }
+    return sp;
+}
+
+IrisSparse* iris_sparsify_i64_array(int64_t* data, int64_t len) {
+    IrisSparse* sp = xcalloc(1, sizeof(IrisSparse));
+    sp->cap     = 8;
+    sp->indices = xmalloc(sizeof(size_t)    * sp->cap);
+    sp->values  = xmalloc(sizeof(IrisVal*)  * sp->cap);
+    for (int64_t i = 0; i < len; i++) {
+        int64_t v = data[i];
+        if (v != 0) {
+            if (sp->len == sp->cap) {
+                sp->cap *= 2;
+                sp->indices = xrealloc(sp->indices, sizeof(size_t)   * sp->cap);
+                sp->values  = xrealloc(sp->values,  sizeof(IrisVal*) * sp->cap);
+            }
+            sp->indices[sp->len] = i;
+            sp->values [sp->len] = iris_box_i64(v);
+            sp->len++;
+        }
+    }
+    return sp;
+}
+
+IrisSparse* iris_sparsify_f64_array(double* data, int64_t len) {
+    IrisSparse* sp = xcalloc(1, sizeof(IrisSparse));
+    sp->cap     = 8;
+    sp->indices = xmalloc(sizeof(size_t)    * sp->cap);
+    sp->values  = xmalloc(sizeof(IrisVal*)  * sp->cap);
+    for (int64_t i = 0; i < len; i++) {
+        double v = data[i];
+        if (v != 0.0) {
+            if (sp->len == sp->cap) {
+                sp->cap *= 2;
+                sp->indices = xrealloc(sp->indices, sizeof(size_t)   * sp->cap);
+                sp->values  = xrealloc(sp->values,  sizeof(IrisVal*) * sp->cap);
+            }
+            sp->indices[sp->len] = i;
+            sp->values [sp->len] = iris_box_f64(v);
             sp->len++;
         }
     }
@@ -2488,7 +2591,6 @@ void iris_udp_send(int64_t fd, const char* addr_port, int64_t data_len) {
     char* port_colon = strrchr(p, ':');
     if (port_colon) { port = (uint16_t)atoi(port_colon + 1); *port_colon = '\0'; strncpy(host, p, sizeof(host)-1); }
     else { strncpy(host, p, sizeof(host)-1); }
-    free(p);
     struct sockaddr_in dst = {0};
     dst.sin_family = AF_INET;
     dst.sin_port = htons(port);
@@ -2499,6 +2601,7 @@ void iris_udp_send(int64_t fd, const char* addr_port, int64_t data_len) {
 #else
     sendto((int)fd, data, dlen, 0, (struct sockaddr*)&dst, sizeof(dst));
 #endif
+    free(p);
 }
 
 char* iris_udp_recv(int64_t fd) {
@@ -4313,7 +4416,11 @@ static void rc_deep_free_by_kind(void* ptr, int32_t kind) {
             IrisVal* val = (IrisVal*)ptr;
             switch (val->tag) {
                 case IRIS_TAG_STR:
-                    free(val->str);
+                    /* Release the underlying string via the RC table so ownership
+                     * and refcounts are consistent. If no RC entry exists the
+                     * call is a no-op; otherwise the string will be freed when
+                     * its count reaches zero. */
+                    if (val->str) iris_release_kind(val->str, IRIS_RC_STR);
                     break;
                 case IRIS_TAG_LIST:
                     iris_release_kind(val->ptr, IRIS_RC_LIST);
@@ -4361,7 +4468,9 @@ static void rc_deep_free_by_kind(void* ptr, int32_t kind) {
             break;
         }
         case IRIS_RC_STR:
-            free((char*)ptr);
+            if (ds_contains_and_remove(ptr)) {
+                free((char*)ptr);
+            }
             break;
         case IRIS_RC_LIST:
             rc_free_list_payload((IrisList*)ptr);

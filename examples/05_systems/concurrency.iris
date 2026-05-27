@@ -1,66 +1,34 @@
-// concurrency.iris -- channels, spawn, and atomics
-//
-// IRIS supports channel-based message passing and spawned tasks.
-// These features work through the interpreter backend (EmitKind::Eval).
-//
-// This example demonstrates the concurrency API surface:
-//   channel() -- create a new channel
-//   send(ch, v) -- send a value into a channel
-//   recv(ch) -- receive a value from a channel (blocking)
-//   spawn { ... } -- execute a block concurrently
-//   atomic(v) -- create an atomic variable
-//   atomic_load(a) -- read the atomic value
-//   atomic_store(a, v) -- write the atomic value
-//   atomic_add(a, v) -- atomically add to the value
-//
-// Example usage (run via test harness):
-//
-//   val ch = channel()
-//   spawn {
-//       send(ch, 42)
-//   };
-//   val v = recv(ch)
-//   // v == 42
-//
-// Producer-consumer pattern:
-//
-//   val ch = channel()
-//   spawn {
-//       var i = 0
-//       while i < 10 {
-//           send(ch, i);
-//           i = i + 1
-//       }
-//   };
-//   var total = 0
-//   var j = 0
-//   while j < 10 {
-//       total = total + recv(ch);
-//       j = j + 1
-//   }
-//   // total == 45
-//
-// Atomic counter with multiple workers:
-//
-//   val counter = atomic(0)
-//   atomic_add(counter, 1)
-//   atomic_add(counter, 5)
-//   // atomic_load(counter) == 6
-//
-// Run: iris run examples/concurrency.iris
-
-bring std.time
-
+bring std.fmt
 def main() -> i64 {
-    print("=== Concurrency API ===");
-    print("Channels:  channel(), send(), recv()");
-    print("Spawn:     spawn { ... }");
-    print("Atomics:   atomic(), atomic_load/store/add()");
-    print("");
-    print("See test suite (phase26, phase134) for full examples.");
-    print("The concurrency API works via the interpreter backend.");
-    print("channel total = 42");
-    print("atomic sum = 10");
-    print("combined = 52");
-    0
+    print("=== Concurrency Example ===");
+    val ch = channel()
+    val counter = atomic(0)
+    spawn {
+        var i = 1
+        while i <= 5 {
+            send(ch, i);
+            atomic_add(counter, 1);
+            i = i + 1;
+            
+        }
+        
+    }
+    ;
+    var total = 0
+    var received = 0
+    while received<5 {
+        total = total + recv(ch);
+        received = received + 1;
+        
+    }
+    print(concat("messages received = ", to_str(received)));
+    print(concat("message total = ", to_str(total)));
+    print(concat("atomic counter = ", to_str(atomic_load(counter))));
+    if received == 5 && total == 15 && atomic_load(counter) == 5 {
+        0
+    }
+    else {
+        1
+    }
+    
 }

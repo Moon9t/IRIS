@@ -1,5 +1,8 @@
 //! IRIS: Intermediate Representation for Intelligent Systems.
 //!
+#![allow(clippy::collapsible_match)]
+#![allow(clippy::useless_conversion)]
+
 //! Compiler pipeline:
 //!
 //! ```text
@@ -47,6 +50,10 @@ pub mod runtime_bindings;
 pub mod security;
 pub mod stdlib;
 pub mod test_runner;
+
+pub mod agent;
+pub mod inference;
+pub mod rl;
 
 pub use codegen::ir_serial::{deserialize_module, serialize_module};
 pub use compiler::FileCompiler;
@@ -387,7 +394,7 @@ fn compile_ast(
         EmitKind::PgoInstrument => Ok(emit_pgo_instrument(&ir_module)?),
         EmitKind::PgoOptimize => Ok(emit_pgo_optimize(&ir_module, "")?),
         EmitKind::Graph | EmitKind::Onnx | EmitKind::OnnxBinary => unreachable!(),
-        EmitKind::Eval => codegen::execute_binary_for_eval(&ir_module).map_err(Error::Codegen),
+        EmitKind::Eval => eval_ir_module_internal(&ir_module),
     }
 }
 
@@ -432,7 +439,49 @@ pub fn compile_to_module(source: &str, module_name: &str) -> Result<IrModule, Er
 /// Finds the first zero-argument function and executes it via the native LLVM
 /// pipeline, capturing stdout.
 pub fn eval_ir_module(module: &IrModule) -> Result<String, Error> {
-    codegen::execute_binary_for_eval(module).map_err(Error::Codegen)
+    eval_ir_module_internal(module)
+}
+
+fn eval_ir_module_internal(module: &IrModule) -> Result<String, Error> {
+    match codegen::execute_binary_for_eval(module) {
+        Ok(s) => Ok(s),
+        Err(e) => {
+            eprintln!(
+                "JIT/Native execution failed (falling back to interpreter): {:?}",
+                e
+            );
+            match e {
+                crate::error::CodegenError::Unsupported { backend, .. }
+                    if backend == "native" || backend == "binary" =>
+                {
+                    let func = module
+                        .functions()
+                        .iter()
+                        .find(|f| f.name == "main" && f.params.is_empty())
+                        .or_else(|| module.functions().iter().find(|f| f.params.is_empty()))
+                        .ok_or_else(|| {
+                            Error::Codegen(crate::error::CodegenError::Unsupported {
+                                backend: "native".into(),
+                                detail: "no zero-argument function found for eval".into(),
+                            })
+                        })?;
+                    let opts = crate::interp::InterpOptions {
+                        max_steps: 10_000_000,
+                        max_depth: 5_000,
+                    };
+                    match crate::interp::eval_function_in_module_opts(module, func, &[], opts) {
+                        Ok(vals) => Ok(vals
+                            .into_iter()
+                            .map(|v| format!("{}", v))
+                            .collect::<Vec<_>>()
+                            .join("\n")),
+                        Err(ie) => Err(Error::Interp(ie)),
+                    }
+                }
+                other => Err(Error::Codegen(other)),
+            }
+        }
+    }
 }
 
 /// Parse source text with full error recovery, printing all errors to stderr

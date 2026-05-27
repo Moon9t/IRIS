@@ -66,7 +66,10 @@ def f() -> str {
 "#;
     let result = compile_multi(&[("main", src)], "main", EmitKind::Eval).unwrap();
     // trim() strips trailing \r\n\r\n, so only the request line + host header survive
-    assert_eq!(result.trim(), "GET / HTTP/1.1\r\nHost: example.com");
+    assert_eq!(
+        result.trim().replace("\r\n", "\n"),
+        "GET / HTTP/1.1\nHost: example.com"
+    );
 }
 
 // ── 6. http_post_request includes Content-Length header ──────────────────────

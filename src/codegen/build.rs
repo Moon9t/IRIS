@@ -120,9 +120,7 @@ pub fn execute_binary_for_eval_with_target(
     target: Option<&str>,
 ) -> Result<String, CodegenError> {
     let output = run_binary_for_eval_entry_capture(module, None, target)?;
-    let stdout = String::from_utf8_lossy(&output.stdout)
-        .replace("\r\n", "\n")
-        .replace('\r', "\n");
+    let stdout = String::from_utf8_lossy(&output.stdout).replace('\r', "");
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(CodegenError::Unsupported {
@@ -483,7 +481,12 @@ fn build_binary_impl(
     // 6. Link module.o + iris_runtime.o → native binary using clang + lld.
     let mut link_cmd = Command::new(&clang);
     link_cmd.args(&target_args);
-    link_cmd.args(["-fuse-ld=lld", "-O2", path_str(&mod_obj)?]);
+    // Apple clang rejects -fuse-ld=lld; only request lld on non-macOS hosts.
+    if cfg!(target_os = "macos") {
+        link_cmd.args(["-O2", path_str(&mod_obj)?]);
+    } else {
+        link_cmd.args(["-fuse-ld=lld", "-O2", path_str(&mod_obj)?]);
+    }
     for obj in &support_objs {
         link_cmd.arg(path_str(obj)?);
     }

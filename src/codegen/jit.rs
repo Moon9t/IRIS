@@ -25,9 +25,12 @@
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use crate::codegen::build::{find_clang, msys2_gcc_lib, msys2_ucrt64_include, msys2_ucrt64_lib};
 use crate::error::CodegenError;
 use crate::ir::module::IrModule;
+
+use crate::codegen::build::find_clang;
+#[cfg(target_os = "windows")]
+use crate::codegen::build::{msys2_gcc_lib, msys2_ucrt64_include, msys2_ucrt64_lib};
 
 // ---------------------------------------------------------------------------
 // JIT cache

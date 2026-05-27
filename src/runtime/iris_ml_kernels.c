@@ -1,5 +1,5 @@
 // iris_ml_kernels.c — IRIS ML Compute Engine
-// v0.5.0 "The C of Machine Learning"
+// v0.5.0 
 //
 // Real, high-performance ML kernels for native IRIS binaries.
 // All functions operate on IrisTensor (contiguous f32 row-major buffers).

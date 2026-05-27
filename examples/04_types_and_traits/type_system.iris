@@ -107,10 +107,10 @@ def demo_inference() -> i64 {
     val inferred_str = "hello"      // str
 
     // Explicit types (same values)
-    val explicit_int: i64 = 42
-    val explicit_float: f64 = 3.14
-    val explicit_bool: bool = true
-    val explicit_str: str = "hello"
+    val _explicit_int: i64 = 42
+    val _explicit_float: f64 = 3.14
+    val _explicit_bool: bool = true
+    val _explicit_str: str = "hello"
 
     print(concat("inferred int:   ", to_str(inferred_int)));
     print(concat("inferred float: ", to_str(inferred_float)));

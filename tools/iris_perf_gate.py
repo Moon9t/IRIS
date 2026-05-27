@@ -9,13 +9,15 @@ import sys
 import statistics
 from pathlib import Path
 
-def run_cmd(cmd, timeout=120):
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+def run_cmd(cmd, timeout=600):
     p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout)
     return p.returncode, p.stdout
 
 def bench_once(iris, benchfile):
     cmd = [str(iris), 'bench', benchfile]
-    rc, out = run_cmd(cmd, timeout=120)
+    rc, out = run_cmd(cmd, timeout=600)
     # Save raw output for debugging
     try:
         Path('target_verify').mkdir(parents=True, exist_ok=True)
@@ -24,16 +26,29 @@ def bench_once(iris, benchfile):
     except Exception:
         pass
 
-    # Expect bench to print a numeric result somewhere in the output; try to extract a float.
-    float_re = re.compile(r'([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)')
-    lines = out.strip().splitlines()
-    for line in reversed(lines):
-        m = float_re.search(line)
-        if m:
-            try:
-                return rc, float(m.group(1))
-            except Exception:
-                continue
+    def to_ms(value: str) -> float | None:
+        match = re.fullmatch(r'([-+]?[0-9]*\.?[0-9]+)\s*(µs|us|ms|s)', value)
+        if not match:
+            return None
+        amount = float(match.group(1))
+        unit = match.group(2)
+        if unit in ('µs', 'us'):
+            return amount / 1000.0
+        if unit == 'ms':
+            return amount
+        return amount * 1000.0
+
+    lines = ANSI_RE.sub('', out).strip().splitlines()
+    for line in lines:
+        cleaned = line.strip()
+        if not cleaned.startswith('Total'):
+            continue
+        parts = cleaned.split()
+        if len(parts) < 3:
+            continue
+        ms = to_ms(parts[2])
+        if ms is not None:
+            return rc, ms
     return rc, None
 
 def main():

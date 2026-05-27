@@ -227,8 +227,12 @@ fn run_single_input(
     }
 }
 
+/// Loads an ONNX model and returns an opaque session handle.
+///
+/// # Safety
+/// The caller must pass a valid, NUL-terminated C string pointer.
 #[no_mangle]
-pub extern "C" fn iris_ml_onnx_load(model_path: *const c_char) -> i64 {
+pub unsafe extern "C" fn iris_ml_onnx_load(model_path: *const c_char) -> i64 {
     unsafe { iris_onnx_session_create(model_path) as i64 }
 }
 
@@ -247,8 +251,12 @@ pub extern "C" fn iris_ml_onnx_run(session: i64, input: TensorPair) -> TensorPai
 }
 
 #[cfg(libtorch_enabled)]
+/// Loads a PyTorch model and returns an opaque handle.
+///
+/// # Safety
+/// The caller must pass a valid, NUL-terminated C string pointer.
 #[no_mangle]
-pub extern "C" fn iris_ml_pytorch_load(model_path: *const c_char) -> i64 {
+pub unsafe extern "C" fn iris_ml_pytorch_load(model_path: *const c_char) -> i64 {
     unsafe { iris_pytorch_load(model_path) as i64 }
 }
 
@@ -289,8 +297,12 @@ pub extern "C" fn iris_ml_pytorch_run(_model: i64, _input: TensorPair) -> Tensor
     }
 }
 
+/// Loads a TensorFlow SavedModel and returns an opaque handle.
+///
+/// # Safety
+/// The caller must pass a valid, NUL-terminated C string pointer.
 #[no_mangle]
-pub extern "C" fn iris_ml_tf_load(model_path: *const c_char) -> i64 {
+pub unsafe extern "C" fn iris_ml_tf_load(model_path: *const c_char) -> i64 {
     unsafe { iris_tf_load_saved_model(model_path) as i64 }
 }
 

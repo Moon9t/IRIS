@@ -1,6 +1,6 @@
 # IRIS — Intermediate Representation for Intelligent Systems
 
-**The C of Machine Learning — a compiled, statically-typed systems language for building Autonomous Intelligent Systems.**
+**A compiled, statically-typed systems language for building Autonomous Intelligent Systems.**
 
 Low-level control. High-level ML ergonomics. First-class tensors, autodiff, and ONNX/CUDA/SIMD backends. Build AIS that learn, adapt, and act.
 
@@ -48,22 +48,22 @@ pipeline. There is no silent interpreter fallback in those user-facing paths.
 `iris build --target <preset>` can now emit cross-target binaries when the
 matching clang/sysroot toolchain is installed.
 
-The locked 0.4.0 language/tooling surface and install dependency matrix live in
+The locked 0.5.0 language/tooling surface and install dependency matrix live in
 [docs/current-language-lock.md](docs/current-language-lock.md).
 
 **Output of `iris --version`:**
 
 ```
-iris 0.4.0 (abc1234 2026-05-17)
+iris 0.5.0 (08b0588 2026-05-26)
 IRIS — Intermediate Representation for Intelligent Systems
 Copyright (C) 2024-2026 Moon & IRIS Project Contributors
 License: GPL-2.0-or-later <https://www.gnu.org/licenses/old-licenses/gpl-2.0.html>
 
 Compiler:
-  Version:       0.4.0
-  Git commit:    abc1234567890abcdef1234567890abcdef123456
+  Version:       0.5.0
+  Git commit:    08b058847493018fc887a3a5c074992e94c4bba0
   Git branch:    main
-  Build date:    2026-05-17
+  Build date:    2026-05-26
 
 Platform:
   Target:        x86_64-pc-windows-msvc
@@ -74,7 +74,7 @@ Build:
   Profile:       release
   Opt level:     3
   Rust edition:  2021
-  Built with:    rustc 1.78.0 (9b00956e5 2024-04-29)
+  Built with:    rustc 1.91.1 (ed61e7d7e 2025-11-07)
 ```
 
 ---
@@ -99,7 +99,7 @@ Build:
 
 ## ML Pipeline Example
 
-IRIS v0.4.0 includes a runnable end-to-end ML pipeline example:
+IRIS v0.5.0 includes a runnable end-to-end ML pipeline example:
 
 ```sh
 iris run examples/ml_full_pipeline.iris
@@ -424,7 +424,7 @@ The official `iris-lang` extension provides:
 - **REPL** — integrated terminal REPL
 - **Status bar** — shows IRIS version, git commit, build info; click for server actions
 
-Install: `code --install-extension iris-lang-0.4.0.vsix`
+Install: `code --install-extension iris-lang-0.5.0.vsix`
 
 ### REPL Commands
 

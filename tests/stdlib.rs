@@ -1287,3 +1287,241 @@ fn bitset_set_get() {
         "3"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 17. ais & rl (Autonomous Intelligent Systems & Reinforcement Learning)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ais_decision_strategies() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.ais
+        def main() -> i64 {
+            val logits : list<f64> = list()
+            val _ = list_push(logits, 1.0)
+            val _ = list_push(logits, 5.0)
+            val _ = list_push(logits, 2.0)
+            val best = argmax(logits)
+            
+            // epsilon_greedy with 0.0 epsilon should be greedy (argmax)
+            val eg = epsilon_greedy(logits, 0.0)
+            
+            // softmax sample should return valid index
+            val sm = softmax_sample(logits)
+            val ok_sm = if sm >= 0 { if sm < 3 { 1 } else { 0 } } else { 0 }
+
+            best + eg + ok_sm
+        }
+    "#
+        ),
+        "3"
+    );
+}
+
+#[test]
+fn ais_reward_processing() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.ais
+        def main() -> i64 {
+            val rewards : list<f64> = list()
+            val _ = list_push(rewards, 0.0)
+            val _ = list_push(rewards, 0.0)
+            val _ = list_push(rewards, 10.0)
+            val returns = discount_rewards(rewards, 0.9)
+            val v0 = list_get(returns, 0)
+            val v2 = list_get(returns, 2)
+            
+            // v0 = 10 * 0.9 * 0.9 = 8.1
+            // v2 = 10.0
+            val ok = if v0 > 8.09 { if v0 < 8.11 { if v2 == 10.0 { 1 } else { 0 } } else { 0 } } else { 0 }
+            ok
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn rl_q_learning_and_sarsa() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.rl
+        def main() -> i64 {
+            val q = q_table_new(3, 2)
+            val _ = q_set(q, 0, 1, 2, 5.0)
+            val v0 = q_get(q, 0, 1, 2)
+            
+            // Q-learning update: state=0, action=0, reward=1.0, next_state=0
+            // Q(0,0) starts at 0.0. Q(0,1) is 5.0.
+            // td_target = 1.0 + 0.9 * 5.0 = 5.5
+            // new_value = 0.0 + 0.1 * (5.5 - 0.0) = 0.55
+            val updated = q_learning_update(q, 0, 0, 1.0, 0, 2, 0.1, 0.9)
+            
+            // Best action at state 0 should be 1 (val 5.0)
+            val best = q_best_action(q, 0, 2)
+
+            val ok = if v0 == 5.0 { if updated > 0.54 { if updated < 0.56 { if best == 1 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            ok
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn rl_replay_buffer() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.rl
+        def main() -> i64 {
+            var buf = replay_buffer_new(2)
+            val s1 : list<f64> = list()
+            val _ = list_push(s1, 1.0)
+            val s2 : list<f64> = list()
+            val _ = list_push(s2, 2.0)
+            val e1 = Experience { state: s1, action: 1, reward: 0.5, next_state: s2, done: false }
+            
+            buf = replay_buffer_push(buf, e1)
+            val sz1 = buf.size
+            buf = replay_buffer_push(buf, e1)
+            val sz2 = buf.size
+            
+            val idxs = replay_buffer_sample_indices(buf, 5)
+            val ok_sz = if sz1 == 1 { if sz2 == 2 { 1 } else { 0 } } else { 0 }
+            val ok_idxs = if list_len(idxs) == 5 { 1 } else { 0 }
+            
+            ok_sz + ok_idxs
+        }
+    "#
+        ),
+        "2"
+    );
+}
+
+#[test]
+fn ais_model_persistence() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.ais
+        def main() -> i64 {
+            val path = "temp_model_test_weights.txt"
+            val weights : list<f64> = list()
+            val _ = list_push(weights, 1.5)
+            val _ = list_push(weights, 0.0 - 2.5)
+            val _ = list_push(weights, 3.14)
+            
+            val ok_save = model_save(weights, path)
+            val loaded = model_load(path)
+            
+            val len_ok = if list_len(loaded) == 3 { 1 } else { 0 }
+            val val_ok = if list_get(loaded, 0) == 1.5 { if list_get(loaded, 2) == 3.14 { 1 } else { 0 } } else { 0 }
+            
+            // Clean up temp file
+            val _ = remove_file(path)
+            
+            if ok_save { len_ok + val_ok } else { 0 }
+        }
+    "#
+        ),
+        "2"
+    );
+}
+
+#[test]
+fn rl_replay_buffer_sample_batch() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.rl
+        def main() -> i64 {
+            var buf = replay_buffer_new(3)
+            val s1 : list<f64> = list()
+            val _ = list_push(s1, 10.0)
+            val s2 : list<f64> = list()
+            val _ = list_push(s2, 20.0)
+            val e1 = Experience { state: s1, action: 1, reward: 0.5, next_state: s2, done: false }
+
+            buf = replay_buffer_push(buf, e1)
+            val batch = replay_buffer_sample(buf, 2)
+
+            val len_ok = if list_len(batch) == 2 { 1 } else { 0 }
+            val first = list_get(batch, 0)
+            val val_ok = if list_get(first.state, 0) == 10.0 { 1 } else { 0 }
+
+            len_ok + val_ok
+        }
+    "#
+        ),
+        "2"
+    );
+}
+
+#[test]
+fn rl_ppo_clip_loss_calc() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.rl
+        def main() -> i64 {
+            val log_probs : list<f64> = list()
+            val _ = list_push(log_probs, 0.5)
+            val _ = list_push(log_probs, 1.2)
+            
+            val old_log_probs : list<f64> = list()
+            val _ = list_push(old_log_probs, 0.4)
+            val _ = list_push(old_log_probs, 1.3)
+            
+            val advantages : list<f64> = list()
+            val _ = list_push(advantages, 1.0)
+            val _ = list_push(advantages, 0.0 - 2.0)
+            
+            // i=0: ratio = exp(0.5 - 0.4) = exp(0.1) = 1.10517
+            //      surr1 = 1.10517 * 1.0 = 1.10517
+            //      surr2 = clamp(1.10517, 0.8, 1.2) * 1.0 = 1.10517
+            //      min_surr = 1.10517 -> loss_0 = -1.10517
+            // i=1: ratio = exp(1.2 - 1.3) = exp(-0.1) = 0.904837
+            //      surr1 = 0.904837 * -2.0 = -1.80967
+            //      surr2 = clamp(0.904837, 0.8, 1.2) * -2.0 = -1.80967
+            //      min_surr = -1.80967 -> loss_1 = 1.80967
+            // Total loss = (-1.10517 + 1.80967) / 2 = 0.35225
+            val loss = ppo_clip_loss(log_probs, old_log_probs, advantages, 0.2)
+            val ok = if loss > 0.35 { if loss < 0.36 { 1 } else { 0 } } else { 0 }
+            ok
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn rl_softmax_entropy_calc() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.rl
+        def main() -> i64 {
+            val logits : list<f64> = list()
+            val _ = list_push(logits, 0.0)
+            val _ = list_push(logits, 0.0)
+            
+            // probs = [0.5, 0.5]
+            // entropy = - (0.5 * ln(0.5) + 0.5 * ln(0.5)) = -ln(0.5) = 0.693147
+            val h = softmax_entropy(logits)
+            val ok = if h > 0.69 { if h < 0.70 { 1 } else { 0 } } else { 0 }
+            ok
+        }
+    "#
+        ),
+        "1"
+    );
+}

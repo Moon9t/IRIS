@@ -1,4 +1,5 @@
-bring "task.iris" bring std.kv
+bring "task.iris"
+bring std.kv
 const DB : str = ".taskman.db"
 pub def storage_next_id() -> i64 {
     val s = kv_get(DB, "__next_id__");

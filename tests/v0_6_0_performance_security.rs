@@ -456,7 +456,7 @@ fn test_copy_prop_float_dedup() {
     builder.push_instr(
         IrInstr::ConstFloat {
             result: c1,
-            value: 3.14,
+            value: std::f64::consts::PI,
             ty: scalar_f32(),
         },
         Some(scalar_f32()),
@@ -466,7 +466,7 @@ fn test_copy_prop_float_dedup() {
     builder.push_instr(
         IrInstr::ConstFloat {
             result: c2,
-            value: 3.14,
+            value: std::f64::consts::PI,
             ty: scalar_f32(),
         },
         Some(scalar_f32()),

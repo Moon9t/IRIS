@@ -31,11 +31,11 @@ use crate::pass::Pass;
 fn local_contains_infer(ty: &IrType) -> bool {
     match ty {
         IrType::Infer => true,
-        IrType::Option(_)
-        | IrType::ResultType(..)
-        | IrType::Chan(_)
-        | IrType::Atomic(_)
-        | IrType::Mutex(_) => false,
+        IrType::Option(inner) => local_contains_infer(inner),
+        IrType::ResultType(ok, err) => local_contains_infer(ok) || local_contains_infer(err),
+        IrType::Chan(inner) => local_contains_infer(inner),
+        IrType::Atomic(inner) => local_contains_infer(inner),
+        IrType::Mutex(inner) => local_contains_infer(inner),
         IrType::Scalar(_) | IrType::Str | IrType::Enum { .. } | IrType::Struct { .. } => false,
         IrType::Tensor { .. } => false,
         IrType::Tuple(elems) => elems.iter().any(local_contains_infer),
@@ -54,6 +54,13 @@ fn local_contains_infer(ty: &IrType) -> bool {
 fn default_infer(ty: &IrType) -> IrType {
     match ty {
         IrType::Infer => IrType::Scalar(DType::I64),
+        IrType::Option(inner) => IrType::Option(Box::new(default_infer(inner))),
+        IrType::ResultType(ok, err) => {
+            IrType::ResultType(Box::new(default_infer(ok)), Box::new(default_infer(err)))
+        }
+        IrType::Chan(inner) => IrType::Chan(Box::new(default_infer(inner))),
+        IrType::Atomic(inner) => IrType::Atomic(Box::new(default_infer(inner))),
+        IrType::Mutex(inner) => IrType::Mutex(Box::new(default_infer(inner))),
         IrType::Tuple(elems) => IrType::Tuple(elems.iter().map(default_infer).collect()),
         IrType::Array { elem, len } => IrType::Array {
             elem: Box::new(default_infer(elem)),
@@ -190,6 +197,17 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
         Some(initial_return_ty.clone())
     });
 
+    // Pre-initialize slots for all ValueIds that have a type in value_types.
+    for (&vid, ty) in module.functions[fn_idx].value_types.iter() {
+        let known = if local_contains_infer(ty) {
+            None
+        } else {
+            Some(ty.clone())
+        };
+        let s = uf.new_slot(known);
+        slots.insert(vid, s);
+    }
+
     // Pass 1: collect constraints by walking all instructions.
     let num_blocks = module.functions[fn_idx].blocks.len();
     // Track a union-find slot for each list value's element type.
@@ -210,6 +228,62 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
                 &mut closure_captures,
                 ret_slot,
             );
+        }
+
+        // Unify block arguments with target block parameters on branches
+        if let Some(terminator) = module.functions[fn_idx].blocks[bi].terminator().cloned() {
+            match terminator {
+                IrInstr::Br { target, args } => {
+                    if let Some(target_block) = module.functions[fn_idx].block(target) {
+                        for (arg, param) in args.iter().zip(target_block.params.iter()) {
+                            let s_arg = get_or_create_slot(&mut uf, &mut slots, *arg, None);
+                            let s_param = get_or_create_slot(&mut uf, &mut slots, param.id, None);
+                            try_unify(
+                                &mut uf,
+                                &mut errors,
+                                s_arg,
+                                s_param,
+                                &format!("Br arg {:?} to param {:?}", arg, param.id),
+                            );
+                        }
+                    }
+                }
+                IrInstr::CondBr {
+                    then_block,
+                    then_args,
+                    else_block,
+                    else_args,
+                    ..
+                } => {
+                    if let Some(then_b) = module.functions[fn_idx].block(then_block) {
+                        for (arg, param) in then_args.iter().zip(then_b.params.iter()) {
+                            let s_arg = get_or_create_slot(&mut uf, &mut slots, *arg, None);
+                            let s_param = get_or_create_slot(&mut uf, &mut slots, param.id, None);
+                            try_unify(
+                                &mut uf,
+                                &mut errors,
+                                s_arg,
+                                s_param,
+                                &format!("CondBr then arg {:?} to param {:?}", arg, param.id),
+                            );
+                        }
+                    }
+                    if let Some(else_b) = module.functions[fn_idx].block(else_block) {
+                        for (arg, param) in else_args.iter().zip(else_b.params.iter()) {
+                            let s_arg = get_or_create_slot(&mut uf, &mut slots, *arg, None);
+                            let s_param = get_or_create_slot(&mut uf, &mut slots, param.id, None);
+                            try_unify(
+                                &mut uf,
+                                &mut errors,
+                                s_arg,
+                                s_param,
+                                &format!("CondBr else arg {:?} to param {:?}", arg, param.id),
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
@@ -328,6 +402,234 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
         }
     }
 
+    // Sweep block parameters to replace any nested IrType::Infer in block parameter type fields
+    // with their fully resolved types from module.functions[fn_idx].value_types.
+    let value_types = module.functions[fn_idx].value_types.clone();
+    let num_blocks = module.functions[fn_idx].blocks.len();
+    for bi in 0..num_blocks {
+        let num_params = module.functions[fn_idx].blocks[bi].params.len();
+        for pi in 0..num_params {
+            let param = &mut module.functions[fn_idx].blocks[bi].params[pi];
+            if let Some(resolved) = value_types.get(&param.id) {
+                param.ty = resolved.clone();
+            }
+        }
+    }
+
+    // Sweep instructions to replace any nested IrType::Infer in instruction type fields
+    // with their fully resolved types from module.functions[fn_idx].value_types.
+    for bi in 0..num_blocks {
+        let num_instrs = module.functions[fn_idx].blocks[bi].instrs.len();
+        for ii in 0..num_instrs {
+            let instr = &mut module.functions[fn_idx].blocks[bi].instrs[ii];
+            match instr {
+                IrInstr::BinOp { result, op, ty, .. } => {
+                    let is_cmp = matches!(
+                        op,
+                        crate::ir::instr::BinOp::CmpEq
+                            | crate::ir::instr::BinOp::CmpNe
+                            | crate::ir::instr::BinOp::CmpLt
+                            | crate::ir::instr::BinOp::CmpLe
+                            | crate::ir::instr::BinOp::CmpGt
+                            | crate::ir::instr::BinOp::CmpGe
+                    );
+                    if is_cmp {
+                        *ty = IrType::Scalar(DType::Bool);
+                    } else if let Some(resolved) = value_types.get(result) {
+                        *ty = resolved.clone();
+                    }
+                }
+                IrInstr::UnaryOp { result, ty, .. } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *ty = resolved.clone();
+                    }
+                }
+                IrInstr::Cast { result, to_ty, .. } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *to_ty = resolved.clone();
+                    }
+                }
+                IrInstr::ListGet {
+                    result, elem_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *elem_ty = resolved.clone();
+                    }
+                }
+                IrInstr::ListPop {
+                    result, elem_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *elem_ty = resolved.clone();
+                    }
+                }
+                IrInstr::ArrayLoad {
+                    result, elem_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *elem_ty = resolved.clone();
+                    }
+                }
+                IrInstr::MapGet { result, val_ty, .. } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *val_ty = resolved.clone();
+                    }
+                }
+                IrInstr::OptionUnwrap {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::ResultUnwrap {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::ResultUnwrapErr {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::AtomicLoad {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::AtomicAdd {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::GetField {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::GetElement {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::MakeStruct {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::MakeTuple {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::MakeClosure {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::MakeSome {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::MakeNone {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::MakeOk {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::MakeErr {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::Call {
+                    result: Some(r),
+                    result_ty,
+                    ..
+                } => {
+                    if let Some(resolved) = value_types.get(r) {
+                        *result_ty = Some(resolved.clone());
+                    }
+                }
+                IrInstr::CallClosure {
+                    result: Some(r),
+                    result_ty,
+                    ..
+                } => {
+                    if let Some(resolved) = value_types.get(r) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::BuiltinCall {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::ListNew { result, elem_ty } => {
+                    if let Some(IrType::List(inner)) = value_types.get(result) {
+                        *elem_ty = (**inner).clone();
+                    }
+                }
+                IrInstr::AllocArray {
+                    result, elem_ty, ..
+                } => {
+                    if let Some(IrType::Array { elem, .. }) = value_types.get(result) {
+                        *elem_ty = (**elem).clone();
+                    }
+                }
+                IrInstr::MapNew {
+                    result,
+                    key_ty,
+                    val_ty,
+                } => {
+                    if let Some(IrType::Map(k, v)) = value_types.get(result) {
+                        *key_ty = (**k).clone();
+                        *val_ty = (**v).clone();
+                    }
+                }
+                IrInstr::Release { ptr, ty } => {
+                    if let Some(resolved) = value_types.get(ptr) {
+                        *ty = resolved.clone();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     if !errors.is_empty() {
         // Append diagnostic info mapping slots -> resolved types to help debugging.
         let mut diag = String::new();
@@ -410,6 +712,40 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
     Ok(())
 }
 
+/// Helper to get-or-create a slot for a value id.
+fn get_or_create_slot(
+    uf: &mut UnionFind,
+    slots: &mut HashMap<ValueId, usize>,
+    v: ValueId,
+    known: Option<IrType>,
+) -> usize {
+    if let Some(&s) = slots.get(&v) {
+        s
+    } else {
+        // Treat `Infer` as unknown: don't register it as a concrete type.
+        let concrete = match known {
+            Some(t) if local_contains_infer(&t) => None,
+            other => other,
+        };
+        let s = uf.new_slot(concrete);
+        slots.insert(v, s);
+        s
+    }
+}
+
+/// Helper to unify with better diagnostics when both sides are concrete.
+fn try_unify(uf: &mut UnionFind, errors: &mut Vec<String>, a: usize, b: usize, ctx: &str) {
+    let ta = uf.get_type(a);
+    let tb = uf.get_type(b);
+    if let (Some(ref ta2), Some(ref tb2)) = (ta.as_ref(), tb.as_ref()) {
+        if ta2 != tb2 {
+            errors.push(format!("type mismatch: {:?} vs {:?} -- {}", ta2, tb2, ctx));
+            return;
+        }
+    }
+    uf.unify(a, b, errors);
+}
+
 /// Emit equality constraints from a single instruction.
 fn collect_constraints(
     instr: &IrInstr,
@@ -420,53 +756,33 @@ fn collect_constraints(
     closure_captures: &mut HashMap<ValueId, Vec<ValueId>>,
     ret_slot: usize,
 ) {
-    // Helper to get-or-create a slot for a value id.
-    fn get_or_create_slot(
-        uf: &mut UnionFind,
-        slots: &mut HashMap<ValueId, usize>,
-        v: ValueId,
-        known: Option<IrType>,
-    ) -> usize {
-        if let Some(&s) = slots.get(&v) {
-            s
-        } else {
-            // Treat `Infer` as unknown: don't register it as a concrete type.
-            let concrete = match known {
-                Some(t) if local_contains_infer(&t) => None,
-                other => other,
-            };
-            let s = uf.new_slot(concrete);
-            slots.insert(v, s);
-            s
-        }
-    }
-
-    // Local helper to unify with better diagnostics when both sides are concrete.
-    fn try_unify(uf: &mut UnionFind, errors: &mut Vec<String>, a: usize, b: usize, ctx: &str) {
-        let ta = uf.get_type(a);
-        let tb = uf.get_type(b);
-        if let (Some(ref ta2), Some(ref tb2)) = (ta.as_ref(), tb.as_ref()) {
-            if ta2 != tb2 {
-                errors.push(format!("type mismatch: {:?} vs {:?} -- {}", ta2, tb2, ctx));
-                return;
-            }
-        }
-        uf.unify(a, b, errors);
-    }
-
     match instr {
-        // BinOp: ty is the result type; lhs/rhs have the same operand type.
+        // BinOp: ty is the operand type; lhs/rhs have the same operand type.
         IrInstr::BinOp {
             result,
+            op,
             lhs,
             rhs,
             ty,
-            ..
         } => {
-            let sr = get_or_create_slot(uf, slots, *result, Some(ty.clone()));
+            let is_cmp = matches!(
+                op,
+                crate::ir::instr::BinOp::CmpEq
+                    | crate::ir::instr::BinOp::CmpNe
+                    | crate::ir::instr::BinOp::CmpLt
+                    | crate::ir::instr::BinOp::CmpLe
+                    | crate::ir::instr::BinOp::CmpGt
+                    | crate::ir::instr::BinOp::CmpGe
+            );
+            let res_ty = if is_cmp {
+                IrType::Scalar(DType::Bool)
+            } else {
+                ty.clone()
+            };
+            let sr = get_or_create_slot(uf, slots, *result, Some(res_ty));
             let sl = get_or_create_slot(uf, slots, *lhs, None);
             let srs = get_or_create_slot(uf, slots, *rhs, None);
-            // Unify lhs and rhs (same numeric type).
+            // Unify lhs and rhs (same operand type).
             try_unify(
                 uf,
                 errors,
@@ -474,8 +790,8 @@ fn collect_constraints(
                 srs,
                 &format!("BinOp lhs {:?} rhs {:?}", lhs, rhs),
             );
-            // For non-Bool results (i.e., non-comparison ops), result type = operand type.
-            if !matches!(ty, IrType::Scalar(DType::Bool)) {
+            // For non-comparison ops, result type = operand type.
+            if !is_cmp {
                 try_unify(
                     uf,
                     errors,

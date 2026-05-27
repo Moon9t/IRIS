@@ -76,8 +76,8 @@ fn licm_func(func: &mut IrFunction) {
     // Simple dominator computation: iterative dataflow.
     let mut dom: Vec<HashSet<usize>> = vec![HashSet::new(); num_blocks];
     dom[0].insert(0);
-    for i in 1..num_blocks {
-        dom[i] = (0..num_blocks).collect();
+    for block_dom in dom.iter_mut().take(num_blocks).skip(1) {
+        *block_dom = (0..num_blocks).collect();
     }
 
     let mut changed = true;

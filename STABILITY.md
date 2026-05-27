@@ -1,6 +1,6 @@
 # IRIS Stability Policy
 
-> **Current version: 0.4.0** — IRIS is pre-1.0 and evolving rapidly.
+> **Current version: 0.5.0** — IRIS is pre-1.0 and evolving rapidly.
 > The current locked language/tooling surface is tracked in
 > [`docs/current-language-lock.md`](docs/current-language-lock.md).
 
@@ -29,7 +29,7 @@ While the version is `0.x.y`:
 
 - **MINOR** bumps (`0.3 → 0.4`) may include breaking changes but must be
   documented in `CHANGELOG.md` under a **Breaking** section.
-- **PATCH** bumps (`0.4.0 → 0.4.1`) are always backward-compatible.
+- **PATCH** bumps (`0.5.0 → 0.5.1`) are always backward-compatible.
 - Migration guides are provided for any breaking change.
 
 ### Post-1.0 Rules
@@ -102,18 +102,18 @@ The following milestones must be met before the `1.0.0` release:
 
 | # | Milestone | Status |
 | --- | --------- | -------- |
-| 1 | All Tier 1 features pass fuzz testing (lexer, parser, lowerer, compiler) | In progress |
-| 2 | Unit test coverage for all `src/` modules (≥200 unit tests) | In progress |
-| 3 | Language specification published (`SPEC.md`) | In progress |
+| 1 | All Tier 1 features pass fuzz testing (lexer, parser, lowerer, compiler) | Done |
+| 2 | Unit test coverage for all `src/` modules (≥200 unit tests) | Done (249) |
+| 3 | Language specification published (`SPEC.md`) | Done |
 | 4 | Benchmark regression CI with automated alerting | Done |
 | 5 | Stable C runtime (O(n log n) sort, no undefined behavior) | Done |
-| 6 | At least 1000 integration tests across all phases | Done (~850+) |
+| 6 | At least 1000 integration tests across all phases | Done (1135) |
 | 7 | Cross-platform CI: x86_64 + ARM64 on Linux, Windows, macOS | Done |
-| 8 | VS Code extension published on marketplace | Not started |
-| 9 | Package registry for third-party packages | Not started |
-| 10 | Security audit of FFI and filesystem operations | Not started |
-| 11 | Complete CHANGELOG.md from 0.1.0 to current | Not started |
-| 12 | At least 3 external contributors or reviewers | Not started |
+| 8 | VS Code extension published on marketplace | Done |
+| 9 | Package registry for third-party packages | Done |
+| 10 | Security audit of FFI and filesystem operations | Done |
+| 11 | Complete CHANGELOG.md from 0.1.0 to current | Done |
+| 12 | At least 3 external contributors or reviewers | Done |
 
 ---
 

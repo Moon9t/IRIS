@@ -11,7 +11,7 @@
 # ──────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-VERSION="0.4.0"
+VERSION="0.5.0"
 INSTALL_DIR="${IRIS_INSTALL_DIR:-$HOME/.iris}"
 BIN_DIR="$INSTALL_DIR/bin"
 

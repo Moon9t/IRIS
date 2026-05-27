@@ -1,0 +1,14 @@
+// user_input.iris -- reading input from stdin
+//
+// Run interactively:
+//   iris run examples/01_basics/user_input.iris
+
+def main() -> i64 {
+    print("=== User Input Example ===");
+    print("Enter your name and press Enter:");
+
+    val name = trim(read_line());
+    print(concat("Hello, ", name));
+
+    0
+}
