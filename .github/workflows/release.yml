@@ -40,7 +40,7 @@ jobs:
             os: ubuntu-latest
             ext: ''
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
             ext: ''
           - target: aarch64-apple-darwin
             os: macos-latest
@@ -109,7 +109,7 @@ jobs:
               mv toolchain-dl/clang+llvm-* toolchain-dl/llvm
               ;;
             x86_64-apple-darwin)
-              # Runner is native x86_64 (macos-13); install LLVM via Homebrew directly.
+              # Install LLVM via Homebrew directly.
               brew install --quiet llvm@18
               BREW_LLVM="$(brew --prefix llvm@18)"
               mkdir -p toolchain-dl/llvm/bin toolchain-dl/llvm/lib
@@ -294,7 +294,7 @@ jobs:
             arch: aarch64
           # macOS x64 .pkg
           - installer: macos-x64-pkg
-            os: macos-13
+            os: macos-latest
             target: x86_64-apple-darwin
             format: pkg
             arch: x86_64
@@ -306,7 +306,7 @@ jobs:
             arch: aarch64
           # macOS x64 .dmg
           - installer: macos-x64-dmg
-            os: macos-13
+            os: macos-latest
             target: x86_64-apple-darwin
             format: dmg
             arch: x86_64
