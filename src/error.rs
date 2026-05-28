@@ -63,7 +63,7 @@ pub fn describe_location(source: Option<&str>, byte: u32) -> String {
 // Parse errors
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum ParseError {
     #[error("unexpected character '{ch}' — this character is not valid in IRIS source code (at byte {pos})")]
     UnexpectedChar { ch: char, pos: u32 },
@@ -194,6 +194,8 @@ pub enum InterpError {
         inner: Box<InterpError>,
         /// Byte offset into the original source of the failing instruction.
         byte: u32,
+        /// Optional end byte offset for wider underlines
+        byte_end: Option<u32>,
         /// Name of the function in which the error occurred.
         func: String,
     },
@@ -608,6 +610,7 @@ mod tests {
             Error::Interp(InterpError::Located {
                 inner: Box::new(InterpError::DivisionByZero),
                 byte: 10,
+                byte_end: None,
                 func: "f".into(),
             })
             .diagnostic_code(),

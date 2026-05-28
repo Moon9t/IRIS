@@ -130,14 +130,16 @@ impl DebugSession {
         self.cursor = 0;
         self.exception_message = None;
 
-        // Compile to module (runs all passes).
-        let module = crate::compile_to_module(&self.source, "debug")?;
+        // Compile to module (runs debugger-friendly passes).
+        let module = crate::compile_to_module_debug(&self.source, "debug")?;
 
         // Collect the trace via the interpreter.
         let trace = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         {
             let t = std::rc::Rc::clone(&trace);
-            crate::interp::collect_trace(&module, &self.source, t)?;
+            if let Err(e) = crate::interp::collect_trace(&module, &self.source, t) {
+                self.exception_message = Some(format!("{}", e));
+            }
         }
         self.trace = std::rc::Rc::try_unwrap(trace)
             .map_err(|_| ())
@@ -306,16 +308,17 @@ impl DebugSession {
         }
         let current = &self.trace[self.cursor];
         let mut frames = vec![current];
+        let mut target_depth = current.depth;
 
-        // Walk backward to find caller frames (different function names)
-        let mut seen_funcs = std::collections::HashSet::new();
-        seen_funcs.insert(&current.func_name);
-
+        // Walk backward to find caller frames at decreasing depths
         for i in (0..self.cursor).rev() {
             let entry = &self.trace[i];
-            if !seen_funcs.contains(&entry.func_name) {
-                seen_funcs.insert(&entry.func_name);
+            if entry.depth < target_depth {
                 frames.push(entry);
+                target_depth = entry.depth;
+                if target_depth == 0 {
+                    break;
+                }
             }
         }
         frames
@@ -612,6 +615,64 @@ mod tests {
         s.set_source("def broken( -> { }");
         assert!(s.start().is_err());
         assert_eq!(s.trace_len(), 0);
+    }
+
+    #[test]
+    fn test_trace_propagation_and_stack_depth() {
+        let src = r#"
+            def bar() -> i64 {
+                val x = 2
+                x
+            }
+            def foo() -> i64 {
+                val y = bar()
+                y
+            }
+            def main() -> i64 {
+                val z = foo()
+                z
+            }
+        "#;
+        let mut s = DebugSession::new();
+        s.set_source(src);
+        s.start().unwrap();
+        println!("TRACE: {:#?}", s.trace);
+
+        let mut found_bar = false;
+        let mut max_depth = 0;
+        for _ in 0..s.trace_len() {
+            if let Some(frame) = s.current_frame() {
+                if frame.func_name == "bar" {
+                    found_bar = true;
+                    let visible = s.all_visible_frames();
+                    assert!(visible.len() >= 3);
+                    assert_eq!(visible[0].func_name, "bar");
+                    assert_eq!(visible[1].func_name, "foo");
+                    assert_eq!(visible[2].func_name, "main");
+                }
+                if frame.depth > max_depth {
+                    max_depth = frame.depth;
+                }
+            }
+            s.step();
+        }
+        assert!(found_bar);
+        assert_eq!(max_depth, 2);
+    }
+
+    #[test]
+    fn test_exception_message_on_runtime_error() {
+        let src = r#"
+            def main() -> i64 {
+                panic("oops")
+            }
+        "#;
+        let mut s = DebugSession::new();
+        s.set_source(src);
+        s.start().unwrap();
+        assert!(s.exception_message.is_some());
+        let msg = s.exception_message.as_ref().unwrap();
+        assert!(msg.contains("panic") || msg.contains("oops"));
     }
 }
 

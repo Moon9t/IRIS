@@ -252,7 +252,8 @@ pub fn collect_trace(
     let func = module
         .functions()
         .iter()
-        .find(|f| f.params.is_empty())
+        .find(|f| f.name == "main" && f.params.is_empty())
+        .or_else(|| module.functions().iter().find(|f| f.params.is_empty()))
         .ok_or_else(|| InterpError::Unsupported {
             detail: "no zero-argument function for trace collection".into(),
         })?;
@@ -263,7 +264,7 @@ pub fn collect_trace(
     interp.trace_out = Some(std::rc::Rc::clone(&out));
     interp.trace_func = func.name.clone();
     interp.trace_source = source.to_owned();
-    let _ = interp.run(func, &[]);
+    interp.run(func, &[])?;
 
     // Ensure at least one trace entry exists so the session is non-empty.
     if out.borrow().is_empty() {
@@ -327,6 +328,7 @@ impl<'m> Interpreter<'m> {
             InterpError::Located {
                 inner: Box::new(e),
                 byte,
+                byte_end: None,
                 func: self.cur_func.clone(),
             }
         } else {
@@ -791,6 +793,9 @@ impl<'m> Interpreter<'m> {
                                     let mut sub =
                                         Interpreter::new(self.module, self.opts, self.depth + 1);
                                     sub.profiler = self.profiler.clone();
+                                    sub.trace_out = self.trace_out.clone();
+                                    sub.trace_func = callee.to_owned();
+                                    sub.trace_source = self.trace_source.clone();
                                     if let Some(ref prof) = self.profiler {
                                         prof.borrow_mut().enter_function(callee);
                                     }
@@ -1969,6 +1974,9 @@ impl<'m> Interpreter<'m> {
                             }
                             let mut sub = Interpreter::new(self.module, self.opts, self.depth + 1);
                             sub.profiler = self.profiler.clone();
+                            sub.trace_out = self.trace_out.clone();
+                            sub.trace_func = fn_name.clone();
+                            sub.trace_source = self.trace_source.clone();
                             if let Some(ref prof) = self.profiler {
                                 prof.borrow_mut().enter_function(&fn_name);
                             }

@@ -119,6 +119,19 @@ fn run() {
                 process::exit(1);
             }
         }
+        Ok(ParseArgsResult::Explain(code)) => {
+            if let Some(c) = code {
+                if let Some(explanation) = iris::explain::explain(&c) {
+                    println!("{}", explanation);
+                } else {
+                    eprintln!("error: no explanation found for error code '{}'", c);
+                    process::exit(1);
+                }
+            } else {
+                eprintln!("error: explain requires an error code (e.g. `iris explain E0100`)");
+                process::exit(1);
+            }
+        }
         Ok(ParseArgsResult::Profile) => {
             if let Err(e) = iris::profiler::run_profile_command(&args) {
                 eprintln!("error: {}", e);

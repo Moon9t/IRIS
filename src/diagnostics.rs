@@ -92,7 +92,9 @@ fn extract_span(err: &Error) -> Option<(u32, u32)> {
             LowerError::InvalidLayerParam { span, .. } => Some((span.start.0, span.end.0)),
             LowerError::UnknownOp { .. } => None,
         },
-        Error::Interp(InterpError::Located { byte, .. }) => Some((*byte, *byte + 1)),
+        Error::Interp(InterpError::Located { byte, byte_end, .. }) => {
+            Some((*byte, byte_end.unwrap_or(*byte + 1)))
+        }
         _ => None,
     }
 }
@@ -134,6 +136,9 @@ fn error_hint(err: &Error) -> Option<&'static str> {
             LowerError::TypeMismatch { .. } => {
                 Some("try adding an explicit type annotation to clarify the expected type")
             }
+            LowerError::DuplicateFunction { .. } => {
+                Some("rename one of the functions, or move it to a separate module")
+            }
             _ => None,
         },
         Error::Pass(pe) => match pe {
@@ -157,6 +162,12 @@ fn error_hint(err: &Error) -> Option<&'static str> {
                 }
                 InterpError::IndexOutOfBounds { .. } => {
                     Some("use 'len(list)' to check bounds before indexing")
+                }
+                InterpError::TypeError { .. } => {
+                    Some("check that operand types match — use `to_i64()`, `to_f64()`, or `to_str()` for conversions")
+                }
+                InterpError::Panic { .. } => {
+                    Some("use `try` blocks to catch panics, or check conditions before the panicking operation")
                 }
                 _ => None,
             }

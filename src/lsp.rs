@@ -1195,31 +1195,53 @@ impl LspState {
         let module_name = uri_to_module_name(uri);
         let mut diags = Vec::new();
 
-        // Try file-based compilation first (resolves bring declarations).
-        // Fall back to in-memory compilation for unsaved / untitled files.
-        let compile_result = if let Some(path) = uri_to_file_path(uri) {
-            crate::compile_file_text(source, &path, EmitKind::Ir)
-        } else {
-            crate::compile(source, &module_name, EmitKind::Ir)
-        };
-
-        if let Err(e) = compile_result {
-            let (line, character) = if let Some(byte) = error_byte_offset(&e) {
+        // Phase 1: Collect ALL parse errors via recovery parser
+        let (_partial_ast, parse_errors) = crate::compile_with_recovery(source);
+        for pe in &parse_errors {
+            let err = crate::error::Error::Parse(pe.clone());
+            let (line, character) = if let Some(byte) = error_byte_offset(&err) {
                 let (l, c) = byte_to_line_col(source, byte);
                 (l.saturating_sub(1), c.saturating_sub(1))
             } else {
                 (0, 0)
             };
-            let code = Some(e.diagnostic_code().to_owned());
             diags.push(LspDiagnostic {
                 line,
                 character,
                 end_line: line,
                 end_character: character + 1,
-                message: format!("{}", e),
+                message: format!("{}", err),
                 severity: 1,
-                code,
+                code: Some(err.diagnostic_code().to_owned()),
             });
+        }
+
+        // Phase 2: If no parse errors, run full compile for deeper errors
+        if parse_errors.is_empty() {
+            let compile_result = if let Some(path) = uri_to_file_path(uri) {
+                crate::compile_file_text(source, &path, EmitKind::Ir)
+            } else {
+                crate::compile(source, &module_name, EmitKind::Ir)
+            };
+
+            if let Err(e) = compile_result {
+                let (line, character) = if let Some(byte) = error_byte_offset(&e) {
+                    let (l, c) = byte_to_line_col(source, byte);
+                    (l.saturating_sub(1), c.saturating_sub(1))
+                } else {
+                    (0, 0)
+                };
+                let code = Some(e.diagnostic_code().to_owned());
+                diags.push(LspDiagnostic {
+                    line,
+                    character,
+                    end_line: line,
+                    end_character: character + 1,
+                    message: format!("{}", e),
+                    severity: 1,
+                    code,
+                });
+            }
         }
 
         // Collect dead-variable warnings directly from the single-file AST.

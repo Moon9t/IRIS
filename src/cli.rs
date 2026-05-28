@@ -50,6 +50,8 @@ pub enum ParseArgsResult {
     Profile,
     /// `test` subcommand: discover and run test_ functions.
     Test,
+    /// `explain` subcommand: show detailed explanation for an error code.
+    Explain(Option<String>),
 }
 
 /// Parses command-line arguments (the full `std::env::args()` slice including `argv[0]`).
@@ -84,6 +86,10 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
             "bench" => return Ok(ParseArgsResult::Bench),
             "profile" => return Ok(ParseArgsResult::Profile),
             "test" => return Ok(ParseArgsResult::Test),
+            "explain" => {
+                let code = args.get(i + 1).cloned();
+                return Ok(ParseArgsResult::Explain(code));
+            }
             _ => {}
         }
     }
@@ -269,6 +275,7 @@ pub fn help_text() -> &'static str {
        dap                   Start the DAP debug adapter (JSON-RPC on stdin/stdout)\n\
        pkg <cmd>             Package manager (init, add, remove, install, list, build, run)\n\
        bench <file.iris>     Run performance benchmarks on a file\n\
+       explain [code]        Show detailed explanation for an error code (e.g. E0100)\n\
      \n\
      Options:\n\
     --emit <kind>         Output kind: ir (default), llvm, llvm-complete, cuda, cuda-ptx, simd,\n\

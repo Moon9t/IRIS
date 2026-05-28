@@ -2,7 +2,7 @@
   "name": "iris-lang",
   "displayName": "IRIS Language",
   "description": "IRIS compiler: syntax highlighting, LSP, debugging, and REPL — Go-like developer experience",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "publisher": "iris-lang",
   "engines": {
     "vscode": "^1.85.0"
@@ -102,7 +102,27 @@
       ]
       }
     ],
+    "taskDefinitions": [
+      {
+        "type": "iris",
+        "required": ["task"],
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "The IRIS command to run (run, build, test)."
+          }
+        }
+      }
+    ],
     "commands": [
+      {
+        "command": "iris.runTest",
+        "title": "IRIS: Run Test Function"
+      },
+      {
+        "command": "iris.debugTest",
+        "title": "IRIS: Debug Test Function"
+      },
       {
         "command": "iris.runFile",
         "title": "IRIS: Run File",

@@ -30,6 +30,7 @@ use crate::debugger::{BreakpointInfo, DebugSession};
 /// `iris dap` as the debug adapter command with adapter type `"iris"`.
 pub fn run_dap_server() -> std::io::Result<()> {
     let stdin = std::io::stdin();
+    let mut reader = std::io::BufReader::new(stdin);
     let stdout = std::io::stdout();
     let mut session = DebugSession::new();
     let mut seq = 1i64;
@@ -44,7 +45,7 @@ pub fn run_dap_server() -> std::io::Result<()> {
             let mut byte = [0u8];
             let mut chars = String::new();
             loop {
-                stdin.lock().read_exact(&mut byte)?;
+                reader.read_exact(&mut byte)?;
                 if byte[0] == b'\r' {
                     continue;
                 }
@@ -66,7 +67,7 @@ pub fn run_dap_server() -> std::io::Result<()> {
         }
 
         let mut body = vec![0u8; content_length];
-        stdin.lock().read_exact(&mut body)?;
+        reader.read_exact(&mut body)?;
         let body_str = String::from_utf8_lossy(&body);
 
         let msg: serde_json::Value = match serde_json::from_str(&body_str) {
@@ -433,18 +434,23 @@ pub fn run_dap_server() -> std::io::Result<()> {
                 seq += 1;
             }
             "scopes" => {
+                let frame_id = arguments["frameId"].as_i64().unwrap_or(0);
+                let var_ref = frame_id + 1;
                 send(serde_json::json!({
                     "seq": seq, "type": "response", "request_seq": request_seq,
                     "success": true, "command": command,
                     "body": { "scopes": [
-                        { "name": "Locals", "variablesReference": 1, "expensive": false },
+                        { "name": "Locals", "variablesReference": var_ref, "expensive": false },
                     ] }
                 }))?;
                 seq += 1;
             }
             "variables" => {
-                let vars: Vec<serde_json::Value> = session
-                    .current_frame()
+                let var_ref = arguments["variablesReference"].as_i64().unwrap_or(1);
+                let frame_idx = (var_ref - 1) as usize;
+                let frames = session.all_visible_frames();
+                let vars: Vec<serde_json::Value> = frames
+                    .get(frame_idx)
                     .map(|f| {
                         f.variables
                             .iter()

@@ -36,6 +36,7 @@ pub mod dap;
 pub mod debugger;
 pub mod diagnostics;
 pub mod error;
+pub mod explain;
 pub mod interp;
 pub mod ir;
 pub mod lower;
@@ -427,6 +428,36 @@ pub fn compile_to_module(source: &str, module_name: &str) -> Result<IrModule, Er
     pm.add_pass(ExhaustivePass);
     pm.add_pass(DcePass);
     pm.add_pass(CsePass);
+    pm.add_pass(ShapeCheckPass);
+    pm.add_pass(GcAnnotatePass);
+    let mut ir = ir;
+    pm.run(&mut ir).map_err(|(_, e)| Error::Pass(e))?;
+    Ok(ir)
+}
+
+/// Compiles an IRIS source string to a `IrModule` suitable for debugging.
+///
+/// Runs standard passes but skips heavy optimizations (inlining, DCE, loop unrolling)
+/// to preserve call frames, loop structures, and all local variables for the debugger.
+pub fn compile_to_module_debug(source: &str, module_name: &str) -> Result<IrModule, Error> {
+    let ast_module = parse_recovering(source)?;
+    let ir = crate::lower::lower(&ast_module, module_name)?;
+    use crate::pass::type_infer::TypeInferPass;
+    use crate::pass::validate::ValidatePass;
+    use crate::pass::{
+        ConstFoldPass, CopyPropPass, ExhaustivePass, GcAnnotatePass, HmTypeInferPass, LicmPass,
+        OpExpandPass, PassManager, ShapeCheckPass, StrengthReducePass,
+    };
+    let mut pm = PassManager::new();
+    pm.add_pass(HmTypeInferPass);
+    pm.add_pass(ValidatePass);
+    pm.add_pass(TypeInferPass);
+    pm.add_pass(ConstFoldPass);
+    pm.add_pass(StrengthReducePass);
+    pm.add_pass(CopyPropPass);
+    pm.add_pass(OpExpandPass);
+    pm.add_pass(LicmPass);
+    pm.add_pass(ExhaustivePass);
     pm.add_pass(ShapeCheckPass);
     pm.add_pass(GcAnnotatePass);
     let mut ir = ir;
