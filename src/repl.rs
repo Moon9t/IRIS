@@ -147,17 +147,10 @@ impl ReplState {
                     return "usage: :type <expr>".to_owned();
                 }
                 let n = self.eval_counter;
-                for (ret_ty, label) in &[
-                    ("i64", "i64"),
-                    ("f64", "f64"),
-                    ("bool", "bool"),
-                    ("str", "str"),
-                ] {
-                    if self.try_eval_with_type(arg, ret_ty, n).is_some() {
-                        return format!(": {}", label);
-                    }
+                match self.type_of_expression(arg, n) {
+                    Ok(ty) => format!(": {}", format_ir_type_for_repl(&ty)),
+                    Err(e) => format!("error: {}", e),
                 }
-                ": (unknown)".to_owned()
             }
 
             "bring" | "b" => {
@@ -251,40 +244,48 @@ impl ReplState {
         src
     }
 
-    fn try_eval_with_type(&self, expr: &str, ret_ty: &str, n: usize) -> Option<String> {
+    fn type_of_expression(&self, expr: &str, n: usize) -> Result<crate::ir::types::IrType, Error> {
         let ctx = self.context.join("\n    ");
         let eval_fn = if ctx.is_empty() {
-            format!("def __eval_{n}() -> {ret_ty} {{\n    {expr}\n}}")
+            format!("def __eval_{n}() -> Infer {{\n    {expr}\n}}")
         } else {
-            format!("def __eval_{n}() -> {ret_ty} {{\n    {ctx}\n    {expr}\n}}")
+            format!("def __eval_{n}() -> Infer {{\n    {ctx}\n    {expr}\n}}")
         };
         let src = self.full_source_for_eval(&eval_fn);
-        crate::compile_multi(&[("repl", &src)], "repl", EmitKind::Eval).ok()
+        let ast = crate::compile_multi_to_ast(&[("repl", &src)], "repl")?;
+        let module = crate::compile_ast_to_module(&ast, "repl", None)?;
+        let eval_name = format!("__eval_{n}");
+        let func = module
+            .functions()
+            .iter()
+            .find(|f| f.name == eval_name)
+            .ok_or_else(|| {
+                Error::Pass(crate::error::PassError::TypeError {
+                    func: eval_name,
+                    detail: "could not find evaluation function".into(),
+                })
+            })?;
+        Ok(func.return_ty.clone())
     }
 
     fn eval_expression(&mut self, expr: &str) -> Result<String, Error> {
         let n = self.eval_counter;
         self.eval_counter += 1;
 
-        // Try candidate return types in order.
-        for ret_ty in &["i64", "f64", "bool", "str"] {
-            if let Some(result) = self.try_eval_with_type(expr, ret_ty, n) {
-                return Ok(result.trim_end_matches('\n').to_owned());
-            }
-        }
+        // Resolve the exact inferred return type.
+        let ty = self.type_of_expression(expr, n)?;
+        let ty_str = format_ir_type_for_repl(&ty);
 
-        // All type candidates failed; run one more time to surface the real error.
+        // Compile and run the evaluation with the resolved concrete type.
         let ctx = self.context.join("\n    ");
         let eval_fn = if ctx.is_empty() {
-            format!("def __eval_{n}() -> i64 {{\n    {expr}\n}}")
+            format!("def __eval_{n}() -> {ty_str} {{\n    {expr}\n}}")
         } else {
-            format!("def __eval_{n}() -> i64 {{\n    {ctx}\n    {expr}\n}}")
+            format!("def __eval_{n}() -> {ty_str} {{\n    {ctx}\n    {expr}\n}}")
         };
         let src = self.full_source_for_eval(&eval_fn);
-        // This will return the error.
-        crate::compile_multi(&[("repl", &src)], "repl", EmitKind::Eval)?;
-        // Unreachable — the line above always errors when we get here.
-        Ok(String::new())
+        let result = crate::compile_multi(&[("repl", &src)], "repl", EmitKind::Eval)?;
+        Ok(result.trim_end_matches('\n').to_owned())
     }
 
     fn add_top_level(&mut self, item: &str) -> Result<String, Error> {
@@ -527,5 +528,41 @@ fn extract_defined_name(item: &str) -> &str {
         tokens[1].trim_end_matches('(').trim_end_matches('{').trim()
     } else {
         tokens.first().copied().unwrap_or("?")
+    }
+}
+
+fn format_ir_type_for_repl(ty: &crate::ir::types::IrType) -> String {
+    use crate::ir::types::IrType;
+    match ty {
+        IrType::Struct { name, .. } => name.trim_start_matches('%').to_owned(),
+        IrType::Enum { name, .. } => name.trim_start_matches("enum.").to_owned(),
+        IrType::Option(inner) => format!("option<{}>", format_ir_type_for_repl(inner)),
+        IrType::ResultType(ok, err) => format!(
+            "result<{}, {}>",
+            format_ir_type_for_repl(ok),
+            format_ir_type_for_repl(err)
+        ),
+        IrType::Chan(inner) => format!("chan<{}>", format_ir_type_for_repl(inner)),
+        IrType::Atomic(inner) => format!("atomic<{}>", format_ir_type_for_repl(inner)),
+        IrType::Mutex(inner) => format!("mutex<{}>", format_ir_type_for_repl(inner)),
+        IrType::Grad(inner) => format!("grad<{}>", format_ir_type_for_repl(inner)),
+        IrType::Sparse(inner) => format!("sparse<{}>", format_ir_type_for_repl(inner)),
+        IrType::List(inner) => format!("list<{}>", format_ir_type_for_repl(inner)),
+        IrType::Map(k, v) => format!(
+            "map<{}, {}>",
+            format_ir_type_for_repl(k),
+            format_ir_type_for_repl(v)
+        ),
+        IrType::Array { elem, len } => format!("[{}; {}]", format_ir_type_for_repl(elem), len),
+        IrType::Tuple(elems) => {
+            let parts: Vec<String> = elems.iter().map(format_ir_type_for_repl).collect();
+            format!("({})", parts.join(", "))
+        }
+        other => {
+            let s = format!("{}", other);
+            s.trim_start_matches('%')
+                .trim_start_matches("enum.")
+                .to_owned()
+        }
     }
 }

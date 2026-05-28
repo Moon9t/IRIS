@@ -1001,9 +1001,19 @@ impl LspState {
         };
         let mut hints = Vec::new();
 
+        // Compile the source to resolve all types!
+        let module_name = uri_to_module_name(uri);
+        let opt_module = crate::compile_to_module(source, &module_name).ok();
+
         // Walk all function bodies looking for val/var bindings without explicit types.
         for func in &ast.functions {
-            self.collect_inlay_hints_from_stmts(&func.body.stmts, source, &mut hints);
+            self.collect_inlay_hints_from_stmts(
+                &func.body.stmts,
+                source,
+                &mut hints,
+                opt_module.as_ref(),
+                &func.name.name,
+            );
         }
 
         hints
@@ -1015,6 +1025,8 @@ impl LspState {
         stmts: &[crate::parser::ast::AstStmt],
         source: &str,
         hints: &mut Vec<InlayHint>,
+        module: Option<&crate::ir::module::IrModule>,
+        ast_func_name: &str,
     ) {
         use crate::parser::ast::AstStmt;
         for stmt in stmts {
@@ -1023,24 +1035,89 @@ impl LspState {
                     // Only add hint if no explicit type annotation
                     if ty.is_none() {
                         let (line, col) = byte_to_lsp_pos(source, name.span.end.0);
+                        let mut resolved_label = ": inferred".to_owned();
+
+                        if let Some(m) = module {
+                            if let Some(func) = m.functions().iter().find(|f| {
+                                let bare = f.name.split("__").next().unwrap_or(&f.name);
+                                bare == ast_func_name
+                            }) {
+                                let mut found_ty = None;
+                                // 1. Check block parameters
+                                for block in func.blocks() {
+                                    for param in &block.params {
+                                        if let Some(ref p_name) = param.name {
+                                            if p_name == &name.name {
+                                                found_ty = Some(param.ty.clone());
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if found_ty.is_some() {
+                                        break;
+                                    }
+                                }
+
+                                // 2. Check SpanTable for instruction result
+                                if found_ty.is_none() {
+                                    let byte_offset = name.span.start.0;
+                                    for block in func.blocks() {
+                                        for (idx, instr) in block.instrs.iter().enumerate() {
+                                            if let Some(span_byte) =
+                                                func.span_table.get(block.id.0, idx)
+                                            {
+                                                if span_byte == byte_offset {
+                                                    if let Some(res_vid) = instr.result() {
+                                                        if let Some(ty) = func.value_type(res_vid) {
+                                                            found_ty = Some(ty.clone());
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if found_ty.is_some() {
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if let Some(ty) = found_ty {
+                                    resolved_label = format!(": {}", format_ir_type_for_lsp(&ty));
+                                }
+                            }
+                        }
+
                         hints.push(InlayHint {
                             line,
                             character: col,
-                            label: ": inferred".to_owned(),
+                            label: resolved_label,
                             kind: 1, // Type
                         });
                     }
                 }
                 AstStmt::While { body, .. } | AstStmt::Loop { body, .. } => {
-                    self.collect_inlay_hints_from_stmts(&body.stmts, source, hints);
+                    self.collect_inlay_hints_from_stmts(
+                        &body.stmts,
+                        source,
+                        hints,
+                        module,
+                        ast_func_name,
+                    );
                 }
                 AstStmt::ForRange { body, .. }
                 | AstStmt::ForEach { body, .. }
                 | AstStmt::ParFor { body, .. } => {
-                    self.collect_inlay_hints_from_stmts(&body.stmts, source, hints);
+                    self.collect_inlay_hints_from_stmts(
+                        &body.stmts,
+                        source,
+                        hints,
+                        module,
+                        ast_func_name,
+                    );
                 }
                 AstStmt::Spawn { body, .. } => {
-                    self.collect_inlay_hints_from_stmts(body, source, hints);
+                    self.collect_inlay_hints_from_stmts(body, source, hints, module, ast_func_name);
                 }
                 _ => {}
             }
@@ -3616,4 +3693,40 @@ fn is_numeric_type(ty: &str) -> bool {
         ty,
         "i32" | "i64" | "f32" | "f64" | "u8" | "u32" | "u64" | "usize"
     )
+}
+
+fn format_ir_type_for_lsp(ty: &crate::ir::types::IrType) -> String {
+    use crate::ir::types::IrType;
+    match ty {
+        IrType::Struct { name, .. } => name.trim_start_matches('%').to_owned(),
+        IrType::Enum { name, .. } => name.trim_start_matches("enum.").to_owned(),
+        IrType::Option(inner) => format!("option<{}>", format_ir_type_for_lsp(inner)),
+        IrType::ResultType(ok, err) => format!(
+            "result<{}, {}>",
+            format_ir_type_for_lsp(ok),
+            format_ir_type_for_lsp(err)
+        ),
+        IrType::Chan(inner) => format!("chan<{}>", format_ir_type_for_lsp(inner)),
+        IrType::Atomic(inner) => format!("atomic<{}>", format_ir_type_for_lsp(inner)),
+        IrType::Mutex(inner) => format!("mutex<{}>", format_ir_type_for_lsp(inner)),
+        IrType::Grad(inner) => format!("grad<{}>", format_ir_type_for_lsp(inner)),
+        IrType::Sparse(inner) => format!("sparse<{}>", format_ir_type_for_lsp(inner)),
+        IrType::List(inner) => format!("list<{}>", format_ir_type_for_lsp(inner)),
+        IrType::Map(k, v) => format!(
+            "map<{}, {}>",
+            format_ir_type_for_lsp(k),
+            format_ir_type_for_lsp(v)
+        ),
+        IrType::Array { elem, len } => format!("[{}; {}]", format_ir_type_for_lsp(elem), len),
+        IrType::Tuple(elems) => {
+            let parts: Vec<String> = elems.iter().map(format_ir_type_for_lsp).collect();
+            format!("({})", parts.join(", "))
+        }
+        other => {
+            let s = format!("{}", other);
+            s.trim_start_matches('%')
+                .trim_start_matches("enum.")
+                .to_owned()
+        }
+    }
 }

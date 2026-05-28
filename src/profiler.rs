@@ -432,7 +432,7 @@ fn profile_file(
     let ir_module = crate::compile_to_module(&source, module_name).map_err(|e| format!("{}", e))?;
 
     // Run with profiling.
-    let mut profiler = Profiler::new();
+    let profiler = Profiler::new();
     let func = ir_module
         .functions()
         .iter()
@@ -440,29 +440,27 @@ fn profile_file(
         .or_else(|| ir_module.functions().iter().find(|f| f.params.is_empty()))
         .ok_or("no zero-argument function to profile")?;
 
-    // Instrument: wrap the interpreter eval in a profiling session.
-    profiler.enter_function(&func.name);
+    let profiler_rc = std::rc::Rc::new(std::cell::RefCell::new(profiler));
+
+    // Create interpreter and pass the profiler!
     let opts = crate::interp::InterpOptions {
         max_steps: 10_000_000,
         max_depth: 500,
     };
-    let _ = crate::interp::eval_function_in_module_opts(&ir_module, func, &[], opts)
-        .map_err(|e| format!("execution error: {}", e))?;
-    profiler.exit_function(&func.name);
+    let mut interp = crate::interp::Interpreter::new(Some(&ir_module), opts, 0);
+    interp.profiler = Some(profiler_rc.clone());
 
-    // For each function in the module, record instruction counts.
-    for f in ir_module.functions() {
-        let instr_count: u64 = f.blocks.iter().map(|b| b.instrs.len() as u64).sum();
-        profiler.total_instructions += instr_count;
-        let entry = profiler
-            .functions
-            .entry(f.name.clone())
-            .or_insert_with(|| FunctionProfile {
-                name: f.name.clone(),
-                ..Default::default()
-            });
-        entry.instr_count += instr_count;
-    }
+    // Instrument: wrap the interpreter eval in a profiling session.
+    profiler_rc.borrow_mut().enter_function(&func.name);
+    let _ = interp
+        .run(func, &[])
+        .map_err(|e| format!("execution error: {}", e))?;
+    profiler_rc.borrow_mut().exit_function(&func.name);
+
+    // Retrieve the profiler from Rc!
+    let mut profiler = std::rc::Rc::try_unwrap(profiler_rc)
+        .map_err(|_| "failed to unwrap profiler".to_owned())?
+        .into_inner();
 
     let result = profiler.finalize();
 

@@ -274,58 +274,73 @@ fn run() {
 }
 
 fn run_repl() {
-    use std::io::{BufRead, Write};
+    use rustyline::error::ReadlineError;
+    use rustyline::DefaultEditor;
+
     let mut repl = iris::ReplState::new();
     let version = env!("CARGO_PKG_VERSION");
     eprintln!("\x1b[1;36mIRIS {}\x1b[0m REPL  (type \x1b[1m:help\x1b[0m for commands, \x1b[1m:quit\x1b[0m to exit)", version);
     eprintln!();
-    let stdin = std::io::stdin();
+
+    let mut rl = DefaultEditor::new().expect("failed to initialize REPL editor");
+    let history_path = ".iris_history";
+    let _ = rl.load_history(history_path);
+
     let mut accumulator = String::new();
     let mut brace_depth: i32 = 0;
 
     loop {
-        // Show continuation prompt when inside a multi-line block.
-        if brace_depth > 0 {
-            eprint!("\x1b[90m...\x1b[0m ");
-        } else {
-            eprint!("\x1b[1;32m>>\x1b[0m ");
-        }
-        let _ = std::io::stderr().flush();
+        let prompt = if brace_depth > 0 { "... " } else { ">> " };
 
-        let mut line = String::new();
-        match stdin.lock().read_line(&mut line) {
-            Ok(0) | Err(_) => {
-                // EOF (Ctrl+D) — flush any pending accumulator then exit.
+        match rl.readline(prompt) {
+            Ok(line) => {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let _ = rl.add_history_entry(line.as_str());
+
+                // Track brace depth for multiline input.
+                for ch in line.chars() {
+                    if ch == '{' {
+                        brace_depth += 1;
+                    }
+                    if ch == '}' {
+                        brace_depth -= 1;
+                    }
+                }
+                accumulator.push_str(&line);
+                accumulator.push('\n');
+
+                // Only evaluate when braces are balanced.
+                if brace_depth <= 0 {
+                    brace_depth = 0;
+                    let input = accumulator.trim().to_owned();
+                    accumulator.clear();
+                    if !input.is_empty() {
+                        run_repl_input(&mut repl, &input);
+                    }
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                accumulator.clear();
+                brace_depth = 0;
+                println!("(cancelled)");
+            }
+            Err(ReadlineError::Eof) => {
                 if !accumulator.trim().is_empty() {
                     run_repl_input(&mut repl, accumulator.trim());
                 }
-                eprintln!();
+                println!();
                 break;
             }
-            Ok(_) => {}
-        }
-
-        // Track brace depth for multiline input.
-        for ch in line.chars() {
-            if ch == '{' {
-                brace_depth += 1;
-            }
-            if ch == '}' {
-                brace_depth -= 1;
-            }
-        }
-        accumulator.push_str(&line);
-
-        // Only evaluate when braces are balanced.
-        if brace_depth <= 0 {
-            brace_depth = 0;
-            let input = accumulator.trim().to_owned();
-            accumulator.clear();
-            if !input.is_empty() {
-                run_repl_input(&mut repl, &input);
+            Err(err) => {
+                eprintln!("REPL error: {:?}", err);
+                break;
             }
         }
     }
+    let _ = rl.save_history(history_path);
 }
 
 fn run_repl_input(repl: &mut iris::ReplState, input: &str) {

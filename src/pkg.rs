@@ -40,6 +40,7 @@
 //! - `iris pkg run`                   — build + run
 //! - `iris pkg check`                 — verify all deps are installed
 
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
@@ -104,161 +105,166 @@ impl fmt::Display for Dep {
     }
 }
 
-// ── Minimal TOML-subset parser ────────────────────────────────────────────────
+// ── Serde mapping structs for TOML ────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct TomlManifest {
+    package: TomlPackage,
+    #[serde(default)]
+    dependencies: BTreeMap<String, TomlDep>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct TomlPackage {
+    name: String,
+    version: String,
+    entry: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    license: Option<String>,
+    #[serde(default)]
+    repository: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
+enum TomlDep {
+    Simple(String),
+    Detailed(DetailedDep),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct DetailedDep {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    git: Option<String>,
+    #[serde(default)]
+    branch: Option<String>,
+    #[serde(default)]
+    tag: Option<String>,
+    #[serde(default)]
+    rev: Option<String>,
+}
 
 impl Manifest {
-    /// Parse a minimal TOML subset from `iris.toml` text.
+    /// Parse a TOML manifest using the standard `toml` crate.
     pub fn parse(src: &str) -> Result<Self, String> {
-        let mut name = String::new();
-        let mut version = String::from("0.1.0");
-        let mut entry = String::from("main.iris");
-        let mut description = String::new();
-        let mut license = String::new();
-        let mut repository = String::new();
-        let mut deps: BTreeMap<String, Dep> = BTreeMap::new();
-        let mut section = String::new();
+        let toml_manifest: TomlManifest =
+            toml::from_str(src).map_err(|e| format!("failed to parse iris.toml: {}", e))?;
 
-        for (lineno, raw_line) in src.lines().enumerate() {
-            let line = raw_line.split('#').next().unwrap_or("").trim();
-            if line.is_empty() {
-                continue;
-            }
-
-            if line.starts_with('[') && line.ends_with(']') {
-                section = line[1..line.len() - 1].trim().to_string();
-                continue;
-            }
-
-            if let Some(eq_pos) = line.find('=') {
-                let key = line[..eq_pos].trim();
-                let val = line[eq_pos + 1..].trim();
-
-                match section.as_str() {
-                    "package" => match key {
-                        "name" => name = unquote(val),
-                        "version" => version = unquote(val),
-                        "entry" => entry = unquote(val),
-                        "description" => description = unquote(val),
-                        "license" => license = unquote(val),
-                        "repository" => repository = unquote(val),
-                        _ => {}
-                    },
-                    "dependencies" => {
-                        let dep = parse_dep(key, val, lineno + 1)?;
-                        deps.insert(key.to_string(), dep);
+        let mut deps = BTreeMap::new();
+        for (name, toml_dep) in toml_manifest.dependencies {
+            let dep = match toml_dep {
+                TomlDep::Simple(s) => {
+                    if s.starts_with("http://")
+                        || s.starts_with("https://")
+                        || s.starts_with("git@")
+                    {
+                        Dep::Git {
+                            url: s,
+                            branch: None,
+                            tag: None,
+                            rev: None,
+                        }
+                    } else {
+                        Dep::Path(s)
                     }
-                    _ => {}
                 }
-            }
-        }
-
-        if name.is_empty() {
-            return Err("missing [package] name".into());
+                TomlDep::Detailed(d) => {
+                    if let Some(p) = d.path {
+                        Dep::Path(p)
+                    } else if let Some(git) = d.git {
+                        Dep::Git {
+                            url: git,
+                            branch: d.branch,
+                            tag: d.tag,
+                            rev: d.rev,
+                        }
+                    } else {
+                        return Err(format!(
+                            "dependency '{}' must specify either 'path' or 'git'",
+                            name
+                        ));
+                    }
+                }
+            };
+            deps.insert(name, dep);
         }
 
         Ok(Manifest {
-            name,
-            version,
-            entry,
-            description,
-            license,
-            repository,
+            name: toml_manifest.package.name,
+            version: toml_manifest.package.version,
+            entry: toml_manifest.package.entry,
+            description: toml_manifest.package.description.unwrap_or_default(),
+            license: toml_manifest.package.license.unwrap_or_default(),
+            repository: toml_manifest.package.repository.unwrap_or_default(),
             deps,
         })
     }
 
     /// Serialize back to TOML text.
     pub fn to_toml(&self) -> String {
-        let mut out = String::new();
-        out.push_str("[package]\n");
-        out.push_str(&format!("name    = \"{}\"\n", self.name));
-        out.push_str(&format!("version = \"{}\"\n", self.version));
-        out.push_str(&format!("entry   = \"{}\"\n", self.entry));
-        if !self.description.is_empty() {
-            out.push_str(&format!("description = \"{}\"\n", self.description));
-        }
-        if !self.license.is_empty() {
-            out.push_str(&format!("license = \"{}\"\n", self.license));
-        }
-        if !self.repository.is_empty() {
-            out.push_str(&format!("repository = \"{}\"\n", self.repository));
-        }
-        out.push('\n');
-        out.push_str("[dependencies]\n");
+        let mut toml_deps = BTreeMap::new();
         for (name, dep) in &self.deps {
-            out.push_str(&format!("{} = {}\n", name, dep));
+            let toml_dep = match dep {
+                Dep::Path(p) => TomlDep::Detailed(DetailedDep {
+                    path: Some(p.clone()),
+                    git: None,
+                    branch: None,
+                    tag: None,
+                    rev: None,
+                }),
+                Dep::Git {
+                    url,
+                    branch,
+                    tag,
+                    rev,
+                } => TomlDep::Detailed(DetailedDep {
+                    path: None,
+                    git: Some(url.clone()),
+                    branch: branch.clone(),
+                    tag: tag.clone(),
+                    rev: rev.clone(),
+                }),
+            };
+            toml_deps.insert(name.clone(), toml_dep);
         }
-        out
-    }
-}
 
-/// Parse a single dependency value from the `[dependencies]` section.
-fn parse_dep(name: &str, val: &str, lineno: usize) -> Result<Dep, String> {
-    if val.starts_with('{') {
-        let inner = val.trim_start_matches('{').trim_end_matches('}').trim();
-        if let Some(p) = extract_inline_key(inner, "path") {
-            return Ok(Dep::Path(p));
-        }
-        if let Some(url) = extract_inline_key(inner, "git") {
-            let branch = extract_inline_key(inner, "branch");
-            let tag = extract_inline_key(inner, "tag");
-            let rev = extract_inline_key(inner, "rev");
-            return Ok(Dep::Git {
-                url,
-                branch,
-                tag,
-                rev,
-            });
-        }
-        // Registry deps explicitly not supported.
-        if extract_inline_key(inner, "version").is_some() {
-            return Err(format!(
-                "line {}: '{}' uses a registry version dep — only `path` and `git` are supported.\n\
-                 Use: {} = {{ git = \"https://github.com/...\" }}",
-                lineno, name, name
-            ));
-        }
-        Err(format!(
-            "line {}: dependency '{}' must have `path` or `git` key",
-            lineno, name
-        ))
-    } else {
-        // Bare string: treat as a path for backward compat.
-        let v = unquote(val);
-        if v.starts_with("http://") || v.starts_with("https://") || v.starts_with("git@") {
-            Ok(Dep::Git {
-                url: v,
-                branch: None,
-                tag: None,
-                rev: None,
-            })
-        } else {
-            Ok(Dep::Path(v))
-        }
-    }
-}
+        let toml_manifest = TomlManifest {
+            package: TomlPackage {
+                name: self.name.clone(),
+                version: self.version.clone(),
+                entry: self.entry.clone(),
+                description: if self.description.is_empty() {
+                    None
+                } else {
+                    Some(self.description.clone())
+                },
+                license: if self.license.is_empty() {
+                    None
+                } else {
+                    Some(self.license.clone())
+                },
+                repository: if self.repository.is_empty() {
+                    None
+                } else {
+                    Some(self.repository.clone())
+                },
+            },
+            dependencies: toml_deps,
+        };
 
-fn unquote(s: &str) -> String {
-    let s = s.trim();
-    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
-        s[1..s.len() - 1].to_string()
-    } else {
-        s.to_string()
+        toml::to_string_pretty(&toml_manifest).unwrap_or_else(|_| {
+            let mut out = String::new();
+            out.push_str("[package]\n");
+            out.push_str(&format!("name    = \"{}\"\n", self.name));
+            out.push_str(&format!("version = \"{}\"\n", self.version));
+            out.push_str(&format!("entry   = \"{}\"\n", self.entry));
+            out
+        })
     }
-}
-
-fn extract_inline_key(inner: &str, key: &str) -> Option<String> {
-    for part in inner.split(',') {
-        let part = part.trim();
-        if let Some(eq) = part.find('=') {
-            let k = part[..eq].trim();
-            let v = part[eq + 1..].trim();
-            if k == key {
-                return Some(unquote(v));
-            }
-        }
-    }
-    None
 }
 
 // ── Lock file ─────────────────────────────────────────────────────────────────
@@ -280,75 +286,58 @@ pub struct LockFile {
     pub entries: BTreeMap<String, LockEntry>,
 }
 
-impl LockFile {
-    /// Parse from the text content of `iris.lock`.
-    pub fn parse(src: &str) -> Self {
-        let mut entries: BTreeMap<String, LockEntry> = BTreeMap::new();
-        let mut cur_name = String::new();
-        let mut cur_kind = String::new();
-        let mut cur_source = String::new();
-        let mut cur_commit: Option<String> = None;
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+struct TomlLockFile {
+    #[serde(default)]
+    dep: BTreeMap<String, TomlLockEntry>,
+}
 
-        for raw in src.lines() {
-            let line = raw.trim();
-            if line.starts_with('#') || line.is_empty() {
-                continue;
-            }
-            if line.starts_with("[dep.") && line.ends_with(']') {
-                // Flush previous entry.
-                if !cur_name.is_empty() && !cur_kind.is_empty() {
-                    entries.insert(
-                        cur_name.clone(),
-                        LockEntry {
-                            kind: cur_kind.clone(),
-                            source: cur_source.clone(),
-                            commit: cur_commit.clone(),
-                        },
-                    );
-                }
-                cur_name = line[5..line.len() - 1].to_string();
-                cur_kind = String::new();
-                cur_source = String::new();
-                cur_commit = None;
-            } else if let Some(eq) = line.find('=') {
-                let k = line[..eq].trim();
-                let v = unquote(line[eq + 1..].trim());
-                match k {
-                    "kind" => cur_kind = v,
-                    "source" => cur_source = v,
-                    "commit" => cur_commit = Some(v),
-                    _ => {}
-                }
-            }
-        }
-        // Flush last entry.
-        if !cur_name.is_empty() && !cur_kind.is_empty() {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct TomlLockEntry {
+    kind: String,
+    source: String,
+    #[serde(default)]
+    commit: Option<String>,
+}
+
+impl LockFile {
+    /// Parse from the TOML content of `iris.lock`.
+    pub fn parse(src: &str) -> Self {
+        let lock: TomlLockFile = toml::from_str(src).unwrap_or_default();
+        let mut entries = BTreeMap::new();
+        for (name, entry) in lock.dep {
             entries.insert(
-                cur_name,
+                name,
                 LockEntry {
-                    kind: cur_kind,
-                    source: cur_source,
-                    commit: cur_commit,
+                    kind: entry.kind,
+                    source: entry.source,
+                    commit: entry.commit,
                 },
             );
         }
         LockFile { entries }
     }
 
-    /// Serialize to text.
+    /// Serialize to TOML text.
     pub fn to_text(&self) -> String {
+        let mut toml_dep = BTreeMap::new();
+        for (name, entry) in &self.entries {
+            toml_dep.insert(
+                name.clone(),
+                TomlLockEntry {
+                    kind: entry.kind.clone(),
+                    source: entry.source.clone(),
+                    commit: entry.commit.clone(),
+                },
+            );
+        }
+        let lock = TomlLockFile { dep: toml_dep };
         let mut out = String::from(
             "# iris.lock — generated by `iris pkg install`. Commit to version control.\n\
              # Do not edit manually.\n\n",
         );
-        for (name, entry) in &self.entries {
-            out.push_str(&format!("[dep.{}]\n", name));
-            out.push_str(&format!("kind   = \"{}\"\n", entry.kind));
-            out.push_str(&format!("source = \"{}\"\n", entry.source));
-            if let Some(c) = &entry.commit {
-                out.push_str(&format!("commit = \"{}\"\n", c));
-            }
-            out.push('\n');
+        if let Ok(toml_str) = toml::to_string_pretty(&lock) {
+            out.push_str(&toml_str);
         }
         out
     }
@@ -704,6 +693,14 @@ fn install_path_dep(source: &Path, target: &Path, name: &str) -> Result<(), Stri
     {
         if std::os::unix::fs::symlink(source, target).is_ok() {
             eprintln!("  {} → {} (symlink)", name, source.display());
+            return Ok(());
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        if std::os::windows::fs::symlink_dir(source, target).is_ok() {
+            eprintln!("  {} → {} (junction)", name, source.display());
             return Ok(());
         }
     }

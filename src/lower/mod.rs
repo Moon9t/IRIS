@@ -13043,6 +13043,8 @@ pub fn lower_type(ty: &AstType) -> IrType {
         AstType::Named(name, _) => {
             if name == "str" {
                 IrType::Str
+            } else if name == "Infer" {
+                IrType::Infer
             } else {
                 IrType::Struct {
                     name: name.clone(),
@@ -13126,7 +13128,13 @@ pub fn lower_type_with_structs(ty: &AstType, module: &IrModule) -> IrType {
             if name == "str" {
                 return IrType::Str;
             }
+            if name == "Infer" {
+                return IrType::Infer;
+            }
             let resolved_name = resolve_brought_name(name, module);
+            if resolved_name == "Infer" {
+                return IrType::Infer;
+            }
             // Check type aliases first.
             if let Some(aliased) = module.type_alias(&resolved_name) {
                 return aliased.clone();

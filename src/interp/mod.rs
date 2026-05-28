@@ -283,7 +283,7 @@ pub fn collect_trace(
 // Interpreter state
 // ---------------------------------------------------------------------------
 
-struct Interpreter<'m> {
+pub(crate) struct Interpreter<'m> {
     values: HashMap<ValueId, IrValue>,
     module: Option<&'m IrModule>,
     opts: InterpOptions,
@@ -301,10 +301,11 @@ struct Interpreter<'m> {
     last_byte: Option<u32>,
     /// Name of the function currently executing (for error location).
     cur_func: String,
+    pub(crate) profiler: Option<std::rc::Rc<std::cell::RefCell<crate::profiler::Profiler>>>,
 }
 
 impl<'m> Interpreter<'m> {
-    fn new(module: Option<&'m IrModule>, opts: InterpOptions, depth: usize) -> Self {
+    pub(crate) fn new(module: Option<&'m IrModule>, opts: InterpOptions, depth: usize) -> Self {
         Self {
             values: HashMap::new(),
             module,
@@ -316,6 +317,7 @@ impl<'m> Interpreter<'m> {
             tape_grads: HashMap::new(),
             last_byte: None,
             cur_func: String::new(),
+            profiler: None,
         }
     }
 
@@ -353,7 +355,7 @@ impl<'m> Interpreter<'m> {
             .collect()
     }
 
-    fn run(
+    pub(crate) fn run(
         &mut self,
         func: &IrFunction,
         entry_args: &[IrValue],
@@ -363,7 +365,7 @@ impl<'m> Interpreter<'m> {
             .map_err(|e| self.located(e))
     }
 
-    fn run_inner(
+    pub(crate) fn run_inner(
         &mut self,
         func: &IrFunction,
         entry_args: &[IrValue],
@@ -389,6 +391,9 @@ impl<'m> Interpreter<'m> {
 
                 for (instr_idx, instr) in block.instrs.iter().enumerate() {
                     steps += 1;
+                    if let Some(ref prof) = self.profiler {
+                        prof.borrow_mut().record_instruction();
+                    }
                     if steps > self.opts.max_steps {
                         return Err(InterpError::Unsupported {
                         detail: format!(
@@ -785,7 +790,14 @@ impl<'m> Interpreter<'m> {
                                     }
                                     let mut sub =
                                         Interpreter::new(self.module, self.opts, self.depth + 1);
+                                    sub.profiler = self.profiler.clone();
+                                    if let Some(ref prof) = self.profiler {
+                                        prof.borrow_mut().enter_function(callee);
+                                    }
                                     let ret = sub.run(callee_func, &call_args)?;
+                                    if let Some(ref prof) = self.profiler {
+                                        prof.borrow_mut().exit_function(callee);
+                                    }
                                     if let Some(r) = result {
                                         if let Some(v) = ret.into_iter().next() {
                                             self.values.insert(*r, v);
@@ -1956,7 +1968,14 @@ impl<'m> Interpreter<'m> {
                                 });
                             }
                             let mut sub = Interpreter::new(self.module, self.opts, self.depth + 1);
+                            sub.profiler = self.profiler.clone();
+                            if let Some(ref prof) = self.profiler {
+                                prof.borrow_mut().enter_function(&fn_name);
+                            }
                             let ret = sub.run(&callee, &call_args)?;
+                            if let Some(ref prof) = self.profiler {
+                                prof.borrow_mut().exit_function(&fn_name);
+                            }
                             if let Some(r) = result {
                                 self.values
                                     .insert(*r, ret.into_iter().next().unwrap_or(IrValue::Unit));
