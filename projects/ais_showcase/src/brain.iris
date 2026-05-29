@@ -1,0 +1,29 @@
+// brain.iris — Neural decision making using taped gradients and tensor operations
+
+pub def adjust_sensory_inputs(x_val: f64, y_val: f64) -> list<f64> {
+    // 1. Initialize variables on the AD tape
+    val w_x = tape(1.5);
+    val w_y = tape(-0.5);
+    val x = tape(x_val);
+    val y = tape(y_val);
+    
+    // 2. Perform forward pass
+    val score = (x * w_x) + (y * w_y);
+    val active_score = score * score; // Cost function
+    
+    // 3. Compute gradients backwards
+    val _ = backward(active_score);
+    
+    // 4. Return the gradients
+    val grads = list();
+    list_push(grads, grad(x));
+    list_push(grads, grad(y));
+    list_push(grads, grad(w_x));
+    list_push(grads, grad(w_y));
+    grads
+}
+
+pub def evaluate_einsum(A: tensor<f64, [2, 2]>, B: tensor<f64, [2, 2]>) -> tensor<f64, [2, 2]> {
+    val C = einsum("mk,kn->mn", A, B);
+    C
+}

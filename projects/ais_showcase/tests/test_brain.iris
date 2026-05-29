@@ -1,0 +1,27 @@
+// test_brain.iris — Unit test for brain AD optimization in the AIS Showcase project
+
+bring std.testing
+bring "../src/brain.iris"
+
+pub def test_brain_gradients() -> i64 {
+    val grads = adjust_sensory_inputs(1.0, 1.0);
+    
+    // dx = 2.0 * score * w_x = 2 * (1*1.5 + 1*-0.5) * 1.5 = 2 * 1.0 * 1.5 = 3.0
+    // dy = 2.0 * score * w_y = 2 * 1.0 * -0.5 = -1.0
+    val dx = list_get(grads, 0);
+    val dy = list_get(grads, 1);
+    
+    // Validate gradients
+    if dx == 3.0 {
+        if dy == -1.0 {
+            print("Unit test test_brain_gradients passed successfully.");
+            return 0;
+        }
+    }
+    print("Unit test test_brain_gradients failed!");
+    1
+}
+
+def main() -> i64 {
+    test_brain_gradients()
+}

@@ -1,0 +1,41 @@
+// types.iris — Traits, Generics, and Records for the AIS Showcase
+
+pub trait Sensory {
+    def inspect(self: Self) -> str
+}
+
+pub record State {
+    id: i64,
+    features: list<f64>,
+}
+
+impl Sensory for State {
+    def inspect(self: State) -> str {
+        format("State #{} with {} features", self.id, list_len(self.features))
+    }
+}
+
+pub record SensorBuffer {
+    history: list<State>,
+    limit: i64,
+}
+
+pub def buffer_new(limit: i64) -> SensorBuffer {
+    SensorBuffer {
+        history: list(),
+        limit: limit,
+    }
+}
+
+pub def buffer_push(buf: SensorBuffer, s: State) -> i64 {
+    list_push(buf.history, s);
+    if list_len(buf.history) > buf.limit {
+        list_pop(buf.history);
+    }
+    0
+}
+
+pub def print_sensor[T where T: Sensory](s: T) -> i64 {
+    print(s.inspect());
+    0
+}

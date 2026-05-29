@@ -1,0 +1,56 @@
+// main.iris — AIS Showcase Entry point coordinating concurrency, generics, and AD optimization
+
+bring std.ais
+bring std.fmt
+bring "types.iris"
+bring "env.iris"
+bring "brain.iris"
+
+def main() -> i64 {
+    print("=== Deforming AIS Showcase ===");
+    
+    // 1. Initialize channels
+    val tx_chan = channel();
+    val rx_chan = channel();
+    
+    // 2. Spawn concurrent environment thread
+    run_env_thread(tx_chan, rx_chan);
+    
+    // 3. Initialize sensory buffer (tests generic buffer capacity)
+    val buf = buffer_new(5);
+    
+    // 4. Run perception-decision-action loop
+    var step = 0;
+    while step < 3 {
+        // Send action 3 (Right) to environment
+        val action = 3;
+        send(rx_chan, action);
+        
+        // Perceive features list concurrently from channel
+        val features = recv(tx_chan);
+        step = step + 1;
+        
+        // Box into State record
+        val state = State { id: step, features: features };
+        buffer_push(buf, state);
+        
+        // Print observations using trait method directly
+        print(state.inspect());
+        
+        // 5. Brain optimization via reverse-mode taped gradients
+        val x_val = list_get(state.features, 0);
+        val y_val = list_get(state.features, 1);
+        val grads = adjust_sensory_inputs(x_val, y_val);
+        
+        val args = list();
+        list_push(args, to_str(x_val));
+        list_push(args, to_str(list_get(grads, 0))); // dx
+        print(fmt.sprintf("Input X: %s | Optimized Gradient dX: %s", args));
+    }
+    
+    // Terminate environment thread
+    send(rx_chan, -1);
+    
+    print("AIS Showcase executed successfully.");
+    0
+}
