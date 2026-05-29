@@ -1,5 +1,5 @@
 [package]
-name = "ais_showcase"
+name = "concurrent_sensory_agent"
 version = "0.6.0"
 authors = ["Moon9t"]
 
