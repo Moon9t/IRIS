@@ -231,33 +231,47 @@ jobs:
           TAG="${GITHUB_REF#refs/tags/}"
           BIN="iris${{ matrix.ext }}"
           ARCHIVE="iris-${TAG}-${{ matrix.target }}"
+          LIGHT_ARCHIVE="iris-${TAG}-${{ matrix.target }}-lightweight"
 
+          # 1. Stage lightweight assets
+          mkdir -p staging-light
+          cp "target/${{ matrix.target }}/release/${BIN}" staging-light/
+          cp -r stdlib staging-light/ 2>/dev/null || true
+          cp -r examples staging-light/ 2>/dev/null || true
+          cp LICENSE staging-light/
+
+          # 2. Stage full assets (with bundled toolchain if present)
           mkdir -p staging
-          cp "target/${{ matrix.target }}/release/${BIN}" staging/
-
-          # Copy stdlib & examples alongside the binary
-          cp -r stdlib staging/ 2>/dev/null || true
-          cp -r examples staging/ 2>/dev/null || true
-          cp LICENSE staging/
-
-          # Bundle the LLVM toolchain so releases are self-contained
+          cp -r staging-light/* staging/
           if [[ -d "toolchain" ]]; then
             cp -r toolchain staging/
-            echo "  Bundled LLVM toolchain"
+            echo "  Bundled LLVM toolchain in full release"
           fi
 
+          # 3. Compress both variants
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
             7z a "${ARCHIVE}.zip" ./staging/*
+            7z a "${LIGHT_ARCHIVE}.zip" ./staging-light/*
             echo "ASSET=${ARCHIVE}.zip" >> "$GITHUB_ENV"
+            echo "LIGHT_ASSET=${LIGHT_ARCHIVE}.zip" >> "$GITHUB_ENV"
           else
             tar czf "${ARCHIVE}.tar.gz" -C staging .
+            tar czf "${LIGHT_ARCHIVE}.tar.gz" -C staging-light .
             echo "ASSET=${ARCHIVE}.tar.gz" >> "$GITHUB_ENV"
+            echo "LIGHT_ASSET=${LIGHT_ARCHIVE}.tar.gz" >> "$GITHUB_ENV"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload full artifact
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: ${{ env.ASSET }}
+
+      - name: Upload lightweight artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-lightweight
+          path: ${{ env.LIGHT_ASSET }}
 
   # ─────────────────────── platform installers ────────────────────────────
   installers:
@@ -498,14 +512,14 @@ jobs:
             echo "## IRIS ${TAG}"
             echo ""
             echo "### Binary Archives"
-            echo "| Platform | Archive |"
-            echo "|----------|---------|"
-            echo "| Windows x64   | \`iris-${TAG}-x86_64-pc-windows-msvc.zip\` |"
-            echo "| Windows ARM64 | \`iris-${TAG}-aarch64-pc-windows-msvc.zip\` |"
-            echo "| Linux x64     | \`iris-${TAG}-x86_64-unknown-linux-gnu.tar.gz\` |"
-            echo "| Linux ARM64   | \`iris-${TAG}-aarch64-unknown-linux-gnu.tar.gz\` |"
-            echo "| macOS x64     | \`iris-${TAG}-x86_64-apple-darwin.tar.gz\` |"
-            echo "| macOS ARM64   | \`iris-${TAG}-aarch64-apple-darwin.tar.gz\` |"
+            echo "| Platform | Full Bundle (with LLVM) | Lightweight Update (no LLVM) |"
+            echo "|----------|-------------|----------------------------|"
+            echo "| Windows x64   | \`iris-${TAG}-x86_64-pc-windows-msvc.zip\` | \`iris-${TAG}-x86_64-pc-windows-msvc-lightweight.zip\` |"
+            echo "| Windows ARM64 | \`iris-${TAG}-aarch64-pc-windows-msvc.zip\` | \`iris-${TAG}-aarch64-pc-windows-msvc-lightweight.zip\` |"
+            echo "| Linux x64     | \`iris-${TAG}-x86_64-unknown-linux-gnu.tar.gz\` | \`iris-${TAG}-x86_64-unknown-linux-gnu-lightweight.tar.gz\` |"
+            echo "| Linux ARM64   | \`iris-${TAG}-aarch64-unknown-linux-gnu.tar.gz\` | \`iris-${TAG}-aarch64-unknown-linux-gnu-lightweight.tar.gz\` |"
+            echo "| macOS x64     | \`iris-${TAG}-x86_64-apple-darwin.tar.gz\` | \`iris-${TAG}-x86_64-apple-darwin-lightweight.tar.gz\` |"
+            echo "| macOS ARM64   | \`iris-${TAG}-aarch64-apple-darwin.tar.gz\` | \`iris-${TAG}-aarch64-apple-darwin-lightweight.tar.gz\` |"
             echo ""
             echo "### Platform Installers"
             echo "| Platform | Installer | Install command |"
