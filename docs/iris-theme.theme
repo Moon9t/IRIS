@@ -1,0 +1,50 @@
+{
+  "text-color": "#D4D4D4",
+  "background-color": "#1E1E1E",
+  "line-number-color": "#858585",
+  "line-number-background-color": "#1E1E1E",
+  "text-styles": {
+    "Normal": {
+      "text-color": "#D4D4D4"
+    },
+    "ControlFlow": {
+      "text-color": "#C586C0",
+      "bold": true
+    },
+    "Keyword": {
+      "text-color": "#569CD6",
+      "bold": true
+    },
+    "DataType": {
+      "text-color": "#4EC9B0"
+    },
+    "Constant": {
+      "text-color": "#4FC1FF"
+    },
+    "Function": {
+      "text-color": "#DCDCAA"
+    },
+    "Float": {
+      "text-color": "#B5CEA8"
+    },
+    "BaseN": {
+      "text-color": "#B5CEA8"
+    },
+    "DecVal": {
+      "text-color": "#B5CEA8"
+    },
+    "String": {
+      "text-color": "#CE9178"
+    },
+    "SpecialChar": {
+      "text-color": "#D7BA7D"
+    },
+    "Comment": {
+      "text-color": "#6A9955",
+      "italic": true
+    },
+    "Operator": {
+      "text-color": "#D4D4D4"
+    }
+  }
+}

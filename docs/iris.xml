@@ -1,0 +1,358 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE language SYSTEM "language.dtd">
+<language name="IRIS" version="1" kateversion="5.0" section="Sources" extensions="*.iris" author="Moon9t">
+  <highlighting>
+    <list name="controlflow">
+      <item>if</item>
+      <item>else</item>
+      <item>when</item>
+      <item>for</item>
+      <item>while</item>
+      <item>loop</item>
+      <item>break</item>
+      <item>continue</item>
+      <item>return</item>
+      <item>in</item>
+    </list>
+    <list name="keywords">
+      <item>val</item>
+      <item>var</item>
+      <item>bring</item>
+      <item>pub</item>
+      <item>def</item>
+      <item>record</item>
+      <item>choice</item>
+      <item>model</item>
+      <item>layer</item>
+      <item>input</item>
+      <item>output</item>
+      <item>type</item>
+      <item>const</item>
+      <item>extern</item>
+      <item>trait</item>
+      <item>impl</item>
+      <item>async</item>
+      <item>await</item>
+      <item>spawn</item>
+      <item>par</item>
+      <item>where</item>
+      <item>to</item>
+      <item>and</item>
+      <item>or</item>
+      <item>not</item>
+    </list>
+    <list name="types">
+      <item>i64</item>
+      <item>i32</item>
+      <item>i8</item>
+      <item>u8</item>
+      <item>u32</item>
+      <item>u64</item>
+      <item>usize</item>
+      <item>f64</item>
+      <item>f32</item>
+      <item>bool</item>
+      <item>str</item>
+      <item>option</item>
+      <item>result</item>
+      <item>list</item>
+      <item>map</item>
+      <item>tensor</item>
+      <item>tuple</item>
+      <item>chan</item>
+      <item>atomic</item>
+      <item>grad</item>
+      <item>sparse</item>
+      <item>deque</item>
+      <item>bitset</item>
+      <item>mutex</item>
+    </list>
+    <list name="constants">
+      <item>true</item>
+      <item>false</item>
+      <item>none</item>
+      <item>unit</item>
+    </list>
+    <list name="builtins">
+      <!-- Core builtins -->
+      <item>print</item>
+      <item>panic</item>
+      <item>assert</item>
+      <item>len</item>
+      <item>to_str</item>
+      <item>format</item>
+      <item>read_line</item>
+      <item>read_i64</item>
+      <item>read_f64</item>
+      <item>type_of</item>
+      <!-- String builtins -->
+      <item>concat</item>
+      <item>contains</item>
+      <item>starts_with</item>
+      <item>ends_with</item>
+      <item>to_upper</item>
+      <item>to_lower</item>
+      <item>trim</item>
+      <item>repeat</item>
+      <item>split</item>
+      <item>join</item>
+      <item>find</item>
+      <item>slice</item>
+      <item>str_index</item>
+      <item>parse_i64</item>
+      <item>parse_f64</item>
+      <item>char_at</item>
+      <item>str_reverse</item>
+      <item>str_pad_left</item>
+      <item>str_pad_right</item>
+      <item>str_chars</item>
+      <item>str_bytes</item>
+      <item>str_count</item>
+      <!-- Math builtins -->
+      <item>sqrt</item>
+      <item>abs</item>
+      <item>floor</item>
+      <item>ceil</item>
+      <item>sin</item>
+      <item>cos</item>
+      <item>tan</item>
+      <item>exp</item>
+      <item>log</item>
+      <item>log2</item>
+      <item>round</item>
+      <item>sign</item>
+      <item>pow</item>
+      <item>min</item>
+      <item>max</item>
+      <item>clamp</item>
+      <item>math_pi</item>
+      <item>math_e</item>
+      <item>math_inf</item>
+      <item>is_nan</item>
+      <item>is_inf</item>
+      <!-- Bitwise builtins -->
+      <item>band</item>
+      <item>bor</item>
+      <item>bxor</item>
+      <item>shl</item>
+      <item>shr</item>
+      <item>bitnot</item>
+      <!-- Option / Result builtins -->
+      <item>some</item>
+      <item>is_some</item>
+      <item>ok</item>
+      <item>err</item>
+      <item>is_ok</item>
+      <item>is_err</item>
+      <!-- List builtins -->
+      <item>push</item>
+      <item>pop</item>
+      <item>list_get</item>
+      <item>list_set</item>
+      <item>list_len</item>
+      <item>list_pop</item>
+      <item>list_map</item>
+      <item>list_filter</item>
+      <item>list_reduce</item>
+      <item>list_any</item>
+      <item>list_all</item>
+      <item>list_zip</item>
+      <item>list_enumerate</item>
+      <item>list_flatten</item>
+      <item>list_unique</item>
+      <item>list_reverse</item>
+      <item>list_sorted</item>
+      <item>list_sum</item>
+      <item>list_min</item>
+      <item>list_max</item>
+      <item>list_index_of</item>
+      <item>list_count</item>
+      <item>list_take</item>
+      <item>list_drop</item>
+      <!-- Map builtins -->
+      <item>map_get</item>
+      <item>map_set</item>
+      <item>map_keys</item>
+      <item>map_values</item>
+      <item>map_contains</item>
+      <!-- Cell builtins -->
+      <item>cell</item>
+      <item>cell_get</item>
+      <item>cell_set</item>
+      <!-- Tensor / linear algebra builtins -->
+      <item>zeros</item>
+      <item>ones</item>
+      <item>fill</item>
+      <item>linspace</item>
+      <item>sparsify</item>
+      <item>densify</item>
+      <item>einsum</item>
+      <!-- Concurrency builtins -->
+      <item>atomic_load</item>
+      <item>atomic_store</item>
+      <item>atomic_add</item>
+      <item>channel</item>
+      <item>send</item>
+      <item>recv</item>
+      <item>chan_try_recv</item>
+      <item>chan_len</item>
+      <item>select</item>
+      <item>timeout</item>
+      <item>thread_count</item>
+      <!-- Deque builtins -->
+      <item>deque_new</item>
+      <item>deque_push_front</item>
+      <item>deque_push_back</item>
+      <item>deque_pop_front</item>
+      <item>deque_pop_back</item>
+      <item>deque_len</item>
+      <item>deque_front</item>
+      <item>deque_back</item>
+      <!-- Sorted / BitSet builtins -->
+      <item>sorted_keys</item>
+      <item>bitset_new</item>
+      <item>bitset_set</item>
+      <item>bitset_get</item>
+      <item>bitset_count</item>
+      <item>bitset_clear</item>
+      <!-- FFI builtins -->
+      <item>ffi_open</item>
+      <item>ffi_call</item>
+      <item>ffi_close</item>
+      <item>ffi_call_i64</item>
+      <item>ffi_call_f64</item>
+      <item>ffi_call_str</item>
+      <item>ffi_call_void</item>
+      <item>ffi_call_args</item>
+      <item>python_eval</item>
+      <item>python_exec</item>
+      <item>python_call</item>
+      <item>python_version</item>
+      <item>rust_lib_open</item>
+      <item>rust_call_i64</item>
+      <item>rust_call_f64</item>
+      <item>rust_call_void</item>
+      <!-- HTTP / JSON / Regex builtins -->
+      <item>http_get</item>
+      <item>http_post</item>
+      <item>http_request</item>
+      <item>http_post_json</item>
+      <item>json_stringify</item>
+      <item>regex_match</item>
+      <item>regex_find_all</item>
+      <item>regex_replace</item>
+      <!-- TCP / UDP networking builtins -->
+      <item>tcp_connect</item>
+      <item>tcp_listen</item>
+      <item>tcp_accept</item>
+      <item>tcp_read</item>
+      <item>tcp_write</item>
+      <item>tcp_close</item>
+      <item>udp_open</item>
+      <item>udp_send</item>
+      <item>udp_recv</item>
+      <item>udp_close</item>
+      <!-- Terminal builtins -->
+      <item>read_key</item>
+      <item>read_password</item>
+      <item>term_clear</item>
+      <item>term_cursor</item>
+      <item>term_show_cursor</item>
+      <item>term_set_color</item>
+      <item>term_reset</item>
+      <item>term_rows</item>
+      <item>term_cols</item>
+      <!-- Date / Time builtins -->
+      <item>datetime_now</item>
+      <item>datetime_timestamp</item>
+      <item>datetime_format</item>
+      <!-- OS / System builtins -->
+      <item>cwd</item>
+      <item>list_dir</item>
+      <item>path_join</item>
+      <item>mkdir</item>
+      <item>remove_file</item>
+      <item>env_get</item>
+      <item>env_set</item>
+      <item>exit_code</item>
+      <item>exec_cmd</item>
+      <item>pid</item>
+      <!-- Random / Hash / Crypto builtins -->
+      <item>random</item>
+      <item>random_range</item>
+      <item>hash</item>
+      <item>base64_encode</item>
+      <item>base64_decode</item>
+      <item>uuid</item>
+      <item>sha256</item>
+      <item>hex_encode</item>
+      <item>hex_decode</item>
+    </list>
+
+    <contexts>
+      <context name="Normal" attribute="Normal Text" lineEndContext="#stay">
+        <keyword attribute="Control Flow" String="controlflow" context="#stay"/>
+        <keyword attribute="Keyword" String="keywords" context="#stay"/>
+        <keyword attribute="Data Type" String="types" context="#stay"/>
+        <keyword attribute="Constant" String="constants" context="#stay"/>
+        <keyword attribute="Builtin" String="builtins" context="#stay"/>
+        
+        <!-- Numbers -->
+        <RegExpr attribute="Float" String="\b[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?\b" context="#stay"/>
+        <RegExpr attribute="Hex" String="\b0x[0-9a-fA-F]+\b" context="#stay"/>
+        <RegExpr attribute="Integer" String="\b[0-9]+\b" context="#stay"/>
+
+        <!-- Strings -->
+        <DetectChar attribute="String" char="&quot;" context="String"/>
+        <Detect2Chars attribute="String" char="f" char1="&quot;" context="FString"/>
+
+        <!-- Comments -->
+        <Detect2Chars attribute="Comment" char="/" char1="/" context="CommentLine"/>
+        <Detect2Chars attribute="Comment" char="/" char1="*" context="CommentBlock"/>
+
+        <!-- Operators -->
+        <AnyChar attribute="Operator" String="+-*/%=&lt;&gt;!&amp;|?." context="#stay"/>
+        <Detect2Chars attribute="Operator" char="-" char1="&gt;" context="#stay"/>
+      </context>
+
+      <context name="CommentLine" attribute="Comment" lineEndContext="#pop">
+      </context>
+
+      <context name="CommentBlock" attribute="Comment" lineEndContext="#stay">
+        <Detect2Chars attribute="Comment" char="*" char1="/" context="#pop"/>
+      </context>
+
+      <context name="String" attribute="String" lineEndContext="#stay">
+        <DetectChar attribute="String" char="&quot;" context="#pop"/>
+        <RegExpr attribute="Escape" String="\\\\(n|t|r|\\\\|&quot;)" context="#stay"/>
+      </context>
+
+      <context name="FString" attribute="String" lineEndContext="#stay">
+        <DetectChar attribute="String" char="&quot;" context="#pop"/>
+        <RegExpr attribute="Escape" String="\\\\(n|t|r|\\\\|&quot;)" context="#stay"/>
+        <DetectChar attribute="Brace" char="{" context="Embedded"/>
+      </context>
+
+      <context name="Embedded" attribute="Normal Text" lineEndContext="#stay">
+        <DetectChar attribute="Brace" char="}" context="#pop"/>
+        <IncludeRules context="Normal"/>
+      </context>
+    </contexts>
+    <itemDatas>
+      <itemData name="Normal Text" defStyleNum="dsNormal"/>
+      <itemData name="Control Flow" defStyleNum="dsControlFlow"/>
+      <itemData name="Keyword" defStyleNum="dsKeyword"/>
+      <itemData name="Data Type" defStyleNum="dsDataType"/>
+      <itemData name="Constant" defStyleNum="dsConstant"/>
+      <itemData name="Builtin" defStyleNum="dsFunction"/>
+      <itemData name="Float" defStyleNum="dsFloat"/>
+      <itemData name="Hex" defStyleNum="dsBaseN"/>
+      <itemData name="Integer" defStyleNum="dsDecVal"/>
+      <itemData name="String" defStyleNum="dsString"/>
+      <itemData name="Escape" defStyleNum="dsSpecialChar"/>
+      <itemData name="Comment" defStyleNum="dsComment"/>
+      <itemData name="Operator" defStyleNum="dsOperator"/>
+      <itemData name="Brace" defStyleNum="dsControlFlow"/>
+    </itemDatas>
+  </highlighting>
+</language>

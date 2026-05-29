@@ -1,41 +1,248 @@
+---
+title: "The IRIS Programming Language"
+author: "Moon9t"
+rights: "GPL-2.0-or-later"
+language: "en-US"
+toc: true
+toc-depth: 2
+number-sections: true
+geometry: margin=1in
+---
+
 # The IRIS Programming Language
 
 ## A Complete Guide
 
----
+\newpage
 
-*A practical guide to writing fast, expressive programs in IRIS — from your first hello world to neural networks and native binaries.*
+## Copyright & License
 
----
+**The IRIS Programming Language: A Complete Guide**
+
+Copyright \u00a9 2024-2026 Moon9t. All rights reserved.
+
+This book is licensed under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+
+This documentation is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this book. If not, see <https://www.gnu.org/licenses/>.
+
+\newpage
 
 ## Table of Contents
 
 - [Foreword](#foreword)
 - [Chapter 1: Getting Started](#chapter-1-getting-started)
+  - [1.1 What Is IRIS?](#11-what-is-iris)
+  - [1.2 Installation](#12-installation)
+  - [1.3 Hello, World](#13-hello-world)
+  - [1.4 The REPL](#14-the-repl)
+  - [1.5 IDE Setup](#15-ide-setup)
+  - [1.6 Project Setup and Testing](#16-project-setup-and-testing)
+  - [1.6 Project Setup and Testing](#16-project-setup-and-testing)
+  - [Try It Yourself](#try-it-yourself)
 - [Chapter 2: Values and Types](#chapter-2-values-and-types)
+  - [2.1 Primitive Types](#21-primitive-types)
+  - [2.2 Bindings: `val` and `var`](#22-bindings-val-and-var)
+  - [2.3 Type Inference](#23-type-inference)
+  - [2.4 Literals and Casts](#24-literals-and-casts)
+  - [2.5 Constants](#25-constants)
+  - [2.6 Type Aliases](#26-type-aliases)
+  - [2.7 The Type System Overview](#27-the-type-system-overview)
+  - [Try It Yourself](#try-it-yourself)
 - [Chapter 3: Functions](#chapter-3-functions)
+  - [3.1 Defining Functions](#31-defining-functions)
+  - [3.2 Tail Expressions (No `return` Needed)](#32-tail-expressions-no-return-needed)
+  - [3.3 Early Return](#33-early-return)
+  - [3.4 Recursive Functions](#34-recursive-functions)
+  - [3.5 Public Functions](#35-public-functions)
+  - [3.6 Default Parameters](#36-default-parameters)
+  - [3.7 Functions as First-Class Values](#37-functions-as-first-class-values)
+  - [Try It Yourself](#try-it-yourself)
 - [Chapter 4: Control Flow](#chapter-4-control-flow)
+  - [4.1 `if / else`](#41-if--else)
+  - [4.2 `while` Loops](#42-while-loops)
+  - [4.3 `for` Range Loops](#43-for-range-loops)
+  - [4.4 `loop` with `break`](#44-loop-with-break)
+  - [4.5 `break` and `continue`](#45-break-and-continue)
+  - [4.6 Nested Loops](#46-nested-loops)
+  - [4.7 Logical Operators](#47-logical-operators)
+  - [4.8 For-Each Loops](#48-for-each-loops)
+  - [4.9 Tuple Destructuring](#49-tuple-destructuring)
+  - [4.10 Keyword Operators (`and`, `or`, `not`)](#410-keyword-operators-and-or-not)
+  - [4.8 For-Each Loops](#48-for-each-loops)
+  - [4.9 Tuple Destructuring](#49-tuple-destructuring)
+  - [4.10 Keyword Operators (`and`, `or`, `not`)](#410-keyword-operators-and-or-not)
+  - [Try It Yourself](#try-it-yourself)
 - [Chapter 5: Data Structures](#chapter-5-data-structures)
-- [Chapter 6: Closures and Higher-Order Functions](#chapter-6-closures-and-higher-order-functions)
-- [Chapter 7: String Processing](#chapter-7-string-processing)
-- [Chapter 8: Error Handling](#chapter-8-error-handling)
-- [Chapter 9: Concurrency](#chapter-9-concurrency)
-- [Chapter 10: Automatic Differentiation](#chapter-10-automatic-differentiation)
-- [Chapter 11: Tensors and ML](#chapter-11-tensors-and-ml)
-- [Chapter 12: Native Compilation](#chapter-12-native-compilation)
-- [Chapter 13: The Standard Library](#chapter-13-the-standard-library)
-- [Chapter 14: Tooling](#chapter-14-tooling)
-- [Chapter 15: Building Real Programs](#chapter-15-building-real-programs)
-- [Chapter 16: Working with Databases](#chapter-16-working-with-databases)
-- [Chapter 17: Foreign Function Interface](#chapter-17-foreign-function-interface)
-- [Chapter 18: Networking](#chapter-18-networking)
+  - [5.1 Records](#51-records)
+  - [5.2 Enums (`choice`)](#52-enums-choice)
+  - [5.3 Pattern Matching with `when`](#53-pattern-matching-with-when)
+  - [5.4 Tuples](#54-tuples)
+  - [5.5 Fixed Arrays](#55-fixed-arrays)
+  - [5.6 Dynamic Lists](#56-dynamic-lists)
+  - [5.7 Maps](#57-maps)
+  - [5.8 Options](#58-options)
+  - [5.9 Results](#59-results)
+  - [5.10 Deques](#510-deques)
+  - [5.11 BitSets](#511-bitsets)
+  - [5.12 Mutexes](#512-mutexes)
+  - [5.10 Deques](#510-deques)
+  - [5.11 BitSets](#511-bitsets)
+  - [5.12 Mutexes](#512-mutexes)
+  - [Try It Yourself](#try-it-yourself)
+- [Chapter 6: Traits and Generics](#chapter-6-traits-and-generics)
+  - [6.1 Trait Declarations](#61-trait-declarations)
+  - [6.2 Implementing Traits](#62-implementing-traits)
+  - [6.3 Generic Functions](#63-generic-functions)
+  - [6.4 Trait Constraints (`where`)](#64-trait-constraints-where)
+  - [Try It Yourself](#try-it-yourself)
+- [Chapter 7: Traits and Generics](#chapter-7-traits-and-generics)
+  - [7.1 Trait Declarations](#71-trait-declarations)
+  - [7.2 Implementing Traits](#72-implementing-traits)
+  - [7.3 Generic Functions](#73-generic-functions)
+  - [7.4 Trait Constraints (`where`)](#74-trait-constraints-where)
+  - [Try It Yourself](#try-it-yourself)
+- [Chapter 8: Closures and Higher-Order Functions](#chapter-8-closures-and-higher-order-functions)
+  - [8.1 Closure Syntax](#81-closure-syntax)
+  - [8.2 Passing Closures as Arguments](#82-passing-closures-as-arguments)
+  - [8.3 Implementing Map](#83-implementing-map)
+  - [8.4 Implementing Filter](#84-implementing-filter)
+  - [8.5 Implementing Reduce / Fold](#85-implementing-reduce--fold)
+  - [8.6 Capture by Value](#86-capture-by-value)
+  - [8.7 Regular Expressions](#87-regular-expressions)
+  - [8.8 Date and Time](#88-date-and-time)
+  - [8.9 Hexadecimal Literals](#89-hexadecimal-literals)
+  - [Try It Yourself](#try-it-yourself)
+- [Chapter 9: String Processing](#chapter-9-string-processing)
+  - [9.1 String Literals and Escapes](#91-string-literals-and-escapes)
+  - [9.2 F-Strings (String Interpolation)](#92-f-strings-string-interpolation)
+  - [9.3 Built-in String Functions](#93-built-in-string-functions)
+  - [9.4 String Building Patterns](#94-string-building-patterns)
+  - [9.5 Working with Split and Join](#95-working-with-split-and-join)
+  - [9.6 String Searching](#96-string-searching)
+  - [9.7 Regular Expressions](#97-regular-expressions)
+  - [9.8 Date and Time](#98-date-and-time)
+  - [9.9 Hexadecimal Literals](#99-hexadecimal-literals)
+  - [Try It Yourself](#try-it-yourself)
+- [Chapter 10: Error Handling](#chapter-10-error-handling)
+  - [10.1 The `result<T, E>` Type](#101-the-resultt-e-type)
+  - [10.2 Creating and Checking Results](#102-creating-and-checking-results)
+  - [10.3 The `?` Operator](#103-the--operator)
+  - [10.4 Pattern Matching Results with `when`](#104-pattern-matching-results-with-when)
+  - [10.5 Chaining Operations](#105-chaining-operations)
+  - [10.6 Combining Options and Results](#106-combining-options-and-results)
+  - [10.7 Panicking with `panic` and `assert`](#107-panicking-with-panic-and-assert)
+  - [10.7 Async/Await](#107-asyncawait)
+  - [Try It Yourself](#try-it-yourself)
+- [Chapter 11: Concurrency](#chapter-11-concurrency)
+  - [11.1 Channels](#111-channels)
+  - [11.2 Spawning Tasks with `spawn`](#112-spawning-tasks-with-spawn)
+  - [11.3 Parallel For Loops](#113-parallel-for-loops)
+  - [11.4 Atomics: Thread-Safe Counters](#114-atomics-thread-safe-counters)
+  - [11.5 Producer-Consumer Pattern](#115-producer-consumer-pattern)
+  - [11.6 Time Functions](#116-time-functions)
+  - [11.7 Async/Await](#117-asyncawait)
+  - [11.5 Reverse-Mode Automatic Differentiation](#115-reverse-mode-automatic-differentiation)
+  - [Try It Yourself](#try-it-yourself)
+- [Chapter 12: Automatic Differentiation](#chapter-12-automatic-differentiation)
+  - [12.1 Dual Numbers with `grad`](#121-dual-numbers-with-grad)
+  - [12.2 Computing Gradients](#122-computing-gradients)
+  - [12.3 Simple Gradient Descent](#123-simple-gradient-descent)
+  - [12.4 Neural Network Gradient Descent](#124-neural-network-gradient-descent)
+  - [12.5 Reverse-Mode Automatic Differentiation](#125-reverse-mode-automatic-differentiation)
+  - [12.9 Model DSL (Neural Network Architectures)](#129-model-dsl-neural-network-architectures)
+  - [12.10 Machine Learning Stdlib Modules (`std.ml`, `std.rl`, `std.nn`)](#1210-machine-learning-stdlib-modules-stdml-stdrl-stdnn)
+  - [Try It Yourself](#try-it-yourself)
+- [Chapter 13: Tensors and ML](#chapter-13-tensors-and-ml)
+  - [13.1 Tensor Types](#131-tensor-types)
+  - [13.2 The `einsum` Intrinsic](#132-the-einsum-intrinsic)
+  - [13.3 Building a Neural Network Layer](#133-building-a-neural-network-layer)
+  - [13.4 Activation Functions](#134-activation-functions)
+  - [13.5 A Simple Training Loop](#135-a-simple-training-loop)
+  - [13.6 Sparse Tensors](#136-sparse-tensors)
+  - [13.9 Model DSL (Neural Network Architectures)](#139-model-dsl-neural-network-architectures)
+  - [13.10 Machine Learning Stdlib Modules (`std.ml`, `std.rl`, `std.nn`)](#1310-machine-learning-stdlib-modules-stdml-stdrl-stdnn)
+  - [Try It Yourself](#try-it-yourself)
+  - [13.7 Native Neural Networks (`std.nn`)](#137-native-neural-networks-stdnn)
+  - [13.8 External Model Inference (ONNX)](#138-external-model-inference-onnx)
+- [Chapter 14: Native Compilation](#chapter-14-native-compilation)
+  - [14.1 Building a Native Binary](#141-building-a-native-binary)
+  - [14.2 How the Compiler Pipeline Works](#142-how-the-compiler-pipeline-works)
+  - [14.3 Inspecting LLVM IR](#143-inspecting-llvm-ir)
+  - [14.4 Calling C Libraries with `extern`](#144-calling-c-libraries-with-extern)
+  - [14.5 The C Runtime](#145-the-c-runtime)
+  - [14.6 Performance Tips](#146-performance-tips)
+  - [Try It Yourself](#try-it-yourself)
+- [Chapter 15: The Standard Library](#chapter-15-the-standard-library)
+  - [15.1 `std.math` — Extended Math Functions](#151-stdmath--extended-math-functions)
+  - [15.2 `std.string` — String Utilities](#152-stdstring--string-utilities)
+  - [15.3 `std.fmt` — Formatting](#153-stdfmt--formatting)
+  - [15.4 `std.fs` — File System](#154-stdfs--file-system)
+  - [15.5 `std.json` — JSON](#155-stdjson--json)
+  - [15.6 `std.csv` — CSV](#156-stdcsv--csv)
+  - [15.7 `std.crypto` — Cryptography & Hashing](#157-stdcrypto--cryptography--hashing)
+  - [15.8 `std.ffi` — Foreign Function Interface (C, Python, Rust)](#158-stdffi--foreign-function-interface-c-python-rust)
+  - [15.9 `std.os` — Operating System](#159-stdos--operating-system)
+  - [15.10 `std.testing` — Testing](#1510-stdtesting--testing)
+  - [15.11 `std.log` — Logging](#1511-stdlog--logging)
+  - [15.12 Remaining Standard Library Modules](#1512-remaining-standard-library-modules)
+  - [15.13 `std.svg` & `std.termplot` — Visualizations](#1513-stdsvg--stdtermplot--visualizations)
+  - [15.14 Using `bring` in the REPL](#1514-using-bring-in-the-repl)
+  - [15.7 Subcommands & Tooling Suite](#157-subcommands--tooling-suite)
+  - [Try It Yourself](#try-it-yourself)
+- [Chapter 16: Tooling](#chapter-16-tooling)
+  - [16.1 The REPL in Depth](#161-the-repl-in-depth)
+  - [16.2 LSP Features](#162-lsp-features)
+  - [16.3 The Step Debugger (DAP)](#163-the-step-debugger-dap)
+  - [16.4 The VS Code Extension](#164-the-vs-code-extension)
+  - [16.6 IR Inspection](#166-ir-inspection)
+  - [16.5 Optimization Passes](#165-optimization-passes)
+  - [16.7 Subcommands & Tooling Suite](#167-subcommands--tooling-suite)
+  - [Try It Yourself](#try-it-yourself)
+- [Chapter 17: Package Manager](#chapter-17-package-manager)
+  - [17.1 Initializing a Project](#171-initializing-a-project)
+  - [17.2 The `iris.toml` Manifest](#172-the-iristoml-manifest)
+  - [17.3 Managing Dependencies](#173-managing-dependencies)
+  - [17.4 Package Subcommands](#174-package-subcommands)
+  - [Try It Yourself](#try-it-yourself)
+- [Chapter 18: Building Real Programs](#chapter-18-building-real-programs)
+  - [18.1 Project Layout](#181-project-layout)
+  - [18.2 Multi-File Programs with `bring`](#182-multi-file-programs-with-bring)
+  - [18.3 Writing a Command-Line Tool](#183-writing-a-command-line-tool)
+  - [18.4 Writing a Word-Count Tool](#184-writing-a-word-count-tool)
+  - [18.5 A Simple TCP Echo Server](#185-a-simple-tcp-echo-server)
+  - [18.6 Performance Profiling](#186-performance-profiling)
+  - [18.7 A Key-Value Store Server](#187-a-key-value-store-server)
+  - [Try It Yourself](#try-it-yourself)
+- [Chapter 19: Package Manager](#chapter-19-package-manager)
+  - [19.1 Initializing a Project](#191-initializing-a-project)
+  - [19.2 The `iris.toml` Manifest](#192-the-iristoml-manifest)
+  - [19.3 Managing Dependencies](#193-managing-dependencies)
+  - [19.4 Package Subcommands](#194-package-subcommands)
+  - [Try It Yourself](#try-it-yourself)
+- [Chapter 20: Working with Databases](#chapter-20-working-with-databases)
+  - [20.1 The Database API](#201-the-database-api)
+  - [20.2 Creating a Database and Table](#202-creating-a-database-and-table)
+  - [20.3 Inserting Data](#203-inserting-data)
+  - [20.4 Querying Data](#204-querying-data)
+  - [20.5 Parameterized Queries](#205-parameterized-queries)
+  - [20.6 Updating and Deleting](#206-updating-and-deleting)
+  - [20.7 Error Handling](#207-error-handling)
+  - [20.8 A Complete Example: Task Manager](#208-a-complete-example-task-manager)
+  - [20.8 Best Practices](#208-best-practices)
+  - [20.11 UDP Networking](#2011-udp-networking)
+  - [Try It Yourself](#try-it-yourself)
+- [Chapter 21: Security & Sandboxing](#chapter-21-security--sandboxing)
+  - [21.1 The Sandbox Flag](#211-the-sandbox-flag)
+  - [21.2 Restricted Operations](#212-restricted-operations)
+  - [21.3 Customizing Whitelists](#213-customizing-whitelists)
+  - [Try It Yourself](#try-it-yourself)
 - [Appendix A: Language Grammar (BNF)](#appendix-a-language-grammar-bnf)
 - [Appendix B: Built-in Functions Reference](#appendix-b-built-in-functions-reference)
 - [Appendix C: Type System Reference](#appendix-c-type-system-reference)
 - [Appendix D: CLI Reference](#appendix-d-cli-reference)
 - [Appendix E: Compiler Error Reference](#appendix-e-compiler-error-reference)
-
----
 
 ## Foreword
 
@@ -54,6 +261,8 @@ Every chapter has working code examples you can run immediately, a "Try It Yours
 Let's get started.
 
 ---
+
+
 
 ## Chapter 1: Getting Started
 
@@ -90,20 +299,20 @@ IRIS ships as a self-contained release archive that includes the `iris` binary, 
 **Option A — `.deb` package (Debian / Ubuntu)**
 
 ```bash
-sudo dpkg -i iris_0.2.0_amd64.deb   # or arm64
+sudo dpkg -i iris_0.6.0_amd64.deb   # or arm64
 ```
 
 **Option B — `.rpm` package (Fedora / RHEL / openSUSE)**
 
 ```bash
-sudo rpm -i iris-0.2.0-1.x86_64.rpm   # or aarch64
+sudo rpm -i iris-0.6.0-1.x86_64.rpm   # or aarch64
 ```
 
 **Option C — AppImage (any distro)**
 
 ```bash
-chmod +x iris-0.2.0-x86_64.AppImage
-./iris-0.2.0-x86_64.AppImage --version
+chmod +x iris-0.6.0-x86_64.AppImage
+./iris-0.6.0-x86_64.AppImage --version
 ```
 
 **Option D — Shell installer**
@@ -118,7 +327,7 @@ This installs `iris` to `~/.iris/bin` and adds it to your `PATH`.
 
 **Option A — `.pkg` installer**
 
-Download and double-click `iris-0.2.0-arm64.pkg` (Apple Silicon) or `iris-0.2.0-x64.pkg` (Intel). The installer places IRIS in `/usr/local/bin`.
+Download and double-click `iris-0.6.0-arm64.pkg` (Apple Silicon) or `iris-0.6.0-x64.pkg` (Intel). The installer places IRIS in `/usr/local/bin`.
 
 **Option B — Shell installer**
 
@@ -138,11 +347,11 @@ brew install iris-lang   # planned for a future release
 
 **Option A — Installer (.exe)**
 
-Download and run `iris-0.2.0-setup.exe`. The Inno Setup installer bundles the LLVM toolchain, MinGW sysroot, and the IRIS VS Code extension. It adds `iris` to your `PATH` automatically.
+Download and run `iris-0.6.0-setup.exe`. The Inno Setup installer bundles the LLVM toolchain, MinGW sysroot, and the IRIS VS Code extension. It adds `iris` to your `PATH` automatically.
 
 **Option B — Portable .zip**
 
-Download `iris-0.2.0-windows-x64.zip`, extract it to a folder (for example, `C:\tools\iris\`), and add that folder to your `PATH`.
+Download `iris-0.6.0-windows-x64.zip`, extract it to a folder (for example, `C:\tools\iris\`), and add that folder to your `PATH`.
 
 **Option C — PowerShell installer**
 
@@ -161,13 +370,13 @@ iris --version
 You should see output like:
 
 ```
-iris 0.2.0 (abc1234 2026-03-02)
+iris 0.6.0 (abc1234 2026-03-02)
 IRIS — Intermediate Representation for Intelligent Systems
 Copyright (C) 2024-2026 Moon & IRIS Project Contributors
 License: GPL-2.0-or-later <https://www.gnu.org/licenses/old-licenses/gpl-2.0.html>
 
 Compiler:
-  Version:       0.2.0
+  Version:       0.6.0
   Git commit:    abc1234567890abcdef1234567890abcdef123456
   Git branch:    main
   Build date:    2026-03-02
@@ -243,7 +452,7 @@ iris repl
 You will see:
 
 ```
-IRIS 0.2.0 REPL
+IRIS 0.6.0 REPL
   :help for commands · :quit to exit · Ctrl+D to exit
 
 >>
@@ -303,6 +512,38 @@ To start the LSP server manually (for other editors):
 iris lsp
 ```
 
+
+### 1.6 Project Setup and Testing
+
+Modern IRIS development utilizes the built-in package manager and testing framework:
+
+1. **Initialize a Project**: Run `iris pkg init myproject` to create a standard project layout:
+   ```bash
+   iris pkg init myproject
+   cd myproject
+   ```
+2. **Standard Structure**: This generates a `src/main.iris` file and a `iris.toml` manifest.
+3. **Run Tests**: Check that everything is working:
+   ```bash
+   iris test
+   ```
+
+
+### 1.6 Project Setup and Testing
+
+Modern IRIS development utilizes the built-in package manager and testing framework:
+
+1. **Initialize a Project**: Run `iris pkg init myproject` to create a standard project layout:
+   ```bash
+   iris pkg init myproject
+   cd myproject
+   ```
+2. **Standard Structure**: This generates a `src/main.iris` file and a `iris.toml` manifest.
+3. **Run Tests**: Check that everything is working:
+   ```bash
+   iris test
+   ```
+
 ### Try It Yourself
 
 1. Write a program that prints your name.
@@ -311,22 +552,29 @@ iris lsp
 
 ---
 
+
+
 ## Chapter 2: Values and Types
 
 ### 2.1 Primitive Types
 
-IRIS has five primitive scalar types:
+IRIS has eleven primitive scalar types:
 
 | Type | Description | Example |
 |------|-------------|---------|
-| `i64` | 64-bit signed integer | `42`, `-7`, `0` |
+| `i64` | 64-bit signed integer | `42`, `-7` |
 | `i32` | 32-bit signed integer | `42`, `-7` |
-| `f64` | 64-bit floating-point | `3.14 to f64`, `1.0 to f64` |
-| `f32` | 32-bit floating-point | `3.14`, `1.0` |
+| `i8`  | 8-bit signed integer | `42 to i8` |
+| `u8`  | 8-bit unsigned integer | `255 to u8` |
+| `u32` | 32-bit unsigned integer | `100 to u32` |
+| `u64` | 64-bit unsigned integer | `100 to u64` |
+| `usize`| Platform pointer size | `10 to usize` |
+| `f64` | 64-bit floating-point | `3.14`, `1.0` |
+| `f32` | 32-bit floating-point | `3.14 to f32`, `1.0 to f32` |
 | `bool` | Boolean | `true`, `false` |
 | `str` | String (UTF-8) | `"hello"` |
 
-> **Note:** Float literals like `3.14` are `f32` by default. To get an `f64`, write `3.14 to f64`.
+> **Note:** Float literals like `3.14` are `f64` by default. To get an `f32`, write `3.14 to f32`.
 
 ### 2.2 Bindings: `val` and `var`
 
@@ -374,15 +622,15 @@ def annotated() -> f32 {
 
 ### 2.4 Literals and Casts
 
-Integer literals are `i64` by default. Float literals are `f32` by default.
+Integer literals are `i64` by default. Float literals are `f64` by default.
 
 To convert between types, use the `to` keyword:
 
 ```iris
 def casts() -> f64 {
     val n: i64 = 42
-    val f: f32 = 3.14
-    val big: f64 = f to f64     // f32 -> f64
+    val f: f64 = 3.14
+    val small: f32 = f to f32     // f32 -> f64
     val also: f64 = n to f64    // i64 -> f64
     also + big
 }
@@ -446,17 +694,19 @@ IRIS uses a structural, nominal type system:
 
 ### Try It Yourself
 
-1. Write a function that takes an `f32` and returns its square root as `f64`. (Hint: use `sqrt` then cast.)
+1. Write a function that takes an `f64` and returns its square root as `f32`. (Hint: use `sqrt` then cast.)
 2. Define a constant `GRAVITY: f64` for Earth's gravitational acceleration (9.81 m/s²) and write a function that computes the force on a given mass.
 3. Create a type alias `Celsius = f64` and write a function that converts Celsius to Fahrenheit.
 
 > **Common Mistakes:**
 >
-> - Forgetting that `3.14` is `f32`, not `f64`. If you pass it to a function expecting `f64`, you must write `3.14 to f64`.
+> - Forgetting that `3.14` is `f64`, not `f32`. If you pass it to a function expecting `f32`, you must write `3.14 to f32`.
 > - Trying to reassign a `val` binding. Use `var` when you need mutation.
 > - Mixing `i64` and `f64` in arithmetic without a cast. IRIS does not implicitly promote types.
 
 ---
+
+
 
 ## Chapter 3: Functions
 
@@ -649,6 +899,8 @@ def main() -> i64 {
 
 ---
 
+
+
 ## Chapter 4: Control Flow
 
 ### 4.1 `if / else`
@@ -817,6 +1069,112 @@ def either_positive(x: i64, y: i64) -> bool {
 }
 ```
 
+
+### 4.8 For-Each Loops
+
+IRIS supports iterating directly over collections like lists, ranges, or arrays:
+
+```iris
+def main() -> i64 {
+    val items = list();
+    push(items, 10); push(items, 20); push(items, 30);
+    
+    // Iterate over elements directly
+    for x in items {
+        print(to_str(x))
+    }
+    0
+}
+```
+
+### 4.9 Tuple Destructuring
+
+You can bind multiple values at once by destructuring tuples:
+
+```iris
+def get_coords() -> (i64, i64) {
+    (100, 200)
+}
+
+def main() -> i64 {
+    val (x, y) = get_coords();
+    print(concat("X: ", to_str(x)));
+    print(concat("Y: ", to_str(y)));
+    0
+}
+```
+
+### 4.10 Keyword Operators (`and`, `or`, `not`)
+
+In addition to `&&`, `||`, and `!`, IRIS supports readable keyword operators:
+
+```iris
+def eligible(age: i64, registered: bool) -> bool {
+    age >= 18 and registered
+}
+
+def can_enter(has_ticket: bool, is_vip: bool) -> bool {
+    has_ticket or is_vip
+}
+
+def is_minor(age: i64) -> bool {
+    not (age >= 18)
+}
+```
+
+
+### 4.8 For-Each Loops
+
+IRIS supports iterating directly over collections like lists, ranges, or arrays:
+
+```iris
+def main() -> i64 {
+    val items = list();
+    push(items, 10); push(items, 20); push(items, 30);
+    
+    // Iterate over elements directly
+    for x in items {
+        print(to_str(x))
+    }
+    0
+}
+```
+
+### 4.9 Tuple Destructuring
+
+You can bind multiple values at once by destructuring tuples:
+
+```iris
+def get_coords() -> (i64, i64) {
+    (100, 200)
+}
+
+def main() -> i64 {
+    val (x, y) = get_coords();
+    print(concat("X: ", to_str(x)));
+    print(concat("Y: ", to_str(y)));
+    0
+}
+```
+
+### 4.10 Keyword Operators (`and`, `or`, `not`)
+
+In addition to `&&`, `||`, and `!`, IRIS supports readable keyword operators:
+
+```iris
+def eligible(age: i64, registered: bool) -> bool {
+    age >= 18 and registered
+}
+
+def can_enter(has_ticket: bool, is_vip: bool) -> bool {
+    has_ticket or is_vip
+}
+
+def is_minor(age: i64) -> bool {
+    not (age >= 18)
+}
+```
+
 ### Try It Yourself
 
 1. Write a function `is_prime(n: i64) -> bool` using a `for` loop and `break`.
@@ -830,6 +1188,8 @@ def either_positive(x: i64, y: i64) -> bool {
 > - Using `%` for modulo — that is correct in IRIS. Do not look for `mod` keyword.
 
 ---
+
+
 
 ## Chapter 5: Data Structures
 
@@ -1147,6 +1507,110 @@ def main() -> i64 {
 }
 ```
 
+
+### 5.10 Deques
+
+Deques are double-ended queues supporting efficient push/pop at both ends:
+
+```iris
+def deque_demo() -> i64 {
+    val dq = deque_new();
+    deque_push_back(dq, 20);
+    deque_push_front(dq, 10);
+    deque_push_back(dq, 30);
+    
+    print(to_str(deque_pop_front(dq))); // 10
+    print(to_str(deque_pop_back(dq)));  // 30
+    0
+}
+```
+
+### 5.11 BitSets
+
+BitSets provide compact, high-performance bit-array collections:
+
+```iris
+def bitset_demo() -> i64 {
+    val bs = bitset_new();
+    bitset_set(bs, 5, true);
+    bitset_set(bs, 10, true);
+    
+    print(to_str(bitset_get(bs, 5)));   // true
+    print(to_str(bitset_get(bs, 7)));   // false
+    print(to_str(bitset_count(bs)));    // 2
+    0
+}
+```
+
+### 5.12 Mutexes
+
+Mutexes provide thread-safe mutual exclusion for shared state:
+
+```iris
+def mutex_demo() -> i64 {
+    val m = mutex(42);
+    // Lock and modify inside spawn
+    spawn {
+        val val_ref = m; // Reference to same mutex
+        // Locks are managed safely by built-ins
+        0
+    };
+    0
+}
+```
+
+
+### 5.10 Deques
+
+Deques are double-ended queues supporting efficient push/pop at both ends:
+
+```iris
+def deque_demo() -> i64 {
+    val dq = deque_new();
+    deque_push_back(dq, 20);
+    deque_push_front(dq, 10);
+    deque_push_back(dq, 30);
+    
+    print(to_str(deque_pop_front(dq))); // 10
+    print(to_str(deque_pop_back(dq)));  // 30
+    0
+}
+```
+
+### 5.11 BitSets
+
+BitSets provide compact, high-performance bit-array collections:
+
+```iris
+def bitset_demo() -> i64 {
+    val bs = bitset_new();
+    bitset_set(bs, 5, true);
+    bitset_set(bs, 10, true);
+    
+    print(to_str(bitset_get(bs, 5)));   // true
+    print(to_str(bitset_get(bs, 7)));   // false
+    print(to_str(bitset_count(bs)));    // 2
+    0
+}
+```
+
+### 5.12 Mutexes
+
+Mutexes provide thread-safe mutual exclusion for shared state:
+
+```iris
+def mutex_demo() -> i64 {
+    val m = mutex(42);
+    // Lock and modify inside spawn
+    spawn {
+        val val_ref = m; // Reference to same mutex
+        // Locks are managed safely by built-ins
+        0
+    };
+    0
+}
+```
+
 ### Try It Yourself
 
 1. Define a `record Rectangle { width: f64, height: f64 }` and write functions `area(r: Rectangle) -> f64` and `perimeter(r: Rectangle) -> f64`.
@@ -1162,9 +1626,176 @@ def main() -> i64 {
 
 ---
 
-## Chapter 6: Closures and Higher-Order Functions
 
-### 6.1 Closure Syntax
+
+## Chapter 6: Traits and Generics
+
+IRIS features a robust type system that supports traits and generics, allowing for clean code reuse, static polymorphism, and generic programming.
+
+### 6.1 Trait Declarations
+
+A **trait** defines a contract or interface of method signatures that types must satisfy:
+
+```iris
+trait Printable {
+    def to_string(self: Self) -> str
+}
+
+trait Comparable {
+    def compare(self: Self, other: Self) -> i64
+}
+```
+
+The keyword `Self` (capitalized) inside a trait definition represents the type that will implement the trait.
+
+### 6.2 Implementing Traits
+
+Use the `impl` keyword to implement a trait for a concrete record type:
+
+```iris
+record Point {
+    x: f64,
+    y: f64,
+}
+
+impl Printable for Point {
+    def to_string(self: Point) -> str {
+        format("({}, {})", self.x, self.y)
+    }
+}
+```
+
+Once a trait is implemented, its methods can be called on instances of that type:
+
+```iris
+def main() -> i64 {
+    val p = Point { x: 3.5, y: -2.0 };
+    print(p.to_string());
+    0
+}
+```
+
+### 6.3 Generic Functions
+
+Generic functions declare type parameters inside square brackets `[T]`:
+
+```iris
+def identity[T](x: T) -> T {
+    x
+}
+
+def my_max[T](a: T, b: T) -> T {
+    if a >= b { a } else { b }
+}
+```
+
+Generics in IRIS are **monomorphized** at compile time, generating efficient concrete implementations for each type used.
+
+### 6.4 Trait Constraints (`where`)
+
+You can constrain generic parameters using the `where` keyword, enforcing that types must implement specific traits:
+
+```iris
+def print_item[T where T: Printable](x: T) -> i64 {
+    print(x.to_string());
+    0
+}
+```
+
+### Try It Yourself
+
+1. Define a trait `Area` with a method `area(self: Self) -> f64`.
+2. Implement `Area` for `record Circle { radius: f64 }` and `record Rectangle { width: f64, height: f64 }`.
+3. Write a generic function `print_area[T where T: Area](shape: T)` that calls `area` and prints the result.
+
+
+
+## Chapter 7: Traits and Generics
+
+IRIS features a robust type system that supports traits and generics, allowing for clean code reuse, static polymorphism, and generic programming.
+
+### 7.1 Trait Declarations
+
+A **trait** defines a contract or interface of method signatures that types must satisfy:
+
+```iris
+trait Printable {
+    def to_string(self: Self) -> str
+}
+
+trait Comparable {
+    def compare(self: Self, other: Self) -> i64
+}
+```
+
+The keyword `Self` (capitalized) inside a trait definition represents the type that will implement the trait.
+
+### 7.2 Implementing Traits
+
+Use the `impl` keyword to implement a trait for a concrete record type:
+
+```iris
+record Point {
+    x: f64,
+    y: f64,
+}
+
+impl Printable for Point {
+    def to_string(self: Point) -> str {
+        format("({}, {})", self.x, self.y)
+    }
+}
+```
+
+Once a trait is implemented, its methods can be called on instances of that type:
+
+```iris
+def main() -> i64 {
+    val p = Point { x: 3.5, y: -2.0 };
+    print(p.to_string());
+    0
+}
+```
+
+### 7.3 Generic Functions
+
+Generic functions declare type parameters inside square brackets `[T]`:
+
+```iris
+def identity[T](x: T) -> T {
+    x
+}
+
+def my_max[T](a: T, b: T) -> T {
+    if a >= b { a } else { b }
+}
+```
+
+Generics in IRIS are **monomorphized** at compile time, generating efficient concrete implementations for each type used.
+
+### 7.4 Trait Constraints (`where`)
+
+You can constrain generic parameters using the `where` keyword, enforcing that types must implement specific traits:
+
+```iris
+def print_item[T where T: Printable](x: T) -> i64 {
+    print(x.to_string());
+    0
+}
+```
+
+### Try It Yourself
+
+1. Define a trait `Area` with a method `area(self: Self) -> f64`.
+2. Implement `Area` for `record Circle { radius: f64 }` and `record Rectangle { width: f64, height: f64 }`.
+3. Write a generic function `print_area[T where T: Area](shape: T)` that calls `area` and prints the result.
+
+
+
+
+## Chapter 8: Closures and Higher-Order Functions
+
+### 8.1 Closure Syntax
 
 A closure is an anonymous function that can capture values from its surrounding scope. The syntax is `|param: Type| expr`:
 
@@ -1200,7 +1831,7 @@ def main() -> i64 {
 }
 ```
 
-### 6.2 Passing Closures as Arguments
+### 8.2 Passing Closures as Arguments
 
 Closures can be passed to functions using function type notation `(ParamType) -> ReturnType`:
 
@@ -1216,7 +1847,7 @@ def main() -> i64 {
 }
 ```
 
-### 6.3 Implementing Map
+### 8.3 Implementing Map
 
 Here is a `map` operation over a list — applies a function to every element:
 
@@ -1247,7 +1878,7 @@ def main() -> i64 {
 // prints: 2 4 6 8 10
 ```
 
-### 6.4 Implementing Filter
+### 8.4 Implementing Filter
 
 ```iris
 def list_filter(lst: list<i64>, pred: (i64) -> bool) -> list<i64> {
@@ -1282,7 +1913,7 @@ def main() -> i64 {
 // prints: 2 4 6
 ```
 
-### 6.5 Implementing Reduce / Fold
+### 8.5 Implementing Reduce / Fold
 
 ```iris
 def list_reduce(lst: list<i64>, init: i64, f: (i64, i64) -> i64) -> i64 {
@@ -1310,7 +1941,7 @@ def main() -> i64 {
 }
 ```
 
-### 6.6 Capture by Value
+### 8.6 Capture by Value
 
 Closures capture variables from the surrounding scope by value at the point of closure creation:
 
@@ -1330,6 +1961,59 @@ def main() -> i64 {
 
 This is a classic higher-order function pattern — `make_adder` returns a closure that "remembers" the `n` it was created with.
 
+
+### 8.7 Regular Expressions
+
+IRIS features fast, compiled regular expressions built-in:
+
+```iris
+def regex_demo() -> i64 {
+    val text = "Contact us at sales@example.com or support@example.com";
+    val pattern = "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]\\.[a-zA-Z]{2,4}";
+    
+    // Find all matches
+    val emails = regex_find_all(text, pattern);
+    for email in emails {
+        print(email)
+    };
+    
+    // Replace regex match
+    val masked = regex_replace(text, pattern, "[redacted]");
+    print(masked);
+    0
+}
+```
+
+### 8.8 Date and Time
+
+The datetime built-ins provide high-precision system time operations:
+
+```iris
+def datetime_demo() -> i64 {
+    val now = datetime_now();
+    print(concat("Timestamp: ", to_str(datetime_timestamp())));
+    
+    val formatted = datetime_format(now, "%Y-%m-%d %H:%M:%S");
+    print(concat("Formatted: ", formatted));
+    0
+}
+```
+
+### 8.9 Hexadecimal Literals
+
+You can write integer literals in hexadecimal notation using the `0x` prefix:
+
+```iris
+def hex_demo() -> i64 {
+    val red = 0xFF0000;
+    val green = 0x00FF00;
+    val blue = 0x0000FF;
+    
+    print(concat("Red: ", to_str(red))); // 16711680
+    0
+}
+```
+
 ### Try It Yourself
 
 1. Write a `list_any(lst: list<i64>, pred: (i64) -> bool) -> bool` function that returns `true` if any element satisfies the predicate.
@@ -1338,9 +2022,11 @@ This is a classic higher-order function pattern — `make_adder` returns a closu
 
 ---
 
-## Chapter 7: String Processing
 
-### 7.1 String Literals and Escapes
+
+## Chapter 9: String Processing
+
+### 9.1 String Literals and Escapes
 
 String literals are enclosed in double quotes. Escape sequences:
 
@@ -1361,7 +2047,7 @@ def main() -> i64 {
 }
 ```
 
-### 7.2 F-Strings (String Interpolation)
+### 9.2 F-Strings (String Interpolation)
 
 F-strings let you embed expressions directly in strings using `{expr}`:
 
@@ -1379,7 +2065,7 @@ def main() -> i64 {
 
 F-strings automatically convert embedded values to strings.
 
-### 7.3 Built-in String Functions
+### 9.3 Built-in String Functions
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -1401,7 +2087,7 @@ F-strings automatically convert embedded values to strings.
 | `parse_i64(s)` | `str -> option<i64>` | Parse integer |
 | `parse_f64(s)` | `str -> option<f64>` | Parse float |
 
-### 7.4 String Building Patterns
+### 9.4 String Building Patterns
 
 Building a string incrementally by concatenation:
 
@@ -1444,7 +2130,7 @@ def main() -> i64 {
 }
 ```
 
-### 7.5 Working with Split and Join
+### 9.5 Working with Split and Join
 
 Split a CSV line and process fields:
 
@@ -1484,7 +2170,7 @@ def main() -> i64 {
 }
 ```
 
-### 7.6 String Searching
+### 9.6 String Searching
 
 ```iris
 def find_and_extract(text: str, marker: str) -> str {
@@ -1505,6 +2191,59 @@ def main() -> i64 {
 }
 ```
 
+
+### 9.7 Regular Expressions
+
+IRIS features fast, compiled regular expressions built-in:
+
+```iris
+def regex_demo() -> i64 {
+    val text = "Contact us at sales@example.com or support@example.com";
+    val pattern = "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]\\.[a-zA-Z]{2,4}";
+    
+    // Find all matches
+    val emails = regex_find_all(text, pattern);
+    for email in emails {
+        print(email)
+    };
+    
+    // Replace regex match
+    val masked = regex_replace(text, pattern, "[redacted]");
+    print(masked);
+    0
+}
+```
+
+### 9.8 Date and Time
+
+The datetime built-ins provide high-precision system time operations:
+
+```iris
+def datetime_demo() -> i64 {
+    val now = datetime_now();
+    print(concat("Timestamp: ", to_str(datetime_timestamp())));
+    
+    val formatted = datetime_format(now, "%Y-%m-%d %H:%M:%S");
+    print(concat("Formatted: ", formatted));
+    0
+}
+```
+
+### 9.9 Hexadecimal Literals
+
+You can write integer literals in hexadecimal notation using the `0x` prefix:
+
+```iris
+def hex_demo() -> i64 {
+    val red = 0xFF0000;
+    val green = 0x00FF00;
+    val blue = 0x0000FF;
+    
+    print(concat("Red: ", to_str(red))); // 16711680
+    0
+}
+```
+
 ### Try It Yourself
 
 1. Write a function `count_occurrences(text: str, target: str) -> i64` that counts how many times `target` appears in `text`.
@@ -1519,9 +2258,11 @@ def main() -> i64 {
 
 ---
 
-## Chapter 8: Error Handling
 
-### 8.1 The `result<T, E>` Type
+
+## Chapter 10: Error Handling
+
+### 10.1 The `result<T, E>` Type
 
 IRIS uses `result<T, E>` to represent operations that can fail. A result is either:
 
@@ -1530,7 +2271,7 @@ IRIS uses `result<T, E>` to represent operations that can fail. A result is eith
 
 This pattern forces you to explicitly handle both success and failure cases, making errors visible and impossible to ignore accidentally.
 
-### 8.2 Creating and Checking Results
+### 10.2 Creating and Checking Results
 
 ```iris
 def divide(a: f64, b: f64) -> result<f64, str> {
@@ -1559,7 +2300,7 @@ def main() -> i64 {
 }
 ```
 
-### 8.3 The `?` Operator
+### 10.3 The `?` Operator
 
 The `?` operator provides a shorthand for propagating errors. Inside a function that returns `result<T, E>`, writing `expr?` means: if `expr` is `err(e)`, return `err(e)` immediately; if it is `ok(v)`, continue with `v`.
 
@@ -1594,7 +2335,7 @@ def main() -> i64 {
 }
 ```
 
-### 8.4 Pattern Matching Results with `when`
+### 10.4 Pattern Matching Results with `when`
 
 You can use `when` to match on a result and handle both cases expressively:
 
@@ -1608,7 +2349,7 @@ def process_file(path: str) -> str {
 }
 ```
 
-### 8.5 Chaining Operations
+### 10.5 Chaining Operations
 
 Results can be chained when each step depends on the previous success:
 
@@ -1640,7 +2381,7 @@ def main() -> i64 {
 }
 ```
 
-### 8.6 Combining Options and Results
+### 10.6 Combining Options and Results
 
 Options and results often appear together. A common pattern is to convert `option<T>` into `result<T, E>`:
 
@@ -1658,7 +2399,7 @@ def safe_parse(s: str) -> result<i64, str> {
 }
 ```
 
-### 8.7 Panicking with `panic` and `assert`
+### 10.7 Panicking with `panic` and `assert`
 
 For truly unrecoverable situations, use `panic` to abort with a message:
 
@@ -1683,6 +2424,28 @@ def safe_sqrt(x: f64) -> f64 {
 
 `assert(cond)` panics with a generic message if `cond` is false.
 
+
+### 10.7 Async/Await
+
+In addition to threads and channels, IRIS supports async/await for lightweight, cooperative multitasking:
+
+```iris
+async def slow_op() -> i64 {
+    // asynchronous operation
+    42
+}
+
+def main() -> i64 {
+    // Calling async def returns an implicit Future/Promise
+    val future = slow_op();
+    
+    // Await pauses execution until the future is ready
+    val result = await future;
+    print(to_str(result));
+    0
+}
+```
+
 ### Try It Yourself
 
 1. Write a `safe_list_get(lst: list<i64>, i: i64) -> result<i64, str>` that returns an error if the index is out of bounds.
@@ -1691,9 +2454,11 @@ def safe_sqrt(x: f64) -> f64 {
 
 ---
 
-## Chapter 9: Concurrency
 
-### 9.1 Channels
+
+## Chapter 11: Concurrency
+
+### 11.1 Channels
 
 IRIS provides channels for communicating between concurrent tasks. A channel is a typed queue: one task sends values, another receives them.
 
@@ -1709,7 +2474,7 @@ def main() -> i64 {
 
 > **Note:** `channel()` creates an unbuffered, blocking channel. `send` blocks until the receiver is ready; `recv` blocks until a value is available.
 
-### 9.2 Spawning Tasks with `spawn`
+### 11.2 Spawning Tasks with `spawn`
 
 The `spawn` block runs its body as a concurrent task:
 
@@ -1732,7 +2497,7 @@ def main() -> i64 {
 // prints: 0 1 2 3 4
 ```
 
-### 9.3 Parallel For Loops
+### 11.3 Parallel For Loops
 
 `par for` runs loop iterations in parallel using a thread pool:
 
@@ -1756,13 +2521,13 @@ def main() -> i64 {
 
 > **Note:** `par for` is ideal for embarrassingly parallel workloads where iterations do not depend on each other. The order of execution is not guaranteed.
 
-### 9.4 Atomics: Thread-Safe Counters
+### 11.4 Atomics: Thread-Safe Counters
 
 When multiple concurrent tasks share a value, use atomics to avoid data races:
 
 ```iris
 def main() -> i64 {
-    val counter = atomic_new(0);
+    val counter = atomic(0);
 
     par for i in 0..2000 {
         atomic_add(counter, 1)
@@ -1778,12 +2543,12 @@ Atomic operations:
 
 | Function | Description |
 |----------|-------------|
-| `atomic_new(v)` | Create an atomic with initial value `v` |
+| `atomic(v)` | Create an atomic with initial value `v` |
 | `atomic_load(a)` | Read the current value |
 | `atomic_store(a, v)` | Write a new value |
 | `atomic_add(a, v)` | Atomically add `v` and return the new value |
 
-### 9.5 Producer-Consumer Pattern
+### 11.5 Producer-Consumer Pattern
 
 A classic concurrency pattern where one task produces work and another consumes it:
 
@@ -1813,7 +2578,7 @@ def main() -> i64 {
 }
 ```
 
-### 9.6 Time Functions
+### 11.6 Time Functions
 
 For timing and delays:
 
@@ -1832,6 +2597,54 @@ def main() -> i64 {
 
 `sleep_ms(ms)` suspends the current task for the given milliseconds.
 
+
+### 11.7 Async/Await
+
+In addition to threads and channels, IRIS supports async/await for lightweight, cooperative multitasking:
+
+```iris
+async def slow_op() -> i64 {
+    // asynchronous operation
+    42
+}
+
+def main() -> i64 {
+    // Calling async def returns an implicit Future/Promise
+    val future = slow_op();
+    
+    // Await pauses execution until the future is ready
+    val result = await future;
+    print(to_str(result));
+    0
+}
+```
+
+
+### 11.5 Reverse-Mode Automatic Differentiation
+
+For models with thousands of inputs, IRIS provides highly optimized reverse-mode AD (backpropagation) using a taped execution graph:
+
+```iris
+def main() -> i64 {
+    // 1. Initialize variables on the AD tape
+    val x = grad(2.0);
+    val y = grad(3.0);
+    
+    // 2. Perform forward pass
+    val z = (x * x) + (x * y);
+    
+    // 3. Compute gradients backwards
+    backward(z);
+    
+    // 4. Retrieve gradients
+    print(concat("dz/dx: ", to_str(grad_of(x)))); // 2*x + y = 7
+    print(concat("dz/dy: ", to_str(grad_of(y)))); // x = 2
+    0
+}
+```
+
+This tape-based backpropagation integrates natively with IRIS ML and Tensor subsystems to enable deep learning workflows.
+
 ### Try It Yourself
 
 1. Write a program that uses `spawn` and a channel to compute the sum of a large list in two halves concurrently.
@@ -1840,9 +2653,11 @@ def main() -> i64 {
 
 ---
 
-## Chapter 10: Automatic Differentiation
 
-### 10.1 Dual Numbers with `grad`
+
+## Chapter 12: Automatic Differentiation
+
+### 12.1 Dual Numbers with `grad`
 
 IRIS has built-in support for forward-mode automatic differentiation. The `grad_of` function computes the derivative of a closure at a given point:
 
@@ -1857,7 +2672,7 @@ def main() -> i64 {
 
 `grad_of` takes a closure `(f32) -> f32` and a point, and returns the derivative as `f32`.
 
-### 10.2 Computing Gradients
+### 12.2 Computing Gradients
 
 The power of `grad_of` comes from computing derivatives automatically through any computation built from `f32` operations:
 
@@ -1887,7 +2702,7 @@ def main() -> i64 {
 }
 ```
 
-### 10.3 Simple Gradient Descent
+### 12.3 Simple Gradient Descent
 
 Gradient descent uses derivatives to minimize a function. Here we minimize `f(x) = (x - 3)^2`, which has minimum at `x = 3`:
 
@@ -1918,7 +2733,7 @@ def main() -> i64 {
 }
 ```
 
-### 10.4 Neural Network Gradient Descent
+### 12.4 Neural Network Gradient Descent
 
 A more realistic example — linear regression with gradient descent:
 
@@ -1974,6 +2789,55 @@ def main() -> i64 {
 }
 ```
 
+
+### 12.5 Reverse-Mode Automatic Differentiation
+
+For models with thousands of inputs, IRIS provides highly optimized reverse-mode AD (backpropagation) using a taped execution graph:
+
+```iris
+def main() -> i64 {
+    // 1. Initialize variables on the AD tape
+    val x = grad(2.0);
+    val y = grad(3.0);
+    
+    // 2. Perform forward pass
+    val z = (x * x) + (x * y);
+    
+    // 3. Compute gradients backwards
+    backward(z);
+    
+    // 4. Retrieve gradients
+    print(concat("dz/dx: ", to_str(grad_of(x)))); // 2*x + y = 7
+    print(concat("dz/dy: ", to_str(grad_of(y)))); // x = 2
+    0
+}
+```
+
+This tape-based backpropagation integrates natively with IRIS ML and Tensor subsystems to enable deep learning workflows.
+
+
+### 12.9 Model DSL (Neural Network Architectures)
+
+The declarative **Model DSL** simplifies deep learning model definitions:
+
+```iris
+model MLP {
+    input x: tensor<f32, [batch, 784]>
+    layer h1 Linear(x, in_features=784, out_features=128)
+    layer a1 ReLU(h1)
+    layer h2 Linear(a1, in_features=128, out_features=10)
+    output h2
+}
+```
+
+This model is compiled to highly efficient vector/SIMD instructions and exposes standard weights and biases for training.
+
+### 12.10 Machine Learning Stdlib Modules (`std.ml`, `std.rl`, `std.nn`)
+
+- **`std.nn`**: Offers high-level layers (Linear, Conv2D, RNN), activations (Softmax, Sigmoid), loss functions (CrossEntropy, MSE), and optimizers (SGD, Adam).
+- **`std.ml`**: Traditional ML algorithms (k-Means, Gaussian Naive Bayes, k-NN, Linear/Logistic Regression).
+- **`std.rl`**: Reinforcement learning framework featuring FIFO replay buffers, experience sampling, stable clipped PPO objectives, and GAE value baselines.
+
 ### Try It Yourself
 
 1. Use the gradient descent framework to minimize `f(x) = x^4 - 4*x^2`. Find both minima by starting from different initial points.
@@ -1981,9 +2845,11 @@ def main() -> i64 {
 
 ---
 
-## Chapter 11: Tensors and ML
 
-### 11.1 Tensor Types
+
+## Chapter 13: Tensors and ML
+
+### 13.1 Tensor Types
 
 Tensors are the primary data structure for ML workloads. The type `tensor<f32, [M, K]>` describes a 2D tensor with `M` rows and `K` columns:
 
@@ -2000,7 +2866,7 @@ Tensor dimensions can be:
 - **Integer literals**: `[3, 3]` — fixed size
 - **Symbolic names**: `[M, K]` — size known at runtime, tracked symbolically
 
-### 11.2 The `einsum` Intrinsic
+### 13.2 The `einsum` Intrinsic
 
 Einstein summation notation provides a concise way to express tensor contractions. The first argument must be a string literal describing the operation:
 
@@ -2035,7 +2901,7 @@ Common einsum patterns:
 | `"ij->i"` | Row sum |
 | `"ij->j"` | Column sum |
 
-### 11.3 Building a Neural Network Layer
+### 13.3 Building a Neural Network Layer
 
 A linear (dense) layer computes `output = input @ weights + bias`:
 
@@ -2054,7 +2920,7 @@ def linear_forward(
 }
 ```
 
-### 11.4 Activation Functions
+### 13.4 Activation Functions
 
 Activation functions are applied element-wise using built-in tensor operations:
 
@@ -2077,7 +2943,7 @@ def tanh_act(x: tensor<f32, [N]>) -> tensor<f32, [N]> {
 
 > **Note:** In practice, IRIS applies activation functions via runtime kernels. The `einsum` identity pass-through shown here demonstrates the type signatures. The compiler recognizes well-known activation patterns and emits optimized code.
 
-### 11.5 A Simple Training Loop
+### 13.5 A Simple Training Loop
 
 Putting it together with a minimal training loop structure:
 
@@ -2101,7 +2967,7 @@ def forward(mdl: MLP, x: tensor<f32, [IN]>) -> tensor<f32, [OUT]> {
 
 > **Note:** In practice, training a neural network in IRIS involves loading data, computing losses, and applying gradient updates. The `einsum` operations form the computational graph; gradient computation can be done via the `grad` mechanism described in chapter 10 or via numerical finite differences.
 
-### 11.6 Sparse Tensors
+### 13.6 Sparse Tensors
 
 For data with many zero values, IRIS supports sparse representations:
 
@@ -2115,13 +2981,36 @@ def process_sparse(data: tensor<f32, [N]>) -> i64 {
 
 Sparse tensors save memory and speed up operations when the data is predominantly zero (e.g., embeddings, adjacency matrices).
 
+
+### 13.9 Model DSL (Neural Network Architectures)
+
+The declarative **Model DSL** simplifies deep learning model definitions:
+
+```iris
+model MLP {
+    input x: tensor<f32, [batch, 784]>
+    layer h1 Linear(x, in_features=784, out_features=128)
+    layer a1 ReLU(h1)
+    layer h2 Linear(a1, in_features=128, out_features=10)
+    output h2
+}
+```
+
+This model is compiled to highly efficient vector/SIMD instructions and exposes standard weights and biases for training.
+
+### 13.10 Machine Learning Stdlib Modules (`std.ml`, `std.rl`, `std.nn`)
+
+- **`std.nn`**: Offers high-level layers (Linear, Conv2D, RNN), activations (Softmax, Sigmoid), loss functions (CrossEntropy, MSE), and optimizers (SGD, Adam).
+- **`std.ml`**: Traditional ML algorithms (k-Means, Gaussian Naive Bayes, k-NN, Linear/Logistic Regression).
+- **`std.rl`**: Reinforcement learning framework featuring FIFO replay buffers, experience sampling, stable clipped PPO objectives, and GAE value baselines.
+
 ### Try It Yourself
 
 1. Write a function `softmax(x: tensor<f32, [N]>) -> tensor<f32, [N]>` that computes the softmax of a vector. (Hint: compute exp of each element, then divide by the sum.)
 2. Write a function to compute the Frobenius norm of a matrix (square root of sum of squared elements) using `einsum`.
 3. Design a three-layer MLP record type and write its `forward` function.
 
-### 11.7 Native Neural Networks (`std.nn`)
+### 13.7 Native Neural Networks (`std.nn`)
 
 IRIS provides a native neural network library (`std.nn`) that enables training models directly without Python.
 
@@ -2133,7 +3022,7 @@ val model = nn.mlp_create([784, 128, 10])
 nn.mlp_train_adam(model, inputs, targets, 0.001, 10, 32)
 ```
 
-### 11.8 External Model Inference (ONNX)
+### 13.8 External Model Inference (ONNX)
 
 For production deployment, you can run pre-trained ONNX models natively:
 
@@ -2145,9 +3034,11 @@ val result = ml.onnx_run(session, [input_tensor])
 
 ---
 
-## Chapter 12: Native Compilation
 
-### 12.1 Building a Native Binary
+
+## Chapter 14: Native Compilation
+
+### 14.1 Building a Native Binary
 
 The `iris build` command compiles your IRIS source to a native executable:
 
@@ -2167,7 +3058,7 @@ Or use `iris run` which compiles and runs in one step:
 iris run myapp.iris
 ```
 
-### 12.2 How the Compiler Pipeline Works
+### 14.2 How the Compiler Pipeline Works
 
 When you run `iris build`, the following steps happen:
 
@@ -2190,7 +3081,7 @@ iris --emit ir myapp.iris        # print IRIS IR
 iris --emit llvm myapp.iris      # print LLVM IR text
 ```
 
-### 12.3 Inspecting LLVM IR
+### 14.3 Inspecting LLVM IR
 
 The `--emit llvm` flag prints the LLVM IR that will be compiled:
 
@@ -2200,7 +3091,7 @@ iris --emit llvm hello.iris
 
 This is useful for debugging performance issues or understanding what the compiler generates.
 
-### 12.4 Calling C Libraries with `extern`
+### 14.4 Calling C Libraries with `extern`
 
 IRIS can call C functions using `extern def` declarations:
 
@@ -2231,7 +3122,7 @@ def compute_power() -> i64 {
 }
 ```
 
-### 12.5 The C Runtime
+### 14.5 The C Runtime
 
 IRIS programs link against a small C runtime (`iris_runtime.c`) that provides:
 
@@ -2243,7 +3134,7 @@ IRIS programs link against a small C runtime (`iris_runtime.c`) that provides:
 
 You do not need to manage memory manually — the runtime handles allocation and a reference-counting scheme for heap objects.
 
-### 12.6 Performance Tips
+### 14.6 Performance Tips
 
 **Use fixed arrays for hot data paths**: `[T; N]` arrays are allocated on the stack and have no overhead. `list<T>` involves heap allocation.
 
@@ -2284,7 +3175,9 @@ def benchmark() -> i64 {
 
 ---
 
-## Chapter 13: The Standard Library
+
+
+## Chapter 15: The Standard Library
 
 IRIS ships with a standard library of `.iris` files that you can bring into your programs. Use the `bring` statement at the top of your file:
 
@@ -2295,7 +3188,7 @@ bring std.fmt
 bring std.fs
 ```
 
-### 13.1 `std.math` — Extended Math Functions
+### 15.1 `std.math` — Extended Math Functions
 
 ```iris
 bring std.math
@@ -2325,7 +3218,7 @@ Available functions from `std.math`:
 | `is_even(n)` | True if n is divisible by 2 |
 | `is_odd(n)` | True if n is not divisible by 2 |
 
-### 13.2 `std.string` — String Utilities
+### 15.2 `std.string` — String Utilities
 
 ```iris
 bring std.string
@@ -2358,7 +3251,7 @@ Available functions from `std.string`:
 | `is_empty(s)` | True if `len(s) == 0` |
 | `str_repeat(s, n)` | Repeat string `n` times |
 
-### 13.3 `std.fmt` — Formatting
+### 15.3 `std.fmt` — Formatting
 
 The `fmt` module provides printf-style string formatting:
 
@@ -2396,7 +3289,7 @@ Available functions from `std.fmt`:
 
 Format specifiers: `%d`, `%s`, `%f`, `%g`, `%x`, `%i`, `%%` (literal `%`), with optional width (`%5d`), zero-padding (`%05d`), left-align (`%-8s`), and precision (`%.3f`).
 
-### 13.4 `std.fs` — File System
+### 15.4 `std.fs` — File System
 
 ```iris
 bring std.fs
@@ -2437,7 +3330,7 @@ Available functions from `std.fs`:
 | `path_exists(path)` | Check if file or directory exists |
 | `read_lines(path)` | Read file as `list<str>` of lines |
 
-### 13.5 `std.json` — JSON
+### 15.5 `std.json` — JSON
 
 ```iris
 bring std.json
@@ -2445,14 +3338,14 @@ bring std.json
 def main() -> i64 {
     val obj = json_object();
     json_set(obj, "name", "IRIS");
-    json_set(obj, "version", "0.2.0");
+    json_set(obj, "version", "0.6.0");
     val s = json_emit(obj);
-    print(s);   // {"name": "IRIS", "version": "0.2.0"}
+    print(s);   // {"name": "IRIS", "version": "0.6.0"}
     0
 }
 ```
 
-### 13.6 `std.csv` — CSV
+### 15.6 `std.csv` — CSV
 
 ```iris
 bring std.csv
@@ -2467,7 +3360,7 @@ def main() -> i64 {
 }
 ```
 
-### 13.7 `std.crypto` — Cryptography & Hashing
+### 15.7 `std.crypto` — Cryptography & Hashing
 
 ```iris
 bring std.crypto
@@ -2483,7 +3376,7 @@ def main() -> i64 {
 }
 ```
 
-### 13.8 `std.ffi` — Foreign Function Interface (C, Python, Rust)
+### 15.8 `std.ffi` — Foreign Function Interface (C, Python, Rust)
 
 ```iris
 bring std.ffi
@@ -2505,7 +3398,7 @@ def main() -> i64 {
 }
 ```
 
-### 13.9 `std.os` — Operating System
+### 15.9 `std.os` — Operating System
 
 ```iris
 bring std.os
@@ -2519,7 +3412,7 @@ def main() -> i64 {
 }
 ```
 
-### 13.10 `std.testing` — Testing
+### 15.10 `std.testing` — Testing
 
 ```iris
 bring std.testing
@@ -2532,7 +3425,7 @@ def test_addition() -> i64 {
 }
 ```
 
-### 13.11 `std.log` — Logging
+### 15.11 `std.log` — Logging
 
 ```iris
 bring std.log
@@ -2545,7 +3438,7 @@ def main() -> i64 {
 }
 ```
 
-### 13.12 Remaining Standard Library Modules
+### 15.12 Remaining Standard Library Modules
 
 IRIS ships with 25 stdlib modules total. Additional modules include:
 
@@ -2566,25 +3459,40 @@ IRIS ships with 25 stdlib modules total. Additional modules include:
 | `std.async` | Async runtime helpers |
 | `std.bitset` | Bit array operations |
 
-### 13.13 `std.svg` & `std.termplot` — Visualizations
+### 15.13 `std.svg` & `std.termplot` — Visualizations
 
-IRIS provides native visualization modules:
+The `std.svg` module provides a simple, structured API to generate vector graphics:
 
-- **`std.svg`**: Generates scalable vector graphics.
-  ```rust
-  bring std.svg
-  val canvas = svg.svg_new(800, 600)
-  svg.svg_rect(canvas, 10, 10, 100, 100, "red")
-  svg.svg_save(canvas, "plot.svg")
-  ```
+```iris
+bring std.svg
 
-- **`std.termplot`**: Renders ASCII terminal charts.
-  ```rust
-  bring std.termplot
-  termplot.term_plot_bar("Loss", values, 50)
-  ```
+def generate_chart() -> i64 {
+    val canvas = svg.canvas(800, 600);
+    svg.rect(canvas, 50, 50, 700, 500, "fill: white; stroke: black; stroke-width: 2");
+    svg.circle(canvas, 400, 300, 150, "fill: blue; opacity: 0.5");
+    svg.text(canvas, 400, 80, "IRIS Standard Visualization", "font-size: 24px; text-anchor: middle");
+    svg.save(canvas, "chart.svg");
+    0
+}
+```
 
-### 13.14 Using `bring` in the REPL
+The `std.termplot` module provides instant inline charts directly in your terminal output:
+
+```iris
+bring std.termplot
+
+def plot_live() -> i64 {
+    val data = list();
+    push(data, 1.2); push(data, 2.5); push(data, 3.1);
+    push(data, 2.0); push(data, 4.5); push(data, 5.0);
+    
+    // Plots a clean Unicode line chart
+    termplot.line(data, "Performance Profile");
+    0
+}
+```
+
+### 15.14 Using `bring` in the REPL
 
 In the REPL, use `:bring` to load a stdlib module:
 
@@ -2594,6 +3502,28 @@ loaded: std.math
 >> gcd(48, 18)
 6
 ```
+
+
+### 15.7 Subcommands & Tooling Suite
+
+IRIS ships with a comprehensive set of developer utilities built directly into the main `iris` compiler binary:
+
+- **`iris test`**: Automated test discovery and execution. Scans code for `@test` decorators or `test_` prefixed functions. Support test filtering:
+  ```bash
+  iris test --filter math
+  ```
+- **`iris bench`**: Benchmarking harness. Executes functions tagged with `@bench` multiple times to measure average runtime and memory allocation.
+- **`iris profile`**: Runs a program and generates a performance flame graph:
+  ```bash
+  iris profile main.iris
+  ```
+- **`iris explain`**: Interactive error and diagnostic catalog. Explains compilation and runtime diagnostic codes with common causes and fixes:
+  ```bash
+  iris explain E4
+  ```
+- **`iris fmt`**: Self-contained code formatter. Rewrites `.iris` files to standard, idiomatic layouts.
+- **`iris lint`**: Linter that analyzes code structures for performance and naming style issues.
+- **`iris doc`**: Automatically extracts doc comments and generates Markdown/HTML API documentation.
 
 ### Try It Yourself
 
@@ -2605,9 +3535,11 @@ loaded: std.math
 
 ---
 
-## Chapter 14: Tooling
 
-### 14.1 The REPL in Depth
+
+## Chapter 16: Tooling
+
+### 16.1 The REPL in Depth
 
 The IRIS REPL is a persistent interactive session. It supports multi-line input when you open a brace:
 
@@ -2724,7 +3656,7 @@ session cleared
 
 `:quit` / `:q` — Exit the REPL (also Ctrl+D or Ctrl+C).
 
-### 14.2 LSP Features
+### 16.2 LSP Features
 
 The IRIS Language Server Protocol implementation provides a rich editing experience in any LSP-compatible editor. Start the server with:
 
@@ -2796,7 +3728,7 @@ Every error and warning carries a diagnostic code for quick reference:
 
 See [Appendix E](#appendix-e-compiler-error-reference) for detailed descriptions and fixes.
 
-### 14.3 The Step Debugger (DAP)
+### 16.3 The Step Debugger (DAP)
 
 IRIS implements the Debug Adapter Protocol (DAP), which integrates with VS Code's debugging panel and other compatible debuggers.
 
@@ -2826,14 +3758,14 @@ From VS Code with the IRIS extension, press F5 to start a debugging session.
 - **Loaded sources**: View which source files the debugger has loaded via the "Loaded Sources" panel.
 - **Exception info**: When a runtime error occurs, the debugger reports exception details including the error description and break mode so you can inspect the program state at the point of failure.
 
-### 14.4 The VS Code Extension
+### 16.4 The VS Code Extension
 
 The official IRIS VS Code extension (`iris-lang`) bundles the LSP client, DAP client, and additional editor features.
 
 #### Installation
 
 ```
-code --install-extension iris-lang-0.2.0.vsix
+code --install-extension iris-lang-0.6.0.vsix
 ```
 
 Or install from the Extensions panel in VS Code by searching for "IRIS Language".
@@ -2860,7 +3792,7 @@ Or install from the Extensions panel in VS Code by searching for "IRIS Language"
 | `iris.enableInlayHints` | `true` | Show inline type annotations |
 | `iris.maxDiagnostics` | `100` | Maximum number of diagnostics per file |
 
-### 14.6 IR Inspection
+### 16.6 IR Inspection
 
 The `--emit` flag controls what the compiler outputs instead of running the program:
 
@@ -2887,7 +3819,7 @@ This is useful for:
 - Debugging unexpected behavior
 - Learning how the compiler works
 
-### 14.5 Optimization Passes
+### 16.5 Optimization Passes
 
 The compiler runs a pipeline of optimization passes. You can see the IR after each pass with `--dump-ir-after`:
 
@@ -2905,6 +3837,28 @@ Pass pipeline:
 6. **CsePass** — Common subexpression elimination (deduplicates repeated computations)
 7. **ShapeCheckPass** — Tensor shape consistency and einsum notation validation
 
+
+### 16.7 Subcommands & Tooling Suite
+
+IRIS ships with a comprehensive set of developer utilities built directly into the main `iris` compiler binary:
+
+- **`iris test`**: Automated test discovery and execution. Scans code for `@test` decorators or `test_` prefixed functions. Support test filtering:
+  ```bash
+  iris test --filter math
+  ```
+- **`iris bench`**: Benchmarking harness. Executes functions tagged with `@bench` multiple times to measure average runtime and memory allocation.
+- **`iris profile`**: Runs a program and generates a performance flame graph:
+  ```bash
+  iris profile main.iris
+  ```
+- **`iris explain`**: Interactive error and diagnostic catalog. Explains compilation and runtime diagnostic codes with common causes and fixes:
+  ```bash
+  iris explain E4
+  ```
+- **`iris fmt`**: Self-contained code formatter. Rewrites `.iris` files to standard, idiomatic layouts.
+- **`iris lint`**: Linter that analyzes code structures for performance and naming style issues.
+- **`iris doc`**: Automatically extracts doc comments and generates Markdown/HTML API documentation.
+
 ### Try It Yourself
 
 1. Open the REPL and experiment with `:type` to learn what type various expressions have.
@@ -2913,9 +3867,73 @@ Pass pipeline:
 
 ---
 
-## Chapter 15: Building Real Programs
 
-### 15.1 Project Layout
+
+## Chapter 17: Package Manager
+
+IRIS includes a production-grade package manager and build tool built directly into the CLI as the `iris pkg` subcommand.
+
+### 17.1 Initializing a Project
+
+Create a new structured IRIS package with:
+
+```bash
+iris pkg init my_project
+```
+
+This creates the standard project layout:
+```text
+my_project/
+├── iris.toml     # Manifest file
+├── iris.lock     # Lockfile (generated on build)
+└── src/
+    └── main.iris # Entry point
+```
+
+### 17.2 The `iris.toml` Manifest
+
+The manifest defines package metadata and third-party dependencies:
+
+```toml
+[package]
+name = "my_project"
+version = "0.6.0"
+authors = ["Moon9t"]
+
+[dependencies]
+http_utils = { git = "https://github.com/iris-lang/http_utils.git", tag = "v1.2.0" }
+json_helper = { path = "../json_helper" }
+```
+
+### 17.3 Managing Dependencies
+
+Add dependencies easily using the CLI:
+
+```bash
+iris pkg add http_utils --git https://github.com/iris-lang/http_utils.git
+```
+
+This automatically downloads, validates, and adds the dependency to your `iris.toml`. 
+
+### 17.4 Package Subcommands
+
+- **`iris pkg build`**: Resolves dependencies, compiles them, and builds the current package.
+- **`iris pkg run`**: Compiles and runs the package entry point.
+- **`iris pkg update`**: Updates lockfile and checks for newer compatible dependency versions.
+- **`iris pkg list`**: Lists all active project dependencies.
+- **`iris pkg check`**: Rapidly parses and checks package types without full compilation.
+
+### Try It Yourself
+
+1. Run `iris pkg init calc_project` to initialize a new package.
+2. Edit `iris.toml` to set yourself as the author.
+3. Build and run it using `iris pkg run`.
+
+
+
+## Chapter 18: Building Real Programs
+
+### 18.1 Project Layout
 
 A typical IRIS project looks like this:
 
@@ -2931,13 +3949,13 @@ myproject/
     myproject.exe      # compiled binary
 ```
 
-IRIS does not have a built-in build system or package manager. You build from the entry point:
+IRIS includes a robust built-in package manager called `iris pkg`. You build from the entry point:
 
 ```
 iris build src/main.iris -o out/myproject.exe
 ```
 
-### 15.2 Multi-File Programs with `bring`
+### 18.2 Multi-File Programs with `bring`
 
 The `bring` statement imports another IRIS file. All `pub def` functions from that file become available:
 
@@ -2967,7 +3985,7 @@ Only `pub def` functions are exported. Private helpers stay private to their fil
 
 > **Note:** ALL helper functions in a file that you want to use from other files must be `pub def`.
 
-### 15.3 Writing a Command-Line Tool
+### 18.3 Writing a Command-Line Tool
 
 A number-guessing game as a complete command-line program:
 
@@ -3003,7 +4021,7 @@ def main() -> i64 {
 }
 ```
 
-### 15.4 Writing a Word-Count Tool
+### 18.4 Writing a Word-Count Tool
 
 A more practical command-line tool — counting words in a file:
 
@@ -3050,7 +4068,7 @@ iris build wc.iris -o wc.exe
 wc.exe myfile.txt
 ```
 
-### 15.5 A Simple TCP Echo Server
+### 18.5 A Simple TCP Echo Server
 
 IRIS has built-in TCP networking:
 
@@ -3086,7 +4104,7 @@ def main() -> i64 {
 
 Connect to test it with `telnet localhost 8080` or `nc localhost 8080`.
 
-### 15.6 Performance Profiling
+### 18.6 Performance Profiling
 
 Use `time_now_ms()` to build simple profiling wrappers:
 
@@ -3130,7 +4148,7 @@ def fib_iter(n: i64) -> i64 {
 }
 ```
 
-### 15.7 A Key-Value Store Server
+### 18.7 A Key-Value Store Server
 
 A simple in-memory key-value store served over TCP:
 
@@ -3209,11 +4227,76 @@ def main() -> i64 {
 
 ---
 
-## Chapter 16: Working with Databases
+
+
+## Chapter 19: Package Manager
+
+IRIS includes a production-grade package manager and build tool built directly into the CLI as the `iris pkg` subcommand.
+
+### 19.1 Initializing a Project
+
+Create a new structured IRIS package with:
+
+```bash
+iris pkg init my_project
+```
+
+This creates the standard project layout:
+```text
+my_project/
+├── iris.toml     # Manifest file
+├── iris.lock     # Lockfile (generated on build)
+└── src/
+    └── main.iris # Entry point
+```
+
+### 19.2 The `iris.toml` Manifest
+
+The manifest defines package metadata and third-party dependencies:
+
+```toml
+[package]
+name = "my_project"
+version = "0.6.0"
+authors = ["Moon9t"]
+
+[dependencies]
+http_utils = { git = "https://github.com/iris-lang/http_utils.git", tag = "v1.2.0" }
+json_helper = { path = "../json_helper" }
+```
+
+### 19.3 Managing Dependencies
+
+Add dependencies easily using the CLI:
+
+```bash
+iris pkg add http_utils --git https://github.com/iris-lang/http_utils.git
+```
+
+This automatically downloads, validates, and adds the dependency to your `iris.toml`. 
+
+### 19.4 Package Subcommands
+
+- **`iris pkg build`**: Resolves dependencies, compiles them, and builds the current package.
+- **`iris pkg run`**: Compiles and runs the package entry point.
+- **`iris pkg update`**: Updates lockfile and checks for newer compatible dependency versions.
+- **`iris pkg list`**: Lists all active project dependencies.
+- **`iris pkg check`**: Rapidly parses and checks package types without full compilation.
+
+### Try It Yourself
+
+1. Run `iris pkg init calc_project` to initialize a new package.
+2. Edit `iris.toml` to set yourself as the author.
+3. Build and run it using `iris pkg run`.
+
+
+
+
+## Chapter 20: Working with Databases
 
 IRIS includes built-in support for **SQLite** databases. You can create, query, and manage local databases without importing any libraries — the four database builtins are part of the language.
 
-### 16.1 The Database API
+### 20.1 The Database API
 
 | Function | Signature | Description |
 | -------- | --------- | ----------- |
@@ -3224,7 +4307,7 @@ IRIS includes built-in support for **SQLite** databases. You can create, query, 
 
 All values returned by `db_query` are strings — you convert to numbers with `to_i64()` or `to_f64()` as needed.
 
-### 16.2 Creating a Database and Table
+### 20.2 Creating a Database and Table
 
 ```iris
 def main() -> i64 {
@@ -3237,7 +4320,7 @@ def main() -> i64 {
 
 If the file `app.db` does not exist, `db_open` creates it automatically. The handle is an opaque integer — pass it to every subsequent database call.
 
-### 16.3 Inserting Data
+### 20.3 Inserting Data
 
 ```iris
 def main() -> i64 {
@@ -3253,7 +4336,7 @@ def main() -> i64 {
 
 Each `db_exec` call runs a single SQL statement. Check the return value: 0 means success, -1 means the statement failed.
 
-### 16.4 Querying Data
+### 20.4 Querying Data
 
 ```iris
 def main() -> i64 {
@@ -3276,7 +4359,7 @@ def main() -> i64 {
 
 `db_query` returns a `list<list<str>>`. Each inner list is one row. Column values are always strings — use `to_i64()` or `to_f64()` if you need numeric types.
 
-### 16.5 Parameterized Queries
+### 20.5 Parameterized Queries
 
 Use `db_exec_params` and `db_query_params` when values should be bound separately from the SQL text.
 
@@ -3301,7 +4384,7 @@ def main() -> i64 {
 
 The `std.sql` module also exposes `sql_exec_params`, `sql_query_params`, and `sql_query_xy_params` as thin wrappers over the same builtins.
 
-### 16.6 Updating and Deleting
+### 20.6 Updating and Deleting
 
 ```iris
 def main() -> i64 {
@@ -3316,7 +4399,7 @@ def main() -> i64 {
 
 UPDATE and DELETE are executed with `db_exec` just like INSERT and CREATE.
 
-### 16.7 Error Handling
+### 20.7 Error Handling
 
 Always check the return value of `db_exec`:
 
@@ -3333,7 +4416,7 @@ def main() -> i64 {
 
 If `db_open` fails (e.g. invalid path), it returns 0. Always verify the handle before using it.
 
-### 16.8 A Complete Example: Task Manager
+### 20.8 A Complete Example: Task Manager
 
 Here is a small task-management database that creates a table, inserts tasks, marks one complete, and queries the results:
 
@@ -3359,13 +4442,36 @@ def main() -> i64 {
 }
 ```
 
-### 16.8 Best Practices
+### 20.8 Best Practices
 
 - **Always close** the database handle with `db_close` when you are finished.
 - **Use `IF NOT EXISTS`** on CREATE TABLE so your program can run more than once.
 - **Check return codes** from `db_exec` — a return of -1 indicates an error.
 - **Delete or clean up** test databases after use (`db_exec(db, "DROP TABLE ...")` or delete the file).
 - **All query values are strings** — convert with `to_i64()` or `to_f64()` when needed.
+
+
+### 20.11 UDP Networking
+
+For low-latency communication, IRIS features high-performance UDP socket support:
+
+```iris
+def udp_demo() -> i64 {
+    // Open a UDP socket bound to local port 8080
+    val socket = udp_open("127.0.0.1:8080");
+    
+    // Send a datagram
+    udp_send(socket, "127.0.0.1:8081", "Ping");
+    
+    // Receive a datagram (blocks until received)
+    val result = udp_recv(socket);
+    print(concat("From: ", result.0)); // Sender address
+    print(concat("Data: ", result.1)); // Payload
+    
+    udp_close(socket);
+    0
+}
+```
 
 ### Try It Yourself
 
@@ -3375,1290 +4481,335 @@ def main() -> i64 {
 
 ---
 
-## Chapter 17: Foreign Function Interface
 
-IRIS provides foreign function interfaces (FFI) to C, Python, and Rust. This lets you call into existing native libraries, leverage the Python ecosystem, or reuse Rust cdylib crates from IRIS code.
 
-### 17.1 C FFI
+## Chapter 21: Security & Sandboxing
 
-The C FFI uses dynamic library loading (dlopen/LoadLibrary) and symbol lookup (dlsym/GetProcAddress):
+IRIS provides enterprise-grade runtime sandboxing capabilities to execute untrusted code safely.
 
-```iris
-bring std.ffi
+### 21.1 The Sandbox Flag
 
-def main() -> i64 {
-    // Open a shared library
-    val lib = ffi_open("libm.so");       // Linux: libm.so, macOS: libm.dylib, Windows: msvcrt.dll
+By running the compiler with the `--sandbox` flag, the IRIS C runtime restricts access to operating system capabilities:
 
-    // Call typed functions
-    val sq = ffi_call_f64(lib, "sqrt", 144.0);    // sqrt(144.0) → 12.0
-    print(to_str(sq));
-
-    val result = ffi_call_i64(lib, "abs", -42);   // abs(-42) → 42
-    print(to_str(result));
-
-    // Void calls (no return value)
-    ffi_call_void(lib, "srand", 12345);
-
-    // Close when done
-    ffi_close(lib);
-    0
-}
+```bash
+iris run --sandbox untrusted_script.iris
 ```
 
-**Available C FFI functions:**
+### 21.2 Restricted Operations
 
-| Function | Description |
-|----------|-------------|
-| `ffi_open(path)` | Open a shared library, returns handle |
-| `ffi_call(lib, fn_name, ...)` | Call a function (generic) |
-| `ffi_call_i64(lib, fn_name, ...)` | Call function returning `i64` |
-| `ffi_call_f64(lib, fn_name, ...)` | Call function returning `f64` |
-| `ffi_call_str(lib, fn_name, ...)` | Call function returning `str` |
-| `ffi_call_void(lib, fn_name, ...)` | Call function returning void |
-| `ffi_close(lib)` | Close a library handle |
+When running in sandbox mode, the following operations are strictly blocked and cause an immediate runtime panic:
 
-### 17.2 Python FFI
+- **Filesystem**: File read/write operations outside designated whitelist directories are rejected.
+- **Networking**: Unauthorized outbound TCP/UDP connections or inbound listening sockets are denied.
+- **Processes**: System command execution (`exec_cmd`, `pid`) is blocked.
+- **FFI**: Foreign Function Interface modules (`std.ffi`, `ffi_open`) are disabled to prevent bypassing sandbox rules.
 
-The Python FFI runs Python expressions and scripts via a subprocess. Python 3 must be installed and in PATH:
+### 21.3 Customizing Whitelists
 
-```iris
-bring std.ffi
+You can grant selective access to resources using sandbox flags:
 
-def main() -> i64 {
-    // Check Python availability
-    val ver = python_version();
-    print(ver);   // "Python 3.12.1"
-
-    // Evaluate an expression — returns the printed output
-    val result = python_eval("2 ** 100");
-    print(result);   // 1267650600228229401496703205376
-
-    // Execute a multi-line script
-    python_exec("import math; print(math.factorial(20))");
-
-    // Call a function in a Python file
-    val out = python_call("my_script.py", "compute", "42");
-    print(out);
-    0
-}
+```bash
+iris run --sandbox --allow-read ./data/ --allow-net api.example.com script.iris
 ```
-
-**Available Python FFI functions:**
-
-| Function | Description |
-|----------|-------------|
-| `python_eval(expr)` | Evaluate a Python expression, return output as `str` |
-| `python_exec(code)` | Execute Python code (no return) |
-| `python_call(file, func, arg)` | Call a function in a Python file |
-| `python_version()` | Return the Python version string |
-
-You can also evaluate arbitrary Python strings natively within IRIS:
-
-```rust
-bring std.ffi
-val result = ffi.py_eval("'Hello ' + 'World!'")
-```
-
-### 17.3 Rust FFI
-
-Calling Rust code works the same as C FFI — Rust `cdylib` crates export `extern "C"` functions that can be loaded dynamically:
-
-```rust
-// In Rust: lib.rs (cargo build produces mylib.dll / libmylib.so)
-#[no_mangle]
-pub extern "C" fn compute(x: i64) -> i64 {
-    x * x + 1
-}
-```
-
-```iris
-bring std.ffi
-
-def main() -> i64 {
-    val lib = rust_lib_open("target/release/mylib.dll");
-    val result = rust_call_i64(lib, "compute", 7);
-    print(to_str(result));   // 50
-    0
-}
-```
-
-**Available Rust FFI functions:**
-
-| Function | Description |
-|----------|-------------|
-| `rust_lib_open(path)` | Open a Rust cdylib (same as `ffi_open`) |
-| `rust_call_i64(lib, fn, ...)` | Call function returning `i64` |
-| `rust_call_f64(lib, fn, ...)` | Call function returning `f64` |
-| `rust_call_void(lib, fn, ...)` | Call void function |
 
 ### Try It Yourself
 
-1. Use C FFI to call `strlen` from the C standard library on a string.
-2. Use Python FFI to evaluate a NumPy expression that computes a matrix multiplication.
-3. Create a small Rust cdylib crate and call one of its functions from IRIS.
+1. Write a script `test_sec.iris` that attempts to read `/etc/passwd` or `C:\\Windows\\system.ini`.
+2. Run it without flags: `iris run test_sec.iris`.
+3. Run it with the sandbox flag: `iris run --sandbox test_sec.iris` and observe the sandbox denial panic.
 
----
 
-## Chapter 18: Networking
-
-IRIS includes built-in TCP and HTTP networking functions, making it straightforward to write clients, servers, and web-facing applications without any external dependencies.
-
-### 18.1 TCP Fundamentals
-
-IRIS exposes six core TCP functions that map directly to the BSD socket model:
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `tcp_listen(port)` | `i64 -> i64` | Bind to a port and listen for connections. Returns a listener handle (or `-1` on error). |
-| `tcp_accept(listener)` | `i64 -> i64` | Accept an incoming connection. Returns a connection handle (or `-1` on error). |
-| `tcp_connect(host, port)` | `(str, i64) -> i64` | Connect to a remote server. Returns a connection handle (or `-1` on error). |
-| `tcp_read(conn)` | `i64 -> str` | Read data from a connection. Returns the data as a string (empty string on EOF). |
-| `tcp_write(conn, data)` | `(i64, str) -> i64` | Write data to a connection. Returns `0`. |
-| `tcp_close(handle)` | `i64 -> i64` | Close a connection or listener. Returns `0`. |
-
-All handles are integer file descriptors managed by the runtime. Always close handles when you're done to avoid resource leaks.
-
-### 18.2 Writing a TCP Server
-
-Here's a simple echo server that accepts a single connection and echoes back whatever the client sends:
-
-```iris
-def handle_client(conn: i64) -> i64 {
-    var running = true;
-    while running {
-        val data = tcp_read(conn);
-        if len(data) == 0 {
-            running = false
-        } else {
-            tcp_write(conn, concat("echo: ", concat(data, "\n")))
-        }
-    }
-    tcp_close(conn);
-    0
-}
-
-def main() -> i64 {
-    val listener = tcp_listen(8080);
-    if listener == -1 {
-        print("Error: could not bind to port 8080");
-        return 1;
-    };
-    print("Server listening on port 8080...");
-
-    val conn = tcp_accept(listener);
-    if conn == -1 {
-        print("Error: failed to accept connection");
-        tcp_close(listener);
-        return 1;
-    };
-    print("Client connected");
-    handle_client(conn);
-
-    tcp_close(listener);
-    0
-}
-```
-
-Test it by running:
-
-```bash
-iris run echo_server.iris &
-echo "Hello, IRIS!" | nc localhost 8080
-```
-
-### 18.3 Writing a TCP Client
-
-Connecting to a remote server is equally simple:
-
-```iris
-def main() -> i64 {
-    val conn = tcp_connect("example.com", 80);
-    if conn == -1 {
-        print("Error: could not connect");
-        return 1;
-    };
-
-    // Send an HTTP GET request manually
-    tcp_write(conn, "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n");
-
-    // Read and print the response
-    var done = false;
-    while !done {
-        val chunk = tcp_read(conn);
-        if len(chunk) == 0 {
-            done = true
-        } else {
-            print(chunk)
-        }
-    }
-
-    tcp_close(conn);
-    0
-}
-```
-
-### 18.4 Multi-Client Server
-
-To handle multiple clients, accept connections in a loop:
-
-```iris
-def handle_client(conn: i64) -> i64 {
-    val greeting = "Welcome to IRIS server!\n";
-    tcp_write(conn, greeting);
-
-    var running = true;
-    while running {
-        val line = tcp_read(conn);
-        if len(line) == 0 {
-            running = false
-        } else {
-            if trim(line) == "quit" {
-                tcp_write(conn, "Goodbye!\n");
-                running = false
-            } else {
-                val response = concat("You said: ", concat(line, "\n"));
-                tcp_write(conn, response)
-            }
-        }
-    }
-    tcp_close(conn);
-    0
-}
-
-def main() -> i64 {
-    val listener = tcp_listen(9000);
-    print("Chat server listening on port 9000...");
-
-    // Accept clients in a loop
-    var count = 0;
-    while count < 10 {
-        val conn = tcp_accept(listener);
-        print(f"Client {count + 1} connected");
-        handle_client(conn);
-        count = count + 1
-    }
-
-    tcp_close(listener);
-    0
-}
-```
-
-> **Note:** This server handles clients sequentially. For true concurrent handling, combine with IRIS's `spawn` and concurrency primitives from [Chapter 9](#chapter-9-concurrency).
-
-### 18.5 HTTP with Built-in Functions
-
-For simple HTTP operations, IRIS provides two high-level built-in functions:
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `http_get(url)` | `str -> str` | Perform an HTTP GET request. Returns the raw response body. |
-| `http_post(url, body)` | `(str, str) -> str` | Perform an HTTP POST request. Returns the raw response body. |
-
-These functions handle DNS resolution, TCP connection, TLS, and HTTP framing internally:
-
-```iris
-def main() -> i64 {
-    // Simple GET request
-    val response = http_get("https://httpbin.org/get");
-    print("GET response:");
-    print(response);
-
-    // POST request with a JSON body
-    val body = "{\"name\": \"iris\", \"version\": \"0.2.0\"}";
-    val post_response = http_post("https://httpbin.org/post", body);
-    print("POST response:");
-    print(post_response);
-    0
-}
-```
-
-### 18.6 The HTTP Standard Library
-
-For more control over HTTP messages — building custom requests, parsing responses, extracting headers — IRIS ships with the `http` standard library module:
-
-```iris
-bring std.http
-```
-
-This module provides pure-IRIS functions for HTTP message construction and parsing:
-
-#### Building Requests
-
-```iris
-bring std.http
-
-def main() -> i64 {
-    // Build a GET request string
-    val req = http_get_request("api.example.com", "/users");
-    print(req);
-    // Output:
-    // GET /users HTTP/1.1
-    // Host: api.example.com
-    //
-    //
-
-    // Build a POST request with a body
-    val post_req = http_post_request("api.example.com", "/data", "{\"key\":\"value\"}");
-    print(post_req);
-    0
-}
-```
-
-#### Parsing Responses
-
-```iris
-bring std.http
-
-def main() -> i64 {
-    val raw = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 13\r\n\r\n{\"ok\": true}";
-
-    val status = http_status_code(raw);
-    print(f"Status: {status}");
-    // Output: Status: 200
-
-    val content_type = http_header(raw, "Content-Type");
-    print(f"Content-Type: {content_type}");
-    // Output: Content-Type: application/json
-
-    val body = http_body(raw);
-    print(f"Body: {body}");
-    // Output: Body: {"ok": true}
-    0
-}
-```
-
-#### Full HTTP Client with TCP
-
-Combine TCP and the HTTP stdlib for complete control:
-
-```iris
-bring std.http
-
-def http_fetch(host: str, path: str) -> str {
-    val conn = tcp_connect(host, 80);
-    if conn == -1 {
-        return "Error: connection failed";
-    };
-
-    val request = http_get_request(host, path);
-    tcp_write(conn, request);
-
-    // Read the full response
-    var response = "";
-    var done = false;
-    while !done {
-        val chunk = tcp_read(conn);
-        if len(chunk) == 0 {
-            done = true
-        } else {
-            response = concat(response, chunk)
-        }
-    }
-    tcp_close(conn);
-    response
-}
-
-def main() -> i64 {
-    val raw_response = http_fetch("example.com", "/");
-    val status = http_status_code(raw_response);
-    val body = http_body(raw_response);
-
-    val body_len = len(body);
-    print(f"Status: {status}");
-    print(f"Body length: {body_len} bytes");
-    print(body);
-    0
-}
-```
-
-### 18.7 Building a Simple Web Server
-
-Here's a minimal HTTP server that responds to GET requests:
-
-```iris
-bring std.http
-
-def serve_request(conn: i64) -> i64 {
-    val raw = tcp_read(conn);
-    if len(raw) == 0 {
-        tcp_close(conn);
-        return 0;
-    };
-
-    val method = http_request_method(raw);
-    val path = http_request_path(raw);
-    print(f"{method} {path}");
-
-    val body = if path == "/" {
-        "<h1>Welcome to IRIS!</h1><p>A fast, expressive programming language.</p>"
-    } else {
-        if path == "/api/status" {
-            "{\"status\": \"ok\", \"version\": \"0.2.0\"}"
-        } else {
-            "<h1>404 Not Found</h1>"
-        }
-    };
-
-    val status = if path == "/" or path == "/api/status" { 200 } else { 404 };
-    val status_text = if status == 200 { "OK" } else { "Not Found" };
-    val response = http_response(status, status_text, body);
-    tcp_write(conn, response);
-    tcp_close(conn);
-    0
-}
-
-def main() -> i64 {
-    val listener = tcp_listen(3000);
-    if listener == -1 {
-        print("Error: could not bind to port 3000");
-        return 1;
-    };
-    print("HTTP server listening on http://localhost:3000");
-
-    var running = true;
-    while running {
-        val conn = tcp_accept(listener);
-        if conn != -1 {
-            serve_request(conn)
-        }
-    }
-
-    tcp_close(listener);
-    0
-}
-```
-
-Test it with:
-
-```bash
-iris run web_server.iris &
-curl http://localhost:3000/
-curl http://localhost:3000/api/status
-```
-
-### 18.8 Combining HTTP and JSON
-
-IRIS's `json_parse` and `json_stringify` builtins pair naturally with HTTP for building REST-style services:
-
-```iris
-bring std.http
-
-def api_handler(conn: i64) -> i64 {
-    val raw = tcp_read(conn);
-    if len(raw) == 0 {
-        tcp_close(conn);
-        return 0;
-    };
-
-    val method = http_request_method(raw);
-    val path = http_request_path(raw);
-
-    val response_body = if method == "GET" && path == "/api/greeting" {
-        val data = map();
-        map_set(data, "message", "Hello from IRIS!");
-        map_set(data, "timestamp", to_str(time_now_ms()));
-        json_stringify(data)
-    } else {
-        if method == "POST" && path == "/api/echo" {
-            val body = http_body(raw);
-            val parsed = json_parse(body);
-            json_stringify(parsed)
-        } else {
-            "{\"error\": \"not found\"}"
-        }
-    };
-
-    val status = if contains(response_body, "error") { 404 } else { 200 };
-    val status_text = if status == 200 { "OK" } else { "Not Found" };
-    val response = http_response(status, status_text, response_body);
-    tcp_write(conn, response);
-    tcp_close(conn);
-    0
-}
-
-def main() -> i64 {
-    val listener = tcp_listen(3001);
-    print("JSON API server on http://localhost:3001");
-
-    var i = 0;
-    while i < 100 {
-        val conn = tcp_accept(listener);
-        if conn != -1 {
-            api_handler(conn)
-        }
-        i = i + 1
-    }
-
-    tcp_close(listener);
-    0
-}
-```
-
-### 18.9 Error Handling Patterns
-
-Network operations can fail. Always check return values:
-
-```iris
-def safe_connect(host: str, port: i64) -> i64 {
-    val conn = tcp_connect(host, port);
-    if conn == -1 {
-        print(f"Error: could not connect to {host}:{port}");
-        return -1;
-    };
-    print(f"Connected to {host}:{port}");
-    conn
-}
-
-def safe_read_all(conn: i64) -> str {
-    var buf = "";
-    var done = false;
-    while !done {
-        val chunk = tcp_read(conn);
-        if len(chunk) == 0 {
-            done = true
-        } else {
-            buf = concat(buf, chunk)
-        }
-    }
-    buf
-}
-
-def main() -> i64 {
-    val conn = safe_connect("example.com", 80);
-    if conn == -1 {
-        return 1;
-    };
-
-    tcp_write(conn, "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n");
-    val response = safe_read_all(conn);
-    val resp_len = len(response);
-    print(f"Received {resp_len} bytes");
-    tcp_close(conn);
-    0
-}
-```
-
-### 18.10 HTTP Standard Library Reference
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `http_get_request(host, path)` | `(str, str) -> str` | Build a GET request string |
-| `http_post_request(host, path, body)` | `(str, str, str) -> str` | Build a POST request string with Content-Length |
-| `http_response(status, text, body)` | `(i64, str, str) -> str` | Build an HTTP response string |
-| `http_request_method(raw)` | `str -> str` | Extract the method from a raw request |
-| `http_request_path(raw)` | `str -> str` | Extract the path from a raw request |
-| `http_body(raw)` | `str -> str` | Extract the body from a raw HTTP message |
-| `http_status_code(raw)` | `str -> i64` | Extract the status code from a raw response |
-| `http_header(raw, name)` | `(str, str) -> str` | Extract a header value by name |
-
-### Try It Yourself
-
-1. Write a TCP chat server that broadcasts messages to all connected clients.
-2. Build an HTTP file server that serves files from the current directory.
-3. Create a REST API with `GET`, `POST`, and `DELETE` endpoints using JSON.
-4. Write an HTTP client that downloads a web page and counts the number of links.
-
----
 
 ## Appendix A: Language Grammar (BNF)
 
-The following is an informal BNF grammar for IRIS. `*` means zero or more, `?` means optional, `|` means alternative.
-
 ```bnf
-module      ::= item*
-item        ::= def_item | record_def | choice_def | const_def
-              | type_alias | extern_def | bring_stmt | trait_def | impl_def
+module      ::= { top_level }
+top_level   ::= function_def
+              | record_def
+              | enum_def
+              | const_def
+              | type_alias
+              | trait_def
+              | impl_def
+              | bring_decl
+              | extern_def
+              | model_def
 
-bring_stmt  ::= "bring" bring_path
-bring_path  ::= IDENT ("." IDENT)*
+bring_decl  ::= "bring" bring_path
+bring_path  ::= IDENT { "." IDENT }
+              | STRING_LIT
 
-const_def   ::= "const" IDENT ":" type "=" expr
+function_def ::= [ "pub" ] [ "async" ] "def" IDENT [ type_params ] "(" params ")" "->" type block
+type_params  ::= "[" IDENT { "," IDENT } "]"
+params       ::= [ param { "," param } ]
+param        ::= IDENT ":" type [ "=" expr ]
 
-type_alias  ::= "type" IDENT "=" type
-
-extern_def  ::= "extern" "def" IDENT "(" param_list ")" "->" type
-
-def_item    ::= ("pub")? ("async")? "def" IDENT "(" param_list ")" "->" type block
-param_list  ::= (param ("," param)*)?
-param       ::= IDENT ":" type ("=" expr)?
-
-record_def  ::= "record" IDENT "{" (field_def ("," field_def)*)? "}"
+record_def  ::= [ "pub" ] "record" IDENT "{" field_defs "}"
+field_defs  ::= field_def { "," field_def }
 field_def   ::= IDENT ":" type
 
-choice_def  ::= "choice" IDENT "{" (variant ("," variant)*)? "}"
-variant     ::= IDENT ("(" type ")")?
+enum_def    ::= [ "pub" ] "choice" IDENT "{" variant_defs "}"
+variant_defs ::= variant_def { "," variant_def }
+variant_def  ::= IDENT [ "(" type { "," type } ")" ]
 
-block       ::= "{" stmt* expr? "}"
-stmt        ::= ("val" | "var") IDENT (":" type)? "=" expr ";"
+const_def   ::= [ "pub" ] "const" IDENT [ ":" type ] "=" expr
+
+type_alias  ::= [ "pub" ] "type" IDENT "=" type
+
+trait_def   ::= "trait" IDENT "{" { trait_method } "}"
+trait_method ::= "def" IDENT "(" params ")" "->" type
+
+impl_def    ::= "impl" IDENT "for" IDENT "{" { function_def } "}"
+
+extern_def  ::= "extern" "def" IDENT "(" params ")" "->" type
+
+model_def   ::= "model" IDENT "{" { model_item } "}"
+model_item  ::= "input" IDENT ":" type
+              | "layer" IDENT IDENT [ "(" layer_args ")" ]
+              | "output" IDENT
+layer_args  ::= layer_arg { "," layer_arg }
+layer_arg   ::= IDENT "=" expr | IDENT
+
+(* Statements *)
+block       ::= "{" { stmt } [ expr ] "}"
+stmt        ::= let_stmt
+              | assign_stmt
+              | while_stmt
+              | loop_stmt
+              | for_stmt
+              | par_for_stmt
+              | spawn_stmt
+              | return_stmt
+              | break_stmt
+              | continue_stmt
               | expr ";"
 
-expr        ::= logic_expr ("to" type)?
-              | "return" expr ";"
-              | closure_expr
+let_stmt    ::= "val" IDENT [ ":" type ] "=" expr ";"
+              | "var" IDENT [ ":" type ] "=" expr ";"
+              | "val" "(" IDENT { "," IDENT } ")" "=" expr ";"
+assign_stmt ::= expr "=" expr ";"
+while_stmt  ::= "while" expr block
+loop_stmt   ::= "loop" block
+for_stmt    ::= "for" IDENT "in" expr ".." expr block
+              | "for" IDENT "in" expr block
+par_for_stmt ::= "par" "for" IDENT "in" expr ".." expr block
+spawn_stmt  ::= "spawn" block
+return_stmt ::= "return" [ expr ] ";"
+break_stmt  ::= "break" ";"
+continue_stmt ::= "continue" ";"
 
-logic_expr  ::= cmp_expr (("&&" | "||") cmp_expr)*
-cmp_expr    ::= add_expr (("==" | "!=" | "<" | "<=" | ">" | ">=") add_expr)*
-add_expr    ::= mul_expr (("+" | "-") mul_expr)*
-mul_expr    ::= unary_expr (("*" | "/" | "%") unary_expr)*
-unary_expr  ::= ("-" | "!") unary_expr | postfix_expr
-postfix_expr ::= primary ("." field_or_index | "[" expr "]" | "(" arg_list ")" | "?" )*
+(* Expressions — from lowest to highest precedence *)
+expr        ::= or_expr
+or_expr     ::= and_expr { "||" and_expr }
+and_expr    ::= cmp_expr { "&&" cmp_expr }
+cmp_expr    ::= add_expr { ( "==" | "!=" | "<" | "<=" | ">" | ">=" ) add_expr }
+add_expr    ::= mul_expr { ( "+" | "-" ) mul_expr }
+mul_expr    ::= cast_expr { ( "*" | "/" | "%" ) cast_expr }
+cast_expr   ::= unary_expr [ "to" type ]
+unary_expr  ::= [ "-" | "!" ] postfix_expr
+postfix_expr ::= primary { "." IDENT [ "(" args ")" ] | "." INT_LIT | "[" args "]" | "?" }
 
-primary     ::= INT_LIT | FLOAT_LIT | BOOL_LIT | STRING_LIT | FSTRING_LIT
-              | "none" | "true" | "false"
-              | IDENT ("(" arg_list ")")?
-              | "(" expr ("," expr)* ")"          // tuple or grouped expr
-              | "[" expr ("," expr)* "]"           // array literal
-              | "if" expr block "else" block       // if expression
-              | "when" expr "{" when_arm* "}"      // pattern match
-              | "loop" block
-              | "while" expr block
-              | "for" IDENT "in" expr ".." expr block
-              | "par" "for" IDENT "in" expr ".." expr block
-              | "spawn" block
+primary     ::= INT_LIT
+              | FLOAT_LIT
+              | BOOL_LIT
+              | STRING_LIT
+              | FSTRING_LIT
+              | IDENT [ "::" IDENT ] [ "(" args ")" ]
+              | IDENT "{" field_inits "}"
+              | "(" expr { "," expr } ")"
+              | "[" [ expr { "," expr } ] "]"
+              | "|" params "|" expr
+              | "if" expr block [ "else" block ]
+              | "when" expr "{" when_arms "}"
               | "await" expr
               | block
 
-closure_expr ::= "|" (closure_param ("," closure_param)*)? "|" (expr | block)
-closure_param ::= IDENT ":" type
+args        ::= [ expr { "," expr } ]
+field_inits ::= [ IDENT ":" expr { "," IDENT ":" expr } ]
 
-when_arm    ::= pattern "=>" expr ","?
-pattern     ::= IDENT "." IDENT                    // enum variant
-              | IDENT "." IDENT "(" IDENT ")"      // variant with binding
-              | "ok" "(" IDENT ")"                 // result ok
-              | "err" "(" IDENT ")"                // result err
+when_arms   ::= when_arm { "," when_arm }
+when_arm    ::= pattern [ "if" expr ] "=>" expr
+pattern     ::= IDENT "." IDENT [ "(" bindings ")" ]
+              | "some" "(" IDENT ")"
+              | "none"
+              | "ok" "(" IDENT ")"
+              | "err" "(" IDENT ")"
+              | INT_LIT [ "..=" INT_LIT ]
+              | BOOL_LIT
+              | STRING_LIT
+              | "(" pattern { "," pattern } ")"
+              | "_"
+bindings    ::= [ IDENT { "," IDENT } ]
 
-type        ::= "i64" | "i32" | "f64" | "f32" | "bool" | "str"
-              | "tensor" "<" scalar_type "," "[" dim_list "]" ">"
+(* Types *)
+type        ::= scalar_type
+              | "tensor" "<" scalar_type "," "[" dims "]" ">"
               | "option" "<" type ">"
               | "result" "<" type "," type ">"
+              | "channel" "<" type ">"
+              | "atomic" "<" type ">"
+              | "mutex" "<" type ">"
+              | "grad" "<" type ">"
+              | "sparse" "<" type ">"
               | "list" "<" type ">"
               | "map" "<" type "," type ">"
-              | "channel" "<" type ">"
-              | "(" type ("," type)* ")"            // tuple type
-              | "[" type ";" INT_LIT "]"            // array type
-              | "(" (type ("," type)*)? ")" "->" type  // function type
-              | IDENT                               // named type or alias
+              | "[" type ";" INT_LIT "]"
+              | "(" type { "," type } ")"
+              | "(" [ type { "," type } ] ")" "->" type
+              | IDENT  (* named struct/enum/alias *)
 
-arg_list    ::= (expr ("," expr)*)?
-dim_list    ::= (dim ("," dim)*)?
+scalar_type ::= "i8" | "u8" | "i32" | "u32" | "i64" | "u64" | "usize"
+              | "f32" | "f64" | "bool" | "str"
+
+dims        ::= dim { "," dim }
 dim         ::= INT_LIT | IDENT
 ```
 
----
 
 ## Appendix B: Built-in Functions Reference
 
-### Math
+IRIS provides a complete catalog of built-in functions available globally in all modules without any imports:
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `sin(x)` | `f32 -> f32` | Sine |
-| `cos(x)` | `f32 -> f32` | Cosine |
-| `tan(x)` | `f32 -> f32` | Tangent |
-| `exp(x)` | `f32 -> f32` | e^x |
-| `log(x)` | `f32 -> f32` | Natural logarithm |
-| `log2(x)` | `f32 -> f32` | Base-2 logarithm |
-| `sqrt(x)` | `f32 -> f32` | Square root |
-| `abs(x)` | `f32 -> f32` | Absolute value |
-| `floor(x)` | `f32 -> f32` | Floor |
-| `ceil(x)` | `f32 -> f32` | Ceiling |
-| `round(x)` | `f32 -> f32` | Round to nearest |
-| `sign(x)` | `f32 -> f32` | -1, 0, or 1 |
-| `pow(base, exp)` | `(f32, f32) -> f32` | Power |
-| `min(a, b)` | `(f32, f32) -> f32` | Minimum |
-| `max(a, b)` | `(f32, f32) -> f32` | Maximum |
-| `clamp(x, lo, hi)` | `(f32, f32, f32) -> f32` | Clamp to range |
+### Math
+`sin`, `cos`, `tan`, `exp`, `log`, `log2`, `sqrt`, `abs`, `floor`, `ceil`, `round`, `sign`, `pow`, `min`, `max`, `clamp`, `math_pi`, `math_e`, `math_inf`, `is_nan`, `is_inf`
 
 ### String
+`len`, `concat`, `contains`, `starts_with`, `ends_with`, `to_upper`, `to_lower`, `trim`, `repeat`, `to_str`, `format`, `split`, `join`, `find`, `slice`, `str_index`, `str_replace`, `str_reverse`, `char_at`, `str_pad_left`, `str_pad_right`, `str_chars`, `str_bytes`, `str_count`
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `len(s)` | `str -> i64` | Byte length |
-| `concat(a, b)` | `(str, str) -> str` | Concatenate |
-| `contains(s, sub)` | `(str, str) -> bool` | Substring test |
-| `starts_with(s, p)` | `(str, str) -> bool` | Prefix test |
-| `ends_with(s, p)` | `(str, str) -> bool` | Suffix test |
-| `to_upper(s)` | `str -> str` | Uppercase |
-| `to_lower(s)` | `str -> str` | Lowercase |
-| `trim(s)` | `str -> str` | Strip whitespace |
-| `repeat(s, n)` | `(str, i64) -> str` | Repeat `n` times |
-| `to_str(v)` | `T -> str` | Convert to string |
-| `split(s, d)` | `(str, str) -> list<str>` | Split by delimiter |
-| `join(lst, d)` | `(list<str>, str) -> str` | Join with delimiter |
-| `slice(s, a, b)` | `(str, i64, i64) -> str` | Substring `[a, b)` |
-| `find(s, sub)` | `(str, str) -> option<i64>` | First occurrence index |
-| `str_replace(s, a, b)` | `(str, str, str) -> str` | Replace all occurrences |
-| `parse_i64(s)` | `str -> option<i64>` | Parse integer |
-| `parse_f64(s)` | `str -> option<f64>` | Parse float |
+### Bitwise
+`band(a, b)`, `bor(a, b)`, `bxor(a, b)`, `shl(a, n)`, `shr(a, n)`, `bitnot(a)`
 
 ### I/O
+`print`, `read_line`, `read_i64`, `read_f64`
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `print(v)` | `T -> ()` | Print to stdout with newline |
-| `read_line()` | `() -> str` | Read line from stdin |
-| `read_i64()` | `() -> i64` | Read and parse integer from stdin |
-| `read_f64()` | `() -> f64` | Read and parse float from stdin |
+### Collections
+- **List**: `list`, `push`, `pop`, `list_get`, `list_set`, `list_len`, `list_pop`, `list_map`, `list_filter`, `list_reduce`, `list_any`, `list_all`, `list_zip`, `list_enumerate`, `list_flatten`, `list_unique`, `list_reverse`, `list_sorted`, `list_sum`, `list_min`, `list_max`
+- **Map**: `map`, `map_get`, `map_set`, `map_contains`, `map_remove`, `map_keys`, `map_values`, `map_len`
+- **Deque**: `deque_new`, `deque_push_front`, `deque_push_back`, `deque_pop_front`, `deque_pop_back`, `deque_len`, `deque_front`, `deque_back`
+- **BitSet**: `bitset_new`, `bitset_set`, `bitset_get`, `bitset_count`, `bitset_clear`
 
-### List
+### Reference Cells
+`cell(v)`, `cell_get(c)`, `cell_set(c, v)`
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `list()` | `() -> list<i64>` | New empty list |
-| `list<T>()` | `() -> list<T>` | New empty typed list |
-| `push(lst, v)` | `(list<T>, T) -> ()` | Append element |
-| `list_pop(lst)` | `list<T> -> T` | Remove and return last element |
-| `list_len(lst)` | `list<T> -> i64` | Number of elements |
-| `list_get(lst, i)` | `(list<T>, i64) -> T` | Get by index (panics if OOB) |
-| `list_set(lst, i, v)` | `(list<T>, i64, T) -> ()` | Set by index |
-| `list_contains(lst, v)` | `(list<T>, T) -> bool` | Membership test |
-| `list_sort(lst)` | `list<T> -> ()` | Sort in-place |
-| `list_concat(a, b)` | `(list<T>, list<T>) -> list<T>` | Concatenate two lists |
-| `list_slice(lst, a, b)` | `(list<T>, i64, i64) -> list<T>` | Slice `[a, b)` |
+### Option & Result
+`some`, `none`, `is_some`, `unwrap`, `ok`, `err`, `is_ok`, `is_err`
 
-### Map
+### Parsing & Regex
+`parse_i64`, `parse_f64`, `json_stringify`, `regex_match`, `regex_find_all`, `regex_replace`
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `map<K,V>()` | `() -> map<K,V>` | New empty map |
-| `map_set(m, k, v)` | Side effect | Insert/update |
-| `map_get(m, k)` | `option<V>` | Lookup |
-| `map_contains(m, k)` | `bool` | Key exists? |
-| `map_remove(m, k)` | Side effect | Remove key |
-| `map_len(m)` | `i64` | Number of entries |
-| `map_keys(m)` | `list<str>` | All keys |
-| `map_values(m)` | `list<V>` | All values |
+### Concurrency
+`channel`, `send`, `recv`, `spawn`, `chan_try_recv`, `chan_len`, `select`, `timeout`, `thread_count`, `atomic`, `atomic_load`, `atomic_store`, `atomic_add`
 
-### Option
+### Date & Time
+`datetime_now`, `datetime_timestamp`, `datetime_format`
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `some(v)` | `T -> option<T>` | Wrap in Some |
-| `none` | `option<T>` | Absent value |
-| `is_some(opt)` | `option<T> -> bool` | Has value? |
-| `unwrap(opt)` | `option<T> -> T` | Extract (panics on none) |
+### OS & System
+`cwd`, `list_dir`, `mkdir`, `remove_file`, `path_join`, `env_get`, `env_set`, `exec_cmd`, `pid`, `exit_code`, `type_of`
 
-### Result
+### Random & Cryptography
+`random`, `random_range`, `uuid`, `sha256`, `hash`, `hex_encode`, `hex_decode`, `base64_encode`, `base64_decode`
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `ok(v)` | `T -> result<T,E>` | Success value |
-| `err(e)` | `E -> result<T,E>` | Error value |
-| `is_ok(r)` | `result<T,E> -> bool` | Is success? |
-| `unwrap(r)` | `result<T,E> -> T` | Extract ok (panics on err) |
+### TCP & UDP Networking
+`tcp_connect`, `tcp_listen`, `tcp_accept`, `tcp_read`, `tcp_write`, `tcp_close`, `udp_open`, `udp_send`, `udp_recv`, `udp_close`
 
-### Channel / Concurrency
+### Terminal Controls
+`read_key`, `read_password`, `term_clear`, `term_cursor`, `term_show_cursor`, `term_set_color`, `term_reset`, `term_rows`, `term_cols`
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `channel()` | `() -> channel<i64>` | New channel |
-| `send(ch, v)` | Side effect | Send value |
-| `recv(ch)` | `channel<T> -> T` | Receive value |
-| `atomic_new(v)` | `T -> atomic<T>` | New atomic |
-| `atomic_load(a)` | `atomic<T> -> T` | Read atomically |
-| `atomic_store(a, v)` | Side effect | Write atomically |
-| `atomic_add(a, v)` | `(atomic<T>, T) -> T` | Add and return new value |
-
-### Time
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `time_now_ms()` | `() -> i64` | Current time in milliseconds since epoch |
-| `sleep_ms(ms)` | `i64 -> i64` | Sleep for `ms` milliseconds |
-
-### File I/O
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `file_read_all(path)` | `str -> result<str, str>` | Read file |
-| `file_write_all(path, content)` | `(str, str) -> result<(), str>` | Write file |
-| `file_exists(path)` | `str -> bool` | Check existence |
-| `file_lines(path)` | `str -> list<str>` | Read lines |
-
-### Process
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `process_args()` | `() -> list<str>` | Command-line arguments |
-| `env_var(name)` | `str -> option<str>` | Environment variable |
-| `process_exit(code)` | `i64 -> ()` | Exit with code |
-
-### TCP Networking
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `tcp_listen(port)` | `i64 -> i64` | Bind and listen, returns fd |
-| `tcp_accept(fd)` | `i64 -> i64` | Accept connection, returns connection fd |
-| `tcp_connect(host, port)` | `(str, i64) -> i64` | Connect to server |
-| `tcp_read(fd)` | `i64 -> str` | Read a line |
-| `tcp_write(fd, data)` | Side effect | Write data |
-| `tcp_close(fd)` | Side effect | Close connection |
-
-### Database (SQLite)
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `db_open(path)` | `str -> i64` | Open (or create) a SQLite database, returns handle |
-| `db_exec(db, sql)` | `(i64, str) -> i64` | Execute SQL (CREATE/INSERT/UPDATE/DELETE). Returns 0 on success, -1 on error |
-| `db_query(db, sql)` | `(i64, str) -> list<list<str>>` | Execute SELECT query. Returns rows of string columns |
-| `db_close(db)` | `i64 -> i64` | Close database handle. Returns 0 |
-
-### Control
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `panic(msg)` | `str -> !` | Abort with message |
-| `assert(cond)` | `bool -> ()` | Assert (panics if false) |
-
----
 
 ## Appendix C: Type System Reference
 
 ### Scalar Types
-
-| Type | Size | Range |
-|------|------|-------|
-| `i64` | 8 bytes | -2^63 to 2^63-1 |
-| `i32` | 4 bytes | -2^31 to 2^31-1 |
-| `f64` | 8 bytes | IEEE 754 double |
-| `f32` | 4 bytes | IEEE 754 single |
-| `bool` | 1 byte | `true` or `false` |
-| `str` | heap | UTF-8 string |
+- **Integers**: `i8` (8-bit signed), `u8` (8-bit unsigned), `i32` (32-bit signed), `u32` (32-bit unsigned), `i64` (64-bit signed), `u64` (64-bit unsigned), `usize` (pointer-sized unsigned)
+- **Floats**: `f32` (32-bit single precision), `f64` (64-bit double precision)
+- **Booleans**: `bool` (`true`, `false`)
+- **Strings**: `str` (UTF-8 immutable sequence)
 
 ### Composite Types
-
-| Type | Syntax | Description |
-|------|--------|-------------|
-| Array | `[T; N]` | Fixed-size array of N elements of type T |
-| Tuple | `(T1, T2, T3)` | Ordered product type |
-| List | `list<T>` | Dynamically-sized array |
-| Map | `map<K, V>` | Hash map |
-| Option | `option<T>` | Nullable value |
-| Result | `result<T, E>` | Success or failure |
-| Channel | `channel<T>` | Concurrent communication |
-| Atomic | `atomic<T>` | Thread-safe scalar |
-| Tensor | `tensor<f32, [M, N]>` | N-dimensional array |
-| Function | `(T1, T2) -> R` | Function type |
-
-### Type Casting
-
-Use `expr to Type` to cast between compatible types:
-
-| From | To | Notes |
-|------|----|-------|
-| `i64` | `f64` | Exact for integers up to 2^53 |
-| `i64` | `f32` | May lose precision |
-| `i64` | `i32` | Truncates if out of range |
-| `f64` | `f32` | May lose precision |
-| `f32` | `f64` | Always exact |
-| `f64` | `i64` | Truncates fractional part |
-| `f32` | `i64` | Truncates fractional part |
+- **Tensors**: `tensor<scalar_type, [dimensions]>`
+- **Lists**: `list<T>`
+- **Maps**: `map<K, V>`
+- **Deques**: `deque`
+- **BitSets**: `bitset`
+- **Mutexes**: `mutex<T>`
+- **Channels**: `channel<T>`
+- **Reference Cells**: `cell<T>`
+- **Automatic Differentiation**: `grad<T>`
+- **Sparse Tensors**: `sparse<T>`
 
 ### Operator Precedence (highest to lowest)
 
-| Level | Operators |
-|-------|-----------|
-| 1 | Unary `-`, `!` |
-| 2 | `*`, `/`, `%` |
-| 3 | `+`, `-` |
-| 4 | `<`, `<=`, `>`, `>=` |
-| 5 | `==`, `!=` |
-| 6 | `&&` |
-| 7 | `\|\|` |
-| 8 | `to` (cast) |
-| 9 | `?` (error propagation, postfix) |
+| Precedence | Category | Operators | Associativity |
+|------------|----------|-----------|---------------|
+| 1 (highest) | Postfix | `.field` `.method()` `[index]` `?` | Left |
+| 2 | Prefix | `-` (negate) `!` (not) | Right |
+| 3 | Multiplicative | `*` `/` `%` | Left |
+| 4 | Additive | `+` `-` | Left |
+| 5 | Cast | `to` | Left |
+| 6 | Comparison | `==` `!=` `<` `<=` `>` `>=` | Left, non-chaining |
+| 7 | Logical AND | `&&` | Left, short-circuit |
+| 8 (lowest) | Logical OR | `||` | Left, short-circuit |
 
-> **Important:** `<` has higher precedence than `+`. Write `(i + 1) < n`, not `i + 1 < n` — the latter parses as `i + (1 < n)`.
-
----
 
 ## Appendix D: CLI Reference
 
-### `iris run <file.iris>`
+The `iris` compiler provides a single, unified CLI with 10 powerful subcommands:
 
-Compile and run an IRIS source file. Uses the interpreter for quick execution.
+### 10 Subcommands
+1. **`build <file.iris>`**: Compiles an IRIS source file into a native binary.
+2. **`run <file.iris>`**: Compiles and executes an IRIS program directly.
+3. **`repl`**: Starts the interactive REPL shell.
+4. **`lsp`**: Launches the background LSP Language Server.
+5. **`dap`**: Launches the Debug Adapter Protocol server.
+6. **`pkg`**: Package manager operations (init, build, run, add, update, list, check).
+7. **`bench <file.iris>`**: Runs benchmarks tagged with `@bench`.
+8. **`profile <file.iris>`**: Runs the compiler profiler and outputs execution flame graphs.
+9. **`test`**: Discovers and runs test cases in the workspace.
+10. **`explain <code>`**: Interactive diagnostic code explanation catalog.
 
-```
-iris run hello.iris
-iris run myapp.iris
-```
+### 14 Emit Kinds (`--emit <kind>`)
+Specify intermediate compiler outputs:
+- **`eval`**: Direct evaluation in the AST interpreter.
+- **`tokens`**: Prints lexical tokens.
+- **`ast`**: Prints structural Abstract Syntax Tree.
+- **`ir`**: Prints text SSA Intermediate Representation.
+- **`ir-opt`**: SSA IR after optimization passes.
+- **`llvm`**: Text LLVM Assembly.
+- **`bc`**: LLVM Bitcode file.
+- **`asm`**: Target assembly code.
+- **`obj`**: Compiled object file.
+- **`binary`**: Native executable file.
+- **`onnx`**: Exported ONNX model graph.
+- **`cuda`**: Generated CUDA source code.
+- **`simd`**: Vectorized IR output.
+- **`graph`**: Generates AST or IR visual dependency dot files.
 
-### `iris build <file.iris> -o <output>`
+### Global Flags
+- **`--sandbox`**: Strict runtime sandboxing.
+- **`--target <triple>`**: Cross-compilation target.
+- **`--no-cache`**: Disables AST and LLVM caching.
+- **`--dump-ir-after <pass>`**: Dumps compiler state after specific optimizer pass.
 
-Compile to a native binary using LLVM/clang.
-
-```
-iris build myapp.iris -o myapp.exe
-iris build src/main.iris -o out/myapp.exe
-```
-
-If `-o` is omitted, the output is named `iris_out.exe` (Windows) or `iris_out` (Linux/macOS).
-
-### `iris repl`
-
-Start the interactive REPL.
-
-```
-iris repl
-```
-
-### `iris lsp`
-
-Start the Language Server Protocol server (stdio). Used by IDE extensions.
-
-```
-iris lsp
-```
-
-### `iris dap`
-
-Start the Debug Adapter Protocol server. Used by IDE debuggers.
-
-```
-iris dap
-```
-
-### `iris --emit <kind> <file.iris>`
-
-Compile and emit intermediate output without running.
-
-| Kind | Output |
-|------|--------|
-| `ir` | IRIS IR (SSA text format) |
-| `llvm` | LLVM IR text (`.ll` format) |
-| `llvm_complete` | Enhanced LLVM IR with named structs and attributes |
-| `jit` | JIT-compile and execute, printing the result and tier used |
-
-```
-iris --emit ir myapp.iris
-iris --emit llvm myapp.iris > myapp.ll
-```
-
-### `iris --version`
-
-Print the IRIS version.
-
-### `iris --help`
-
-Print help text.
-
-### `iris --output <path> <file.iris>`
-
-Write output to a file instead of stdout.
-
-```
-iris --emit ir myapp.iris --output myapp.ir
-```
-
----
 
 ## Appendix E: Compiler Error Reference
 
-This appendix covers the IRIS compiler's diagnostic code system and the most common errors with fixes.
+IRIS has a detailed diagnostic code system cross-referenced directly with the `iris explain` command.
 
-### Diagnostic Code System
+### Diagnostic Code Catalog
+- **`E1: Missing else branch`**: Every `if` expression must have a matching `else` block to guarantee a returned value.
+- **`E2: Missing semicolon after non-tail statement`**: Semicolons are required to separate non-tail statements in blocks.
+- **`E3: Reassigning an immutable binding`**: Attempting to reassign a `val` binding instead of a `var` binding.
+- **`E4: Type mismatch in binary operation`**: Operators require both operands to have the same type. IRIS does not perform implicit type casting.
+- **`E5: Float literal type`**: Floating-point literal mismatch. Remember that float literals are `f64` by default.
+- **`E6: Calling unwrap on none`**: Unsafely calling `unwrap` on an option that contains `none`. Always check with `is_some()`.
+- **`E7: Operator precedence with comparison`**: Parsing error because operators like `+` have different precedence relative to comparisons.
+- **`E8: find result used as number`**: Attempting to use the `option<i64>` returned by `find` directly in arithmetic.
+- **`E9: Function not exported`**: Calling a function from another module that has not been marked with `pub`.
+- **`E10: Using % modulo vs / division`**: Diagnostic error checking division operators.
 
-Every IRIS compiler error carries a machine-readable diagnostic code. These codes are shown in your editor alongside the error message and can be used for quick lookup.
-
-| Code | Category | Description |
-|------|----------|-------------|
-| **E0001** | Parse | Unexpected character in source |
-| **E0002** | Parse | Unterminated string literal |
-| **E0003** | Parse | Invalid escape sequence in string |
-| **E0004** | Parse | Invalid numeric literal |
-| **E0005** | Parse | Unexpected token (expected something else) |
-| **E0006** | Parse | Unexpected end of file |
-| **E0100** | Lower | Undefined variable or function |
-| **E0101** | Lower | Type mismatch |
-| **E0102** | Lower | Duplicate function definition |
-| **E0103** | Lower | Unsupported language feature |
-| **E0104** | Lower | Undefined layer (ML models) |
-| **E0105** | Lower | Duplicate node in computation graph |
-| **E0106** | Lower | Invalid layer parameter |
-| **E0107** | Lower | Unknown operation |
-| **E0200** | Pass | Use before definition |
-| **E0201** | Pass | Multiple definitions of same name |
-| **E0202** | Pass | Type error in IR |
-| **E0203** | Pass | Missing block terminator |
-| **E0204** | Pass | Tensor shape mismatch |
-| **E0205** | Pass | Unresolved type inference variable |
-| **E0300** | Codegen | Code generation error |
-| **E0400** | Interp | Interpreter runtime error |
-| **E0500** | I/O | File system or I/O error |
 
 ---
 
-### Common Errors and Fixes
-
----
-
-### E1: Missing `else` branch
-
-**Error:**
-
-```
-error: if expression requires an else branch
-```
-
-**Cause:** You wrote `if cond { ... }` without an `else { ... }`.
-
-**Fix:** Always add `else`. If you just want to do nothing, return a dummy value:
-
-```iris
-// Wrong
-def bad(x: i64) -> i64 {
-    if x > 0 {
-        x
-    }
-}
-
-// Correct
-def good(x: i64) -> i64 {
-    if x > 0 {
-        x
-    } else {
-        0
-    }
-}
-```
-
----
-
-### E2: Missing semicolon after non-tail statement
-
-**Error:**
-
-```
-error: expected expression, found 'val'
-```
-
-or unexpected parse errors on the line *after* a function call.
-
-**Cause:** You forgot the `;` after a statement that is not the tail expression.
-
-**Fix:**
-
-```iris
-// Wrong — print() is not the tail, needs semicolon
-def bad() -> i64 {
-    print("hello")
-    42
-}
-
-// Correct
-def good() -> i64 {
-    print("hello");
-    42
-}
-```
-
----
-
-### E3: Reassigning an immutable binding
-
-**Error:**
-
-```
-error: cannot assign to immutable binding 'x'
-```
-
-**Cause:** You used `val` and then tried to reassign it.
-
-**Fix:** Use `var` for bindings you intend to reassign:
-
-```iris
-// Wrong
-def bad() -> i64 {
-    val x = 0;
-    x = x + 1;   // error
-    x
-}
-
-// Correct
-def good() -> i64 {
-    var x = 0;
-    x = x + 1;
-    x
-}
-```
-
----
-
-### E4: Type mismatch in binary operation
-
-**Error:**
-
-```
-error: type mismatch in BinOp: left is i64, right is f32
-```
-
-**Cause:** You mixed incompatible types in arithmetic. IRIS does not auto-promote.
-
-**Fix:** Cast one operand to match the other:
-
-```iris
-// Wrong
-def bad(n: i64, x: f32) -> f32 {
-    n + x   // error: i64 + f32 is invalid
-}
-
-// Correct
-def good(n: i64, x: f32) -> f32 {
-    (n to f32) + x
-}
-```
-
----
-
-### E5: Float literal type
-
-**Error:**
-
-```
-error: expected f64, found f32
-```
-
-**Cause:** `3.14` is `f32`, but the function expects `f64`.
-
-**Fix:** Explicitly cast:
-
-```iris
-// Wrong
-def bad() -> f64 {
-    3.14    // this is f32, not f64
-}
-
-// Correct
-def good() -> f64 {
-    3.14 to f64
-}
-```
-
----
-
-### E6: Calling `unwrap` on `none`
-
-**Error (runtime):**
-
-```
-panic: unwrap called on None
-```
-
-**Cause:** You called `unwrap()` without first checking `is_some()`.
-
-**Fix:** Always guard with `is_some()`:
-
-```iris
-// Wrong (runtime panic if opt is none)
-def bad(opt: option<i64>) -> i64 {
-    unwrap(opt)
-}
-
-// Correct
-def good(opt: option<i64>) -> i64 {
-    if is_some(opt) {
-        unwrap(opt)
-    } else {
-        0   // default value
-    }
-}
-```
-
----
-
-### E7: Operator precedence with comparison
-
-**Error:** Logical, wrong result, no compile error.
-
-**Cause:** `<` has higher precedence than `+`. `i + 1 < n` parses as `i + (1 < n)`, which is `i + 0` or `i + 1` (since `bool` coerces to `0`/`1` in arithmetic context).
-
-**Fix:** Use parentheses:
-
-```iris
-// Likely wrong
-while i + 1 < n {
-    // ...
-}
-
-// Correct — explicit parentheses
-while (i + 1) < n {
-    // ...
-}
-```
-
----
-
-### E8: `find` result used as number
-
-**Error (type):**
-
-```
-error: expected i64, found option<i64>
-```
-
-**Cause:** `find(s, sub)` returns `option<i64>`, not `i64`.
-
-**Fix:**
-
-```iris
-// Wrong
-def bad(s: str, sub: str) -> bool {
-    find(s, sub) >= 0   // error: option<i64> >= i64
-}
-
-// Correct
-def good(s: str, sub: str) -> bool {
-    is_some(find(s, sub))
-}
-```
-
----
-
-### E9: Function not exported
-
-**Error:**
-
-```
-error: undefined function 'my_helper'
-```
-
-**Cause:** The function in another file is not declared `pub def`.
-
-**Fix:** Add `pub` to the function declaration in the source file:
-
-```iris
-// In mylib.iris
-pub def my_helper() -> i64 {   // was: def my_helper
-    42
-}
-```
-
----
-
-### E10: Using `%` modulo vs `/` division
-
-**Behavior note:**
-
-IRIS uses `/` for integer division (floor division toward zero) and `%` for modulo (remainder). There is no `//` operator.
-
-```iris
-def examples() -> i64 {
-    val a = 10 / 3;    // 3  (integer division)
-    val b = 10 % 3;    // 1  (remainder)
-    val c = -7 / 2;    // -3 (truncates toward zero)
-    val d = -7 % 2;    // -1 (remainder, same sign as dividend)
-    a
-}
-```
-
----
-
-*End of The IRIS Programming Language: A Complete Guide*
-
----
-
-**Version**: Corresponds to IRIS compiler version 0.2.x
+**Version**: Corresponds to IRIS compiler version 0.6.0
 **Platform**: Tested on Windows 10/11, Linux (x86_64), macOS (aarch64) with LLVM 17+ and MinGW ucrt64
 **License**: GNU General Public License v2.0 or later — see [LICENSE](LICENSE)
 **Source**: [github.com/moon9t/iris](https://github.com/moon9t/iris)
