@@ -1,6 +1,6 @@
 # IRIS Roadmap
 
-> **Current version: 0.5.0** — active release. Pre-1.0, evolving rapidly.
+> **Current version: 0.6.0** — active release. Pre-1.0, evolving rapidly.
 
 This document outlines the planned milestones for IRIS from the current release
 line through the stable 1.0 release and beyond.
@@ -92,7 +92,7 @@ Release status: Released (May 2026)
 
 **Goal:** Production-grade performance and trustworthy FFI.
 
-Release status: Unreleased. Items listed as done reflect implementation status on `main`.
+Release status: Released (May 2026)
 
 | # | Task | Priority | Status |
 | --- | ------ | ---------- | -------- |
@@ -128,11 +128,12 @@ Release status: Unreleased. Items listed as done reflect implementation status o
 
 - **Language server v2** — semantic tokens, call hierarchy, type hierarchy
 - **Debugger enhancements** — conditional breakpoints, hot-reload
-- **WebAssembly backend** — `iris build --target wasm32`
-- **Distributed compute** — multi-node tensor parallelism
+- **Self-update CLI subsystem** — Built-in `iris upgrade` / `iris self-update` to fetch lightweight, fast compiler & stdlib binary delta updates on-demand
 - **IDE plugins** — IntelliJ, Neovim, Emacs
 - **Self-hosting** — IRIS compiler written in IRIS
+- **WebAssembly backend** — `iris build --target wasm32`
+- **Distributed compute** — multi-node tensor parallelism
 
 ---
 
-*Last updated: 2026-05-21*
+*Last updated: 2026-05-29*
