@@ -6,6 +6,22 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 
 ---
 
+## [0.6.1] — Tooling & Editor Support
+
+### Added
+
+- **LSP Semantic Tokens** — registers `"semanticTokensProvider"` capability in `src/lsp.rs` and implements a full delta-encoding stream covering keywords, contextual constructs, literals, and AST-resolved user definitions for rich syntax highlighting across Neovim, Helix, Emacs, and VS Code.
+- **LSP Document Highlights** — registers `"documentHighlightProvider": true` capability and wires `"textDocument/documentHighlight"` JSON-RPC handler to instantly highlight all occurrences of the identifier under the cursor.
+- **LSP Call Hierarchy** — registers `"callHierarchyProvider": true` capability and implements `"textDocument/prepareCallHierarchy"`, `"callHierarchy/incomingCalls"`, and `"callHierarchy/outgoingCalls"` request handlers with full AST walks to generate incoming/outgoing call graphs.
+- **DAP Conditional Breakpoints** — advertises `"supportsConditionalBreakpoints": true` in `src/dap.rs` and propagates conditions configured in `setBreakpoints` to `DebugSession` for conditional pause evaluations.
+
+### Tests
+
+- Target integration tests in [lsp_features_v061.rs](file:///c:/Users/Moon/Desktop/Projects/IRIS/tests/lsp_features_v061.rs) verifying semantic token delta-encoding, call hierarchy preparation, and document highlight reference resolution.
+- Target integration tests in [debugger_conditional_breakpoints.rs](file:///c:/Users/Moon/Desktop/Projects/IRIS/tests/debugger_conditional_breakpoints.rs) asserting conditional breakpoint pauses with loop variable snapshots.
+
+---
+
 ## [0.6.0] — Performance & Security
 
 ### Added (0.5.0)
@@ -363,8 +379,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 
 ---
 
-[Unreleased]: https://github.com/Moon9t/IRIS/compare/v0.5.0...HEAD
-[0.6.0]: https://github.com/Moon9t/IRIS/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Moon9t/IRIS/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/Moon9t/IRIS/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/Moon9t/IRIS/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Moon9t/IRIS/compare/v0.2.0...v0.5.0
 [0.2.0]: https://github.com/Moon9t/IRIS/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Moon9t/IRIS/releases/tag/v0.1.0

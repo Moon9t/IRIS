@@ -1396,6 +1396,198 @@ impl LspState {
 
         diags
     }
+
+    /// Returns LSP semantic tokens delta-encoded for the given document.
+    pub fn semantic_tokens(&self, uri: &str) -> Vec<u32> {
+        let mut data = Vec::new();
+        let Some(source) = self.documents.get(uri) else {
+            return data;
+        };
+        use crate::parser::lexer::{Lexer, Token};
+        let spanned_tokens = match Lexer::new(source).tokenize() {
+            Ok(t) => t,
+            Err(_) => return data,
+        };
+
+        let mut function_names = std::collections::HashSet::new();
+        let mut struct_names = std::collections::HashSet::new();
+        let mut enum_names = std::collections::HashSet::new();
+        let mut model_names = std::collections::HashSet::new();
+        let mut trait_names = std::collections::HashSet::new();
+        let mut const_names = std::collections::HashSet::new();
+
+        if let Some(ast) = parse_source(source) {
+            for func in &ast.functions {
+                function_names.insert(func.name.name.clone());
+            }
+            for ef in &ast.extern_fns {
+                function_names.insert(ef.name.name.clone());
+            }
+            for s in &ast.structs {
+                struct_names.insert(s.name.name.clone());
+            }
+            for e in &ast.enums {
+                enum_names.insert(e.name.name.clone());
+            }
+            for m in &ast.models {
+                model_names.insert(m.name.name.clone());
+            }
+            for t in &ast.traits {
+                trait_names.insert(t.name.name.clone());
+            }
+            for c in &ast.consts {
+                const_names.insert(c.name.name.clone());
+            }
+        }
+
+        let mut raw_tokens = Vec::new();
+
+        for spanned in &spanned_tokens {
+            let tok = &spanned.node;
+            let start_byte = spanned.span.start.0;
+            let end_byte = spanned.span.end.0;
+            if start_byte >= end_byte {
+                continue;
+            }
+            let length = end_byte - start_byte;
+            let (line, col) = byte_to_lsp_pos(source, start_byte);
+
+            let (token_type, token_modifiers) = match tok {
+                Token::Def
+                | Token::Val
+                | Token::Var
+                | Token::If
+                | Token::Else
+                | Token::When
+                | Token::For
+                | Token::While
+                | Token::Loop
+                | Token::Break
+                | Token::Continue
+                | Token::Return
+                | Token::Record
+                | Token::Choice
+                | Token::Model
+                | Token::Const
+                | Token::Type
+                | Token::Extern
+                | Token::Trait
+                | Token::Impl
+                | Token::Mod
+                | Token::Pub
+                | Token::Bring
+                | Token::Async
+                | Token::Await
+                | Token::Spawn
+                | Token::Par
+                | Token::In
+                | Token::To => (0, 0),
+
+                Token::BoolLit(_) => (0, 0),
+
+                Token::I64
+                | Token::I32
+                | Token::F64
+                | Token::F32
+                | Token::Bool
+                | Token::Str
+                | Token::Tensor => (1, 0),
+
+                Token::IntLit(_) | Token::FloatLit(_) => (9, 0),
+
+                Token::StringLit(_) | Token::FStringLit(_) => (10, 0),
+
+                Token::Ident(s) => {
+                    if matches!(s.as_str(), "layer" | "input" | "output") {
+                        (0, 0)
+                    } else if matches!(
+                        s.as_str(),
+                        "i64"
+                            | "i32"
+                            | "i8"
+                            | "u8"
+                            | "u32"
+                            | "u64"
+                            | "usize"
+                            | "f64"
+                            | "f32"
+                            | "bool"
+                            | "str"
+                            | "tensor"
+                            | "option"
+                            | "result"
+                            | "list"
+                            | "map"
+                            | "chan"
+                            | "atomic"
+                            | "mutex"
+                            | "grad"
+                            | "sparse"
+                    ) {
+                        (1, 0)
+                    } else if struct_names.contains(s) {
+                        (3, 0)
+                    } else if enum_names.contains(s) {
+                        (4, 0)
+                    } else if model_names.contains(s) {
+                        (2, 0)
+                    } else if trait_names.contains(s) {
+                        (5, 0)
+                    } else if function_names.contains(s) {
+                        (6, 0)
+                    } else if const_names.contains(s) {
+                        (8, 4) // readonly = 4
+                    } else if STATIC_COMPLETIONS.contains(&s.as_str()) {
+                        if completion_kind_for(s) == 3 {
+                            (6, 0)
+                        } else {
+                            (0, 0)
+                        }
+                    } else {
+                        (8, 0)
+                    }
+                }
+                _ => continue,
+            };
+
+            raw_tokens.push((line, col, length, token_type, token_modifiers));
+        }
+
+        raw_tokens.sort_by(|a, b| {
+            if a.0 != b.0 {
+                a.0.cmp(&b.0)
+            } else {
+                a.1.cmp(&b.1)
+            }
+        });
+
+        let mut prev_line = 0u32;
+        let mut prev_col = 0u32;
+        for (line, col, length, token_type, token_modifiers) in raw_tokens {
+            let delta_line = line - prev_line;
+            let delta_start = if delta_line > 0 { col } else { col - prev_col };
+            data.push(delta_line);
+            data.push(delta_start);
+            data.push(length);
+            data.push(token_type);
+            data.push(token_modifiers);
+
+            prev_line = line;
+            prev_col = col;
+        }
+
+        data
+    }
+
+    /// Returns LSP document highlights for all references to the identifier under the cursor.
+    pub fn document_highlights(
+        &self,
+        uri: &str,
+        line: u32,
+        character: u32,
+    ) -> Vec<(u32, u32, u32, u32)> {
+        self.references(uri, line, character)
+    }
 }
 
 #[cfg(test)]
@@ -3021,7 +3213,34 @@ pub fn run_lsp_server() -> std::io::Result<()> {
                             "referencesProvider": true,
                             "renameProvider": {
                                 "prepareProvider": false
-                            }
+                            },
+                            "semanticTokensProvider": {
+                                "legend": {
+                                    "tokenTypes": [
+                                        "keyword",
+                                        "type",
+                                        "class",
+                                        "struct",
+                                        "enum",
+                                        "interface",
+                                        "function",
+                                        "parameter",
+                                        "variable",
+                                        "number",
+                                        "string",
+                                        "comment"
+                                    ],
+                                    "tokenModifiers": [
+                                        "declaration",
+                                        "definition",
+                                        "readonly"
+                                    ]
+                                },
+                                "range": false,
+                                "full": true
+                            },
+                            "documentHighlightProvider": true,
+                            "callHierarchyProvider": true
                         },
                         "serverInfo": { "name": "iris-lsp", "version": env!("CARGO_PKG_VERSION") }
                     }),
@@ -3303,6 +3522,418 @@ pub fn run_lsp_server() -> std::io::Result<()> {
                 write_message(
                     &mut stdout.lock(),
                     &make_response(request_id.clone(), serde_json::json!(result)),
+                )?;
+            }
+            "textDocument/semanticTokens/full" => {
+                let uri = params["textDocument"]["uri"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_owned();
+                let tokens_data = state.semantic_tokens(&uri);
+                write_message(
+                    &mut stdout.lock(),
+                    &make_response(
+                        request_id.clone(),
+                        serde_json::json!({ "data": tokens_data }),
+                    ),
+                )?;
+            }
+            "textDocument/documentHighlight" => {
+                let uri = params["textDocument"]["uri"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_owned();
+                let line = params["position"]["line"].as_u64().unwrap_or(0) as u32;
+                let character = params["position"]["character"].as_u64().unwrap_or(0) as u32;
+                let highlights = state.document_highlights(&uri, line, character);
+                let result: Vec<serde_json::Value> = highlights
+                    .into_iter()
+                    .map(|(sl, sc, el, ec)| {
+                        serde_json::json!({
+                            "range": {
+                                "start": { "line": sl, "character": sc },
+                                "end":   { "line": el, "character": ec }
+                            },
+                            "kind": 1 // Text
+                        })
+                    })
+                    .collect();
+                write_message(
+                    &mut stdout.lock(),
+                    &make_response(request_id.clone(), serde_json::json!(result)),
+                )?;
+            }
+            "textDocument/prepareCallHierarchy" => {
+                let uri = params["textDocument"]["uri"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_owned();
+                let line = params["position"]["line"].as_u64().unwrap_or(0) as u32;
+                let character = params["position"]["character"].as_u64().unwrap_or(0) as u32;
+
+                let result = if let Some(source) = state.documents.get(&uri) {
+                    if let Some(ast) = parse_source(source) {
+                        let byte = line_col_to_byte(source, line, character);
+                        let target_ident = ident_at_byte(source, byte).unwrap_or("");
+
+                        let mut target_func = None;
+                        for func in &ast.functions {
+                            if func.name.name == target_ident {
+                                target_func = Some(func);
+                                break;
+                            }
+                            let start_byte = func.span.start.0;
+                            let end_byte = func.span.end.0;
+                            if byte >= start_byte && byte <= end_byte {
+                                target_func = Some(func);
+                            }
+                        }
+
+                        target_func
+                            .map(|func| {
+                                let (sl, sc) = byte_to_lsp_pos(source, func.span.start.0);
+                                let (el, ec) = byte_to_lsp_pos(
+                                    source,
+                                    func.span.end.0.min(source.len() as u32),
+                                );
+                                let (ssl, ssc) = byte_to_lsp_pos(source, func.name.span.start.0);
+                                let (sel, sec) = byte_to_lsp_pos(source, func.name.span.end.0);
+
+                                serde_json::json!([{
+                                    "name": func.name.name,
+                                    "kind": 12, // Function
+                                    "uri": uri,
+                                    "range": {
+                                        "start": { "line": sl, "character": sc },
+                                        "end": { "line": el, "character": ec }
+                                    },
+                                    "selectionRange": {
+                                        "start": { "line": ssl, "character": ssc },
+                                        "end": { "line": sel, "character": sec }
+                                    },
+                                    "data": func.name.name
+                                }])
+                            })
+                            .unwrap_or(serde_json::Value::Null)
+                    } else {
+                        serde_json::Value::Null
+                    }
+                } else {
+                    serde_json::Value::Null
+                };
+
+                write_message(
+                    &mut stdout.lock(),
+                    &make_response(request_id.clone(), result),
+                )?;
+            }
+            "callHierarchy/incomingCalls" => {
+                let item = &params["item"];
+                let uri = item["uri"].as_str().unwrap_or("").to_owned();
+                let target_name = item["data"]
+                    .as_str()
+                    .unwrap_or_else(|| item["name"].as_str().unwrap_or(""));
+
+                let mut incoming_calls = Vec::new();
+                if let Some(source) = state.documents.get(&uri) {
+                    if let Some(ast) = parse_source(source) {
+                        for func in &ast.functions {
+                            let mut call_site_ranges = Vec::new();
+                            find_calls_in_block(
+                                &func.body,
+                                target_name,
+                                &mut call_site_ranges,
+                                source,
+                            );
+
+                            if !call_site_ranges.is_empty() {
+                                let (sl, sc) = byte_to_lsp_pos(source, func.span.start.0);
+                                let (el, ec) = byte_to_lsp_pos(
+                                    source,
+                                    func.span.end.0.min(source.len() as u32),
+                                );
+                                let (ssl, ssc) = byte_to_lsp_pos(source, func.name.span.start.0);
+                                let (sel, sec) = byte_to_lsp_pos(source, func.name.span.end.0);
+
+                                incoming_calls.push(serde_json::json!({
+                                    "from": {
+                                        "name": func.name.name,
+                                        "kind": 12,
+                                        "uri": uri,
+                                        "range": {
+                                            "start": { "line": sl, "character": sc },
+                                            "end": { "line": el, "character": ec }
+                                        },
+                                        "selectionRange": {
+                                            "start": { "line": ssl, "character": ssc },
+                                            "end": { "line": sel, "character": sec }
+                                        },
+                                        "data": func.name.name
+                                    },
+                                    "fromRanges": call_site_ranges.iter().map(|&(sl, sc, el, ec)| {
+                                        serde_json::json!({
+                                            "start": { "line": sl, "character": sc },
+                                            "end": { "line": el, "character": ec }
+                                        })
+                                    }).collect::<Vec<_>>()
+                                }));
+                            }
+                        }
+                    }
+                }
+
+                write_message(
+                    &mut stdout.lock(),
+                    &make_response(request_id.clone(), serde_json::json!(incoming_calls)),
+                )?;
+            }
+            "callHierarchy/outgoingCalls" => {
+                let item = &params["item"];
+                let uri = item["uri"].as_str().unwrap_or("").to_owned();
+                let caller_name = item["data"]
+                    .as_str()
+                    .unwrap_or_else(|| item["name"].as_str().unwrap_or(""));
+
+                let mut outgoing_calls = Vec::new();
+                if let Some(source) = state.documents.get(&uri) {
+                    if let Some(ast) = parse_source(source) {
+                        if let Some(caller_func) =
+                            ast.functions.iter().find(|f| f.name.name == caller_name)
+                        {
+                            let mut called_map: HashMap<String, Vec<(u32, u32, u32, u32)>> =
+                                HashMap::new();
+
+                            fn collect_all_calls_in_block(
+                                block: &AstBlock,
+                                calls: &mut HashMap<String, Vec<(u32, u32, u32, u32)>>,
+                                source: &str,
+                            ) {
+                                for stmt in &block.stmts {
+                                    collect_all_calls_in_stmt(stmt, calls, source);
+                                }
+                                if let Some(tail) = &block.tail {
+                                    collect_all_calls_in_expr(tail, calls, source);
+                                }
+                            }
+
+                            fn collect_all_calls_in_stmt(
+                                stmt: &AstStmt,
+                                calls: &mut HashMap<String, Vec<(u32, u32, u32, u32)>>,
+                                source: &str,
+                            ) {
+                                match stmt {
+                                    AstStmt::Let { init, .. } => {
+                                        collect_all_calls_in_expr(init, calls, source)
+                                    }
+                                    AstStmt::Expr(expr) => {
+                                        collect_all_calls_in_expr(expr, calls, source)
+                                    }
+                                    AstStmt::While { cond, body, .. } => {
+                                        collect_all_calls_in_expr(cond, calls, source);
+                                        collect_all_calls_in_block(body, calls, source);
+                                    }
+                                    AstStmt::Loop { body, .. } => {
+                                        collect_all_calls_in_block(body, calls, source)
+                                    }
+                                    AstStmt::ForRange {
+                                        start, end, body, ..
+                                    } => {
+                                        collect_all_calls_in_expr(start, calls, source);
+                                        collect_all_calls_in_expr(end, calls, source);
+                                        collect_all_calls_in_block(body, calls, source);
+                                    }
+                                    AstStmt::Assign { target, value, .. } => {
+                                        collect_all_calls_in_expr(target, calls, source);
+                                        collect_all_calls_in_expr(value, calls, source);
+                                    }
+                                    AstStmt::LetTuple { init, .. } => {
+                                        collect_all_calls_in_expr(init, calls, source)
+                                    }
+                                    AstStmt::Return { value, .. } => {
+                                        if let Some(v) = value {
+                                            collect_all_calls_in_expr(v, calls, source);
+                                        }
+                                    }
+                                    AstStmt::Spawn { body, .. } => {
+                                        for sub_stmt in body {
+                                            collect_all_calls_in_stmt(sub_stmt, calls, source);
+                                        }
+                                    }
+                                    AstStmt::ParFor {
+                                        start, end, body, ..
+                                    } => {
+                                        collect_all_calls_in_expr(start, calls, source);
+                                        collect_all_calls_in_expr(end, calls, source);
+                                        collect_all_calls_in_block(body, calls, source);
+                                    }
+                                    AstStmt::ForEach { iter, body, .. } => {
+                                        collect_all_calls_in_expr(iter, calls, source);
+                                        collect_all_calls_in_block(body, calls, source);
+                                    }
+                                    AstStmt::Break { .. } | AstStmt::Continue { .. } => {}
+                                }
+                            }
+
+                            fn collect_all_calls_in_expr(
+                                expr: &AstExpr,
+                                calls: &mut HashMap<String, Vec<(u32, u32, u32, u32)>>,
+                                source: &str,
+                            ) {
+                                match expr {
+                                    AstExpr::Ident(_)
+                                    | AstExpr::IntLit { .. }
+                                    | AstExpr::FloatLit { .. }
+                                    | AstExpr::BoolLit { .. }
+                                    | AstExpr::StringLit { .. } => {}
+                                    AstExpr::BinOp { lhs, rhs, .. } => {
+                                        collect_all_calls_in_expr(lhs, calls, source);
+                                        collect_all_calls_in_expr(rhs, calls, source);
+                                    }
+                                    AstExpr::UnaryOp { expr, .. } => {
+                                        collect_all_calls_in_expr(expr, calls, source)
+                                    }
+                                    AstExpr::Call { callee, args, .. } => {
+                                        let (sl, sc) = byte_to_lsp_pos(source, callee.span.start.0);
+                                        let (el, ec) = byte_to_lsp_pos(source, callee.span.end.0);
+                                        calls
+                                            .entry(callee.name.clone())
+                                            .or_default()
+                                            .push((sl, sc, el, ec));
+                                        for arg in args {
+                                            collect_all_calls_in_expr(arg, calls, source);
+                                        }
+                                    }
+                                    AstExpr::If {
+                                        cond,
+                                        then_block,
+                                        else_block,
+                                        ..
+                                    } => {
+                                        collect_all_calls_in_expr(cond, calls, source);
+                                        collect_all_calls_in_block(then_block, calls, source);
+                                        if let Some(else_b) = else_block {
+                                            collect_all_calls_in_block(else_b, calls, source);
+                                        }
+                                    }
+                                    AstExpr::Block(b) => {
+                                        collect_all_calls_in_block(b, calls, source)
+                                    }
+                                    AstExpr::Index { base, indices, .. } => {
+                                        collect_all_calls_in_expr(base, calls, source);
+                                        for idx in indices {
+                                            collect_all_calls_in_expr(idx, calls, source);
+                                        }
+                                    }
+                                    AstExpr::Cast { expr, .. } => {
+                                        collect_all_calls_in_expr(expr, calls, source)
+                                    }
+                                    AstExpr::StructLit { fields, .. } => {
+                                        for (_, val) in fields {
+                                            collect_all_calls_in_expr(val, calls, source);
+                                        }
+                                    }
+                                    AstExpr::FieldAccess { base, .. } => {
+                                        collect_all_calls_in_expr(base, calls, source)
+                                    }
+                                    AstExpr::When {
+                                        scrutinee, arms, ..
+                                    } => {
+                                        collect_all_calls_in_expr(scrutinee, calls, source);
+                                        for arm in arms {
+                                            if let Some(g) = &arm.guard {
+                                                collect_all_calls_in_expr(g, calls, source);
+                                            }
+                                            collect_all_calls_in_expr(&arm.body, calls, source);
+                                        }
+                                    }
+                                    AstExpr::Tuple { elements, .. } => {
+                                        for elem in elements {
+                                            collect_all_calls_in_expr(elem, calls, source);
+                                        }
+                                    }
+                                    AstExpr::TupleIndex { base, .. } => {
+                                        collect_all_calls_in_expr(base, calls, source)
+                                    }
+                                    AstExpr::ArrayLit { elems, .. } => {
+                                        for elem in elems {
+                                            collect_all_calls_in_expr(elem, calls, source);
+                                        }
+                                    }
+                                    AstExpr::Lambda { body, .. } => {
+                                        collect_all_calls_in_expr(body, calls, source)
+                                    }
+                                    AstExpr::Await { expr, .. } => {
+                                        collect_all_calls_in_expr(expr, calls, source)
+                                    }
+                                    AstExpr::Try { expr, .. } => {
+                                        collect_all_calls_in_expr(expr, calls, source)
+                                    }
+                                    AstExpr::MethodCall { base, args, .. } => {
+                                        collect_all_calls_in_expr(base, calls, source);
+                                        for arg in args {
+                                            collect_all_calls_in_expr(arg, calls, source);
+                                        }
+                                    }
+                                }
+                            }
+
+                            collect_all_calls_in_block(&caller_func.body, &mut called_map, source);
+
+                            for (target, call_ranges) in called_map {
+                                let mut resolved_func = None;
+                                for f in &ast.functions {
+                                    if f.name.name == target {
+                                        resolved_func = Some(f);
+                                        break;
+                                    }
+                                }
+
+                                let (sl, sc, el, ec, ssl, ssc, sel, sec) = if let Some(rf) =
+                                    resolved_func
+                                {
+                                    let (sl, sc) = byte_to_lsp_pos(source, rf.span.start.0);
+                                    let (el, ec) = byte_to_lsp_pos(
+                                        source,
+                                        rf.span.end.0.min(source.len() as u32),
+                                    );
+                                    let (ssl, ssc) = byte_to_lsp_pos(source, rf.name.span.start.0);
+                                    let (sel, sec) = byte_to_lsp_pos(source, rf.name.span.end.0);
+                                    (sl, sc, el, ec, ssl, ssc, sel, sec)
+                                } else {
+                                    let (sl, sc, el, ec) = call_ranges[0];
+                                    (sl, sc, el, ec, sl, sc, el, ec)
+                                };
+
+                                outgoing_calls.push(serde_json::json!({
+                                    "to": {
+                                        "name": target,
+                                        "kind": 12,
+                                        "uri": uri,
+                                        "range": {
+                                            "start": { "line": sl, "character": sc },
+                                            "end": { "line": el, "character": ec }
+                                        },
+                                        "selectionRange": {
+                                            "start": { "line": ssl, "character": ssc },
+                                            "end": { "line": sel, "character": sec }
+                                        },
+                                        "data": target
+                                    },
+                                    "fromRanges": call_ranges.iter().map(|&(sl, sc, el, ec)| {
+                                        serde_json::json!({
+                                            "start": { "line": sl, "character": sc },
+                                            "end": { "line": el, "character": ec }
+                                        })
+                                    }).collect::<Vec<_>>()
+                                }));
+                            }
+                        }
+                    }
+                }
+
+                write_message(
+                    &mut stdout.lock(),
+                    &make_response(request_id.clone(), serde_json::json!(outgoing_calls)),
                 )?;
             }
             "textDocument/rename" => {
@@ -3750,5 +4381,187 @@ fn format_ir_type_for_lsp(ty: &crate::ir::types::IrType) -> String {
                 .trim_start_matches("enum.")
                 .to_owned()
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Call Hierarchy AST Helpers
+// ---------------------------------------------------------------------------
+
+use crate::parser::ast::{AstBlock, AstExpr, AstStmt};
+
+fn find_calls_in_expr(
+    expr: &AstExpr,
+    target_name: &str,
+    ranges: &mut Vec<(u32, u32, u32, u32)>,
+    source: &str,
+) {
+    match expr {
+        AstExpr::Ident(_)
+        | AstExpr::IntLit { .. }
+        | AstExpr::FloatLit { .. }
+        | AstExpr::BoolLit { .. }
+        | AstExpr::StringLit { .. } => {}
+        AstExpr::BinOp { lhs, rhs, .. } => {
+            find_calls_in_expr(lhs, target_name, ranges, source);
+            find_calls_in_expr(rhs, target_name, ranges, source);
+        }
+        AstExpr::UnaryOp { expr, .. } => {
+            find_calls_in_expr(expr, target_name, ranges, source);
+        }
+        AstExpr::Call { callee, args, .. } => {
+            if callee.name == target_name {
+                let (sl, sc) = byte_to_lsp_pos(source, callee.span.start.0);
+                let (el, ec) = byte_to_lsp_pos(source, callee.span.end.0);
+                ranges.push((sl, sc, el, ec));
+            }
+            for arg in args {
+                find_calls_in_expr(arg, target_name, ranges, source);
+            }
+        }
+        AstExpr::If {
+            cond,
+            then_block,
+            else_block,
+            ..
+        } => {
+            find_calls_in_expr(cond, target_name, ranges, source);
+            find_calls_in_block(then_block, target_name, ranges, source);
+            if let Some(else_b) = else_block {
+                find_calls_in_block(else_b, target_name, ranges, source);
+            }
+        }
+        AstExpr::Block(b) => {
+            find_calls_in_block(b, target_name, ranges, source);
+        }
+        AstExpr::Index { base, indices, .. } => {
+            find_calls_in_expr(base, target_name, ranges, source);
+            for idx in indices {
+                find_calls_in_expr(idx, target_name, ranges, source);
+            }
+        }
+        AstExpr::Cast { expr, .. } => {
+            find_calls_in_expr(expr, target_name, ranges, source);
+        }
+        AstExpr::StructLit { fields, .. } => {
+            for (_, val) in fields {
+                find_calls_in_expr(val, target_name, ranges, source);
+            }
+        }
+        AstExpr::FieldAccess { base, .. } => {
+            find_calls_in_expr(base, target_name, ranges, source);
+        }
+        AstExpr::When {
+            scrutinee, arms, ..
+        } => {
+            find_calls_in_expr(scrutinee, target_name, ranges, source);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    find_calls_in_expr(g, target_name, ranges, source);
+                }
+                find_calls_in_expr(&arm.body, target_name, ranges, source);
+            }
+        }
+        AstExpr::Tuple { elements, .. } => {
+            for elem in elements {
+                find_calls_in_expr(elem, target_name, ranges, source);
+            }
+        }
+        AstExpr::TupleIndex { base, .. } => {
+            find_calls_in_expr(base, target_name, ranges, source);
+        }
+        AstExpr::ArrayLit { elems, .. } => {
+            for elem in elems {
+                find_calls_in_expr(elem, target_name, ranges, source);
+            }
+        }
+        AstExpr::Lambda { body, .. } => {
+            find_calls_in_expr(body, target_name, ranges, source);
+        }
+        AstExpr::Await { expr, .. } => {
+            find_calls_in_expr(expr, target_name, ranges, source);
+        }
+        AstExpr::Try { expr, .. } => {
+            find_calls_in_expr(expr, target_name, ranges, source);
+        }
+        AstExpr::MethodCall { base, args, .. } => {
+            find_calls_in_expr(base, target_name, ranges, source);
+            for arg in args {
+                find_calls_in_expr(arg, target_name, ranges, source);
+            }
+        }
+    }
+}
+
+fn find_calls_in_block(
+    block: &AstBlock,
+    target_name: &str,
+    ranges: &mut Vec<(u32, u32, u32, u32)>,
+    source: &str,
+) {
+    for stmt in &block.stmts {
+        find_calls_in_stmt(stmt, target_name, ranges, source);
+    }
+    if let Some(tail) = &block.tail {
+        find_calls_in_expr(tail, target_name, ranges, source);
+    }
+}
+
+fn find_calls_in_stmt(
+    stmt: &AstStmt,
+    target_name: &str,
+    ranges: &mut Vec<(u32, u32, u32, u32)>,
+    source: &str,
+) {
+    match stmt {
+        AstStmt::Let { init, .. } => {
+            find_calls_in_expr(init, target_name, ranges, source);
+        }
+        AstStmt::Expr(expr) => {
+            find_calls_in_expr(expr, target_name, ranges, source);
+        }
+        AstStmt::While { cond, body, .. } => {
+            find_calls_in_expr(cond, target_name, ranges, source);
+            find_calls_in_block(body, target_name, ranges, source);
+        }
+        AstStmt::Loop { body, .. } => {
+            find_calls_in_block(body, target_name, ranges, source);
+        }
+        AstStmt::ForRange {
+            start, end, body, ..
+        } => {
+            find_calls_in_expr(start, target_name, ranges, source);
+            find_calls_in_expr(end, target_name, ranges, source);
+            find_calls_in_block(body, target_name, ranges, source);
+        }
+        AstStmt::Assign { target, value, .. } => {
+            find_calls_in_expr(target, target_name, ranges, source);
+            find_calls_in_expr(value, target_name, ranges, source);
+        }
+        AstStmt::LetTuple { init, .. } => {
+            find_calls_in_expr(init, target_name, ranges, source);
+        }
+        AstStmt::Return { value, .. } => {
+            if let Some(v) = value {
+                find_calls_in_expr(v, target_name, ranges, source);
+            }
+        }
+        AstStmt::Spawn { body, .. } => {
+            for sub_stmt in body {
+                find_calls_in_stmt(sub_stmt, target_name, ranges, source);
+            }
+        }
+        AstStmt::ParFor {
+            start, end, body, ..
+        } => {
+            find_calls_in_expr(start, target_name, ranges, source);
+            find_calls_in_expr(end, target_name, ranges, source);
+            find_calls_in_block(body, target_name, ranges, source);
+        }
+        AstStmt::ForEach { iter, body, .. } => {
+            find_calls_in_expr(iter, target_name, ranges, source);
+            find_calls_in_block(body, target_name, ranges, source);
+        }
+        AstStmt::Break { .. } | AstStmt::Continue { .. } => {}
     }
 }
