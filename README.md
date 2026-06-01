@@ -1,4 +1,4 @@
-# IRIS — Intermediate Representation for Intelligent Systems
+# IRIS — Intermediate Representation for Intelligent Systems.
 
 **A compiled, statically-typed systems programming language engineered for Autonomous Intelligent Systems (AIS).**
 
