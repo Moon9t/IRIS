@@ -121,6 +121,10 @@ pub fn execute_binary_for_eval_with_target(
 ) -> Result<String, CodegenError> {
     let output = run_binary_for_eval_entry_capture(module, None, target)?;
     let stdout = String::from_utf8_lossy(&output.stdout).replace('\r', "");
+    if !output.stderr.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprint!("{}", stderr);
+    }
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(CodegenError::Unsupported {
@@ -302,22 +306,44 @@ fn build_binary_impl(
     let target_args = ["-target".to_owned(), resolved_target.clone()];
     let native_ml_backends = std::env::var("IRIS_NATIVE_ML_BACKENDS")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+        .unwrap_or_else(|_| {
+            Path::new("C:\\onnxruntime").exists() || Path::new("C:\\tensorflow").exists() || Path::new("C:\\libtorch").exists()
+        });
     let use_blas = std::env::var("IRIS_USE_BLAS")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+        .unwrap_or_else(|_| {
+            Path::new("C:\\openblas").exists()
+        });
     let openblas_dir = if use_blas {
-        std::env::var("OPENBLAS_DIR").ok().map(PathBuf::from)
+        std::env::var("OPENBLAS_DIR").ok().map(PathBuf::from).or_else(|| {
+            if Path::new("C:\\openblas").exists() {
+                Some(PathBuf::from("C:\\openblas"))
+            } else {
+                None
+            }
+        })
     } else {
         None
     };
     let onnx_sdk = if native_ml_backends {
-        std::env::var("ONNXRUNTIME_DIR").ok().map(PathBuf::from)
+        std::env::var("ONNXRUNTIME_DIR").ok().map(PathBuf::from).or_else(|| {
+            if Path::new("C:\\onnxruntime").exists() {
+                Some(PathBuf::from("C:\\onnxruntime"))
+            } else {
+                None
+            }
+        })
     } else {
         None
     };
     let tf_sdk = if native_ml_backends {
-        std::env::var("TENSORFLOW_DIR").ok().map(PathBuf::from)
+        std::env::var("TENSORFLOW_DIR").ok().map(PathBuf::from).or_else(|| {
+            if Path::new("C:\\tensorflow").exists() {
+                Some(PathBuf::from("C:\\tensorflow"))
+            } else {
+                None
+            }
+        })
     } else {
         None
     };
@@ -347,7 +373,7 @@ fn build_binary_impl(
         path_str(&tmp_dir)?,
         "-Wno-pragma-pack",
     ]);
-    if resolved_target.contains("windows") {
+    if resolved_target.contains("windows") && !resolved_target.contains("msvc") {
         if let Some(ref inc) = msys2_inc {
             compile_cmd.arg("-I").arg(inc);
         }
@@ -394,7 +420,7 @@ fn build_binary_impl(
             path_str(&tmp_dir)?,
             "-Wno-pragma-pack",
         ]);
-        if resolved_target.contains("windows") {
+        if resolved_target.contains("windows") && !resolved_target.contains("msvc") && backend_name != "PyTorch shim" {
             if let Some(ref inc) = msys2_inc {
                 shim_cmd.arg("-I").arg(inc);
             }
@@ -412,10 +438,17 @@ fn build_binary_impl(
             }
         }
         if backend_name == "PyTorch shim" {
-            shim_cmd.arg("-x").arg("c++");
+            if resolved_target.contains("windows") {
+                shim_cmd.arg("-target").arg("x86_64-pc-windows-msvc");
+                shim_cmd.arg("-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH");
+                shim_cmd.arg("-fno-autolink");
+                shim_cmd.arg("-fms-compatibility");
+                shim_cmd.arg("-fms-extensions");
+            }
             if let Some(ref sdk) = libtorch_sdk {
                 shim_cmd.arg("-DLIBTORCH_ENABLED");
-                shim_cmd.arg("-std=c++17");
+                shim_cmd.arg("-DNDEBUG");
+                shim_cmd.arg("-std=c++20");
                 shim_cmd.arg("-I").arg(sdk.join("include"));
                 shim_cmd
                     .arg("-I")
@@ -490,12 +523,15 @@ fn build_binary_impl(
     for obj in &support_objs {
         link_cmd.arg(path_str(obj)?);
     }
-    link_cmd.args(["-o", path_str(output_path)?, "-lm", "-lpthread"]);
+    link_cmd.args(["-o", path_str(output_path)?]);
+    if !resolved_target.contains("msvc") {
+        link_cmd.args(["-lm", "-lpthread"]);
+    }
     // Windows: link WinSock2 for TCP/HTTP builtins
     if resolved_target.contains("windows") {
         link_cmd.arg("-lws2_32");
     }
-    if resolved_target.contains("windows") {
+    if resolved_target.contains("windows") && !resolved_target.contains("msvc") {
         if let Some(ref lib) = msys2_lib {
             link_cmd.arg(format!("-L{}", lib));
         }
@@ -522,7 +558,11 @@ fn build_binary_impl(
         if let Some(ref dir) = openblas_dir {
             link_cmd.arg(format!("-L{}", dir.join("lib").display()));
         }
-        link_cmd.arg("-lopenblas");
+        if resolved_target.contains("msvc") {
+            link_cmd.arg("-llibopenblas");
+        } else {
+            link_cmd.arg("-lopenblas");
+        }
     }
     if !resolved_target.contains("windows") {
         // Non-Windows targets keep relying on the target toolchain's standard sysroot.
@@ -544,7 +584,7 @@ fn build_binary_impl(
         });
     }
 
-    stage_sqlite_dll_next_to(output_path);
+    stage_required_dlls_next_to(output_path);
     Ok(output_path.to_path_buf())
 }
 
@@ -554,6 +594,61 @@ fn resolve_target_triple(target: Option<&str>) -> String {
         None => crate::codegen::llvm_ir::native_target_triple(),
     }
     .to_owned()
+}
+
+fn stage_required_dlls_next_to(output_path: &Path) {
+    use std::path::{Path, PathBuf};
+
+    if let Some(parent) = output_path.parent() {
+        // 1. Stage sqlite3.dll
+        stage_sqlite_dll_next_to(output_path);
+
+        // 2. Stage iris_ros2.dll
+        let candidates = [
+            PathBuf::from("iris_ros2.dll"),
+            PathBuf::from("target/release/iris_ros2.dll"),
+            PathBuf::from("target/debug/iris_ros2.dll"),
+        ];
+        for candidate in candidates {
+            if candidate.exists() {
+                let _ = std::fs::copy(&candidate, parent.join("iris_ros2.dll"));
+                break;
+            }
+        }
+
+        // 3. Stage onnxruntime.dll
+        let onnx_dll = Path::new("C:\\onnxruntime\\lib\\onnxruntime.dll");
+        if onnx_dll.exists() {
+            let _ = std::fs::copy(onnx_dll, parent.join("onnxruntime.dll"));
+        }
+
+        // 4. Stage tensorflow.dll
+        let tf_dll = Path::new("C:\\tensorflow\\lib\\tensorflow.dll");
+        if tf_dll.exists() {
+            let _ = std::fs::copy(tf_dll, parent.join("tensorflow.dll"));
+        }
+
+        // 5. Stage libopenblas.dll
+        let blas_dll = Path::new("C:\\openblas\\bin\\libopenblas.dll");
+        if blas_dll.exists() {
+            let _ = std::fs::copy(blas_dll, parent.join("libopenblas.dll"));
+        }
+
+        // 6. Stage libtorch DLLs
+        let torch_lib_dir = Path::new("C:\\libtorch\\lib");
+        if torch_lib_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(torch_lib_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|ext| ext.to_str()).map(|ext| ext.eq_ignore_ascii_case("dll")).unwrap_or(false) {
+                        if let Some(file_name) = path.file_name() {
+                            let _ = std::fs::copy(&path, parent.join(file_name));
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn stage_sqlite_dll_next_to(output_path: &Path) {

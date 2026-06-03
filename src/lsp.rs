@@ -1920,6 +1920,25 @@ mod tests {
             "user-defined fn should be gone after close"
         );
     }
+
+    #[test]
+    fn lsp_position_helpers_do_not_panic_inside_multibyte_text() {
+        let src = "def café() -> i64 { 0 }\n";
+        let split_e_acute = src.find('é').unwrap() + 1;
+
+        let pos = byte_to_lsp_pos(src, split_e_acute as u32);
+        assert_eq!(pos, (0, 7));
+        assert_eq!(ident_at_byte(src, split_e_acute as u32), Some("café"));
+    }
+
+    #[test]
+    fn lsp_position_helpers_use_utf16_character_units() {
+        let src = "def smile🙂() -> i64 { 0 }\n";
+        let after_emoji_byte = src.find('(').unwrap();
+
+        assert_eq!(byte_to_lsp_pos(src, after_emoji_byte as u32), (0, 11));
+        assert_eq!(line_col_to_byte(src, 0, 11), after_emoji_byte as u32);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2359,14 +2378,14 @@ fn definition_byte_of(ast: &crate::parser::ast::AstModule, name: &str) -> Option
 
 /// Converts a byte offset to a 0-based (line, character) LSP position.
 fn byte_to_lsp_pos(source: &str, byte: u32) -> (u32, u32) {
-    let byte = byte as usize;
-    let prefix = if byte <= source.len() {
-        &source[..byte]
-    } else {
-        source
-    };
+    let byte = clamp_to_char_boundary(source, byte as usize);
+    let prefix = &source[..byte];
     let line = prefix.bytes().filter(|&b| b == b'\n').count() as u32;
-    let col = prefix.rfind('\n').map(|i| byte - i - 1).unwrap_or(byte) as u32;
+    let line_start = prefix.rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let col = prefix[line_start..]
+        .chars()
+        .map(|ch| ch.len_utf16() as u32)
+        .sum();
     (line, col)
 }
 
@@ -4020,14 +4039,23 @@ fn line_col_to_byte(source: &str, line: u32, character: u32) -> u32 {
     let mut cur_line = 0u32;
     let mut cur_col = 0u32;
     for (i, ch) in source.char_indices() {
-        if cur_line == line && cur_col == character {
+        if cur_line == line && cur_col >= character {
+            return i as u32;
+        }
+        if cur_line == line && ch != '\n' {
+            let next_col = cur_col + ch.len_utf16() as u32;
+            if next_col > character {
+                return i as u32;
+            }
+        }
+        if cur_line > line {
             return i as u32;
         }
         if ch == '\n' {
             cur_line += 1;
             cur_col = 0;
         } else {
-            cur_col += 1;
+            cur_col += ch.len_utf16() as u32;
         }
     }
     source.len() as u32
@@ -4035,7 +4063,7 @@ fn line_col_to_byte(source: &str, line: u32, character: u32) -> u32 {
 
 fn ident_at_byte(source: &str, byte: u32) -> Option<&str> {
     let src = source;
-    let byte = byte as usize;
+    let byte = clamp_to_char_boundary(src, byte as usize);
     if byte >= src.len() {
         return None;
     }
@@ -4052,6 +4080,14 @@ fn ident_at_byte(source: &str, byte: u32) -> Option<&str> {
     } else {
         None
     }
+}
+
+fn clamp_to_char_boundary(source: &str, byte: usize) -> usize {
+    let mut byte = byte.min(source.len());
+    while byte > 0 && !source.is_char_boundary(byte) {
+        byte -= 1;
+    }
+    byte
 }
 
 fn make_response(id: Option<serde_json::Value>, result: serde_json::Value) -> String {

@@ -1,8 +1,9 @@
 // examples/ml_model_loading.iris
-// Real SQL-backed ML example using the std.sql connector.
+// SQL-backed data processing and native ML model loading/execution showcase.
 
 bring std.ml
 bring std.sql
+bring std.fs
 
 def add_training_row(db : i64, x : f64, y : f64) -> i64 {
     sql_exec(db, concat("INSERT INTO training_samples (feature, target) VALUES (", concat(to_str(x), concat(", ", concat(to_str(y), ")")))))
@@ -16,12 +17,12 @@ def print_rows(rows : list<list<str>>) -> () {
 }
 
 def main() -> i64 {
-    print("=== SQL-Backed ML Training Example ===");
+    print("=== SQL-Backed ML Training & Model Loading Example ===");
 
+    // Part 1: SQL-backed classic machine learning
     val db = sql_open("iris_ml_training.db");
     if db == 0 {
         print("failed to open database");
-        1
     } else {
         sql_exec(db, "DROP TABLE IF EXISTS training_samples");
         sql_exec(db, "CREATE TABLE training_samples (id INTEGER PRIMARY KEY AUTOINCREMENT, feature REAL, target REAL)");
@@ -47,6 +48,35 @@ def main() -> i64 {
         print("Expected trend: y = 2x + 1");
 
         sql_close(db);
-        0
-    }
+    };
+
+    print("");
+
+    // Part 2: Native Deep Learning Model Loading & Execution via ONNX Runtime
+    val model_path = "tests/fixtures/identity.onnx";
+    if path_exists(model_path) {
+        print(concat("Loading native ONNX model from: ", model_path));
+        val handle = onnx_load(model_path);
+        if ml_backend_ready(handle) {
+            print("ONNX model loaded successfully!");
+            val input_data : list<f64> = list();
+            list_push(input_data, 42.0);
+            val shape : list<i64> = list();
+            list_push(shape, 1);
+            val sample = tensor_pair(input_data, shape);
+            
+            print("Running native ONNX model inference...");
+            val output = onnx_run(handle, sample);
+            print(concat("ONNX output value: ", to_str(list_get(output.0, 0))));
+            
+            onnx_free(handle);
+            print("ONNX model resources freed cleanly.");
+        } else {
+            print("Failed to initialize ONNX model runtime session.");
+        }
+    } else {
+        print(concat("ONNX model file not found at: ", model_path));
+    };
+
+    0
 }

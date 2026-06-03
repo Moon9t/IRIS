@@ -1,0 +1,112 @@
+// main.iris -- Flagship Multimodal Edge AI Orchestrator Loop
+
+bring std.fmt
+
+bring "types.iris"
+bring "blas_math.iris"
+bring "ml_pipeline.iris"
+bring "ros2_pub.iris"
+bring "ad_policy.iris"
+
+def main() -> i64 {
+    print("=== IRIS Flagship Multimodal Edge AI Orchestrator Loop ===");
+
+    // 1. Initialize ROS2 DDS Context and Node
+    val node = initialize_dds_node();
+    val pub_handle = register_actuator_publisher(node);
+
+    // 2. Initialize Machine Learning models (ONNX, PyTorch, TensorFlow)
+    val session = initialize_ml_pipeline(
+        "tests/fixtures/identity.onnx",
+        "tests/fixtures/model.pt",
+        "tests/fixtures/model.pb"
+    );
+
+    // 3. Coordinate multi-framework perception, BLAS projection, and taped AD learning
+    var cycle = 1;
+    while cycle <= 3 {
+        print(concat("Execution Cycle: ", to_str(cycle)));
+
+        // 3a. Generate simulated multimodal inputs
+        val img_features = list();
+        list_push(img_features, 0.5);
+        list_push(img_features, -1.0);
+        list_push(img_features, 2.0);
+        list_push(img_features, 1.5);
+        list_push(img_features, 0.0);
+        list_push(img_features, -0.5);
+
+        val lidar_ranges = list();
+        list_push(lidar_ranges, 5.0);
+        list_push(lidar_ranges, 4.8);
+        list_push(lidar_ranges, 5.2);
+
+        val joint_positions = list();
+        list_push(joint_positions, 0.4);
+        list_push(joint_positions, -0.2);
+
+        val target_positions = list();
+        list_push(target_positions, 0.5);
+        list_push(target_positions, -0.1);
+
+        val sensory_input = MultimodalSensoryInput {
+            step: cycle,
+            image_features: img_features,
+            lidar_ranges: lidar_ranges,
+            joint_positions: joint_positions,
+            target_positions: target_positions
+        };
+
+        print_input_features(sensory_input);
+
+        // 3b. Run ML inference pipeline (autodetect frameworks, shape [2, 3] if length is 6)
+        val ml_out = run_multimodal_inference(session, sensory_input.image_features);
+        print("Multi-framework inference pipeline completed");
+
+        // 3c. BLAS matrix projection
+        val projection_matrix = list();
+        for i in 0 .. 18 {
+            list_push(projection_matrix, 0.5);
+        };
+        val projected = project_state_space(ml_out, projection_matrix, 6, 3);
+        print("Projected state features to control space via matmul");
+
+        // 3d. BLAS similarity
+        val coherence_vec = list();
+        list_push(coherence_vec, 1.0);
+        list_push(coherence_vec, 1.0);
+        list_push(coherence_vec, 1.0);
+        val sim = compute_sensor_similarity(projected, coherence_vec);
+        print(concat("L1 dot projection coherence: ", to_str(sim)));
+
+        // 3e. Safe allocation-free taped AD backpropagation
+        val weights = list();
+        list_push(weights, 1.0);
+        list_push(weights, 1.0);
+        val opt_results = optimize_multi_joint_policy(
+            sensory_input.joint_positions,
+            sensory_input.target_positions,
+            weights
+        );
+        print("Policy parameters optimized with zero allocation");
+
+        // 3f. Publish actuator commands
+        val primary_torque = list();
+        list_push(primary_torque, 1.2);
+        list_push(primary_torque, -0.8);
+        val secondary_torque = list();
+        list_push(secondary_torque, 0.1);
+        list_push(secondary_torque, 0.1);
+        val final_torque = blend_actuator_torques(0.9, primary_torque, secondary_torque);
+
+        publish_torque_command(pub_handle, list_get(final_torque, 0));
+
+        cycle = cycle + 1;
+    };
+
+    // 4. Shutdown DDS
+    terminate_dds_node();
+    print("Multimodal AI Orchestrator loop completed cleanly");
+
+    0
+}

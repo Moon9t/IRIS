@@ -37,8 +37,8 @@ pub fn target_preset_to_triple(preset: &str) -> Option<&'static str> {
         "linux-arm64" => Some("aarch64-unknown-linux-gnu"),
         "macos-x64" => Some("x86_64-apple-macosx14.0"),
         "macos-arm64" => Some("aarch64-apple-macosx14.0"),
-        "windows-x64" => Some("x86_64-pc-windows-gnu"),
-        "windows-arm64" => Some("aarch64-pc-windows-gnu"),
+        "windows-x64" => Some("x86_64-pc-windows-msvc"),
+        "windows-arm64" => Some("aarch64-pc-windows-msvc"),
         "riscv64-linux" => Some("riscv64gc-unknown-linux-gnu"),
         _ => None,
     }
@@ -62,11 +62,11 @@ pub fn target_data_layout(triple: &str) -> &'static str {
 pub fn native_target_triple() -> &'static str {
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        "x86_64-pc-windows-gnu"
+        "x86_64-pc-windows-msvc"
     }
     #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
     {
-        "aarch64-pc-windows-gnu"
+        "aarch64-pc-windows-msvc"
     }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     {
@@ -5398,36 +5398,107 @@ fn emit_instr_ir(
             args,
             result_ty,
         } => {
-            let fn_name = format!("iris_{}", name);
-            let mut arg_strs = Vec::new();
-            for &a in args {
-                if name == "json_stringify" || name == "type_of" {
-                    let val_str = val(a);
-                    let arg_ty = func.value_type(a);
-                    let emitted_ty = emitted_types.get(&a).map(|s| s.as_str());
-                    let boxed =
-                        box_to_ptr(out, func, a, &val_str, arg_ty, emitted_ty, gep_counter)?;
-                    arg_strs.push(format!("ptr {}", boxed));
+            if name == "ffi_open" || name == "rust_lib_open" {
+                // Call dynamic library open returning ptr, then cast to i64
+                let fn_name = format!("iris_{}", name);
+                let path_val = val(args[0]);
+                *gep_counter += 1;
+                let ptr_val = format!("%ffi_ptr_{}", *gep_counter);
+                writeln!(out, "  {} = call ptr @{}(ptr {})", ptr_val, fn_name, path_val)?;
+                writeln!(out, "  %v{} = ptrtoint ptr {} to i64", result.0, ptr_val)?;
+            } else if name == "ffi_close" {
+                // Cast i64 handle to ptr, then call iris_ffi_close returning i1
+                let handle_val = val(args[0]);
+                *gep_counter += 1;
+                let ptr_handle = format!("%ffi_h_{}", *gep_counter);
+                writeln!(out, "  {} = inttoptr i64 {} to ptr", ptr_handle, handle_val)?;
+                writeln!(out, "  %v{} = call i1 @iris_ffi_close(ptr {})", result.0, ptr_handle)?;
+            } else if name == "ffi_call" {
+                // Cast i64 handle to ptr, then call iris_ffi_call(ptr, ptr)
+                let handle_val = val(args[0]);
+                let name_val = val(args[1]);
+                *gep_counter += 1;
+                let ptr_handle = format!("%ffi_h_{}", *gep_counter);
+                writeln!(out, "  {} = inttoptr i64 {} to ptr", ptr_handle, handle_val)?;
+                writeln!(out, "  %v{} = call i64 @iris_ffi_call(ptr {}, ptr {})", result.0, ptr_handle, name_val)?;
+            } else if name == "ffi_call_i64" || name == "ffi_call_f64" || name == "ffi_call_str" || name == "ffi_call_void"
+                || name == "rust_call_i64" || name == "rust_call_f64" || name == "rust_call_void"
+            {
+                // Cast handle to ptr, allocate stack array of args if any, and dispatch
+                let handle_val = val(args[0]);
+                let name_val = val(args[1]);
+                *gep_counter += 1;
+                let ptr_handle = format!("%ffi_h_{}", *gep_counter);
+                writeln!(out, "  {} = inttoptr i64 {} to ptr", ptr_handle, handle_val)?;
+
+                let nargs = args.len() - 2;
+                let (arr_ptr, nargs_i32) = if nargs > 0 {
+                    *gep_counter += 1;
+                    let array_name = format!("%ffi_args_{}", *gep_counter);
+                    writeln!(out, "  {} = alloca [{} x i64], align 8", array_name, nargs)?;
+                    for i in 0..nargs {
+                        let a = args[i + 2];
+                        let val_str = val(a);
+                        *gep_counter += 1;
+                        let ptr_name = format!("%ffi_arg_ptr_{}", *gep_counter);
+                        writeln!(out, "  {} = getelementptr inbounds [{} x i64], ptr {}, i64 0, i64 {}", ptr_name, nargs, array_name, i)?;
+                        writeln!(out, "  store i64 {}, ptr {}", val_str, ptr_name)?;
+                    }
+                    (array_name, nargs.to_string())
                 } else {
-                    let ty_s = emitted_types.get(&a).map(|s| s.as_str()).unwrap_or("ptr");
-                    arg_strs.push(format!("{} {}", ty_s, val(a)));
+                    ("null".to_string(), "0".to_string())
+                };
+
+                let fn_name = format!("iris_{}", name);
+                let ret_llvm = match result_ty {
+                    IrType::Scalar(DType::F64) => "double",
+                    IrType::Scalar(DType::Bool) => "i1",
+                    IrType::Scalar(DType::I64) if name.ends_with("_void") => "void",
+                    IrType::Tuple(ref v) if v.is_empty() => "void",
+                    _ => "ptr",
+                };
+                if result_ty == &IrType::Scalar(DType::I64) && !name.ends_with("_void") {
+                    writeln!(out, "  %v{} = call i64 @{}(ptr {}, ptr {}, ptr {}, i32 {})", result.0, fn_name, ptr_handle, name_val, arr_ptr, nargs_i32)?;
+                } else if ret_llvm == "void" {
+                    writeln!(out, "  call void @{}(ptr {}, ptr {}, ptr {}, i32 {})", fn_name, ptr_handle, name_val, arr_ptr, nargs_i32)?;
+                    writeln!(out, "  %v{} = add i64 0, 0", result.0)?;
+                } else if ret_llvm == "double" {
+                    writeln!(out, "  %v{} = call double @{}(ptr {}, ptr {}, ptr {}, i32 {})", result.0, fn_name, ptr_handle, name_val, arr_ptr, nargs_i32)?;
+                } else {
+                    writeln!(out, "  %v{} = call ptr @{}(ptr {}, ptr {}, ptr {}, i32 {})", result.0, fn_name, ptr_handle, name_val, arr_ptr, nargs_i32)?;
                 }
+            } else {
+                let fn_name = format!("iris_{}", name);
+                let mut arg_strs = Vec::new();
+                for &a in args {
+                    if name == "json_stringify" || name == "type_of" {
+                        let val_str = val(a);
+                        let arg_ty = func.value_type(a);
+                        let emitted_ty = emitted_types.get(&a).map(|s| s.as_str());
+                        let boxed =
+                            box_to_ptr(out, func, a, &val_str, arg_ty, emitted_ty, gep_counter)?;
+                        arg_strs.push(format!("ptr {}", boxed));
+                    } else {
+                        let ty_s = emitted_types.get(&a).map(|s| s.as_str()).unwrap_or("ptr");
+                        arg_strs.push(format!("{} {}", ty_s, val(a)));
+                    }
+                }
+                // Determine LLVM return type from result_ty
+                let ret_llvm = match result_ty {
+                    IrType::Scalar(DType::I64) => "i64",
+                    IrType::Scalar(DType::F64) => "double",
+                    IrType::Scalar(DType::Bool) => "i1",
+                    _ => "ptr", // str, list, map, infer → ptr
+                };
+                writeln!(
+                    out,
+                    "  %v{} = call {} @{}({})",
+                    result.0,
+                    ret_llvm,
+                    fn_name,
+                    arg_strs.join(", ")
+                )?;
             }
-            // Determine LLVM return type from result_ty
-            let ret_llvm = match result_ty {
-                IrType::Scalar(DType::I64) => "i64",
-                IrType::Scalar(DType::F64) => "double",
-                IrType::Scalar(DType::Bool) => "i1",
-                _ => "ptr", // str, list, map, infer → ptr
-            };
-            writeln!(
-                out,
-                "  %v{} = call {} @{}({})",
-                result.0,
-                ret_llvm,
-                fn_name,
-                arg_strs.join(", ")
-            )?;
         }
     }
     Ok(())

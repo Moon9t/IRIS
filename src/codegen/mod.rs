@@ -10,6 +10,7 @@ pub mod onnx_binary;
 pub mod pgo;
 pub mod printer;
 pub mod simd;
+pub mod tensorrt;
 
 pub use build::{
     build_binary, build_binary_for_eval, build_binary_for_eval_with_target,
@@ -30,5 +31,6 @@ pub use onnx_binary::emit_onnx_binary;
 pub use pgo::{emit_pgo_instrument, emit_pgo_optimize};
 pub use printer::emit_ir_text;
 pub use simd::emit_simd;
+pub use tensorrt::emit_tensorrt;
 
 use crate::error::CodegenError;

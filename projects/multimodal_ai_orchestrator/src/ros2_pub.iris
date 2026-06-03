@@ -1,0 +1,33 @@
+// ros2_pub.iris -- Handles native ROS2 DDS context, node registration, and publishing.
+
+bring std.ros2
+
+pub def initialize_dds_node() -> i64 {
+    val status = init();
+    if status == -1 {
+        return -1
+    };
+    
+    // Create node under the "robotics" namespace
+    val node = create_node("ai_orchestrator", "robotics");
+    node
+}
+
+pub def register_actuator_publisher(node: i64) -> i64 {
+    if node == -1 {
+        return -1
+    };
+    val pub_handle = create_publisher(node, "/orchestrator/actuation", "Float64");
+    pub_handle
+}
+
+pub def publish_torque_command(pub_handle: i64, value: f64) -> bool {
+    if pub_handle == -1 {
+        return false
+    };
+    publish_float64(pub_handle, value)
+}
+
+pub def terminate_dds_node() -> bool {
+    shutdown()
+}

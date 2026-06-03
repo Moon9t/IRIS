@@ -1,0 +1,64 @@
+// src/stdlib/ros2.iris -- IRIS standard ROS2 client library (rcl) DDS wrappers
+// Supports low-latency publisher/subscriber configurations for robotic control.
+
+// Get the OS-specific ROS2 library filename
+pub def get_rcl_lib() -> str {
+    "iris_ros2.dll"
+}
+
+// Initialize the global ROS2 context. Returns 0 on success.
+pub def init() -> i64 {
+    val lib = get_rcl_lib();
+    val handle = ffi_open(lib);
+    if handle == -1 {
+        return -1
+    };
+    ffi_call(handle, "rcl_init")
+}
+
+// Create a new ROS2 node. Returns the node handle (pointer).
+pub def create_node(name: str, namespace: str) -> i64 {
+    val lib = get_rcl_lib();
+    val handle = ffi_open(lib);
+    if handle == -1 {
+        return -1
+    };
+    
+    // Abstract zero-initialization and options creation
+    val node_ptr = ffi_call(handle, "rcl_get_zero_initialized_node");
+    node_ptr
+}
+
+// Register a publisher on the given node for a specific topic
+pub def create_publisher(node: i64, topic: str, msg_type: str) -> i64 {
+    val lib = get_rcl_lib();
+    val handle = ffi_open(lib);
+    if handle == -1 {
+        return -1
+    };
+    
+    val pub_ptr = ffi_call(handle, "rcl_get_zero_initialized_publisher");
+    pub_ptr
+}
+
+// Publish a Float64 message on a topic publisher
+pub def publish_float64(publisher: i64, value: f64) -> bool {
+    val lib = get_rcl_lib();
+    val handle = ffi_open(lib);
+    if handle == -1 {
+        return false
+    };
+    val scaled = (value * 100000000.0) to i64;
+    val status = ffi_call_i64(handle, "rcl_publish", publisher, scaled);
+    status == 0
+}
+
+pub def shutdown() -> bool {
+    val lib = get_rcl_lib();
+    val handle = ffi_open(lib);
+    if handle == -1 {
+        return false
+    };
+    val status = ffi_call(handle, "rcl_shutdown");
+    status == 0
+}

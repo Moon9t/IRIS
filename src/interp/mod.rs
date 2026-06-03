@@ -5037,9 +5037,49 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
             #[cfg(windows)]
             {
                 use std::ffi::CString;
+
+                // Automatically inject known dependency paths to PATH for LoadLibrary search
+                static INJECT_PATHS: std::sync::Once = std::sync::Once::new();
+                INJECT_PATHS.call_once(|| {
+                    if std::env::var("AMENT_PREFIX_PATH").is_err() {
+                        std::env::set_var("AMENT_PREFIX_PATH", "C:\\dev\\ros2_humble\\ros2-windows");
+                    }
+                    if let Ok(old_path) = std::env::var("PATH") {
+                        let new_path = format!(
+                            "C:\\dev\\ros2_humble\\ros2-windows\\bin;\
+                             C:\\onnxruntime\\lib;\
+                             C:\\tensorflow\\lib;\
+                             C:\\libtorch\\lib;\
+                             C:\\openblas\\bin;{}",
+                            old_path
+                        );
+                        std::env::set_var("PATH", new_path);
+                    }
+                    
+                    // Windows MSVC UCRT environment block dynamic injection
+                    unsafe {
+                        let ucrt_name = b"ucrtbase.dll\0".as_ptr() as *const i8;
+                        let h_ucrt = winapi_LoadLibraryA(ucrt_name);
+                        if !h_ucrt.is_null() {
+                            let putenv_name = b"_putenv_s\0".as_ptr() as *const i8;
+                            let p_putenv = winapi_GetProcAddress(h_ucrt, putenv_name);
+                            if !p_putenv.is_null() {
+                                let putenv: unsafe extern "C" fn(*const i8, *const i8) -> i32 = std::mem::transmute(p_putenv);
+                                putenv(b"AMENT_PREFIX_PATH\0".as_ptr() as *const i8, b"C:\\dev\\ros2_humble\\ros2-windows\0".as_ptr() as *const i8);
+                                if let Ok(new_path) = std::env::var("PATH") {
+                                    let c_new_path = std::ffi::CString::new(new_path).unwrap_or_default();
+                                    putenv(b"PATH\0".as_ptr() as *const i8, c_new_path.as_ptr());
+                                }
+                            }
+                        }
+                    }
+                });
+
                 let cs = CString::new(_path.as_bytes()).unwrap_or_default();
                 let h = unsafe { winapi_LoadLibraryA(cs.as_ptr()) };
                 if h.is_null() {
+                    let err = unsafe { winapi_GetLastError() };
+                    eprintln!("[iris_interp] LoadLibraryA(\"{}\") failed with error code: {}", _path, err);
                     return Ok(IrValue::I64(-1));
                 }
                 Ok(IrValue::I64(h as i64))
@@ -5070,6 +5110,8 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
                 let cs = CString::new(_func_name.as_bytes()).unwrap_or_default();
                 let proc = unsafe { winapi_GetProcAddress(_handle as *mut u8, cs.as_ptr()) };
                 if proc.is_null() {
+                    let err = unsafe { winapi_GetLastError() };
+                    eprintln!("[iris_interp] GetProcAddress(handle: {}, \"{}\") failed with error code: {}", _handle, _func_name, err);
                     return Ok(IrValue::I64(-1));
                 }
                 let f: extern "C" fn() -> i64 = unsafe { std::mem::transmute(proc) };
@@ -5124,6 +5166,8 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
                 let cs = CString::new(_func_name.as_bytes()).unwrap_or_default();
                 let proc = unsafe { winapi_GetProcAddress(_handle as *mut u8, cs.as_ptr()) };
                 if proc.is_null() {
+                    let err = unsafe { winapi_GetLastError() };
+                    eprintln!("[iris_interp] GetProcAddress(handle: {}, \"{}\") failed in expanded FFI with error code: {}", _handle, _func_name, err);
                     return match name {
                         "ffi_call_str" => Ok(IrValue::Str(String::new())),
                         "ffi_call_f64" => Ok(IrValue::F64(0.0)),
@@ -5303,6 +5347,8 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
                 let cs = CString::new(path.as_bytes()).unwrap_or_default();
                 let h = unsafe { winapi_LoadLibraryA(cs.as_ptr()) };
                 if h.is_null() {
+                    let err = unsafe { winapi_GetLastError() };
+                    eprintln!("[iris_interp] LoadLibraryA(\"{}\") failed with error code: {}", path, err);
                     return Ok(IrValue::I64(-1));
                 }
                 Ok(IrValue::I64(h as i64))
@@ -5944,6 +5990,7 @@ extern "system" {
     fn GetProcAddress(module: *mut u8, name: *const i8) -> *mut u8;
     fn FreeLibrary(module: *mut u8) -> i32;
     fn GetModuleHandleA(name: *const i8) -> *mut u8;
+    fn GetLastError() -> u32;
 }
 #[cfg(windows)]
 use self::FreeLibrary as winapi_FreeLibrary;
@@ -5951,6 +5998,8 @@ use self::FreeLibrary as winapi_FreeLibrary;
 use self::GetProcAddress as winapi_GetProcAddress;
 #[cfg(windows)]
 use self::LoadLibraryA as winapi_LoadLibraryA;
+#[cfg(windows)]
+use self::GetLastError as winapi_GetLastError;
 
 #[cfg(unix)]
 extern "C" {

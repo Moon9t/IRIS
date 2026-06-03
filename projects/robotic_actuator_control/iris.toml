@@ -1,0 +1,6 @@
+[package]
+name = "robotic_actuator_control"
+version = "0.6.1"
+authors = ["Moon9t", "Antigravity"]
+
+[dependencies]

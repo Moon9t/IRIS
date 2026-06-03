@@ -51,6 +51,7 @@ pub mod runtime_bindings;
 pub mod security;
 pub mod stdlib;
 pub mod test_runner;
+pub mod upgrade;
 
 pub mod agent;
 pub mod inference;
@@ -136,6 +137,8 @@ pub enum EmitKind {
     /// Native binary: emit LLVM IR text intended for clang compilation via `build_binary()`.
     /// `compile()` returns the LLVM IR text; use `codegen::build_binary()` to produce an exe.
     Binary,
+    /// TensorRT backend compiler target.
+    TensorRt,
 }
 
 /// Compiles multiple IRIS source strings together, supporting `bring module_name`,
@@ -396,6 +399,7 @@ fn compile_ast(
         EmitKind::PgoOptimize => Ok(emit_pgo_optimize(&ir_module, "")?),
         EmitKind::Graph | EmitKind::Onnx | EmitKind::OnnxBinary => unreachable!(),
         EmitKind::Eval => eval_ir_module_internal(&ir_module),
+        EmitKind::TensorRt => Ok(crate::codegen::tensorrt::emit_tensorrt(&ir_module)?),
     }
 }
 

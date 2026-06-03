@@ -1,0 +1,28 @@
+// ros2_client.iris -- Handles safe ROS2 node registration and publisher DDS interface.
+
+bring std.ros2
+
+pub def setup_actuator_node() -> i64 {
+    val status = init();
+    if status == -1 {
+        return -1
+    };
+    
+    // Create a node dedicated to joint actuator feedback loops
+    val node = create_node("actuator_loop", "robotics");
+    node
+}
+
+pub def setup_joint_publisher(node: i64) -> i64 {
+    // Create publisher on a joint topic
+    val pub_handle = create_publisher(node, "/joint_states", "Float64");
+    pub_handle
+}
+
+pub def publish_actuation(pub_handle: i64, value: f64) -> bool {
+    publish_float64(pub_handle, value)
+}
+
+pub def teardown() -> bool {
+    shutdown()
+}

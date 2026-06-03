@@ -138,6 +138,12 @@ fn run() {
                 process::exit(1);
             }
         }
+        Ok(ParseArgsResult::Upgrade { check, yes, force }) => {
+            if let Err(e) = iris::upgrade::run_upgrade_command(check, yes, force) {
+                eprintln!("error: {}", e);
+                process::exit(1);
+            }
+        }
         Ok(ParseArgsResult::Args(cli)) => {
             if cli.sandbox {
                 iris::security::set_security_policy(iris::security::SecurityPolicy::sandboxed());

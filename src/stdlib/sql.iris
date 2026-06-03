@@ -29,7 +29,8 @@ pub def sql_exec_params(db : i64, sql : str, params : list<str>) -> i64 {
 }
 
 pub def sql_query_xy_params(db : i64, sql : str, params : list<str>, x_idx : i64, y_idx : i64) -> (list<f64>, list<f64>) {
-    sql_rows_to_xy(sql_query_params(db, sql, params), x_idx, y_idx)
+    val rows = sql_query_params(db, sql, params);
+    sql_rows_to_xy(rows, x_idx, y_idx)
 }
 
 pub def sql_parse_f64_or_zero(s : str) -> f64 {
@@ -65,5 +66,6 @@ pub def sql_rows_to_xy(rows : list<list<str>>, x_idx : i64, y_idx : i64) -> (lis
 }
 
 pub def sql_query_xy(db : i64, sql : str, x_idx : i64, y_idx : i64) -> (list<f64>, list<f64>) {
-    sql_rows_to_xy(sql_query(db, sql), x_idx, y_idx)
+    val rows = sql_query(db, sql);
+    sql_rows_to_xy(rows, x_idx, y_idx)
 }

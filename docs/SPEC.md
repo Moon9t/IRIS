@@ -1,6 +1,6 @@
 # IRIS Language Specification
 
-**Version 0.5.0**
+**Version 0.6.1**
 **Last updated: 2026-05-26**
 
 > This document defines the syntax, semantics, and type system of the IRIS
@@ -944,7 +944,7 @@ when x {
 }
 ```
 
-> **Implementation note (v0.5.0):** Guard expressions are fully supported and
+> **Implementation note (v0.6.1):** Guard expressions are fully supported and
 > integrated natively at runtime in both JIT and compiled binary builds.
 
 ### 7.3 Exhaustiveness

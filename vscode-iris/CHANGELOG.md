@@ -1,6 +1,6 @@
 # IRIS Language Extension Changelog
 
-## 0.5.0
+## 0.6.1
 
 ### New Features
 

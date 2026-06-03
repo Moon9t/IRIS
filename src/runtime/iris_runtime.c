@@ -1481,14 +1481,15 @@ int64_t iris_sparse_nnz(IrisSparse* sp) {
 #endif
 
 #define IRIS_TAPE_MAGIC ((uint64_t)0x4952495354415045ULL)
+#define IRIS_TAPE_ARENA_SIZE 1048576
 
 typedef struct IrisTapeNode {
     uint64_t               magic;
     double                 primal;
     double                 grad;
-    char*                  op;
-    struct IrisTapeNode**  parents;
-    double*                parent_primals;
+    const char*            op;
+    struct IrisTapeNode*   parents[2];
+    double                 parent_primals[2];
     int64_t                parent_count;
     uint64_t               grad_epoch;
     uint64_t               visit_epoch;
@@ -1499,6 +1500,10 @@ typedef struct {
     size_t         len;
     size_t         cap;
 } IrisTapeVec;
+
+static IRIS_THREAD_LOCAL IrisTapeNode iris_tape_arena[IRIS_TAPE_ARENA_SIZE];
+static IRIS_THREAD_LOCAL size_t iris_tape_arena_index = 0;
+static IRIS_THREAD_LOCAL IrisTapeNode* iris_topo_buffer[IRIS_TAPE_ARENA_SIZE];
 
 static IRIS_THREAD_LOCAL uint64_t iris_tape_grad_epoch  = 0;
 static IRIS_THREAD_LOCAL uint64_t iris_tape_visit_epoch = 0;
@@ -1515,11 +1520,9 @@ static uint64_t iris_tape_next_epoch(uint64_t* epoch) {
 }
 
 static void iris_tape_vec_push(IrisTapeVec* vec, IrisTapeNode* node) {
-    if (vec->len == vec->cap) {
-        vec->cap = vec->cap ? (vec->cap * 2) : 8;
-        vec->data = xrealloc(vec->data, vec->cap * sizeof(IrisTapeNode*));
+    if (vec->len < vec->cap) {
+        vec->data[vec->len++] = node;
     }
-    vec->data[vec->len++] = node;
 }
 
 static void iris_tape_collect_topo(IrisTapeNode* node, uint64_t visit_epoch, IrisTapeVec* topo) {
@@ -1547,25 +1550,27 @@ static void iris_tape_accumulate(IrisTapeNode* parent, double delta, uint64_t gr
 
 void* iris_tape_record(double value, const char* op, int64_t parent_count,
                        void* const* parents, const double* parent_primals) {
-    IrisTapeNode* node = xcalloc(1, sizeof(IrisTapeNode));
+    if (iris_tape_arena_index >= IRIS_TAPE_ARENA_SIZE) {
+        iris_tape_arena_index = 0;
+    }
+    IrisTapeNode* node = &iris_tape_arena[iris_tape_arena_index++];
     node->magic = IRIS_TAPE_MAGIC;
     node->primal = value;
-    node->op = xstrdup(op ? op : "");
-    node->parent_count = parent_count > 0 ? parent_count : 0;
+    node->op = op ? op : "";
+    node->parent_count = parent_count > 0 ? (parent_count > 2 ? 2 : parent_count) : 0;
+    node->grad = 0.0;
+    node->grad_epoch = 0;
+    node->visit_epoch = 0;
 
-    if (node->parent_count > 0) {
-        node->parents = xcalloc((size_t)node->parent_count, sizeof(IrisTapeNode*));
-        node->parent_primals = xcalloc((size_t)node->parent_count, sizeof(double));
-        for (int64_t i = 0; i < node->parent_count; i++) {
-            const void* parent = parents ? parents[i] : NULL;
-            node->parents[i] = iris_is_tape_node(parent) ? (IrisTapeNode*)parent : NULL;
-            if (parent_primals) {
-                node->parent_primals[i] = parent_primals[i];
-            } else if (node->parents[i]) {
-                node->parent_primals[i] = node->parents[i]->primal;
-            } else {
-                node->parent_primals[i] = 0.0;
-            }
+    for (int64_t i = 0; i < node->parent_count; i++) {
+        const void* parent = parents ? parents[i] : NULL;
+        node->parents[i] = iris_is_tape_node(parent) ? (IrisTapeNode*)parent : NULL;
+        if (parent_primals) {
+            node->parent_primals[i] = parent_primals[i];
+        } else if (node->parents[i]) {
+            node->parent_primals[i] = node->parents[i]->primal;
+        } else {
+            node->parent_primals[i] = 0.0;
         }
     }
 
@@ -1576,7 +1581,11 @@ void iris_backward(void* loss) {
     IrisTapeNode* loss_node = iris_is_tape_node(loss) ? (IrisTapeNode*)loss : NULL;
     if (!loss_node) return;
 
-    IrisTapeVec topo = {0};
+    IrisTapeVec topo;
+    topo.data = iris_topo_buffer;
+    topo.len = 0;
+    topo.cap = IRIS_TAPE_ARENA_SIZE;
+
     uint64_t visit_epoch = iris_tape_next_epoch(&iris_tape_visit_epoch);
     uint64_t grad_epoch = iris_tape_next_epoch(&iris_tape_grad_epoch);
 
@@ -1680,7 +1689,8 @@ void iris_backward(void* loss) {
         }
     }
 
-    free(topo.data);
+    // Reset tape arena index for deterministic memory reuse in the next training step
+    iris_tape_arena_index = 0;
 }
 
 double iris_tape_grad(void* node) {
@@ -3938,7 +3948,39 @@ IrisList* iris_bitset_clear(IrisList* bs, int64_t pos) {
 void* iris_ffi_open(const char* path) {
     if (!path) return NULL;
 #ifdef _WIN32
-    return (void*)LoadLibraryA(path);
+    // Automatically inject known dependency paths to PATH for LoadLibrary search
+    static int paths_injected = 0;
+    if (!paths_injected) {
+        paths_injected = 1;
+        
+        // 1. Ensure AMENT_PREFIX_PATH is set
+        if (!getenv("AMENT_PREFIX_PATH")) {
+            _putenv_s("AMENT_PREFIX_PATH", "C:\\dev\\ros2_humble\\ros2-windows");
+            SetEnvironmentVariableA("AMENT_PREFIX_PATH", "C:\\dev\\ros2_humble\\ros2-windows");
+        }
+        
+        // 2. Add dependencies to PATH
+        char old_path[32768];
+        DWORD len = GetEnvironmentVariableA("PATH", old_path, sizeof(old_path));
+        if (len > 0 && len < sizeof(old_path)) {
+            char new_path[32768];
+            snprintf(new_path, sizeof(new_path),
+                "C:\\dev\\ros2_humble\\ros2-windows\\bin;"
+                "C:\\onnxruntime\\lib;"
+                "C:\\tensorflow\\lib;"
+                "C:\\libtorch\\lib;"
+                "C:\\openblas\\bin;%s",
+                old_path);
+            _putenv_s("PATH", new_path);
+            SetEnvironmentVariableA("PATH", new_path);
+        }
+    }
+
+    void* h = (void*)LoadLibraryA(path);
+    if (!h) {
+        fprintf(stderr, "[iris_runtime] LoadLibraryA(\"%s\") failed with error code: %lu\n", path, GetLastError());
+    }
+    return h;
 #elif defined(__unix__) || defined(__APPLE__)
     return dlopen(path, RTLD_LAZY);
 #else

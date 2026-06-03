@@ -3,7 +3,7 @@
 # build-rpm.sh — Build an .rpm package for IRIS Language
 # ──────────────────────────────────────────────────────────────────────────
 # Usage:
-#   ./installer/linux/build-rpm.sh [--version 0.5.0] [--arch x86_64]
+#   ./installer/linux/build-rpm.sh [--version 0.6.1] [--arch x86_64]
 #
 # Produces: installer/dist/iris-<version>-1.<arch>.rpm
 # Requires: rpmbuild (from rpm or rpm-build package)
@@ -14,7 +14,7 @@
 # ──────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-VERSION="0.5.0"
+VERSION="0.6.1"
 ARCH="x86_64"
 RELEASE="1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

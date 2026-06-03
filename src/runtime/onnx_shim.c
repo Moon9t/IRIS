@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 // Build-time switch: if ONNX_RUNTIME_ENABLED is defined, include ORT C API
 #ifdef ONNX_RUNTIME_ENABLED
@@ -30,8 +33,31 @@ void* iris_onnx_session_create(const char* model_path) {
     if (status) { fprintf(stderr, "iris: ORT CreateSessionOptions failed\n"); g_ort->ReleaseStatus(status); g_ort->ReleaseEnv(env); return NULL; }
     g_ort->SetIntraOpNumThreads(sess_opts, 1);
     OrtSession* session = NULL;
+#ifdef _WIN32
+    wchar_t w_model_path[4096];
+    int w_len = MultiByteToWideChar(CP_UTF8, 0, model_path, -1, w_model_path, 4096);
+    if (w_len <= 0) {
+        fprintf(stderr, "iris: failed to convert model path to wide string\n");
+        g_ort->ReleaseSessionOptions(sess_opts);
+        g_ort->ReleaseEnv(env);
+        return NULL;
+    }
+    status = g_ort->CreateSession(env, w_model_path, sess_opts, &session);
+#else
     status = g_ort->CreateSession(env, model_path, sess_opts, &session);
-    if (status) { fprintf(stderr, "iris: ORT CreateSession failed\n"); g_ort->ReleaseStatus(status); g_ort->ReleaseSessionOptions(sess_opts); g_ort->ReleaseEnv(env); return NULL; }
+#endif
+    if (status) {
+        fprintf(stderr, "iris: ORT CreateSession failed\n");
+        // Print ORT error message if available
+        const char* msg = g_ort->GetErrorMessage(status);
+        if (msg) {
+            fprintf(stderr, "iris: ORT error: %s\n", msg);
+        }
+        g_ort->ReleaseStatus(status);
+        g_ort->ReleaseSessionOptions(sess_opts);
+        g_ort->ReleaseEnv(env);
+        return NULL;
+    }
     OrtAllocator* allocator = NULL;
     g_ort->GetAllocatorWithDefaultOptions(&allocator);
     ONNXModel* m = malloc(sizeof(ONNXModel));
@@ -93,8 +119,17 @@ int iris_onnx_session_run(void* session, IrisTensor** inputs, size_t n_inputs, I
 
     // Run the session
     OrtRunOptions* run_opts = NULL;
-    OrtValue** output_values = NULL;
-    status = g_ort->Run(m->session, run_opts, input_names, (const OrtValue* const*)input_tensors, n_inputs, output_names, num_output_nodes, &output_values);
+    OrtValue** output_values = calloc(num_output_nodes, sizeof(OrtValue*));
+    if (!output_values) {
+        for (size_t i = 0; i < n_inputs; ++i) {
+            if (input_tensors[i]) g_ort->ReleaseValue(input_tensors[i]);
+        }
+        free(input_tensors);
+        free(input_names);
+        free(output_names);
+        return -1;
+    }
+    status = g_ort->Run(m->session, run_opts, input_names, (const OrtValue* const*)input_tensors, n_inputs, output_names, num_output_nodes, output_values);
     
     // Cleanup input tensors and names
     for (size_t i = 0; i < n_inputs; ++i) {
@@ -102,11 +137,25 @@ int iris_onnx_session_run(void* session, IrisTensor** inputs, size_t n_inputs, I
     }
     free(input_tensors);
 
-    if (status) { g_ort->ReleaseStatus(status); free(input_names); free(output_names); return -1; }
+    if (status) {
+        g_ort->ReleaseStatus(status);
+        free(output_values);
+        free(input_names);
+        free(output_names);
+        return -1;
+    }
 
     // Convert output OrtValues to IrisTensor
     *outputs = malloc(sizeof(IrisTensor*) * num_output_nodes);
-    if (!*outputs) { free(input_names); free(output_names); return -1; }
+    if (!*outputs) {
+        for (size_t i = 0; i < num_output_nodes; ++i) {
+            if (output_values[i]) g_ort->ReleaseValue(output_values[i]);
+        }
+        free(output_values);
+        free(input_names);
+        free(output_names);
+        return -1;
+    }
     *n_outputs = num_output_nodes;
 
     for (size_t i = 0; i < num_output_nodes; ++i) {

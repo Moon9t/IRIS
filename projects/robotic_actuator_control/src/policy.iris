@@ -1,0 +1,28 @@
+// policy.iris -- Edge AI control policy learning via Deterministic Reverse-Mode AD.
+
+pub def adjust_joint_effort(position: f64, target: f64, w: f64) -> list<f64> {
+    // Register leaf inputs on the AD tape (O(1) pre-allocated memory arena)
+    val tape_pos = tape(position);
+    val tape_target = tape(target);
+    val tape_w = tape(w);
+    
+    // Joint trajectory error calculation
+    val error = tape_target - tape_pos;
+    
+    // Actuator torque policy: torque = w * error
+    val torque = tape_w * error;
+    
+    // Mean Squared Loss to optimize
+    val loss = error * error;
+    
+    // Backpropagate loss statically through the allocation-free tape sorting
+    val _ = backward(loss);
+    
+    // Extract gradient d(loss)/d(w)
+    val dw = grad(tape_w);
+    
+    val res: list<f64> = list();
+    val _ = list_push(res, torque);
+    val _ = list_push(res, dw);
+    res
+}

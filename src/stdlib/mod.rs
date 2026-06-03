@@ -43,8 +43,10 @@ pub fn stdlib_source(name: &str) -> Option<&'static str> {
         // Autonomous Intelligent Systems
         "ais" => Some(include_str!("ais.iris")),
         "rl" => Some(include_str!("rl.iris")),
+        "ros2" => Some(include_str!("ros2.iris")),
         // Networking
         "http_server" => Some(include_str!("http_server.iris")),
         _ => None,
     }
 }
+// Touched to force stdlib rebuild.

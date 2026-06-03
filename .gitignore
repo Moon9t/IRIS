@@ -62,7 +62,6 @@ vscode-iris/*.vsix
 # ── Misc temp files ──
 *.log
 test_output*.txt
-*.txt
 
 # ── Stale build / debug artifacts in repo root ──
 /*.exe
@@ -114,15 +113,21 @@ tests/_all_tests.txt
 .typst_cache/
 .typst
 *.pdb
-*.json
 
 # ── ML Models & Visualizations ──
 models/
-*.svg
-projects/*/*.exe
 
 # ── CI Artifacts ──
 /ci-artifacts/
 /sqlite3.dll
 /scratch_test.iris
 /IRIS-Book.pdf
+
+# -- Python --
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+.build_new_book.py

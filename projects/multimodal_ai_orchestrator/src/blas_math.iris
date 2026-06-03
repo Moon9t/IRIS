@@ -1,0 +1,20 @@
+// blas_math.iris -- High-performance mathematical acceleration utilizing BLAS.
+
+pub def project_state_space(features: list<f64>, projection_matrix: list<f64>, cols: i64, target_cols: i64) -> list<f64> {
+    // Project 1x(cols) feature vector to 1x(target_cols) state vector via matrix multiplication:
+    // C = A @ B, where A is 1 x cols, B is cols x target_cols
+    val c = matmul(features, 1, cols, projection_matrix, target_cols);
+    c
+}
+
+pub def compute_sensor_similarity(a: list<f64>, b: list<f64>) -> f64 {
+    // Dot product similarity between two state/sensor vectors using BLAS list_dot_blas
+    val dot_val = list_dot_blas(a, b);
+    dot_val
+}
+
+pub def blend_actuator_torques(alpha: f64, primary_torque: list<f64>, secondary_torque: list<f64>) -> list<f64> {
+    // Compute alpha * primary_torque + secondary_torque using BLAS list_axpy_blas
+    val blended = list_axpy_blas(alpha, primary_torque, secondary_torque);
+    blended
+}

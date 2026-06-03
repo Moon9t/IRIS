@@ -4,14 +4,14 @@
 # Detects the current OS/arch and builds all applicable installer formats.
 #
 # Usage:
-#   ./installer/build-all.sh [--version 0.5.0] [--skip-build] [--format deb|rpm|appimage|pkg|dmg|all]
+#   ./installer/build-all.sh [--version 0.6.1] [--skip-build] [--format deb|rpm|appimage|pkg|dmg|all]
 #
 # Produces all outputs in installer/dist/
 # ─────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
 
-VERSION="0.5.0"
+VERSION="0.6.1"
 SKIP_BUILD=false
 FORMAT="all"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

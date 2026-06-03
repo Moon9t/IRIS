@@ -2756,6 +2756,28 @@ impl<'m> Lowerer<'m> {
             return Ok((result, IrType::Scalar(DType::F64)));
         }
 
+        // Built-in: to_i64(v) → Cast to i64
+        if callee.name == "to_i64" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "to_i64() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (operand, from_ty) = self.lower_expr(&args[0])?;
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::Cast {
+                    result,
+                    operand,
+                    from_ty,
+                    to_ty: IrType::Scalar(DType::I64),
+                },
+                Some(IrType::Scalar(DType::I64)),
+            );
+            return Ok((result, IrType::Scalar(DType::I64)));
+        }
+
         // Built-in: format("...", args...) — split on "{}" and concat with args
         if callee.name == "format" {
             if args.is_empty() {

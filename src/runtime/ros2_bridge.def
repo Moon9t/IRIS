@@ -1,0 +1,7 @@
+LIBRARY iris_ros2
+EXPORTS
+    rcl_init = iris_rcl_init
+    rcl_get_zero_initialized_node = iris_rcl_get_zero_initialized_node
+    rcl_get_zero_initialized_publisher = iris_rcl_get_zero_initialized_publisher
+    rcl_publish = iris_rcl_publish
+    rcl_shutdown = iris_rcl_shutdown

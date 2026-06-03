@@ -1,0 +1,44 @@
+// ad_policy.iris -- Multi-joint control policy optimization using safe allocation-free AD tape.
+
+pub def optimize_joint_weight(position: f64, target: f64, current_weight: f64) -> list<f64> {
+    // 1. Allocate inputs on the O(1) static stack tape
+    val tape_pos = tape(position);
+    val tape_target = tape(target);
+    val tape_w = tape(current_weight);
+    
+    // 2. Trajectory gap
+    val error = tape_target - tape_pos;
+    
+    // 3. Control command effort: torque = weight * error
+    val torque = tape_w * error;
+    
+    // 4. Safety loss metric: error^2
+    val loss = error * error;
+    
+    // 5. Backpropagate through the pre-allocated arena
+    val _ = backward(loss);
+    
+    // 6. Extract parametric policy gradient
+    val dw = grad(tape_w);
+    
+    val result: list<f64> = list();
+    list_push(result, torque);
+    list_push(result, dw);
+    result
+}
+
+pub def optimize_multi_joint_policy(positions: list<f64>, targets: list<f64>, weights: list<f64>) -> list<list<f64>> {
+    val outputs: list<list<f64>> = list();
+    val n = list_len(positions);
+    
+    for i in 0 .. n {
+        val p = list_get(positions, i);
+        val t = list_get(targets, i);
+        val w = list_get(weights, i);
+        
+        val joint_opt = optimize_joint_weight(p, t, w);
+        list_push(outputs, joint_opt);
+    }
+    
+    outputs
+}

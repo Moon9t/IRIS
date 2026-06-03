@@ -3,14 +3,14 @@
 # build-pkg.sh — Build a macOS .pkg installer for IRIS Language
 # ──────────────────────────────────────────────────────────────────────────
 # Usage:
-#   ./installer/macos/build-pkg.sh [--version 0.5.0] [--arch arm64]
+#   ./installer/macos/build-pkg.sh [--version 0.6.1] [--arch arm64]
 #
 # Produces: installer/dist/IRIS-<version>-macos-<arch>.pkg
 # Requires: macOS with pkgbuild and productbuild
 # ──────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-VERSION="0.5.0"
+VERSION="0.6.1"
 ARCH="$(uname -m)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"

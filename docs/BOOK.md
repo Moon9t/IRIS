@@ -299,20 +299,20 @@ IRIS ships as a self-contained release archive that includes the `iris` binary, 
 **Option A — `.deb` package (Debian / Ubuntu)**
 
 ```bash
-sudo dpkg -i iris_0.6.0_amd64.deb   # or arm64
+sudo dpkg -i iris_0.6.1_amd64.deb   # or arm64
 ```
 
 **Option B — `.rpm` package (Fedora / RHEL / openSUSE)**
 
 ```bash
-sudo rpm -i iris-0.6.0-1.x86_64.rpm   # or aarch64
+sudo rpm -i iris-0.6.1-1.x86_64.rpm   # or aarch64
 ```
 
 **Option C — AppImage (any distro)**
 
 ```bash
-chmod +x iris-0.6.0-x86_64.AppImage
-./iris-0.6.0-x86_64.AppImage --version
+chmod +x iris-0.6.1-x86_64.AppImage
+./iris-0.6.1-x86_64.AppImage --version
 ```
 
 **Option D — Shell installer**
@@ -327,7 +327,7 @@ This installs `iris` to `~/.iris/bin` and adds it to your `PATH`.
 
 **Option A — `.pkg` installer**
 
-Download and double-click `iris-0.6.0-arm64.pkg` (Apple Silicon) or `iris-0.6.0-x64.pkg` (Intel). The installer places IRIS in `/usr/local/bin`.
+Download and double-click `iris-0.6.1-arm64.pkg` (Apple Silicon) or `iris-0.6.1-x64.pkg` (Intel). The installer places IRIS in `/usr/local/bin`.
 
 **Option B — Shell installer**
 
@@ -347,11 +347,11 @@ brew install iris-lang   # planned for a future release
 
 **Option A — Installer (.exe)**
 
-Download and run `iris-0.6.0-setup.exe`. The Inno Setup installer bundles the LLVM toolchain, MinGW sysroot, and the IRIS VS Code extension. It adds `iris` to your `PATH` automatically.
+Download and run `iris-0.6.1-setup.exe`. The Inno Setup installer bundles the LLVM toolchain, MinGW sysroot, and the IRIS VS Code extension. It adds `iris` to your `PATH` automatically.
 
 **Option B — Portable .zip**
 
-Download `iris-0.6.0-windows-x64.zip`, extract it to a folder (for example, `C:\tools\iris\`), and add that folder to your `PATH`.
+Download `iris-0.6.1-windows-x64.zip`, extract it to a folder (for example, `C:\tools\iris\`), and add that folder to your `PATH`.
 
 **Option C — PowerShell installer**
 
@@ -370,13 +370,13 @@ iris --version
 You should see output like:
 
 ```
-iris 0.6.0 (abc1234 2026-03-02)
+iris 0.6.1 (abc1234 2026-03-02)
 IRIS — Intermediate Representation for Intelligent Systems
 Copyright (C) 2024-2026 Moon & IRIS Project Contributors
 License: GPL-2.0-or-later <https://www.gnu.org/licenses/old-licenses/gpl-2.0.html>
 
 Compiler:
-  Version:       0.6.0
+  Version:       0.6.1
   Git commit:    abc1234567890abcdef1234567890abcdef123456
   Git branch:    main
   Build date:    2026-03-02
@@ -452,7 +452,7 @@ iris repl
 You will see:
 
 ```
-IRIS 0.6.0 REPL
+IRIS 0.6.1 REPL
   :help for commands · :quit to exit · Ctrl+D to exit
 
 >>
@@ -3338,9 +3338,9 @@ bring std.json
 def main() -> i64 {
     val obj = json_object();
     json_set(obj, "name", "IRIS");
-    json_set(obj, "version", "0.6.0");
+    json_set(obj, "version", "0.6.1");
     val s = json_emit(obj);
-    print(s);   // {"name": "IRIS", "version": "0.6.0"}
+    print(s);   // {"name": "IRIS", "version": "0.6.1"}
     0
 }
 ```
@@ -3765,7 +3765,7 @@ The official IRIS VS Code extension (`iris-lang`) bundles the LSP client, DAP cl
 #### Installation
 
 ```
-code --install-extension iris-lang-0.6.0.vsix
+code --install-extension iris-lang-0.6.1.vsix
 ```
 
 Or install from the Extensions panel in VS Code by searching for "IRIS Language".
@@ -3897,7 +3897,7 @@ The manifest defines package metadata and third-party dependencies:
 ```toml
 [package]
 name = "my_project"
-version = "0.6.0"
+version = "0.6.1"
 authors = ["Moon9t"]
 
 [dependencies]
@@ -4257,7 +4257,7 @@ The manifest defines package metadata and third-party dependencies:
 ```toml
 [package]
 name = "my_project"
-version = "0.6.0"
+version = "0.6.1"
 authors = ["Moon9t"]
 
 [dependencies]
@@ -4809,7 +4809,7 @@ IRIS has a detailed diagnostic code system cross-referenced directly with the `i
 
 ---
 
-**Version**: Corresponds to IRIS compiler version 0.6.0
+**Version**: Corresponds to IRIS compiler version 0.6.1
 **Platform**: Tested on Windows 10/11, Linux (x86_64), macOS (aarch64) with LLVM 17+ and MinGW ucrt64
 **License**: GNU General Public License v2.0 or later — see [LICENSE](LICENSE)
 **Source**: [github.com/moon9t/iris](https://github.com/moon9t/iris)

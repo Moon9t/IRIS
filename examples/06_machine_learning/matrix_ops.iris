@@ -144,6 +144,11 @@ def mat_print(m: Matrix, name: str) -> i64 {
     0
 }
 
+def mat_mul_blas(a: Matrix, b: Matrix) -> Matrix {
+    val res_data = matmul(a.data, a.rows, a.cols, b.data, b.cols);
+    Matrix { data: res_data, rows: a.rows, cols: b.cols }
+}
+
 def main() -> i64 {
     val a_data = list()
     push(a_data, 1.0 to f64); push(a_data, 2.0 to f64); push(a_data, 3.0 to f64);
@@ -159,7 +164,10 @@ def main() -> i64 {
     val _pb = mat_print(b, "B")
 
     val c = mat_mul(a, b)
-    val _pc = mat_print(c, "A @ B")
+    val _pc = mat_print(c, "A @ B (Manual Loop)")
+
+    val c_blas = mat_mul_blas(a, b)
+    val _pc_blas = mat_print(c_blas, "A @ B (Optimized BLAS matmul)")
 
     val at = mat_transpose(a)
     val _pat = mat_print(at, "A^T")
@@ -178,3 +186,4 @@ def main() -> i64 {
 
     0
 }
+

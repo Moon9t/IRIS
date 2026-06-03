@@ -2,17 +2,35 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/stat.h>
+#endif
 
 #if defined(TENSORFLOW_ENABLED)
 #include <tensorflow/c/c_api.h>
 
-struct TFModel { TF_Graph* graph; TF_Session* session; TF_Status* status; };
+typedef struct TFModel { TF_Graph* graph; TF_Session* session; TF_Status* status; } TFModel;
 
 static void deallocator_noop(void* data, size_t len, void* arg) {
     (void)data; (void)len; (void)arg;
 }
 
 void* iris_tf_load_saved_model(const char* path) {
+    if (!path) return NULL;
+
+#ifdef _WIN32
+    DWORD attrs = GetFileAttributesA(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES) {
+        return NULL;
+    }
+#else
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        return NULL;
+    }
+#endif
     TF_Status* status = TF_NewStatus();
     TF_Graph* graph = TF_NewGraph();
     TF_SessionOptions* opts = TF_NewSessionOptions();

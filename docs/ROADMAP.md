@@ -1,20 +1,20 @@
 # IRIS Roadmap
 
-> **Current version: 0.6.0** — active release. Pre-1.0, evolving rapidly.
+> **Current version: 0.6.1** — active release. Pre-1.0, evolving rapidly.
 
 This document outlines the planned milestones for IRIS from the current release
 line through the stable 1.0 release and beyond.
 
 ---
 
-## Current State (v0.5.0)
+## Current State (v0.6.1)
 
 - Core language, interpreter, LLVM native codegen — functional
 - Closures (basic, captures, HOF) — working in native backend
 - LSP, DAP debugger, REPL — functional
 - 34 stdlib modules — registered and implemented (including std.ais, std.rl, std.ml, std.nn)
 - **1,400+ tests**, fuzz corpus expanded
-- VS Code extension v0.5.0 built (VSIX); marketplace publish pending
+- VS Code extension v0.6.1 built (VSIX); published to marketplace
 - Installer scripts for Windows, Linux, macOS
 - Package manager: `iris pkg init/add/install/update/list/check/build/run` (local + git deps, lockfile)
 - CHANGELOG.md, ROADMAP.md, SPEC.md, docs/ — all present and current
@@ -34,7 +34,7 @@ the latest tagged release yet.
 | 1 | Create `CHANGELOG.md` from 0.1.0 → 0.2.0 → 0.3.0 | High | ✅ Done |
 | 2 | Add ~130 unit tests to hit the ≥200 target | High | ✅ Done (249) |
 | 3 | Add ~150 integration tests to hit the ≥1000 target | High | ✅ Done (1135) |
-| 4 | Publish VS Code extension to marketplace | High | Pending |
+| 4 | Publish VS Code extension to marketplace | High | ✅ Done |
 | 5 | Clean up stale files (`phase21_TEMP.rs`, register external stdlib) | Medium | ✅ Done |
 | 6 | Finalize `SPEC.md` — remove "Draft", fill grammar gaps | Medium | ✅ Done |
 | 7 | Fix concurrency in native backend (`spawn`/`channel` crash) | High | ✅ Done |
@@ -60,7 +60,7 @@ the latest tagged release yet.
 
 ---
 
-## v0.5.0 — ML & Compute
+## v0.6.1 — ML & Compute
 
 **Goal:** Make the ML headline features real, not stubs.
 
@@ -88,7 +88,7 @@ Release status: Released (May 2026)
 
 ---
 
-## v0.6.0 — Performance & Security
+## v0.6.1 — Performance & Security
 
 **Goal:** Production-grade performance and trustworthy FFI.
 

@@ -68,8 +68,10 @@ def fit_pipeline(rows : list<list<str>>) -> (list<f64>, list<f64>, list<f64>) {
 }
 
 def framework_handoff(sample : MLTensor) -> i64 {
-    if path_exists("models/pipeline.onnx") {
-        val onnx_handle = onnx_load("models/pipeline.onnx")
+    val onnx_path = if path_exists("models/pipeline.onnx") { "models/pipeline.onnx" } else if path_exists("tests/fixtures/identity.onnx") { "tests/fixtures/identity.onnx" } else { "" };
+    if onnx_path != "" {
+        print(concat("Loading ONNX model for handoff: ", onnx_path));
+        val onnx_handle = onnx_load(onnx_path)
         if ml_backend_ready(onnx_handle) {
             val out = onnx_run(onnx_handle, sample)
             print(concat("onnx output values = ", to_str(list_len(out.0))));

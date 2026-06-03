@@ -4,12 +4,30 @@
 #if defined(LIBTORCH_ENABLED)
 #include <torch/script.h>
 #include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/stat.h>
+#endif
 
 struct PyTorchModel {
     std::shared_ptr<torch::jit::script::Module> module;
 };
 
 extern "C" void* iris_pytorch_load(const char* model_path) {
+    if (!model_path) return NULL;
+#ifdef _WIN32
+    DWORD attrs = GetFileAttributesA(model_path);
+    if (attrs == INVALID_FILE_ATTRIBUTES) {
+        return NULL;
+    }
+#else
+    struct stat st;
+    if (stat(model_path, &st) != 0) {
+        return NULL;
+    }
+#endif
+
     try {
         auto module = std::make_shared<torch::jit::script::Module>(torch::jit::load(model_path));
         PyTorchModel* m = new PyTorchModel();

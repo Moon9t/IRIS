@@ -1,6 +1,6 @@
 # IRIS Stability Policy
 
-> **Current version: 0.5.0** — IRIS is pre-1.0 and evolving rapidly.
+> **Current version: 0.6.1** — IRIS is pre-1.0 and evolving rapidly.
 > The current locked language/tooling surface is tracked in
 > [`docs/current-language-lock.md`](docs/current-language-lock.md).
 
@@ -29,7 +29,7 @@ While the version is `0.x.y`:
 
 - **MINOR** bumps (`0.3 → 0.4`) may include breaking changes but must be
   documented in `CHANGELOG.md` under a **Breaking** section.
-- **PATCH** bumps (`0.5.0 → 0.5.1`) are always backward-compatible.
+- **PATCH** bumps (`0.6.1 → 0.5.1`) are always backward-compatible.
 - Migration guides are provided for any breaking change.
 
 ### Post-1.0 Rules
@@ -58,6 +58,11 @@ and will not change in backward-incompatible ways without a major version bump.
 - Pattern matching (`when`)
 - Standard builtins: `print`, `len`, `concat`, `to_str`, etc.
 - CLI: `iris run`, `iris build`, `iris repl`
+- ML built-ins: `tensor<T,[dims]>`, `einsum`, `grad<T>`, `sparse<T>`
+- Model DSL (`model { ... }`)
+- ONNX/CUDA/SIMD codegen targets
+- DAP debugger protocol
+- `atomic<T>`, `mutex<T>`
 
 ### Tier 2 — Provisional
 
@@ -76,11 +81,8 @@ syntax or semantics before stabilization.
 
 These features are available but subject to redesign or removal.
 
-- ML built-ins: `tensor<T,[dims]>`, `einsum`, `grad<T>`, `sparse<T>`
-- Model DSL (`model { ... }`)
-- ONNX/CUDA/SIMD codegen targets
-- DAP debugger protocol
-- `atomic<T>`, `mutex<T>`
+- Obscure/undocumented CLI flags
+- Custom compiler passes API
 
 ---
 

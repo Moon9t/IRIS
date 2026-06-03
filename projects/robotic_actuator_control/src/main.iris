@@ -1,0 +1,45 @@
+// main.iris -- Robotic Joint Actuator Autonomous Learning Loop
+
+bring "types.iris"
+bring "policy.iris"
+bring "ros2_client.iris"
+
+def main() -> i64 {
+    print("=== Robotic Joint Actuator Autonomous Learning Loop ===");
+
+    // 1. Setup ROS2 context & Publisher Node
+    val node = setup_actuator_node();
+    val pub_handle = setup_joint_publisher(node);
+
+    // 2. Perform autonomous gradient-descent joint control steps
+    var step = 1;
+    while step <= 3 {
+        print(concat("Step: ", to_str(step)));
+
+        // Get current trajectory sensory state
+        val state = SensoryState {
+            step: step,
+            position: 0.1,
+            velocity: 0.05,
+            target: 1.0
+        };
+
+        val status = inspect_state(state);
+
+        // Adjust joint effort via allocation-free taped reverse AD
+        val opt_res = adjust_joint_effort(state.position, state.target, 0.5);
+        val torque = list_get(opt_res, 0);
+        val dw = list_get(opt_res, 1);
+
+        // Publish control actuation command to DDS
+        publish_actuation(pub_handle, torque);
+
+        step = step + 1;
+    };
+
+    // 3. Teardown
+    teardown();
+    print("Robotic Autonomous Joint learning loop completed successfully");
+
+    0
+}

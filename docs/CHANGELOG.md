@@ -22,9 +22,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 
 ---
 
-## [0.6.0] — Performance & Security
+## [0.6.1] — Performance & Security
 
-### Added (0.5.0)
+### Added (0.6.1)
 
 - **Security audit infrastructure** (`src/security.rs`) — `SecurityPolicy` with
   per-capability allow/deny flags (fs_read, fs_write, network, ffi, process),
@@ -66,11 +66,11 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 - 36 new integration tests in `v0_6_0_performance_security.rs` covering security policy, path
   validation, audit logging, profiler lifecycle / flame graphs / edge cases,
   CopyPropPass constant dedup, LicmPass safety, full pipeline integration,
-  pass manager with all v0.6.0 passes, and benchmark file existence.
+  pass manager with all v0.6.1 passes, and benchmark file existence.
 
 ---
 
-## [0.5.0] — ML & Compute
+## [0.6.1] — ML & Compute
 
 ### Added (Unreleased)
 
@@ -380,9 +380,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/) conventions
 ---
 
 [Unreleased]: https://github.com/Moon9t/IRIS/compare/v0.6.1...HEAD
-[0.6.1]: https://github.com/Moon9t/IRIS/compare/v0.6.0...v0.6.1
-[0.6.0]: https://github.com/Moon9t/IRIS/compare/v0.5.0...v0.6.0
-[0.5.0]: https://github.com/Moon9t/IRIS/compare/v0.2.0...v0.5.0
+[0.6.1]: https://github.com/Moon9t/IRIS/compare/v0.6.1...v0.6.1
+[0.6.1]: https://github.com/Moon9t/IRIS/compare/v0.6.1...v0.6.1
+[0.6.1]: https://github.com/Moon9t/IRIS/compare/v0.2.0...v0.6.1
 [0.2.0]: https://github.com/Moon9t/IRIS/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Moon9t/IRIS/releases/tag/v0.1.0
 

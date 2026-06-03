@@ -1,0 +1,78 @@
+// ml_pipeline.iris -- Multi-framework ML Inference Pipeline (ONNX, LibTorch, TensorFlow)
+
+bring std.ml
+
+pub record MLPipelineSession {
+    onnx_handle: i64,
+    torch_handle: i64,
+    tf_handle: i64,
+    is_simulation: bool
+}
+
+pub def initialize_ml_pipeline(onnx_path: str, torch_path: str, tf_path: str) -> MLPipelineSession {
+    print("[ml_pipeline] Initializing multi-framework machine learning runtimes...");
+    
+    // 1. Try loading ONNX Model
+    val onnx_h = onnx_load(onnx_path);
+    if ml_backend_ready(onnx_h) {
+        print(concat("[ml_pipeline] ONNX Runtime model loaded successfully (handle: ", concat(to_str(onnx_h), ")")));
+    } else {
+        print("[ml_pipeline] ONNX Runtime not available or model missing. Fallback to simulation.");
+    };
+
+    // 2. Try loading PyTorch JIT Model
+    val torch_h = pytorch_load(torch_path);
+    if ml_backend_ready(torch_h) {
+        print(concat("[ml_pipeline] PyTorch LibTorch model loaded successfully (handle: ", concat(to_str(torch_h), ")")));
+    } else {
+        print("[ml_pipeline] PyTorch LibTorch not available or model missing. Fallback to simulation.");
+    };
+
+    // 3. Try loading TensorFlow SavedModel
+    val tf_h = tensorflow_load(tf_path);
+    if ml_backend_ready(tf_h) {
+        print(concat("[ml_pipeline] TensorFlow SavedModel loaded successfully (handle: ", concat(to_str(tf_h), ")")));
+    } else {
+        print("[ml_pipeline] TensorFlow not available or model missing. Fallback to simulation.");
+    };
+
+    val is_sim = (onnx_h == 0) && (torch_h == 0) && (tf_h == 0);
+    
+    MLPipelineSession {
+        onnx_handle: onnx_h,
+        torch_handle: torch_h,
+        tf_handle: tf_h,
+        is_simulation: is_sim
+    }
+}
+
+pub def run_multimodal_inference(session: MLPipelineSession, features: list<f64>) -> list<f64> {
+    val input_len = list_len(features);
+    val shape: list<i64> = list();
+    
+    if input_len == 6 {
+        list_push(shape, 2);
+        list_push(shape, 3);
+    } else {
+        list_push(shape, 1);
+        list_push(shape, input_len);
+    };
+
+    val inp_tensor = tensor_pair(features, shape);
+
+    if ml_backend_ready(session.onnx_handle) {
+        val out_tensor = onnx_run(session.onnx_handle, inp_tensor);
+        return out_tensor.0
+    };
+    if ml_backend_ready(session.torch_handle) {
+        val out_tensor = pytorch_run(session.torch_handle, inp_tensor);
+        return out_tensor.0
+    };
+    if ml_backend_ready(session.tf_handle) {
+        val out_tensor = tensorflow_run(session.tf_handle, inp_tensor);
+        return out_tensor.0
+    };
+
+    print("[ml_pipeline] Running in simulated ML inference mode (no backend ready)...");
+    features
+}

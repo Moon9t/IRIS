@@ -94,5 +94,22 @@ def main() -> i64 {
     show_dual("  ", hx);
     print(concat("  Expected: value = 15, deriv = 8", ""));
 
+    print("");
+    print("=== Reverse-Mode Autodiff with Native Static Tape ===");
+
+    // f(x) = x^3 + x^2 + x at x = 2.0
+    val rx = tape(2.0);
+    val rx2 = rx * rx;
+    val rx3 = rx2 * rx;
+    val rfx = rx3 + rx2 + rx;
+
+    val _ = backward(rfx);
+    val rdx = grad(rx);
+
+    print("f(x) = x^3 + x^2 + x, at x = 2.0 (Native Reverse-Mode):");
+    print("  value = " + to_str(rfx) + ", deriv = " + to_str(rdx));
+    print("  Expected: value = 14.0, deriv = 17.0");
+
     0
 }
+

@@ -93,6 +93,11 @@ fn compile_c_runtime() {
         build.include(&include_dir);
         build.file("src/runtime/pytorch_shim.cpp");
         build.cpp(true);
+        if cfg!(windows) {
+            build.flag("/std:c++20");
+        } else {
+            build.flag("-std=c++20");
+        }
         if let Ok(cxxflags) = env::var("LIBTORCH_CXXFLAGS") {
             for flag in cxxflags.split_whitespace() {
                 build.flag(flag);
@@ -106,12 +111,15 @@ fn compile_c_runtime() {
     }
 
     // TensorFlow
-    if let Ok(tf_dir) = env::var("TENSORFLOW_DIR") {
+    if let Some(tf_dir) = sdk_dir("TENSORFLOW_DIR", r"C:\tensorflow") {
         println!("cargo:rustc-cfg=tensorflow_enabled");
         build.define("TENSORFLOW_ENABLED", None);
-        build.include(format!("{}/include", tf_dir));
-        println!("cargo:rustc-link-search=native={}/lib", tf_dir);
-        println!("cargo:rustc-link-lib=tensorflow");
+        let include_dir = format!("{}/include", tf_dir);
+        let lib_dir = format!("{}/lib", tf_dir);
+        build.include(&include_dir);
+        println!("cargo:rustc-link-search=native={}", lib_dir);
+        link_lib_if_present(&lib_dir, "tensorflow");
+        stage_runtime_dlls(&lib_dir);
     }
     build.flag_if_supported("-std=gnu11");
     build.flag_if_supported("-fPIC");

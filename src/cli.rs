@@ -52,6 +52,8 @@ pub enum ParseArgsResult {
     Test,
     /// `explain` subcommand: show detailed explanation for an error code.
     Explain(Option<String>),
+    /// `upgrade` subcommand: self-upgrade the IRIS compiler to the latest version.
+    Upgrade { check: bool, yes: bool, force: bool },
 }
 
 /// Parses command-line arguments (the full `std::env::args()` slice including `argv[0]`).
@@ -90,6 +92,23 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
                 let code = args.get(i + 1).cloned();
                 return Ok(ParseArgsResult::Explain(code));
             }
+            "upgrade" => {
+                let mut check = false;
+                let mut yes = false;
+                let mut force = false;
+                i += 1;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--check" | "-c" => check = true,
+                        "--yes" | "-y" => yes = true,
+                        "--force" | "-f" => force = true,
+                        "--help" | "-h" => return Ok(ParseArgsResult::Help),
+                        other => return Err(format!("unknown upgrade option: '{}'", other)),
+                    }
+                    i += 1;
+                }
+                return Ok(ParseArgsResult::Upgrade { check, yes, force });
+            }
             _ => {}
         }
     }
@@ -118,9 +137,10 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
                     "onnx-binary" => EmitKind::OnnxBinary,
                     "eval" => EmitKind::Eval,
                     "binary" => EmitKind::Binary,
+                    "tensorrt" => EmitKind::TensorRt,
                     other => {
                         return Err(format!(
-                            "unknown emit kind: '{}' (valid: ir, llvm, llvm-complete, cuda, cuda-ptx, simd, jit, pgo-instrument, pgo-optimize, graph, onnx, onnx-binary, eval, binary)",
+                            "unknown emit kind: '{}' (valid: ir, llvm, llvm-complete, cuda, cuda-ptx, simd, jit, pgo-instrument, pgo-optimize, graph, onnx, onnx-binary, eval, binary, tensorrt)",
                             other
                         ))
                     }
@@ -276,11 +296,12 @@ pub fn help_text() -> &'static str {
        pkg <cmd>             Package manager (init, add, remove, install, list, build, run)\n\
        bench <file.iris>     Run performance benchmarks on a file\n\
        explain [code]        Show detailed explanation for an error code (e.g. E0100)\n\
+       upgrade               Self-upgrade the IRIS compiler to the latest version\n\
      \n\
      Options:\n\
-    --emit <kind>         Output kind: ir (default), llvm, llvm-complete, cuda, cuda-ptx, simd,\n\
-                             jit, pgo-instrument, pgo-optimize, graph, onnx, onnx-binary,\n\
-                             eval, binary\n\
+     --emit <kind>         Output kind: ir (default), llvm, llvm-complete, cuda, cuda-ptx, simd,\n\
+                              jit, pgo-instrument, pgo-optimize, graph, onnx, onnx-binary,\n\
+                              eval, binary, tensorrt\n\
        -o <file>             Write output to <file> instead of stdout\n\
        --target <triple>     Target preset/triple for llvm/binary outputs (e.g. linux-arm64)\n\
        --dump-ir-after <p>   Dump IR to stderr after pass <p> completes\n\

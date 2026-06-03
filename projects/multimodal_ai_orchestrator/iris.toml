@@ -1,0 +1,6 @@
+[package]
+name = "multimodal_ai_orchestrator"
+version = "0.6.1"
+authors = ["Moon9t"]
+
+[dependencies]

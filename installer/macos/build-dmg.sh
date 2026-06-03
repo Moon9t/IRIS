@@ -3,13 +3,13 @@
 # build-dmg.sh — Build a macOS .dmg disk image for IRIS Language
 # ──────────────────────────────────────────────────────────────────────────
 # Usage:
-#   ./installer/macos/build-dmg.sh [--version 0.5.0]
+#   ./installer/macos/build-dmg.sh [--version 0.6.1]
 #
 # Produces: installer/dist/IRIS-<version>-macos-<arch>.dmg
 # ──────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-VERSION="0.5.0"
+VERSION="0.6.1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 

@@ -14,7 +14,7 @@
 #   - MinGW ucrt64 sysroot    (C headers + static libs)
 
 param(
-    [string]$Version = "0.5.0",
+    [string]$Version = "0.6.1",
     [switch]$SkipBuild
 )
 

@@ -1,0 +1,23 @@
+// types.iris -- Shared records and structures for multimodal AI orchestration.
+
+pub record MultimodalSensoryInput {
+    step: i64,
+    image_features: list<f64>,
+    lidar_ranges: list<f64>,
+    joint_positions: list<f64>,
+    target_positions: list<f64>
+}
+
+pub record ActuatorCommands {
+    step: i64,
+    control_torques: list<f64>,
+    status: str
+}
+
+pub def print_input_features(inp: MultimodalSensoryInput) -> i64 {
+    print("--- Sensory State ---");
+    print(concat("Image Feature Embeddings Length: ", to_str(list_len(inp.image_features))));
+    print(concat("LiDAR Ranges Readings Length: ", to_str(list_len(inp.lidar_ranges))));
+    print(concat("Joint Positions Length: ", to_str(list_len(inp.joint_positions))));
+    0
+}

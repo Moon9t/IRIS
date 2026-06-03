@@ -1,0 +1,18 @@
+// types.iris -- Common types and records for real-time robotic joint control.
+
+pub record SensoryState {
+    step: i64,
+    position: f64,
+    velocity: f64,
+    target: f64
+}
+
+pub record ControlCommand {
+    step: i64,
+    torque: f64
+}
+
+pub def inspect_state(s: SensoryState) -> str {
+    // Return formatted status
+    "Joint State"
+}
