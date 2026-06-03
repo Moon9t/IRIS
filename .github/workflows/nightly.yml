@@ -195,3 +195,87 @@ jobs:
               echo ""
             fi
           done
+
+  windows-test-and-installer:
+    name: Windows JIT & Installer Verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure LLVM toolchain
+        shell: pwsh
+        run: |
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          if (Test-Path "$llvmBin\clang.exe") {
+            echo "LLVM pre-installed at $llvmBin"
+            echo "$llvmBin" >> $env:GITHUB_PATH
+            echo "IRIS_CLANG=$llvmBin\clang.exe" >> $env:GITHUB_ENV
+          } else {
+            echo "LLVM not pre-installed. Installing via choco..."
+            choco install llvm --no-progress -y
+            echo "$llvmBin" >> $env:GITHUB_PATH
+            echo "IRIS_CLANG=$llvmBin\clang.exe" >> $env:GITHUB_ENV
+          }
+
+      - name: Install MinGW ucrt64 dependencies
+        shell: bash
+        run: |
+          C:/msys64/usr/bin/pacman.exe -S --noconfirm --needed \
+            mingw-w64-ucrt-x86_64-headers-git \
+            mingw-w64-ucrt-x86_64-crt-git \
+            mingw-w64-ucrt-x86_64-gcc-libs \
+            mingw-w64-ucrt-x86_64-winpthreads-git 2>&1 || true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release compiler
+        run: cargo build --release
+
+      - name: Run examples with JIT on Windows
+        shell: pwsh
+        run: |
+          $pass = 0
+          $fail = 0
+          $files = Get-ChildItem -Path examples -Filter *.iris -Recurse
+          foreach ($f in $files) {
+              Write-Host "=== Testing: $($f.Name) ==="
+              & target\release\iris.exe run $f.FullName > $null 2>&1
+              if ($LASTEXITCODE -eq 0) {
+                  Write-Host "  PASS"
+                  $pass++
+              } else {
+                  Write-Host "  FAIL (exit $LASTEXITCODE)"
+                  $fail++
+              }
+          }
+          Write-Host ""
+          Write-Host "=== Results ==="
+          Write-Host "  Pass: $pass"
+          Write-Host "  Fail: $fail"
+          if ($fail -gt 10) {
+              Write-Error "Too many JIT failures on Windows!"
+              exit 1
+          }
+
+      - name: Package VS Code Extension
+        shell: pwsh
+        run: |
+          cd vscode-iris
+          npm ci
+          npm run compile
+          npx @vscode/vsce package --no-dependencies
+
+      - name: Verify Inno Setup installer compilation
+        shell: pwsh
+        run: |
+          & installer\build_installer.ps1 -Version "nightly" -SkipBuild
+
+      - name: Upload Windows installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IRIS-nightly-windows-x64-setup
+          path: installer/dist/IRIS-nightly-windows-x64-setup.exe
