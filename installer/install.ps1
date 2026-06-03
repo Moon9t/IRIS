@@ -265,7 +265,18 @@ if ($clangPath) {
     }
 } else {
     Write-Warn "Bundled LLVM tools not found in installer package."
-    Write-Info "Install LLVM manually from: https://releases.llvm.org/"
+    $depsScript = Join-Path $scriptDir "windows\setup_dependencies.ps1"
+    if (Test-Path $depsScript) {
+        Write-Step "Running dependency downloader script to install LLVM, MinGW, Git, and MSVC..."
+        & $depsScript -InstallDir (Join-Path $env:USERPROFILE ".iris")
+        $clangPath = Test-ClangInstalled
+        if ($clangPath) {
+            $LlvmInstallDir = Split-Path $clangPath
+            Write-Ok "LLVM installed and configured successfully."
+        }
+    } else {
+        Write-Info "Install LLVM manually from: https://releases.llvm.org/"
+    }
 }
 
 # --- Step 7: Install bundled MinGW sysroot (headers + libs) ---
@@ -277,6 +288,13 @@ $Ucrt64InstallDir = "C:\msys64\ucrt64"
 
 # Check if ucrt64 sysroot is already present (lib + include directories)
 $existingSysroot = (Test-Path "$Ucrt64InstallDir\lib") -and (Test-Path "$Ucrt64InstallDir\include")
+if (-not $existingSysroot) {
+    $localSysroot = Join-Path $env:USERPROFILE ".iris\ucrt64"
+    if ((Test-Path "$localSysroot\lib") -and (Test-Path "$localSysroot\include")) {
+        $existingSysroot = $true
+        $Ucrt64InstallDir = $localSysroot
+    }
+}
 
 if ($existingSysroot) {
     Write-Ok "MinGW sysroot already present: $Ucrt64InstallDir"
@@ -308,7 +326,18 @@ if ($existingSysroot) {
     }
 } else {
     Write-Warn "Bundled MinGW sysroot not found in installer package."
-    Write-Info "Install MSYS2 manually from: https://www.msys2.org/"
+    $depsScript = Join-Path $scriptDir "windows\setup_dependencies.ps1"
+    if (Test-Path $depsScript) {
+        Write-Step "Running dependency downloader script to install MinGW..."
+        & $depsScript -InstallDir (Join-Path $env:USERPROFILE ".iris")
+        $localSysroot = Join-Path $env:USERPROFILE ".iris\ucrt64"
+        if ((Test-Path "$localSysroot\lib") -and (Test-Path "$localSysroot\include")) {
+            $Ucrt64InstallDir = $localSysroot
+            Write-Ok "MinGW sysroot installed and configured successfully."
+        }
+    } else {
+        Write-Info "Install MSYS2 manually from: https://www.msys2.org/"
+    }
 }
 
 # Ensure LLVM bin dir is in user PATH (no need for ucrt64\bin — no GCC executables)

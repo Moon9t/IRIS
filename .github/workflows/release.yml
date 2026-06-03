@@ -342,6 +342,12 @@ jobs:
             target: aarch64-pc-windows-msvc
             format: portable
             arch: aarch64
+          # Windows x64 Inno Setup installer (.exe)
+          - installer: windows-x64-installer
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            format: installer
+            arch: x86_64
 
     steps:
       - uses: actions/checkout@v4
@@ -433,13 +439,21 @@ jobs:
           & installer\windows\build_portable.ps1 `
             -Version $env:VERSION -SkipBuild
 
+      # ── Windows x64 Inno Setup installer (.exe) ──
+      - name: Build Windows .exe installer
+        if: matrix.format == 'installer'
+        shell: pwsh
+        run: |
+          & installer\build_installer.ps1 `
+            -Version $env:VERSION -SkipBuild
+
       - name: Collect installer output
         shell: bash
         run: |
           mkdir -p installer-output
           find installer/dist -type f \
             \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg' \
-               -o -name '*.dmg' -o -name '*portable*.zip' \) \
+               -o -name '*.dmg' -o -name '*portable*.zip' -o -name '*.exe' \) \
             -exec cp {} installer-output/ \;
 
           echo "--- Installer artifacts ---"
@@ -495,7 +509,8 @@ jobs:
           # Collect all release files into one directory
           mkdir -p ../release-files
           find . -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.vsix' \
-            -o -name '*.deb' -o -name '*.rpm' -o -name '*.pkg' -o -name '*.dmg' \) \
+            -o -name '*.deb' -o -name '*.rpm' -o -name '*.pkg' -o -name '*.dmg' \
+            -o -name '*.exe' \) \
             -exec cp {} ../release-files/ \;
           cd ../release-files
           sha256sum * > SHA256SUMS.txt
@@ -534,6 +549,7 @@ jobs:
             echo "| macOS ARM64 | \`IRIS-${VERSION}-macos-aarch64.dmg\` | Mount and run Install script |"
             echo "| Windows x64 | \`IRIS-${VERSION}-windows-x86_64-portable.zip\` | Extract and add to PATH |"
             echo "| Windows ARM64 | \`IRIS-${VERSION}-windows-aarch64-portable.zip\` | Extract and add to PATH |"
+            echo "| Windows x64 | \`IRIS-${VERSION}-windows-x64-setup.exe\` | GUI installer (auto-downloads missing LLVM/MinGW/Git/MSVC) |"
             echo ""
             echo "### VS Code Extension"
             echo "\`\`\`bash"
@@ -581,6 +597,7 @@ jobs:
             release-files/*.rpm
             release-files/*.pkg
             release-files/*.dmg
+            release-files/*.exe
             release-files/SHA256SUMS.txt
           generate_release_notes: true
           draft: false

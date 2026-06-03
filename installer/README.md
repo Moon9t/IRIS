@@ -140,9 +140,9 @@ sudo pkgutil --forget dev.moon9t.iris
 
 **Inno Setup installer (.exe)** — the recommended method:
 
-1. Download `IRIS-1.0.0-rc1-windows-x64-setup.exe` from the latest release
-2. Run the installer (no admin required — per-user install)
-3. Choose **Full** for compiler + LLVM + MinGW, or **Compact** for compiler only
+1. Download `IRIS-1.0.0-rc1-windows-x64-setup.exe` from the latest release.
+2. Run the installer (no admin required — per-user install).
+3. The installer includes a **Smart Dependency Downloader** (enabled by default). It automatically detects and installs missing compiler components (LLVM/clang, MinGW UCRT64 headers, Git, MSVC Build Tools) to guarantee a flawless native compilation experience right out of the box.
 
 **PowerShell installer:**
 
@@ -254,6 +254,7 @@ The GitHub Release will include:
 - `.rpm` packages (x64 + ARM64)
 - `.pkg` installers (x64 + ARM64)
 - `.dmg` disk images (x64 + ARM64)
+- Inno Setup `.exe` GUI installer for Windows (with smart dependency downloader)
 - Portable `.zip` for Windows (x64 + ARM64)
 - VS Code extension (`.vsix`)
 - `SHA256SUMS.txt` for integrity verification

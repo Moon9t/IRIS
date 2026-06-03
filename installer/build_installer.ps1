@@ -65,7 +65,8 @@ Write-Host "[4/9] Staging docs and icon..." -ForegroundColor Yellow
 Copy-Item (Join-Path $InstallerDir "README.md") $StageDir -Force
 $Icon = Join-Path $Root "vscode-iris\icon.png"
 if (Test-Path $Icon) { Copy-Item $Icon $StageDir -Force }
-Write-Host "  README.md + icon.png" -ForegroundColor Green
+Copy-Item (Join-Path $InstallerDir "windows\setup_dependencies.ps1") $StageDir -Force
+Write-Host "  README.md + icon.png + setup_dependencies.ps1" -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
 # Step 5: Stage VSCode extension
@@ -86,6 +87,13 @@ if ($Vsix) {
 Write-Host "[6/9] Staging LLVM/clang + lld..." -ForegroundColor Yellow
 $LlvmDst = New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "toolchain\llvm\bin")
 $LlvmBinSrc = "C:\Program Files\LLVM\bin"
+if (-not (Test-Path (Join-Path $LlvmBinSrc "clang.exe"))) {
+    $fallbackLlvm = Join-Path $Root "toolchain\llvm\bin"
+    if (Test-Path (Join-Path $fallbackLlvm "clang.exe")) {
+        $LlvmBinSrc = $fallbackLlvm
+        Write-Host "  Using fallback LLVM from workspace toolchain: $LlvmBinSrc" -ForegroundColor Cyan
+    }
+}
 $llvmTotal = 0
 foreach ($f in @('clang.exe', 'ld.lld.exe')) {
     $src = Join-Path $LlvmBinSrc $f
@@ -139,12 +147,35 @@ Write-Host "  VC++ runtime total: $vcrtMB MB" -ForegroundColor Green
 # ---------------------------------------------------------------------------
 Write-Host "[7/9] Staging MinGW sysroot..." -ForegroundColor Yellow
 $Msys2Ucrt = "C:\msys64\ucrt64"
-if (-not (Test-Path $Msys2Ucrt)) { Write-Error "MSYS2 ucrt64 not found at $Msys2Ucrt"; throw "MSYS2 ucrt64 not found" }
+if (-not (Test-Path $Msys2Ucrt)) {
+    $fallbackUcrt = Join-Path $Root "toolchain\ucrt64"
+    if (Test-Path $fallbackUcrt) {
+        $Msys2Ucrt = $fallbackUcrt
+        Write-Host "  Using fallback MinGW from workspace toolchain: $Msys2Ucrt" -ForegroundColor Cyan
+    } else {
+        Write-Error "MSYS2 ucrt64 not found at $Msys2Ucrt"; throw "MSYS2 ucrt64 not found"
+    }
+}
 
 # 7a. GCC internal CRT support files (crtbegin.o, libgcc.a, etc.)
-$GccVer     = "14.2.0"
 $GccTriple  = "x86_64-w64-mingw32"
-$GccLibSrc  = "$Msys2Ucrt\lib\gcc\$GccTriple\$GccVer"
+$GccBase = Join-Path $Msys2Ucrt "lib\gcc\$GccTriple"
+$GccLibSrc = $null
+$GccVer = $null
+if (Test-Path $GccBase) {
+    $subdirs = Get-ChildItem $GccBase -Directory | Sort-Object Name -Descending
+    if ($subdirs.Count -gt 0) {
+        $GccVer = $subdirs[0].Name
+        $GccLibSrc = $subdirs[0].FullName
+    }
+}
+
+if ($null -eq $GccLibSrc) {
+    Write-Error "GCC library path not found under $GccBase"
+    throw "GCC library path not found"
+}
+
+Write-Host "  Detected GCC version: $GccVer" -ForegroundColor Gray
 $GccLibDst  = New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "toolchain\ucrt64\lib\gcc\$GccTriple\$GccVer")
 $gccLibTotal = 0
 Get-ChildItem $GccLibSrc -File | Where-Object { $_.Extension -in '.o','.a' } | ForEach-Object {

@@ -61,9 +61,11 @@ Name: "sysroot";    Description: "MinGW sysroot (headers + libs)";            Ty
 Name: "vscode";     Description: "VSCode extension (.vsix)";                  Types: full
 
 [Tasks]
-Name: "addtopath";     Description: "Add IRIS to the user PATH";                         GroupDescription: "Environment:"; Flags: checked
-Name: "addllvmpath";   Description: "Add LLVM to the user PATH";                         GroupDescription: "Environment:"; Components: llvm; Flags: checked
-Name: "installvscode"; Description: "Install VSCode extension (if VSCode is detected)";   GroupDescription: "Extras:";      Components: vscode; Flags: checked
+Name: "addtopath";     Description: "Add IRIS to the user PATH";                         GroupDescription: "Environment:"
+Name: "addllvmpath";   Description: "Add LLVM to the user PATH";                         GroupDescription: "Environment:"; Components: llvm
+Name: "installvscode"; Description: "Install VSCode extension (if VSCode is detected)";   GroupDescription: "Extras:";      Components: vscode
+Name: "installdeps";     Description: "Check and download missing dependencies (LLVM, MinGW, Git, MSVC)"; GroupDescription: "Dependencies:"
+
 
 ; ---------------------------------------------------------------------------
 ; Files
@@ -81,6 +83,8 @@ Source: "{#StageDir}\MSVCP140.dll";           DestDir: "{app}";  Flags: ignoreve
 ; Documentation / readme
 Source: "{#StageDir}\README.md";              DestDir: "{app}";                              Flags: ignoreversion isreadme;    Components: main
 Source: "{#StageDir}\icon.png";               DestDir: "{app}";                              Flags: ignoreversion skipifsourcedoesntexist; Components: main
+Source: "{#StageDir}\setup_dependencies.ps1";  DestDir: "{app}";                              Flags: ignoreversion;             Components: main
+
 
 ; LLVM toolchain (clang + lld)
 Source: "{#StageDir}\toolchain\llvm\bin\*";   DestDir: "{app}\toolchain\llvm\bin";           Flags: ignoreversion recursesubdirs; Components: llvm
@@ -180,8 +184,16 @@ begin
         end;
       end;
     end;
+
+    { Check and download missing dependencies }
+    if WizardIsTaskSelected('installdeps') then
+    begin
+      Exec('powershell.exe', '-ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\setup_dependencies.ps1') + '" "' + ExpandConstant('{app}') + '"',
+           '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
+    end;
   end;
 end;
+
 
 { ---- Uninstall cleanup ---- }
 
