@@ -140,6 +140,7 @@ pub enum AstStmt {
         name: Ident,
         ty: Option<AstType>,
         init: Box<AstExpr>,
+        is_var: bool,
         span: Span,
     },
     /// An expression used for its side effects (followed by `;`).
@@ -177,6 +178,7 @@ pub enum AstStmt {
     LetTuple {
         names: Vec<Ident>,
         init: Box<AstExpr>,
+        is_var: bool,
         span: Span,
     },
     /// `return [expr]` early return from function.

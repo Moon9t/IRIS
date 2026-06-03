@@ -1326,6 +1326,7 @@ impl<'t> Parser<'t> {
 
     fn parse_let_stmt(&mut self) -> Result<AstStmt, ParseError> {
         let start = self.current_span();
+        let is_var = matches!(self.peek_tok(), Token::Var);
         self.advance(); // consume 'val' or 'var' (caller already checked)
 
         // Destructuring: val (a, b, ...) = expr
@@ -1353,6 +1354,7 @@ impl<'t> Parser<'t> {
             return Ok(AstStmt::LetTuple {
                 names,
                 init: Box::new(init),
+                is_var,
                 span: start.merge(end),
             });
         }
@@ -1378,6 +1380,7 @@ impl<'t> Parser<'t> {
             name,
             ty,
             init: Box::new(init),
+            is_var,
             span: start.merge(end),
         })
     }

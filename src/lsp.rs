@@ -507,9 +507,25 @@ impl LspState {
             }
 
             // Local variables — walk function bodies to find val/var bindings
+            let module_name = uri_to_module_name(uri);
+            let module = crate::compile_to_module(source, &module_name).ok();
+
             for func in &ast.functions {
-                if let Some(info) = find_binding_in_block(&func.body, ident, byte) {
+                if let Some(info) = find_binding_in_block(&func.body, ident, byte, module.as_ref(), &func.name.name) {
                     return Some(info);
+                }
+            }
+
+            for impl_def in &ast.impls {
+                for func in &impl_def.methods {
+                    let mangled_name = if impl_def.trait_name.is_empty() {
+                        format!("{}__{}", impl_def.type_name, func.name.name)
+                    } else {
+                        format!("{}__{}__{}", impl_def.trait_name, impl_def.type_name, func.name.name)
+                    };
+                    if let Some(info) = find_binding_in_block(&func.body, ident, byte, module.as_ref(), &mangled_name) {
+                        return Some(info);
+                    }
                 }
             }
         }
@@ -568,13 +584,15 @@ impl LspState {
             .collect();
 
         if let Some(source) = self.documents.get(uri) {
+            let module_name = uri_to_module_name(uri);
+            let module = crate::compile_to_module(source, &module_name).ok();
+
             if let Some(ast) = parse_source(source) {
-                collect_completion_items_from_ast(&ast, &mut items);
+                collect_completion_items_from_ast(&ast, &mut items, module.as_ref());
             }
 
-            let module_name = uri_to_module_name(uri);
-            if let Ok(module) = crate::compile_to_module(source, &module_name) {
-                for func in module.functions() {
+            if let Some(ref m) = module {
+                for func in m.functions() {
                     let bare = func.name.split("__").next().unwrap_or(&func.name);
                     if !bare.starts_with("__") {
                         push_completion(
@@ -2122,6 +2140,7 @@ fn completion_detail_for(label: &str) -> Option<&'static str> {
 fn collect_completion_items_from_ast(
     ast: &crate::parser::ast::AstModule,
     items: &mut Vec<CompletionItem>,
+    module: Option<&crate::ir::module::IrModule>,
 ) {
     for func in &ast.functions {
         push_completion(
@@ -2138,7 +2157,7 @@ fn collect_completion_items_from_ast(
                 Some(format!("parameter: {}", ast_type_str(&param.ty))),
             );
         }
-        collect_completion_items_from_stmts(&func.body.stmts, items);
+        collect_completion_items_from_stmts(&func.body.stmts, items, module, &func.name.name);
     }
     for s in &ast.structs {
         push_completion(
@@ -2210,12 +2229,18 @@ fn collect_completion_items_from_ast(
     }
     for imp in &ast.impls {
         for method in &imp.methods {
+            let mangled_name = if imp.trait_name.is_empty() {
+                format!("{}__{}", imp.type_name, method.name.name)
+            } else {
+                format!("{}__{}__{}", imp.trait_name, imp.type_name, method.name.name)
+            };
             push_completion(
                 items,
                 method.name.name.clone(),
                 2,
                 Some(format!("impl method {}(...)", method.name.name)),
             );
+            collect_completion_items_from_stmts(&method.body.stmts, items, module, &mangled_name);
         }
     }
     for m in &ast.models {
@@ -2263,42 +2288,81 @@ fn collect_completion_items_from_ast(
 fn collect_completion_items_from_stmts(
     stmts: &[crate::parser::ast::AstStmt],
     items: &mut Vec<CompletionItem>,
+    module: Option<&crate::ir::module::IrModule>,
+    func_name: &str,
 ) {
     use crate::parser::ast::AstStmt;
     for stmt in stmts {
         match stmt {
-            AstStmt::Let { name, ty, .. } => {
+            AstStmt::Let {
+                name,
+                ty,
+                init,
+                is_var,
+                span,
+                ..
+            } => {
+                let mut ty_str = resolve_local_var_type(module, func_name, &name.name, span.start.0, None);
+                if ty_str.is_none() {
+                    ty_str = ty.as_ref().map(ast_type_str);
+                }
+                if ty_str.is_none() {
+                    ty_str = infer_ast_expr_type(init);
+                }
+                let resolved_ty = ty_str.unwrap_or_else(|| "inferred".to_owned());
+                let binding_kind = if *is_var { "var" } else { "val" };
+
                 push_completion(
                     items,
                     name.name.clone(),
-                    6,
-                    Some(
-                        ty.as_ref()
-                            .map(ast_type_str)
-                            .unwrap_or_else(|| "inferred binding".to_owned()),
-                    ),
+                    6, // Variable kind
+                    Some(format!("{}: {}", binding_kind, resolved_ty)),
                 );
             }
-            AstStmt::LetTuple { names, .. } => {
-                for name in names {
+            AstStmt::LetTuple {
+                names,
+                init,
+                is_var,
+                span,
+                ..
+            } => {
+                for (i, name) in names.iter().enumerate() {
+                    let mut ty_str = resolve_local_var_type(module, func_name, &name.name, span.start.0, Some(i));
+                    if ty_str.is_none() {
+                        if let crate::parser::ast::AstExpr::Tuple { elements, .. } = init.as_ref() {
+                            if let Some(el) = elements.get(i) {
+                                ty_str = infer_ast_expr_type(el);
+                            }
+                        }
+                    }
+                    let resolved_ty = ty_str.unwrap_or_else(|| "inferred".to_owned());
+                    let binding_kind = if *is_var { "var" } else { "val" };
+
                     push_completion(
                         items,
                         name.name.clone(),
                         6,
-                        Some("inferred tuple binding".to_owned()),
+                        Some(format!("{}: {}", binding_kind, resolved_ty)),
                     );
                 }
             }
             AstStmt::ForRange { var, body, .. }
-            | AstStmt::ForEach { var, body, .. }
             | AstStmt::ParFor { var, body, .. } => {
-                push_completion(items, var.name.clone(), 6, Some("loop variable".to_owned()));
-                collect_completion_items_from_stmts(&body.stmts, items);
+                push_completion(items, var.name.clone(), 6, Some("val: i64".to_owned()));
+                collect_completion_items_from_stmts(&body.stmts, items, module, func_name);
+            }
+            AstStmt::ForEach { var, body, span, .. } => {
+                let ty_str = resolve_local_var_type(module, func_name, &var.name, span.start.0, None)
+                    .unwrap_or_else(|| "inferred".to_owned());
+                push_completion(items, var.name.clone(), 6, Some(format!("val: {}", ty_str)));
+                collect_completion_items_from_stmts(&body.stmts, items, module, func_name);
             }
             AstStmt::While { body, .. } | AstStmt::Loop { body, .. } => {
-                collect_completion_items_from_stmts(&body.stmts, items);
+                collect_completion_items_from_stmts(&body.stmts, items, module, func_name);
             }
-            AstStmt::Spawn { body, .. } => collect_completion_items_from_stmts(body, items),
+            AstStmt::Spawn { body, .. } => {
+                collect_completion_items_from_stmts(body, items, module, func_name);
+            }
             _ => {}
         }
     }
@@ -2508,71 +2572,229 @@ fn find_call_context(source: &str, line: u32, character: u32) -> Option<(String,
 // Hover helpers
 // ---------------------------------------------------------------------------
 
+fn resolve_local_var_type(
+    module: Option<&crate::ir::module::IrModule>,
+    func_name: &str,
+    var_name: &str,
+    def_byte_offset: u32,
+    tuple_index: Option<usize>,
+) -> Option<String> {
+    let m = module?;
+    let func = m.functions().iter().find(|f| {
+        f.name == func_name || f.name.ends_with(&format!("__{}", func_name))
+    })?;
+
+    let mut found_ty = None;
+    // 1. Check block parameters
+    for block in func.blocks() {
+        for param in &block.params {
+            if let Some(ref p_name) = param.name {
+                if p_name == var_name {
+                    found_ty = Some(param.ty.clone());
+                    break;
+                }
+            }
+        }
+        if found_ty.is_some() {
+            break;
+        }
+    }
+
+    // 2. Check SpanTable for instruction result
+    if found_ty.is_none() {
+        for block in func.blocks() {
+            for (idx, instr) in block.instrs.iter().enumerate() {
+                if let Some(span_byte) = func.span_table.get(block.id.0, idx) {
+                    if span_byte == def_byte_offset {
+                        if let Some(t_idx) = tuple_index {
+                            if let crate::ir::instr::IrInstr::GetElement { result, index, .. } = instr {
+                                if *index == t_idx {
+                                    if let Some(ty) = func.value_type(*result) {
+                                        found_ty = Some(ty.clone());
+                                        break;
+                                    }
+                                }
+                            }
+                        } else {
+                            if let Some(res_vid) = instr.result() {
+                                if let Some(ty) = func.value_type(res_vid) {
+                                    found_ty = Some(ty.clone());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if found_ty.is_some() {
+                break;
+            }
+        }
+    }
+
+    found_ty.map(|ty| format_ir_type_for_lsp(&ty))
+}
+
+fn infer_ast_expr_type(expr: &crate::parser::ast::AstExpr) -> Option<String> {
+    use crate::parser::ast::AstExpr;
+    match expr {
+        AstExpr::IntLit { .. } => Some("i64".to_owned()),
+        AstExpr::FloatLit { .. } => Some("f64".to_owned()),
+        AstExpr::BoolLit { .. } => Some("bool".to_owned()),
+        AstExpr::StringLit { .. } => Some("str".to_owned()),
+        AstExpr::StructLit { name, .. } => Some(name.clone()),
+        AstExpr::Tuple { elements, .. } => {
+            let mut parts = Vec::new();
+            for el in elements {
+                parts.push(infer_ast_expr_type(el).unwrap_or_else(|| "(inferred)".to_owned()));
+            }
+            Some(format!("({})", parts.join(", ")))
+        }
+        AstExpr::ArrayLit { elems, .. } => {
+            if let Some(first) = elems.first() {
+                let ty = infer_ast_expr_type(first).unwrap_or_else(|| "(inferred)".to_owned());
+                Some(format!("[{}; {}]", ty, elems.len()))
+            } else {
+                Some("list<(inferred)>".to_owned())
+            }
+        }
+        AstExpr::Cast { ty, .. } => Some(ast_type_str(ty)),
+        AstExpr::BinOp { op, .. } => {
+            use crate::parser::ast::AstBinOp;
+            match op {
+                AstBinOp::CmpEq
+                | AstBinOp::CmpNe
+                | AstBinOp::CmpLt
+                | AstBinOp::CmpLe
+                | AstBinOp::CmpGt
+                | AstBinOp::CmpGe
+                | AstBinOp::And
+                | AstBinOp::Or => Some("bool".to_owned()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Searches a block (and nested blocks) for a val/var binding matching `name`
 /// whose span encompasses the cursor `byte` position.
 fn find_binding_in_block(
     block: &crate::parser::ast::AstBlock,
     name: &str,
     _byte: u32,
+    module: Option<&crate::ir::module::IrModule>,
+    func_name: &str,
 ) -> Option<String> {
     for stmt in &block.stmts {
         match stmt {
             crate::parser::ast::AstStmt::Let {
-                name: ident, ty, ..
+                name: ident,
+                ty,
+                init,
+                is_var,
+                span,
+                ..
             } => {
                 if ident.name == name {
-                    let ty_str = ty
-                        .as_ref()
-                        .map(ast_type_str)
-                        .unwrap_or_else(|| "(inferred)".to_owned());
-                    return Some(format!("```iris\ninferred {}: {}\n```", name, ty_str));
+                    let mut ty_str = resolve_local_var_type(module, func_name, &ident.name, span.start.0, None);
+                    if ty_str.is_none() {
+                        ty_str = ty.as_ref().map(ast_type_str);
+                    }
+                    if ty_str.is_none() {
+                        ty_str = infer_ast_expr_type(init);
+                    }
+                    let resolved_ty = ty_str.unwrap_or_else(|| "inferred".to_owned());
+
+                    if *is_var {
+                        return Some(format!(
+                            "```iris\nvar {}: {}\n```\n**Mutable local variable**\n`{}` is a mutable variable of type `{}`.\nIts value can be reassigned or modified using assignment (`{} = value`).",
+                            name, resolved_ty, name, resolved_ty, name
+                        ));
+                    } else {
+                        return Some(format!(
+                            "```iris\nval {}: {}\n```\n**Immutable local binding**\n`{}` is an immutable binding of type `{}`.\nOnce bound, its value cannot be reassigned or modified.",
+                            name, resolved_ty, name, resolved_ty
+                        ));
+                    }
+                }
+            }
+            crate::parser::ast::AstStmt::LetTuple {
+                names,
+                init,
+                is_var,
+                span,
+                ..
+            } => {
+                for (i, n) in names.iter().enumerate() {
+                    if n.name == name {
+                        let mut ty_str = resolve_local_var_type(module, func_name, &n.name, span.start.0, Some(i));
+                        if ty_str.is_none() {
+                            if let crate::parser::ast::AstExpr::Tuple { elements, .. } = init.as_ref() {
+                                if let Some(el) = elements.get(i) {
+                                    ty_str = infer_ast_expr_type(el);
+                                }
+                            }
+                        }
+                        let resolved_ty = ty_str.unwrap_or_else(|| "inferred".to_owned());
+
+                        if *is_var {
+                            return Some(format!(
+                                "```iris\nvar {}: {}\n```\n**Mutable local variable** (destructured from tuple)\n`{}` is a mutable variable of type `{}`.\nIts value can be reassigned or modified using assignment (`{} = value`).",
+                                name, resolved_ty, name, resolved_ty, name
+                            ));
+                        } else {
+                            return Some(format!(
+                                "```iris\nval {}: {}\n```\n**Immutable local binding** (destructured from tuple)\n`{}` is an immutable binding of type `{}`.\nOnce bound, its value cannot be reassigned or modified.",
+                                name, resolved_ty, name, resolved_ty
+                            ));
+                        }
+                    }
                 }
             }
             crate::parser::ast::AstStmt::ForRange { var, body, .. } => {
                 if var.name == name {
-                    return Some(format!("```iris\nfor {}: i64\n```\nLoop variable", name));
+                    return Some(format!(
+                        "```iris\nval {}: i64\n```\n**Loop variable**\n`{}` is an immutable loop variable of type `i64` bound in a `for` range loop.",
+                        name, name
+                    ));
                 }
-                if let Some(info) = find_binding_in_block(body, name, _byte) {
+                if let Some(info) = find_binding_in_block(body, name, _byte, module, func_name) {
                     return Some(info);
                 }
             }
             crate::parser::ast::AstStmt::While { body, .. } => {
-                if let Some(info) = find_binding_in_block(body, name, _byte) {
+                if let Some(info) = find_binding_in_block(body, name, _byte, module, func_name) {
                     return Some(info);
                 }
             }
             crate::parser::ast::AstStmt::Loop { body, .. } => {
-                if let Some(info) = find_binding_in_block(body, name, _byte) {
+                if let Some(info) = find_binding_in_block(body, name, _byte, module, func_name) {
                     return Some(info);
                 }
             }
             crate::parser::ast::AstStmt::ParFor { var, body, .. } => {
                 if var.name == name {
                     return Some(format!(
-                        "```iris\npar for {}: i64\n```\nParallel loop variable",
-                        name
+                        "```iris\nval {}: i64\n```\n**Parallel loop variable**\n`{}` is an immutable parallel loop variable of type `i64` bound in a `par for` loop.",
+                        name, name
                     ));
                 }
-                if let Some(info) = find_binding_in_block(body, name, _byte) {
+                if let Some(info) = find_binding_in_block(body, name, _byte, module, func_name) {
                     return Some(info);
                 }
             }
-            crate::parser::ast::AstStmt::ForEach { var, body, .. } => {
+            crate::parser::ast::AstStmt::ForEach { var, body, span, .. } => {
                 if var.name == name {
+                    let ty_str = resolve_local_var_type(module, func_name, &var.name, span.start.0, None)
+                        .unwrap_or_else(|| "inferred".to_owned());
                     return Some(format!(
-                        "```iris\nfor {} in ...\n```\nIterator variable",
-                        name
+                        "```iris\nval {}: {}\n```\n**Iterator variable**\n`{}` is an immutable iterator variable of type `{}` bound in a `for in` loop.",
+                        name, ty_str, name, ty_str
                     ));
                 }
-                if let Some(info) = find_binding_in_block(body, name, _byte) {
+                if let Some(info) = find_binding_in_block(body, name, _byte, module, func_name) {
                     return Some(info);
-                }
-            }
-            crate::parser::ast::AstStmt::LetTuple { names, .. } => {
-                for n in names {
-                    if n.name == name {
-                        return Some(format!("```iris\ninferred {} (destructured)\n```", name));
-                    }
                 }
             }
             _ => {}

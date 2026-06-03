@@ -133,3 +133,35 @@ fn test_lsp_update_document_refreshes_diagnostics() {
         "expected no errors after fixing source"
     );
 }
+
+// ── 9. Hover and Completions for Local val/var bindings with types ───────
+
+#[test]
+fn test_lsp_hover_and_completions_local_bindings() {
+    let mut lsp = LspState::new();
+    let src = "def test_fn() -> i64 {\n    val x = 10;\n    var y = 20.0;\n    val (a, b) = (30, true);\n    x\n}";
+    lsp.open_document(URI, src);
+
+    // Hover on 'x' at its usage (line 4, character 4)
+    let hover_x = lsp.hover(URI, 4, 4).expect("expected hover on x");
+    assert!(hover_x.contains("val x: i64"));
+    assert!(hover_x.contains("Immutable local binding"));
+
+    // Hover on 'y' at its definition (line 2, character 8)
+    let hover_y = lsp.hover(URI, 2, 8).expect("expected hover on y");
+    assert!(hover_y.contains("var y: f64"));
+    assert!(hover_y.contains("Mutable local variable"));
+
+    // Hover on destructured tuple element 'a' at definition (line 3, character 9)
+    let hover_a = lsp.hover(URI, 3, 9).expect("expected hover on a");
+    assert!(hover_a.contains("val a: i64"));
+    assert!(hover_a.contains("Immutable local binding"));
+
+    // Completions detail checks
+    let completions = lsp.completion_items(URI);
+    let x_comp = completions.iter().find(|c| c.label == "x").expect("expected completion item for x");
+    assert_eq!(x_comp.detail.as_deref(), Some("val: i64"));
+
+    let y_comp = completions.iter().find(|c| c.label == "y").expect("expected completion item for y");
+    assert_eq!(y_comp.detail.as_deref(), Some("var: f64"));
+}

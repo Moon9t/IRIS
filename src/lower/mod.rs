@@ -12311,7 +12311,7 @@ impl<'m> Lowerer<'m> {
                 self.scope.insert(name.name.clone(), (val, ty));
                 Ok(())
             }
-            AstStmt::LetTuple { names, init, span } => {
+            AstStmt::LetTuple { names, init, span, .. } => {
                 let (tuple_val, tuple_ty) = self.lower_expr(init)?;
                 let elem_types = match &tuple_ty {
                     IrType::Tuple(elems) => elems.clone(),
