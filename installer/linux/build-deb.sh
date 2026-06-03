@@ -3,13 +3,13 @@
 # build-deb.sh — Build a .deb package for IRIS Language
 # ──────────────────────────────────────────────────────────────────────────
 # Usage:
-#   ./installer/linux/build-deb.sh [--version 0.6.1] [--arch amd64]
+#   ./installer/linux/build-deb.sh [--version 1.0.0-rc1] [--arch amd64]
 #
 # Produces: installer/dist/iris_<version>_<arch>.deb
 # ──────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-VERSION="0.6.1"
+VERSION="1.0.0-rc1"
 ARCH="amd64"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -89,7 +89,7 @@ cp "$ROOT/README.md" "$PKG_DIR/usr/share/doc/iris/"
 # ── Generate man page ────────────────────────────────────────────────────
 echo "[3/5] Generating man page..."
 cat > "$PKG_DIR/usr/share/man/man1/iris.1" << 'MANEOF'
-.TH IRIS 1 "2026" "iris 0.6.1" "IRIS Language"
+.TH IRIS 1 "2026" "iris 1.0.0-rc1" "IRIS Language"
 .SH NAME
 iris \- IRIS programming language compiler and toolchain
 .SH SYNOPSIS

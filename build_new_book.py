@@ -7,8 +7,8 @@ with open(book_path, "r", encoding="utf-8") as f:
 
 # Perform simple global version replacements
 content = orig_content
-content = content.replace("0.2.0", "0.6.0")
-content = content.replace("0.2.x", "0.6.0")
+content = content.replace("0.2.0", "1.0.0-rc1")
+content = content.replace("0.2.x", "1.0.0-rc1")
 
 # Break by '## '
 parts = re.split(r'\n## ', content)
@@ -45,7 +45,7 @@ new_chapters = []
 # ----------------- Chapter 1: Getting Started -----------------
 ch1 = chapters[0] # "Chapter 1: Getting Started"
 # Update VS Code extension version in Ch 1
-ch1 = ch1.replace("iris-lang-0.6.0.vsix", "iris-lang-0.6.0.vsix")
+ch1 = ch1.replace("iris-lang-1.0.0-rc1.vsix", "iris-lang-1.0.0-rc1.vsix")
 
 # Add a section on 'iris pkg init' and 'iris test' to Chapter 1, right before 'Try It Yourself'
 ch1_insert = """
@@ -647,7 +647,7 @@ The manifest defines package metadata and third-party dependencies:
 ```toml
 [package]
 name = "my_project"
-version = "0.6.0"
+version = "1.0.0-rc1"
 authors = ["Moon9t"]
 
 [dependencies]
@@ -1161,7 +1161,7 @@ final_book_content += "\n## " + app_e_new + "\n"
 final_book_content += """
 ---
 
-**Version**: Corresponds to IRIS compiler version 0.6.0
+**Version**: Corresponds to IRIS compiler version 1.0.0-rc1
 **Platform**: Tested on Windows 10/11, Linux (x86_64), macOS (aarch64) with LLVM 17+ and MinGW ucrt64
 **License**: GNU General Public License v2.0 or later — see [LICENSE](LICENSE)
 **Source**: [github.com/moon9t/iris](https://github.com/moon9t/iris)

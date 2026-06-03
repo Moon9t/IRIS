@@ -2,7 +2,7 @@
   "name": "iris-lang",
   "displayName": "IRIS Language",
   "description": "IRIS compiler: syntax highlighting, LSP, debugging, and REPL — Go-like developer experience",
-  "version": "0.6.1",
+  "version": "1.0.0-rc1",
   "publisher": "iris-lang",
   "engines": {
     "vscode": "^1.85.0"

@@ -4,7 +4,7 @@ Full-featured IDE support for the [IRIS programming language](https://github.com
 
 ![VS Code](https://img.shields.io/badge/VS%20Code-1.85+-blue?logo=visualstudiocode)
 ![License](https://img.shields.io/badge/license-GPL--2.0--or--later-green)
-![Version](https://img.shields.io/badge/version-0.6.1-orange)
+![Version](https://img.shields.io/badge/version-1.0.0-rc1-orange)
 
 ---
 

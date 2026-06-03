@@ -12,11 +12,16 @@ def replace_in_file(path, pattern, replacement):
         print(f'Updated {path}')
 
 for root, _, files in os.walk('.'):
+    # Exclude build target, git internals, and node modules
     if 'target' in root or '.git' in root or 'node_modules' in root:
         continue
     for file in files:
-        if file.endswith(('.md', '.sh', '.ps1', '.json', '.iss')):
+        if file.endswith(('.md', '.sh', '.ps1', '.json', '.iss', '.toml', '.py')):
             path = os.path.join(root, file)
-            # Update specific versions to 0.6.1
-            replace_in_file(path, r'(?<!\d)0\.5\.0(?!\d)', '0.6.1')
-            replace_in_file(path, r'(?<!\d)0\.6\.0(?!\d)', '0.6.1')
+            # Skip this script itself and Cargo.lock / package-lock.json (we let package managers regenerate lockfiles)
+            if file == 'update_versions.py' or file == 'Cargo.lock' or file == 'package-lock.json':
+                continue
+            # Update specific versions to 1.0.0-rc1
+            replace_in_file(path, r'(?<!\d)0\.5\.0(?!\d)', '1.0.0-rc1')
+            replace_in_file(path, r'(?<!\d)0\.6\.0(?!\d)', '1.0.0-rc1')
+            replace_in_file(path, r'(?<!\d)0\.6\.1(?!\d)', '1.0.0-rc1')

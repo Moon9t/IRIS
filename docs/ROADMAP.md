@@ -1,20 +1,20 @@
 # IRIS Roadmap
 
-> **Current version: 0.6.1** — active release. Pre-1.0, evolving rapidly.
+> **Current version: 1.0.0-rc1** — active release. Pre-1.0, evolving rapidly.
 
 This document outlines the planned milestones for IRIS from the current release
 line through the stable 1.0 release and beyond.
 
 ---
 
-## Current State (v0.6.1)
+## Current State (v1.0.0-rc1)
 
 - Core language, interpreter, LLVM native codegen — functional
 - Closures (basic, captures, HOF) — working in native backend
 - LSP, DAP debugger, REPL — functional
 - 34 stdlib modules — registered and implemented (including std.ais, std.rl, std.ml, std.nn)
 - **1,400+ tests**, fuzz corpus expanded
-- VS Code extension v0.6.1 built (VSIX); published to marketplace
+- VS Code extension v1.0.0-rc1 built (VSIX); published to marketplace
 - Installer scripts for Windows, Linux, macOS
 - Package manager: `iris pkg init/add/install/update/list/check/build/run` (local + git deps, lockfile)
 - CHANGELOG.md, ROADMAP.md, SPEC.md, docs/ — all present and current
@@ -60,7 +60,7 @@ the latest tagged release yet.
 
 ---
 
-## v0.6.1 — ML & Compute
+## v1.0.0-rc1 — ML & Compute
 
 **Goal:** Make the ML headline features real, not stubs.
 
@@ -88,7 +88,7 @@ Release status: Released (May 2026)
 
 ---
 
-## v0.6.1 — Performance & Security
+## v1.0.0-rc1 — Performance & Security
 
 **Goal:** Production-grade performance and trustworthy FFI.
 

@@ -1,6 +1,6 @@
-# IRIS 0.6.1 Current Language Lock
+# IRIS 1.0.0-rc1 Current Language Lock
 
-This document captures the current ready-to-use IRIS language surface for the 0.6.1 build. It is the reference for examples, LSP/DAP support, editor grammar, installer dependency checks, and ML pipeline examples.
+This document captures the current ready-to-use IRIS language surface for the 1.0.0-rc1 build. It is the reference for examples, LSP/DAP support, editor grammar, installer dependency checks, and ML pipeline examples.
 
 ## Locked Language Surface
 

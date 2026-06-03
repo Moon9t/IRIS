@@ -3,14 +3,14 @@
 # build-appimage.sh — Build an AppImage for IRIS Language
 # ──────────────────────────────────────────────────────────────────────────
 # Usage:
-#   ./installer/linux/build-appimage.sh [--version 0.6.1]
+#   ./installer/linux/build-appimage.sh [--version 1.0.0-rc1]
 #
 # Produces: installer/dist/IRIS-<version>-<arch>.AppImage
 # Self-contained, runs on any Linux distro (glibc 2.17+).
 # ──────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-VERSION="0.6.1"
+VERSION="1.0.0-rc1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 

@@ -9,7 +9,7 @@
 ;   or via:    powershell -ExecutionPolicy Bypass -File installer\build_installer.ps1
 
 #define AppName      "IRIS Language"
-#define AppVersion   "0.6.1"
+#define AppVersion   "1.0.0-rc1"
 #define AppPublisher "IRIS Language Project"
 #define AppURL       "https://github.com/moon9t/iris"
 #define AppExeName   "iris.exe"
@@ -33,7 +33,7 @@ DefaultGroupName={#AppName}
 AllowNoIcons=yes
 OutputDir=dist
 OutputBaseFilename=IRIS-{#AppVersion}-windows-x64-setup
-; v0.6.1: bundles iris.exe + clang + lld + ucrt64 sysroot + VSCode extension
+; v1.0.0-rc1: bundles iris.exe + clang + lld + ucrt64 sysroot + VSCode extension
 SetupIconFile=icon.ico
 Compression=lzma2/ultra64
 SolidCompression=yes

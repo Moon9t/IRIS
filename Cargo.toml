@@ -1,6 +1,6 @@
 [package]
 name = "iris"
-version = "0.6.1"
+version = "1.0.0-rc1"
 edition = "2021"
 rust-version = "1.75"
 description = "IRIS: A compiled systems language for Autonomous Intelligent Systems"
