@@ -187,9 +187,12 @@ mod ml_inference_tests {
     fn test_ml_framework_status() {
         println!("\n=== ML Framework Integration Status ===\n");
 
-        let onnx_enabled = std::env::var("ONNXRUNTIME_DIR").is_ok() || std::path::Path::new("C:\\onnxruntime").exists();
-        let libtorch_enabled = std::env::var("LIBTORCH_DIR").is_ok() || std::path::Path::new("C:\\libtorch").exists();
-        let tensorflow_enabled = std::env::var("TENSORFLOW_DIR").is_ok() || std::path::Path::new("C:\\tensorflow").exists();
+        let onnx_enabled = std::env::var("ONNXRUNTIME_DIR").is_ok()
+            || std::path::Path::new("C:\\onnxruntime").exists();
+        let libtorch_enabled =
+            std::env::var("LIBTORCH_DIR").is_ok() || std::path::Path::new("C:\\libtorch").exists();
+        let tensorflow_enabled = std::env::var("TENSORFLOW_DIR").is_ok()
+            || std::path::Path::new("C:\\tensorflow").exists();
 
         println!("Framework availability:");
         println!(

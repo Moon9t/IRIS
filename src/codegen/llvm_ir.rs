@@ -64,10 +64,18 @@ pub fn target_data_layout(triple: &str) -> &'static str {
 pub fn native_target_triple() -> &'static str {
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        let has_vs = std::path::Path::new("C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe").exists()
-            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Community").exists()
-            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Professional").exists()
-            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise").exists();
+        let has_vs = std::path::Path::new(
+            "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe",
+        )
+        .exists()
+            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Community")
+                .exists()
+            || std::path::Path::new(
+                "C:\\Program Files\\Microsoft Visual Studio\\2022\\Professional",
+            )
+            .exists()
+            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise")
+                .exists();
         if has_vs {
             "x86_64-pc-windows-msvc"
         } else {
@@ -76,10 +84,18 @@ pub fn native_target_triple() -> &'static str {
     }
     #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
     {
-        let has_vs = std::path::Path::new("C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe").exists()
-            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Community").exists()
-            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Professional").exists()
-            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise").exists();
+        let has_vs = std::path::Path::new(
+            "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe",
+        )
+        .exists()
+            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Community")
+                .exists()
+            || std::path::Path::new(
+                "C:\\Program Files\\Microsoft Visual Studio\\2022\\Professional",
+            )
+            .exists()
+            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise")
+                .exists();
         if has_vs {
             "aarch64-pc-windows-msvc"
         } else {
@@ -5422,7 +5438,11 @@ fn emit_instr_ir(
                 let path_val = val(args[0]);
                 *gep_counter += 1;
                 let ptr_val = format!("%ffi_ptr_{}", *gep_counter);
-                writeln!(out, "  {} = call ptr @{}(ptr {})", ptr_val, fn_name, path_val)?;
+                writeln!(
+                    out,
+                    "  {} = call ptr @{}(ptr {})",
+                    ptr_val, fn_name, path_val
+                )?;
                 writeln!(out, "  %v{} = ptrtoint ptr {} to i64", result.0, ptr_val)?;
             } else if name == "ffi_close" {
                 // Cast i64 handle to ptr, then call iris_ffi_close returning i1
@@ -5430,7 +5450,11 @@ fn emit_instr_ir(
                 *gep_counter += 1;
                 let ptr_handle = format!("%ffi_h_{}", *gep_counter);
                 writeln!(out, "  {} = inttoptr i64 {} to ptr", ptr_handle, handle_val)?;
-                writeln!(out, "  %v{} = call i1 @iris_ffi_close(ptr {})", result.0, ptr_handle)?;
+                writeln!(
+                    out,
+                    "  %v{} = call i1 @iris_ffi_close(ptr {})",
+                    result.0, ptr_handle
+                )?;
             } else if name == "ffi_call" {
                 // Cast i64 handle to ptr, then call iris_ffi_call(ptr, ptr)
                 let handle_val = val(args[0]);
@@ -5438,9 +5462,18 @@ fn emit_instr_ir(
                 *gep_counter += 1;
                 let ptr_handle = format!("%ffi_h_{}", *gep_counter);
                 writeln!(out, "  {} = inttoptr i64 {} to ptr", ptr_handle, handle_val)?;
-                writeln!(out, "  %v{} = call i64 @iris_ffi_call(ptr {}, ptr {})", result.0, ptr_handle, name_val)?;
-            } else if name == "ffi_call_i64" || name == "ffi_call_f64" || name == "ffi_call_str" || name == "ffi_call_void"
-                || name == "rust_call_i64" || name == "rust_call_f64" || name == "rust_call_void"
+                writeln!(
+                    out,
+                    "  %v{} = call i64 @iris_ffi_call(ptr {}, ptr {})",
+                    result.0, ptr_handle, name_val
+                )?;
+            } else if name == "ffi_call_i64"
+                || name == "ffi_call_f64"
+                || name == "ffi_call_str"
+                || name == "ffi_call_void"
+                || name == "rust_call_i64"
+                || name == "rust_call_f64"
+                || name == "rust_call_void"
             {
                 // Cast handle to ptr, allocate stack array of args if any, and dispatch
                 let handle_val = val(args[0]);
@@ -5459,7 +5492,11 @@ fn emit_instr_ir(
                         let val_str = val(a);
                         *gep_counter += 1;
                         let ptr_name = format!("%ffi_arg_ptr_{}", *gep_counter);
-                        writeln!(out, "  {} = getelementptr inbounds [{} x i64], ptr {}, i64 0, i64 {}", ptr_name, nargs, array_name, i)?;
+                        writeln!(
+                            out,
+                            "  {} = getelementptr inbounds [{} x i64], ptr {}, i64 0, i64 {}",
+                            ptr_name, nargs, array_name, i
+                        )?;
                         writeln!(out, "  store i64 {}, ptr {}", val_str, ptr_name)?;
                     }
                     (array_name, nargs.to_string())
@@ -5476,14 +5513,30 @@ fn emit_instr_ir(
                     _ => "ptr",
                 };
                 if result_ty == &IrType::Scalar(DType::I64) && !name.ends_with("_void") {
-                    writeln!(out, "  %v{} = call i64 @{}(ptr {}, ptr {}, ptr {}, i32 {})", result.0, fn_name, ptr_handle, name_val, arr_ptr, nargs_i32)?;
+                    writeln!(
+                        out,
+                        "  %v{} = call i64 @{}(ptr {}, ptr {}, ptr {}, i32 {})",
+                        result.0, fn_name, ptr_handle, name_val, arr_ptr, nargs_i32
+                    )?;
                 } else if ret_llvm == "void" {
-                    writeln!(out, "  call void @{}(ptr {}, ptr {}, ptr {}, i32 {})", fn_name, ptr_handle, name_val, arr_ptr, nargs_i32)?;
+                    writeln!(
+                        out,
+                        "  call void @{}(ptr {}, ptr {}, ptr {}, i32 {})",
+                        fn_name, ptr_handle, name_val, arr_ptr, nargs_i32
+                    )?;
                     writeln!(out, "  %v{} = add i64 0, 0", result.0)?;
                 } else if ret_llvm == "double" {
-                    writeln!(out, "  %v{} = call double @{}(ptr {}, ptr {}, ptr {}, i32 {})", result.0, fn_name, ptr_handle, name_val, arr_ptr, nargs_i32)?;
+                    writeln!(
+                        out,
+                        "  %v{} = call double @{}(ptr {}, ptr {}, ptr {}, i32 {})",
+                        result.0, fn_name, ptr_handle, name_val, arr_ptr, nargs_i32
+                    )?;
                 } else {
-                    writeln!(out, "  %v{} = call ptr @{}(ptr {}, ptr {}, ptr {}, i32 {})", result.0, fn_name, ptr_handle, name_val, arr_ptr, nargs_i32)?;
+                    writeln!(
+                        out,
+                        "  %v{} = call ptr @{}(ptr {}, ptr {}, ptr {}, i32 {})",
+                        result.0, fn_name, ptr_handle, name_val, arr_ptr, nargs_i32
+                    )?;
                 }
             } else {
                 let fn_name = format!("iris_{}", name);

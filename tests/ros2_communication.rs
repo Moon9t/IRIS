@@ -22,5 +22,9 @@ def main() -> i64 {
     // Compiling to LLVM IR to verify that the AST parses, merges, lowers,
     // and successfully completes optimization passes without compile errors.
     let res = compile_multi(&[("main", src)], "main", EmitKind::Llvm);
-    assert!(res.is_ok(), "ROS2 client library wrapper failed to compile: {:?}", res.err());
+    assert!(
+        res.is_ok(),
+        "ROS2 client library wrapper failed to compile: {:?}",
+        res.err()
+    );
 }

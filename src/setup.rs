@@ -38,16 +38,15 @@ pub fn run_setup_command() -> Result<(), String> {
             .map_err(|_| "Failed to locate USERPROFILE environment variable.".to_owned())?;
         let install_dir = home.join(".iris");
 
-        // 3. Spawn powershell to execute the script
         let mut child = Command::new("powershell")
-            .args(&[
+            .args([
                 "-NoProfile",
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
-                &temp_script.to_string_lossy(),
+                temp_script.to_str().unwrap_or(""),
                 "-InstallDir",
-                &install_dir.to_string_lossy(),
+                install_dir.to_str().unwrap_or(""),
             ])
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())

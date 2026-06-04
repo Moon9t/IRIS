@@ -28,17 +28,41 @@ fn test_multimodal_ai_orchestrator_project() {
     }
 
     let out = compile_file(&project_main_path(), EmitKind::Eval).unwrap();
-    
+
     // Verify execution output matches either the JIT captured output or the interpreter return value "0"
     if out.trim() != "0" {
-        assert!(out.contains("IRIS Flagship Multimodal Edge AI Orchestrator Loop"), "output was:\n{}", out);
+        assert!(
+            out.contains("IRIS Flagship Multimodal Edge AI Orchestrator Loop"),
+            "output was:\n{}",
+            out
+        );
         assert!(out.contains("Execution Cycle: 1"), "output was:\n{}", out);
         assert!(out.contains("Execution Cycle: 2"), "output was:\n{}", out);
         assert!(out.contains("Execution Cycle: 3"), "output was:\n{}", out);
-        assert!(out.contains("Multi-framework inference pipeline completed"), "output was:\n{}", out);
-        assert!(out.contains("Projected state features to control space via matmul"), "output was:\n{}", out);
-        assert!(out.contains("L1 dot projection coherence"), "output was:\n{}", out);
-        assert!(out.contains("Policy parameters optimized with zero allocation"), "output was:\n{}", out);
-        assert!(out.contains("Multimodal AI Orchestrator loop completed cleanly"), "output was:\n{}", out);
+        assert!(
+            out.contains("Multi-framework inference pipeline completed"),
+            "output was:\n{}",
+            out
+        );
+        assert!(
+            out.contains("Projected state features to control space via matmul"),
+            "output was:\n{}",
+            out
+        );
+        assert!(
+            out.contains("L1 dot projection coherence"),
+            "output was:\n{}",
+            out
+        );
+        assert!(
+            out.contains("Policy parameters optimized with zero allocation"),
+            "output was:\n{}",
+            out
+        );
+        assert!(
+            out.contains("Multimodal AI Orchestrator loop completed cleanly"),
+            "output was:\n{}",
+            out
+        );
     }
 }

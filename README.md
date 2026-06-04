@@ -1,5 +1,9 @@
 # IRIS — Intermediate Representation for Intelligent Systems
 
+<p align="center">
+  <img src="logo/iris-logo.png" alt="IRIS Logo" width="180">
+</p>
+
 **A compiled, statically-typed systems programming language engineered for Autonomous Intelligent Systems (AIS).**
 
 IRIS bridges low-level hardware control and execution efficiency with high-level machine learning and cognitive ergonomics. It compiles directly to native binaries via an LLVM pipeline, utilizes a deterministic reference-counting garbage collector, and features built-in multi-dimensional tensors, tape-based automatic differentiation, and a multi-level capability-based security sandbox.
@@ -86,6 +90,30 @@ iris run hello.iris
 iris build hello.iris
 ./hello
 ```
+
+---
+
+## Progressive Examples & Sample Projects
+
+The IRIS repository includes a complete suite of progressive example programs and complex showcases to help developers get started:
+
+### Progressive Examples (`examples/`)
+Progress through the language from core basics to advanced ML and actor-model systems:
+* **[01_basics/](examples/01_basics/)** — Variables, strings, f-strings, control flow, arrays.
+* **[02_functions/](examples/02_functions/)** — Closures, recursion, lambdas.
+* **[03_data_structures_algorithms/](examples/03_data_structures_algorithms/)** — Maps, sorting, math utilities.
+* **[04_types_and_traits/](examples/04_types_and_traits/)** — Structs, enums, traits, pattern matching, generics.
+* **[05_systems/](examples/05_systems/)** — Concurrency, networking, FFI, databases.
+* **[06_machine_learning/](examples/06_machine_learning/)** — Autodiff, tensor operations, neural network layers, dataset preprocessing.
+* **[07_applications/](examples/07_applications/)** — End-to-end applications (e.g., `ais_agent.iris`, `game_of_life.iris`).
+
+For details on how to run them, see the [Examples README](examples/README.md).
+
+### Sample Projects (`projects/`)
+Explore real-world architecture examples using IRIS:
+* **[ML Backends Demo](projects/ml_backends_demo/)** — Demonstrates native neural network training (`std.nn`), tensor contractions (`einsum`), loss metrics, and external runtime shims for **ONNX Runtime**, **PyTorch/LibTorch**, and **TensorFlow**.
+* **[Robotic Actuator Control](projects/robotic_actuator_control/)** — Visualizes hardware control loops and capability-based filesystem boundaries.
+* **[Multimodal AI Orchestrator](projects/multimodal_ai_orchestrator/)** — Showcases actor-model messaging channels (`channel<T>`) for sensory input routing.
 
 ---
 
@@ -299,6 +327,12 @@ iris repl
 ```
 
 *REPL Meta-commands:* Use `:help` to list commands, `:env` to dump active bindings, `:type <expr>` to see type signatures, and `:ir <expr>` to inspect generated SSA IR.
+
+### Visual Studio Code Extension
+
+To get full syntax highlighting, hover documentation, real-time diagnostics, auto-formatting, debugging integration (DAP), and a status bar showing the active compiler version, install the official **IRIS VS Code Extension** located in the [vscode-iris/](vscode-iris/) directory.
+
+Refer to the [VS Code Extension README](vscode-iris/README.md) for installation and configuration instructions.
 
 ---
 

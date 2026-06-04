@@ -150,7 +150,12 @@ fn test_autodiff_determinism_profiling() {
         Some(f64_ty()),
     );
 
-    builder.push_instr(IrInstr::Return { values: vec![grad_x] }, None);
+    builder.push_instr(
+        IrInstr::Return {
+            values: vec![grad_x],
+        },
+        None,
+    );
     let func = builder.build();
 
     // Warm-up iteration
@@ -168,10 +173,14 @@ fn test_autodiff_determinism_profiling() {
     // Compute stats
     let sum_lat: f64 = latencies.iter().sum();
     let mean = sum_lat / latencies.len() as f64;
-    let variance: f64 = latencies.iter().map(|&l| {
-        let diff = l - mean;
-        diff * diff
-    }).sum::<f64>() / latencies.len() as f64;
+    let variance: f64 = latencies
+        .iter()
+        .map(|&l| {
+            let diff = l - mean;
+            diff * diff
+        })
+        .sum::<f64>()
+        / latencies.len() as f64;
     let std_dev = variance.sqrt();
 
     println!("Deterministic Auto-Diff Hardening Latency Profile:");
@@ -180,5 +189,9 @@ fn test_autodiff_determinism_profiling() {
     println!("  Standard deviation: {:.4} microseconds", std_dev);
 
     // Assert that standard deviation is well under 100 microseconds (flexible for virtualization/CPU scheduling environments)
-    assert!(std_dev < 100.0, "Standard deviation is too high: {:.4} microseconds", std_dev);
+    assert!(
+        std_dev < 100.0,
+        "Standard deviation is too high: {:.4} microseconds",
+        std_dev
+    );
 }

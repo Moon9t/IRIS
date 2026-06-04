@@ -4,7 +4,7 @@ Full-featured IDE support for the [IRIS programming language](https://github.com
 
 ![VS Code](https://img.shields.io/badge/VS%20Code-1.85+-blue?logo=visualstudiocode)
 ![License](https://img.shields.io/badge/license-GPL--2.0--or--later-green)
-![Version](https://img.shields.io/badge/version-1.0.0-rc1-orange)
+![Version](https://img.shields.io/badge/version-1.0.0-orange)
 
 ---
 
@@ -149,10 +149,10 @@ IRIS features strong static typing, algebraic data types, closures, generics, pa
 
 ## Contributing
 
-Contributions welcome! See [CONTRIBUTING.md](https://github.com/moon9t/iris/blob/main/CONTRIBUTING.md).
+Contributions welcome! See [CONTRIBUTING.md](../docs/CONTRIBUTING.md).
 
 ---
 
 ## License
 
-[GPL-2.0-or-later](https://github.com/moon9t/iris/blob/main/LICENSE)
+[GPL-2.0-or-later](../LICENSE)

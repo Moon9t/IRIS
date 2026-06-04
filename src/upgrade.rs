@@ -2,17 +2,16 @@
 //! Queries GitHub Release API for latest compiler version, downloads corresponding
 //! platform executable, and performs safe, atomic self-replacement.
 
+use serde::Deserialize;
 use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
 struct GitHubRelease {
     tag_name: String,
-    body: Option<String>,
     assets: Vec<GitHubAsset>,
 }
 
@@ -47,14 +46,18 @@ impl SemVer {
         } else {
             0
         };
-        Some(SemVer { major, minor, patch })
+        Some(SemVer {
+            major,
+            minor,
+            patch,
+        })
     }
 }
 
 fn fetch_latest_release_json() -> Result<String, String> {
     let output = if cfg!(target_os = "windows") {
         Command::new("powershell")
-            .args(&[
+            .args([
                 "-NoProfile",
                 "-Command",
                 "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-RestMethod -Uri 'https://api.github.com/repos/moon9t/iris/releases/latest' | ConvertTo-Json -Depth 10"
@@ -62,17 +65,21 @@ fn fetch_latest_release_json() -> Result<String, String> {
             .output()
     } else {
         Command::new("curl")
-            .args(&[
+            .args([
                 "-s",
-                "-H", "User-Agent: iris-updater",
-                "https://api.github.com/repos/moon9t/iris/releases/latest"
+                "-H",
+                "User-Agent: iris-updater",
+                "https://api.github.com/repos/moon9t/iris/releases/latest",
             ])
             .output()
     };
 
     let output = output.map_err(|e| format!("Failed to execute download command: {}", e))?;
     if !output.status.success() {
-        return Err(format!("Download process exited with error status: {}", String::from_utf8_lossy(&output.stderr)));
+        return Err(format!(
+            "Download process exited with error status: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
     String::from_utf8(output.stdout).map_err(|e| format!("Invalid UTF-8 in output: {}", e))
 }
@@ -83,7 +90,7 @@ fn download_and_extract(url: &str, target_path: &Path) -> Result<(), String> {
 
     let download_status = if cfg!(target_os = "windows") {
         Command::new("powershell")
-            .args(&[
+            .args([
                 "-NoProfile",
                 "-Command",
                 &format!(
@@ -95,12 +102,7 @@ fn download_and_extract(url: &str, target_path: &Path) -> Result<(), String> {
             .status()
     } else {
         Command::new("curl")
-            .args(&[
-                "-sL",
-                url,
-                "-o",
-                &tmp_zip.to_string_lossy()
-            ])
+            .args(["-sL", url, "-o", tmp_zip.to_str().unwrap_or("")])
             .status()
     };
 
@@ -114,27 +116,28 @@ fn download_and_extract(url: &str, target_path: &Path) -> Result<(), String> {
         if extract_dir.exists() {
             let _ = fs::remove_dir_all(&extract_dir);
         }
-        fs::create_dir_all(&extract_dir).map_err(|e| format!("Failed to create extract dir: {}", e))?;
+        fs::create_dir_all(&extract_dir)
+            .map_err(|e| format!("Failed to create extract dir: {}", e))?;
 
         let extract_status = if cfg!(target_os = "windows") {
             Command::new("powershell")
-                .args(&[
+                .args([
                     "-NoProfile",
                     "-Command",
                     &format!(
                         "Expand-Archive -Path '{}' -DestinationPath '{}' -Force",
                         tmp_zip.to_string_lossy(),
                         extract_dir.to_string_lossy()
-                    )
+                    ),
                 ])
                 .status()
         } else {
             Command::new("unzip")
-                .args(&[
+                .args([
                     "-o",
-                    &tmp_zip.to_string_lossy(),
+                    tmp_zip.to_str().unwrap_or(""),
                     "-d",
-                    &extract_dir.to_string_lossy()
+                    extract_dir.to_str().unwrap_or(""),
                 ])
                 .status()
         };
@@ -145,8 +148,12 @@ fn download_and_extract(url: &str, target_path: &Path) -> Result<(), String> {
         }
 
         let mut new_binary: Option<PathBuf> = None;
-        let exe_name = if cfg!(target_os = "windows") { "iris.exe" } else { "iris" };
-        
+        let exe_name = if cfg!(target_os = "windows") {
+            "iris.exe"
+        } else {
+            "iris"
+        };
+
         fn find_exe(dir: &Path, name: &str) -> Option<PathBuf> {
             if let Ok(entries) = fs::read_dir(dir) {
                 for entry in entries.flatten() {
@@ -167,16 +174,16 @@ fn download_and_extract(url: &str, target_path: &Path) -> Result<(), String> {
             new_binary = Some(exe_path);
         }
 
-        let new_bin_path = new_binary.ok_or_else(|| "Could not find iris binary in the downloaded archive".to_owned())?;
+        let new_bin_path = new_binary
+            .ok_or_else(|| "Could not find iris binary in the downloaded archive".to_owned())?;
         fs::copy(&new_bin_path, target_path)
             .map_err(|e| format!("Failed to copy new binary: {}", e))?;
-            
+
         let _ = fs::remove_dir_all(&extract_dir);
     } else {
-        fs::copy(&tmp_zip, target_path)
-            .map_err(|e| format!("Failed to copy new binary: {}", e))?;
+        fs::copy(&tmp_zip, target_path).map_err(|e| format!("Failed to copy new binary: {}", e))?;
     }
-    
+
     let _ = fs::remove_file(&tmp_zip);
     Ok(())
 }
@@ -201,13 +208,16 @@ fn perform_swap(new_bin_path: &Path, current_exe_path: &Path) -> Result<(), Stri
             old_exe_path.to_string_lossy()
         );
         let _ = Command::new("powershell")
-            .args(&["-NoProfile", "-Command", &cmd])
+            .args(["-NoProfile", "-Command", &cmd])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn();
     } else {
         let _ = Command::new("sh")
-            .args(&["-c", &format!("sleep 1; rm -f '{}'", old_exe_path.to_string_lossy())])
+            .args([
+                "-c",
+                &format!("sleep 1; rm -f '{}'", old_exe_path.to_string_lossy()),
+            ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn();
@@ -236,7 +246,10 @@ pub fn run_upgrade_command(check: bool, yes: bool, force: bool) -> Result<(), St
         return Ok(());
     }
 
-    println!("New version found: v{} (current: v{})", release.tag_name, current_ver_str);
+    println!(
+        "New version found: v{} (current: v{})",
+        release.tag_name, current_ver_str
+    );
     if check {
         return Ok(());
     }
@@ -245,7 +258,9 @@ pub fn run_upgrade_command(check: bool, yes: bool, force: bool) -> Result<(), St
         print!("Do you want to upgrade? [y/N]: ");
         io::stdout().flush().map_err(|e| e.to_string())?;
         let mut response = String::new();
-        io::stdin().read_line(&mut response).map_err(|e| e.to_string())?;
+        io::stdin()
+            .read_line(&mut response)
+            .map_err(|e| e.to_string())?;
         let response = response.trim().to_lowercase();
         if !response.starts_with('y') {
             println!("Upgrade cancelled.");
@@ -264,7 +279,12 @@ pub fn run_upgrade_command(check: bool, yes: bool, force: bool) -> Result<(), St
     let mut asset_url = None;
     for asset in &release.assets {
         let name_lower = asset.name.to_lowercase();
-        if name_lower.contains(platform_tag) && (name_lower.contains(".zip") || name_lower.contains(".tar.gz") || name_lower.contains(".exe") || !name_lower.contains("setup")) {
+        if name_lower.contains(platform_tag)
+            && (name_lower.contains(".zip")
+                || name_lower.contains(".tar.gz")
+                || name_lower.contains(".exe")
+                || !name_lower.contains("setup"))
+        {
             asset_url = Some(&asset.browser_download_url);
             break;
         }
@@ -280,17 +300,22 @@ pub fn run_upgrade_command(check: bool, yes: bool, force: bool) -> Result<(), St
         }
     }
 
-    let download_url = asset_url.ok_or_else(|| "Could not find a suitable release asset for this platform".to_owned())?;
+    let download_url = asset_url
+        .ok_or_else(|| "Could not find a suitable release asset for this platform".to_owned())?;
     println!("Downloading new binary from: {}", download_url);
 
-    let current_exe = env::current_exe().map_err(|e| format!("Failed to get current executable path: {}", e))?;
+    let current_exe =
+        env::current_exe().map_err(|e| format!("Failed to get current executable path: {}", e))?;
     let tmp_bin = current_exe.with_extension("tmp_new");
 
     download_and_extract(download_url, &tmp_bin)?;
 
     println!("Applying update...");
     perform_swap(&tmp_bin, &current_exe)?;
-    println!("Upgrade complete! IRIS has been updated to v{}", release.tag_name);
+    println!(
+        "Upgrade complete! IRIS has been updated to v{}",
+        release.tag_name
+    );
 
     Ok(())
 }

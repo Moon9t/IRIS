@@ -49,10 +49,10 @@ pub mod proto;
 pub mod repl;
 pub mod runtime_bindings;
 pub mod security;
+pub mod setup;
 pub mod stdlib;
 pub mod test_runner;
 pub mod upgrade;
-pub mod setup;
 
 pub mod agent;
 pub mod inference;

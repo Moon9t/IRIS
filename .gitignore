@@ -131,3 +131,11 @@ __pycache__/
 .Python
 env/
 .build_new_book.py
+
+# -- Windows test DLLs and validation directory --
+/*.dll
+/*.lib
+/*.def
+/*.exp
+/target_validate/
+

@@ -511,7 +511,9 @@ impl LspState {
             let module = crate::compile_to_module(source, &module_name).ok();
 
             for func in &ast.functions {
-                if let Some(info) = find_binding_in_block(&func.body, ident, byte, module.as_ref(), &func.name.name) {
+                if let Some(info) =
+                    find_binding_in_block(&func.body, ident, byte, module.as_ref(), &func.name.name)
+                {
                     return Some(info);
                 }
             }
@@ -521,9 +523,18 @@ impl LspState {
                     let mangled_name = if impl_def.trait_name.is_empty() {
                         format!("{}__{}", impl_def.type_name, func.name.name)
                     } else {
-                        format!("{}__{}__{}", impl_def.trait_name, impl_def.type_name, func.name.name)
+                        format!(
+                            "{}__{}__{}",
+                            impl_def.trait_name, impl_def.type_name, func.name.name
+                        )
                     };
-                    if let Some(info) = find_binding_in_block(&func.body, ident, byte, module.as_ref(), &mangled_name) {
+                    if let Some(info) = find_binding_in_block(
+                        &func.body,
+                        ident,
+                        byte,
+                        module.as_ref(),
+                        &mangled_name,
+                    ) {
                         return Some(info);
                     }
                 }
@@ -2232,7 +2243,10 @@ fn collect_completion_items_from_ast(
             let mangled_name = if imp.trait_name.is_empty() {
                 format!("{}__{}", imp.type_name, method.name.name)
             } else {
-                format!("{}__{}__{}", imp.trait_name, imp.type_name, method.name.name)
+                format!(
+                    "{}__{}__{}",
+                    imp.trait_name, imp.type_name, method.name.name
+                )
             };
             push_completion(
                 items,
@@ -2302,7 +2316,8 @@ fn collect_completion_items_from_stmts(
                 span,
                 ..
             } => {
-                let mut ty_str = resolve_local_var_type(module, func_name, &name.name, span.start.0, None);
+                let mut ty_str =
+                    resolve_local_var_type(module, func_name, &name.name, span.start.0, None);
                 if ty_str.is_none() {
                     ty_str = ty.as_ref().map(ast_type_str);
                 }
@@ -2327,7 +2342,13 @@ fn collect_completion_items_from_stmts(
                 ..
             } => {
                 for (i, name) in names.iter().enumerate() {
-                    let mut ty_str = resolve_local_var_type(module, func_name, &name.name, span.start.0, Some(i));
+                    let mut ty_str = resolve_local_var_type(
+                        module,
+                        func_name,
+                        &name.name,
+                        span.start.0,
+                        Some(i),
+                    );
                     if ty_str.is_none() {
                         if let crate::parser::ast::AstExpr::Tuple { elements, .. } = init.as_ref() {
                             if let Some(el) = elements.get(i) {
@@ -2346,14 +2367,16 @@ fn collect_completion_items_from_stmts(
                     );
                 }
             }
-            AstStmt::ForRange { var, body, .. }
-            | AstStmt::ParFor { var, body, .. } => {
+            AstStmt::ForRange { var, body, .. } | AstStmt::ParFor { var, body, .. } => {
                 push_completion(items, var.name.clone(), 6, Some("val: i64".to_owned()));
                 collect_completion_items_from_stmts(&body.stmts, items, module, func_name);
             }
-            AstStmt::ForEach { var, body, span, .. } => {
-                let ty_str = resolve_local_var_type(module, func_name, &var.name, span.start.0, None)
-                    .unwrap_or_else(|| "inferred".to_owned());
+            AstStmt::ForEach {
+                var, body, span, ..
+            } => {
+                let ty_str =
+                    resolve_local_var_type(module, func_name, &var.name, span.start.0, None)
+                        .unwrap_or_else(|| "inferred".to_owned());
                 push_completion(items, var.name.clone(), 6, Some(format!("val: {}", ty_str)));
                 collect_completion_items_from_stmts(&body.stmts, items, module, func_name);
             }
@@ -2580,9 +2603,10 @@ fn resolve_local_var_type(
     tuple_index: Option<usize>,
 ) -> Option<String> {
     let m = module?;
-    let func = m.functions().iter().find(|f| {
-        f.name == func_name || f.name.ends_with(&format!("__{}", func_name))
-    })?;
+    let func = m
+        .functions()
+        .iter()
+        .find(|f| f.name == func_name || f.name.ends_with(&format!("__{}", func_name)))?;
 
     let mut found_ty = None;
     // 1. Check block parameters
@@ -2607,7 +2631,9 @@ fn resolve_local_var_type(
                 if let Some(span_byte) = func.span_table.get(block.id.0, idx) {
                     if span_byte == def_byte_offset {
                         if let Some(t_idx) = tuple_index {
-                            if let crate::ir::instr::IrInstr::GetElement { result, index, .. } = instr {
+                            if let crate::ir::instr::IrInstr::GetElement { result, index, .. } =
+                                instr
+                            {
                                 if *index == t_idx {
                                     if let Some(ty) = func.value_type(*result) {
                                         found_ty = Some(ty.clone());
@@ -2615,12 +2641,10 @@ fn resolve_local_var_type(
                                     }
                                 }
                             }
-                        } else {
-                            if let Some(res_vid) = instr.result() {
-                                if let Some(ty) = func.value_type(res_vid) {
-                                    found_ty = Some(ty.clone());
-                                    break;
-                                }
+                        } else if let Some(res_vid) = instr.result() {
+                            if let Some(ty) = func.value_type(res_vid) {
+                                found_ty = Some(ty.clone());
+                                break;
                             }
                         }
                     }
@@ -2697,7 +2721,8 @@ fn find_binding_in_block(
                 ..
             } => {
                 if ident.name == name {
-                    let mut ty_str = resolve_local_var_type(module, func_name, &ident.name, span.start.0, None);
+                    let mut ty_str =
+                        resolve_local_var_type(module, func_name, &ident.name, span.start.0, None);
                     if ty_str.is_none() {
                         ty_str = ty.as_ref().map(ast_type_str);
                     }
@@ -2728,9 +2753,17 @@ fn find_binding_in_block(
             } => {
                 for (i, n) in names.iter().enumerate() {
                     if n.name == name {
-                        let mut ty_str = resolve_local_var_type(module, func_name, &n.name, span.start.0, Some(i));
+                        let mut ty_str = resolve_local_var_type(
+                            module,
+                            func_name,
+                            &n.name,
+                            span.start.0,
+                            Some(i),
+                        );
                         if ty_str.is_none() {
-                            if let crate::parser::ast::AstExpr::Tuple { elements, .. } = init.as_ref() {
+                            if let crate::parser::ast::AstExpr::Tuple { elements, .. } =
+                                init.as_ref()
+                            {
                                 if let Some(el) = elements.get(i) {
                                     ty_str = infer_ast_expr_type(el);
                                 }
@@ -2784,10 +2817,13 @@ fn find_binding_in_block(
                     return Some(info);
                 }
             }
-            crate::parser::ast::AstStmt::ForEach { var, body, span, .. } => {
+            crate::parser::ast::AstStmt::ForEach {
+                var, body, span, ..
+            } => {
                 if var.name == name {
-                    let ty_str = resolve_local_var_type(module, func_name, &var.name, span.start.0, None)
-                        .unwrap_or_else(|| "inferred".to_owned());
+                    let ty_str =
+                        resolve_local_var_type(module, func_name, &var.name, span.start.0, None)
+                            .unwrap_or_else(|| "inferred".to_owned());
                     return Some(format!(
                         "```iris\nval {}: {}\n```\n**Iterator variable**\n`{}` is an immutable iterator variable of type `{}` bound in a `for in` loop.",
                         name, ty_str, name, ty_str

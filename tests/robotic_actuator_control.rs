@@ -28,13 +28,21 @@ fn test_robotic_actuator_control_project() {
     }
 
     let out = compile_file(&project_main_path(), EmitKind::Eval).unwrap();
-    
+
     // Verify execution output matches either the JIT captured output or the interpreter return value "0"
     if out.trim() != "0" {
-        assert!(out.contains("Robotic Joint Actuator Autonomous Learning Loop"), "output was:\n{}", out);
+        assert!(
+            out.contains("Robotic Joint Actuator Autonomous Learning Loop"),
+            "output was:\n{}",
+            out
+        );
         assert!(out.contains("Step: 1"), "output was:\n{}", out);
         assert!(out.contains("Step: 2"), "output was:\n{}", out);
         assert!(out.contains("Step: 3"), "output was:\n{}", out);
-        assert!(out.contains("Robotic Autonomous Joint learning loop completed successfully"), "output was:\n{}", out);
+        assert!(
+            out.contains("Robotic Autonomous Joint learning loop completed successfully"),
+            "output was:\n{}",
+            out
+        );
     }
 }

@@ -159,9 +159,15 @@ fn test_lsp_hover_and_completions_local_bindings() {
 
     // Completions detail checks
     let completions = lsp.completion_items(URI);
-    let x_comp = completions.iter().find(|c| c.label == "x").expect("expected completion item for x");
+    let x_comp = completions
+        .iter()
+        .find(|c| c.label == "x")
+        .expect("expected completion item for x");
     assert_eq!(x_comp.detail.as_deref(), Some("val: i64"));
 
-    let y_comp = completions.iter().find(|c| c.label == "y").expect("expected completion item for y");
+    let y_comp = completions
+        .iter()
+        .find(|c| c.label == "y")
+        .expect("expected completion item for y");
     assert_eq!(y_comp.detail.as_deref(), Some("var: f64"));
 }
