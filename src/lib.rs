@@ -52,6 +52,7 @@ pub mod security;
 pub mod stdlib;
 pub mod test_runner;
 pub mod upgrade;
+pub mod setup;
 
 pub mod agent;
 pub mod inference;

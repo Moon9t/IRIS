@@ -128,14 +128,27 @@ fn compile_c_runtime() {
 }
 
 fn sdk_dir(var_name: &str, default_path: &str) -> Option<String> {
-    std::env::var(var_name).ok().or_else(|| {
+    // Only link ML shims into the compiler binary itself if explicitly requested
+    let link_ml_shims = std::env::var("IRIS_LINK_ML_SHIMS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if !link_ml_shims {
+        return None;
+    }
+
+    if let Ok(val) = std::env::var(var_name) {
+        if !val.is_empty() {
+            return Some(val);
+        }
+    }
+    // Only use default path if explicitly requested via IRIS_USE_DEFAULT_SDK_PATHS=1
+    if std::env::var("IRIS_USE_DEFAULT_SDK_PATHS").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false) {
         let candidate = std::path::Path::new(default_path);
         if candidate.exists() {
-            Some(default_path.to_owned())
-        } else {
-            None
+            return Some(default_path.to_owned());
         }
-    })
+    }
+    None
 }
 
 fn link_lib_if_present(lib_dir: &str, lib_name: &str) {

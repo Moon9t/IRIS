@@ -37,8 +37,10 @@ pub fn target_preset_to_triple(preset: &str) -> Option<&'static str> {
         "linux-arm64" => Some("aarch64-unknown-linux-gnu"),
         "macos-x64" => Some("x86_64-apple-macosx14.0"),
         "macos-arm64" => Some("aarch64-apple-macosx14.0"),
-        "windows-x64" => Some("x86_64-pc-windows-msvc"),
-        "windows-arm64" => Some("aarch64-pc-windows-msvc"),
+        // Native Windows builds use the GNU/UCRT64 toolchain so the binary
+        // backend can link with the bundled MinGW sysroot instead of MSVC libs.
+        "windows-x64" => Some("x86_64-w64-windows-gnu"),
+        "windows-arm64" => Some("aarch64-w64-windows-gnu"),
         "riscv64-linux" => Some("riscv64gc-unknown-linux-gnu"),
         _ => None,
     }
@@ -62,11 +64,27 @@ pub fn target_data_layout(triple: &str) -> &'static str {
 pub fn native_target_triple() -> &'static str {
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        "x86_64-pc-windows-msvc"
+        let has_vs = std::path::Path::new("C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe").exists()
+            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Community").exists()
+            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Professional").exists()
+            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise").exists();
+        if has_vs {
+            "x86_64-pc-windows-msvc"
+        } else {
+            "x86_64-w64-windows-gnu"
+        }
     }
     #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
     {
-        "aarch64-pc-windows-msvc"
+        let has_vs = std::path::Path::new("C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe").exists()
+            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Community").exists()
+            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Professional").exists()
+            || std::path::Path::new("C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise").exists();
+        if has_vs {
+            "aarch64-pc-windows-msvc"
+        } else {
+            "aarch64-w64-windows-gnu"
+        }
     }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     {

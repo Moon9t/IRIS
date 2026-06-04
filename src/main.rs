@@ -144,6 +144,12 @@ fn run() {
                 process::exit(1);
             }
         }
+        Ok(ParseArgsResult::Setup) => {
+            if let Err(e) = iris::setup::run_setup_command() {
+                eprintln!("error: {}", e);
+                process::exit(1);
+            }
+        }
         Ok(ParseArgsResult::Args(cli)) => {
             if cli.sandbox {
                 iris::security::set_security_policy(iris::security::SecurityPolicy::sandboxed());

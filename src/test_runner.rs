@@ -183,7 +183,14 @@ mod tests {
         let module = crate::compile_to_module("def test_ok() -> i64 { 0 }", "test_mod").unwrap();
         let output = crate::codegen::build::run_native_test_capture(&module, "test_ok", None)
             .expect("native test wrapper should run");
-        assert!(output.status.success(), "expected pass status");
+        if !output.status.success() {
+            panic!(
+                "expected pass status, but got exit: {:?}\nstdout: {}\nstderr: {}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 
     #[test]

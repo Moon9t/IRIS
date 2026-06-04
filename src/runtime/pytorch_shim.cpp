@@ -43,12 +43,12 @@ static torch::Tensor iris_tensor_to_torch(IrisTensor* t) {
     // Create a CPU tensor from IrisTensor data (copies)
     std::vector<int64_t> sizes(t->ndim);
     for (int i = 0; i < t->ndim; ++i) sizes[i] = (int64_t)t->shape[i];
-    auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU);
+    auto options = torch::TensorOptions().dtype(c10::ScalarType::Float).device(c10::Device(c10::DeviceType::CPU));
     return torch::from_blob(t->data, sizes, options).clone(); // clone to own memory
 }
 
 static IrisTensor* torch_to_iris_tensor(const torch::Tensor& tt) {
-    auto t = tt.contiguous().to(torch::kCPU);
+    auto t = tt.contiguous().to(c10::Device(c10::DeviceType::CPU));
     int ndim = t.dim();
     IrisTensor* out = iris_tensor_alloc((int32_t)ndim, (const int64_t*)t.sizes().data());
     // copy data

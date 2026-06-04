@@ -54,6 +54,8 @@ pub enum ParseArgsResult {
     Explain(Option<String>),
     /// `upgrade` subcommand: self-upgrade the IRIS compiler to the latest version.
     Upgrade { check: bool, yes: bool, force: bool },
+    /// `setup` subcommand: download and configure toolchain dependencies.
+    Setup,
 }
 
 /// Parses command-line arguments (the full `std::env::args()` slice including `argv[0]`).
@@ -88,6 +90,7 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
             "bench" => return Ok(ParseArgsResult::Bench),
             "profile" => return Ok(ParseArgsResult::Profile),
             "test" => return Ok(ParseArgsResult::Test),
+            "setup" => return Ok(ParseArgsResult::Setup),
             "explain" => {
                 let code = args.get(i + 1).cloned();
                 return Ok(ParseArgsResult::Explain(code));
@@ -297,6 +300,7 @@ pub fn help_text() -> &'static str {
        bench <file.iris>     Run performance benchmarks on a file\n\
        explain [code]        Show detailed explanation for an error code (e.g. E0100)\n\
        upgrade               Self-upgrade the IRIS compiler to the latest version\n\
+       setup                 Download and configure toolchain dependencies\n\
      \n\
      Options:\n\
      --emit <kind>         Output kind: ir (default), llvm, llvm-complete, cuda, cuda-ptx, simd,\n\
