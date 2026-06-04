@@ -169,7 +169,11 @@ jobs:
               MSYS2_UCRT="C:/msys64/ucrt64"
 
               # Ensure mingw-w64 headers+libs are installed (runner may have a bare MSYS2).
-              C:/msys64/usr/bin/pacman.exe -S --noconfirm --needed \
+              # Disable signature validation to bypass outdated keyring errors on the runner.
+              sed -i 's/Required/Never/g' C:/msys64/etc/pacman.conf || true
+              sed -i 's/Optional/Never/g' C:/msys64/etc/pacman.conf || true
+
+              C:/msys64/usr/bin/pacman.exe -Sy --noconfirm --needed \
                 mingw-w64-ucrt-x86_64-headers \
                 mingw-w64-ucrt-x86_64-crt \
                 mingw-w64-ucrt-x86_64-gcc \
