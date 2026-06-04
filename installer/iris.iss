@@ -90,10 +90,10 @@ Source: "{#StageDir}\setup_dependencies.ps1";  DestDir: "{app}";                
 Source: "{#StageDir}\toolchain\llvm\bin\*";   DestDir: "{app}\toolchain\llvm\bin";           Flags: ignoreversion recursesubdirs; Components: llvm
 
 ; MinGW sysroot — libraries
-Source: "{#StageDir}\toolchain\ucrt64\lib\*"; DestDir: "{app}\toolchain\ucrt64\lib";         Flags: ignoreversion recursesubdirs; Components: sysroot
+Source: "{#StageDir}\toolchain\ucrt64\lib\*"; DestDir: "{app}\toolchain\ucrt64\lib";         Flags: ignoreversion recursesubdirs skipifsourcedoesntexist; Components: sysroot
 
 ; MinGW sysroot — headers
-Source: "{#StageDir}\toolchain\ucrt64\include\*"; DestDir: "{app}\toolchain\ucrt64\include"; Flags: ignoreversion recursesubdirs; Components: sysroot
+Source: "{#StageDir}\toolchain\ucrt64\include\*"; DestDir: "{app}\toolchain\ucrt64\include"; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist; Components: sysroot
 
 ; VSCode extension
 Source: "{#StageDir}\iris-lang-*.vsix";       DestDir: "{app}";                              Flags: ignoreversion skipifsourcedoesntexist; Components: vscode

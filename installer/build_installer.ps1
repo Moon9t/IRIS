@@ -210,19 +210,24 @@ Write-Host "  ucrt64\lib: $libMB MB" -ForegroundColor Green
 # 7c. ucrt64\include -- C headers
 $TcInc = New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "toolchain\ucrt64\include")
 $incTotal = 0
-Get-ChildItem "$Msys2Ucrt\include" -File -Filter '*.h' | ForEach-Object {
-    Copy-Item $_.FullName $TcInc.FullName -Force
-    $incTotal += $_.Length
+$IncSrc = "$Msys2Ucrt\include"
+if ((Test-Path $IncSrc) -and @(Get-ChildItem $IncSrc -File -Filter '*.h' -ErrorAction SilentlyContinue).Count -gt 0) {
+    Get-ChildItem $IncSrc -File -Filter '*.h' | ForEach-Object {
+        Copy-Item $_.FullName $TcInc.FullName -Force
+        $incTotal += $_.Length
+    }
+    # Copy ALL subdirectories (sys, sec_api, sdks, c++, directx, etc.)
+    Get-ChildItem $IncSrc -Directory | ForEach-Object {
+        $subSrc = $_.FullName
+        $subDst = Join-Path $TcInc.FullName $_.Name
+        Copy-Item $subSrc $subDst -Recurse -Force
+        Get-ChildItem $subSrc -Recurse -File | ForEach-Object { $incTotal += $_.Length }
+    }
+    $incMB = [math]::Round($incTotal / 1048576, 1)
+    Write-Host "  ucrt64\include: $incMB MB" -ForegroundColor Green
+} else {
+    Write-Host "  Warning: No headers found at $IncSrc — installer will skip include bundling" -ForegroundColor Yellow
 }
-# Copy ALL subdirectories (sys, sec_api, sdks, c++, directx, etc.)
-Get-ChildItem "$Msys2Ucrt\include" -Directory | ForEach-Object {
-    $subSrc = $_.FullName
-    $subDst = Join-Path $TcInc.FullName $_.Name
-    Copy-Item $subSrc $subDst -Recurse -Force
-    Get-ChildItem $subSrc -Recurse -File | ForEach-Object { $incTotal += $_.Length }
-}
-$incMB = [math]::Round($incTotal / 1048576, 1)
-Write-Host "  ucrt64\include: $incMB MB" -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
 # Step 8: Report staging totals
