@@ -130,21 +130,57 @@ impl DebugSession {
         self.cursor = 0;
         self.exception_message = None;
 
-        // Compile to module (runs debugger-friendly passes).
-        let module = crate::compile_to_module_debug(&self.source, "debug")?;
+        let source = &self.source;
 
-        // Collect the trace via the interpreter.
-        let trace = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        {
-            let t = std::rc::Rc::clone(&trace);
-            if let Err(e) = crate::interp::collect_trace(&module, &self.source, t) {
-                self.exception_message = Some(format!("{}", e));
+        // Run the compilation and trace collection inside a spawned thread with a larger stack size.
+        // This prevents stack overflow when running under cargo-tarpaulin or other instrumented
+        // testing tools that consume extra stack space.
+        let res = std::thread::scope(|s| {
+            let builder = std::thread::Builder::new()
+                .name("debugger_start_thread".to_string())
+                .stack_size(16 * 1024 * 1024); // 16MB stack
+
+            let handler = builder.spawn_scoped(s, || {
+                let module = crate::compile_to_module_debug(source, "debug")?;
+                let trace = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+                let mut exception_msg = None;
+                {
+                    let t = std::rc::Rc::clone(&trace);
+                    if let Err(e) = crate::interp::collect_trace(&module, source, t) {
+                        exception_msg = Some(format!("{}", e));
+                    }
+                }
+                let trace_vec = std::rc::Rc::try_unwrap(trace)
+                    .map_err(|_| ())
+                    .unwrap_or_default()
+                    .into_inner();
+                Ok::<_, Error>((trace_vec, exception_msg))
+            });
+
+            match handler {
+                Ok(h) => h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)),
+                Err(_) => {
+                    // Fallback to current thread if Builder fails to spawn scoped thread
+                    let module = crate::compile_to_module_debug(source, "debug")?;
+                    let trace = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+                    let mut exception_msg = None;
+                    {
+                        let t = std::rc::Rc::clone(&trace);
+                        if let Err(e) = crate::interp::collect_trace(&module, source, t) {
+                            exception_msg = Some(format!("{}", e));
+                        }
+                    }
+                    let trace_vec = std::rc::Rc::try_unwrap(trace)
+                        .map_err(|_| ())
+                        .unwrap_or_default()
+                        .into_inner();
+                    Ok::<_, Error>((trace_vec, exception_msg))
+                }
             }
-        }
-        self.trace = std::rc::Rc::try_unwrap(trace)
-            .map_err(|_| ())
-            .unwrap_or_default()
-            .into_inner();
+        })?;
+
+        self.trace = res.0;
+        self.exception_message = res.1;
 
         Ok(())
     }

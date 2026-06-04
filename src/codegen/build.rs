@@ -329,6 +329,7 @@ fn build_binary_impl(
     // clang — compiles LLVM IR (.ll) to object files AND compiles the C
     //         runtime AND links the final binary (with -fuse-ld=lld).
     //         No GCC installation is required.
+    #[allow(unused_mut)]
     let mut clang = find_clang();
     #[cfg(target_os = "windows")]
     {

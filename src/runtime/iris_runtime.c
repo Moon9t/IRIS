@@ -1481,7 +1481,7 @@ int64_t iris_sparse_nnz(IrisSparse* sp) {
 #endif
 
 #define IRIS_TAPE_MAGIC ((uint64_t)0x4952495354415045ULL)
-#define IRIS_TAPE_ARENA_SIZE 1048576
+#define IRIS_TAPE_ARENA_SIZE 131072
 
 typedef struct IrisTapeNode {
     uint64_t               magic;

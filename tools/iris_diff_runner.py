@@ -43,9 +43,9 @@ def main():
         rc_n, out_n = run_cmd(native_cmd, timeout=60)
         (outdir / f"{name}.native.out").write_text(out_n)
 
-        # Normalize outputs: ignore build log lines like 'wrote binary:'.
+        # Normalize outputs: ignore build log lines like 'wrote binary:' or compiler build logs.
         def normalize(s):
-            lines = [l for l in s.splitlines() if not l.strip().lower().startswith('wrote binary:')]
+            lines = [l for l in s.splitlines() if not l.strip().lower().startswith('wrote binary:') and not l.strip().startswith('[build.rs]')]
             # strip trailing numeric-only lines (common interpreter exit prints)
             while lines and lines[-1].strip().isdigit():
                 lines.pop()

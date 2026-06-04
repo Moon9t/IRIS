@@ -2,10 +2,6 @@
 //! Embeds the PowerShell setup script to automatically fetch and configure LLVM, MinGW,
 //! Git, and MSVC build tools on Windows without requiring manual user configuration.
 
-use std::fs;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
-
 #[cfg(target_os = "windows")]
 const SETUP_SCRIPT: &str = include_str!("../installer/windows/setup_dependencies.ps1");
 
@@ -21,6 +17,10 @@ pub fn run_setup_command() -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        use std::fs;
+        use std::path::PathBuf;
+        use std::process::{Command, Stdio};
+
         println!("Starting automatic IRIS compiler toolchain setup...");
         println!("This will detect and install missing compilation dependencies (LLVM/clang, MinGW sysroot, MSVC, Git).");
         println!("Installing local dependencies into ~/.iris/ directory...");
