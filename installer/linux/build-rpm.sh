@@ -29,6 +29,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Replace any '-' with '.' in version for RPM compatibility
+RPM_VERSION=$(echo "$VERSION" | tr '-' '.')
+
 # Map arch names for RPM
 case "$ARCH" in
     x86_64|amd64)    RPM_ARCH="x86_64" ;;
@@ -36,12 +39,12 @@ case "$ARCH" in
     *)               echo "Unsupported arch: $ARCH"; exit 1 ;;
 esac
 
-echo "Building IRIS .rpm package v${VERSION} (${RPM_ARCH})"
+echo "Building IRIS .rpm package v${RPM_VERSION} (${RPM_ARCH})"
 
 # ── Paths ─────────────────────────────────────────────────────────────────
 DIST_DIR="$ROOT/installer/dist"
 RPM_TOPDIR="$ROOT/installer/dist/rpm-staging"
-RPM_FILE="iris-${VERSION}-${RELEASE}.${RPM_ARCH}.rpm"
+RPM_FILE="iris-${RPM_VERSION}-${RELEASE}.${RPM_ARCH}.rpm"
 
 # ── Clean previous build ─────────────────────────────────────────────────
 rm -rf "$RPM_TOPDIR"
@@ -97,7 +100,7 @@ CHANGELOG_DATE="$(date '+%a %b %d %Y')"
 
 cat > "$RPM_TOPDIR/SPECS/iris.spec" << SPECEOF
 Name:           iris
-Version:        ${VERSION}
+Version:        ${RPM_VERSION}
 Release:        ${RELEASE}
 Summary:        IRIS programming language compiler and toolchain
 
@@ -152,8 +155,8 @@ echo "  Run 'iris --version' to verify."
 echo ""
 
 %changelog
-* ${CHANGELOG_DATE} IRIS Language Project <iris@moon9t.dev> - ${VERSION}-${RELEASE}
-- Release v${VERSION}
+* ${CHANGELOG_DATE} IRIS Language Project <iris@moon9t.dev> - ${RPM_VERSION}-${RELEASE}
+- Release v${RPM_VERSION}
 SPECEOF
 
 # ── Build .rpm ────────────────────────────────────────────────────────────

@@ -147,7 +147,8 @@ Write-Host "  VC++ runtime total: $vcrtMB MB" -ForegroundColor Green
 # ---------------------------------------------------------------------------
 Write-Host "[7/9] Staging MinGW sysroot..." -ForegroundColor Yellow
 $Msys2Ucrt = "C:\msys64\ucrt64"
-if (-not (Test-Path $Msys2Ucrt)) {
+$GccTriple  = "x86_64-w64-mingw32"
+if (-not (Test-Path (Join-Path $Msys2Ucrt "lib\gcc\$GccTriple"))) {
     $fallbackUcrt = Join-Path $Root "toolchain\ucrt64"
     if (Test-Path $fallbackUcrt) {
         $Msys2Ucrt = $fallbackUcrt
@@ -158,7 +159,6 @@ if (-not (Test-Path $Msys2Ucrt)) {
 }
 
 # 7a. GCC internal CRT support files (crtbegin.o, libgcc.a, etc.)
-$GccTriple  = "x86_64-w64-mingw32"
 $GccBase = Join-Path $Msys2Ucrt "lib\gcc\$GccTriple"
 $GccLibSrc = $null
 $GccVer = $null
