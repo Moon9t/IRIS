@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::JoinHandle;
 
 use crate::error::InterpError;
 use crate::ir::block::BlockId;
@@ -47,7 +49,7 @@ pub enum IrValue {
     /// A result value: Ok(v) or Err(e).
     ResultVal(std::result::Result<Box<IrValue>, Box<IrValue>>),
     /// A channel value: a shared FIFO queue (thread-safe for Spawn).
-    Chan(std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<IrValue>>>),
+    Chan(Arc<SharedChannel>),
     /// An atomic/mutex value: a shared mutable cell (thread-safe for Spawn).
     Atomic(std::sync::Arc<std::sync::Mutex<IrValue>>),
     /// Unit (void) value for side-effecting calls with no return.
@@ -189,6 +191,16 @@ impl PartialEq for IrValue {
     }
 }
 
+/// Shared state backing a channel: a FIFO queue with a condition variable
+/// so that `recv` can block efficiently instead of spinning.
+#[derive(Debug)]
+pub struct SharedChannel {
+    pub queue: Mutex<std::collections::VecDeque<IrValue>>,
+    pub not_empty: Condvar,
+    pub not_full: Condvar,
+    pub capacity: usize,
+}
+
 /// Interpreter execution options.
 #[derive(Debug, Clone, Copy)]
 pub struct InterpOptions {
@@ -213,7 +225,10 @@ impl Default for InterpOptions {
 /// `InterpError::Unsupported`. Use `eval_function_in_module` if you need
 /// cross-function calls.
 pub fn eval_function(func: &IrFunction, args: &[IrValue]) -> Result<Vec<IrValue>, InterpError> {
-    Interpreter::new(None, InterpOptions::default(), 0).run(func, args)
+    let mut interp = Interpreter::new(None, InterpOptions::default(), 0);
+    let result = interp.run(func, args)?;
+    interp.join_all_spawns()?;
+    Ok(result)
 }
 
 /// Like `eval_function` but with access to a full module for cross-function calls.
@@ -222,7 +237,10 @@ pub fn eval_function_in_module(
     func: &IrFunction,
     args: &[IrValue],
 ) -> Result<Vec<IrValue>, InterpError> {
-    Interpreter::new(Some(module), InterpOptions::default(), 0).run(func, args)
+    let mut interp = Interpreter::new(Some(module), InterpOptions::default(), 0);
+    let result = interp.run(func, args)?;
+    interp.join_all_spawns()?;
+    Ok(result)
 }
 
 /// Like `eval_function_in_module` but accepts custom execution limits.
@@ -232,7 +250,10 @@ pub fn eval_function_in_module_opts(
     args: &[IrValue],
     opts: InterpOptions,
 ) -> Result<Vec<IrValue>, InterpError> {
-    Interpreter::new(Some(module), opts, 0).run(func, args)
+    let mut interp = Interpreter::new(Some(module), opts, 0);
+    let result = interp.run(func, args)?;
+    interp.join_all_spawns()?;
+    Ok(result)
 }
 
 /// Runs the first zero-argument function in `module`, collecting a trace of
@@ -265,6 +286,7 @@ pub fn collect_trace(
     interp.trace_func = func.name.clone();
     interp.trace_source = source.to_owned();
     interp.run(func, &[])?;
+    interp.join_all_spawns()?;
 
     // Ensure at least one trace entry exists so the session is non-empty.
     if out.borrow().is_empty() {
@@ -303,6 +325,8 @@ pub(crate) struct Interpreter<'m> {
     /// Name of the function currently executing (for error location).
     cur_func: String,
     pub(crate) profiler: Option<std::rc::Rc<std::cell::RefCell<crate::profiler::Profiler>>>,
+    /// Join handles for spawned threads, collected so we can wait for them.
+    spawn_handles: Vec<JoinHandle<Result<Vec<IrValue>, InterpError>>>,
 }
 
 impl<'m> Interpreter<'m> {
@@ -319,6 +343,7 @@ impl<'m> Interpreter<'m> {
             last_byte: None,
             cur_func: String::new(),
             profiler: None,
+            spawn_handles: Vec::new(),
         }
     }
 
@@ -367,6 +392,17 @@ impl<'m> Interpreter<'m> {
             .map_err(|e| self.located(e))
     }
 
+    fn join_all_spawns(&mut self) -> Result<(), InterpError> {
+        while let Some(handle) = self.spawn_handles.pop() {
+            if let Err(e) = handle.join() {
+                return Err(InterpError::Unsupported {
+                    detail: format!("spawn thread panicked: {:?}", e),
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn run_inner(
         &mut self,
         func: &IrFunction,
@@ -381,12 +417,7 @@ impl<'m> Interpreter<'m> {
         let mut current = BlockId(0);
         let mut steps = 0usize;
 
-        std::thread::scope(|scope| {
-            let mut spawn_handles: Vec<
-                std::thread::ScopedJoinHandle<'_, Result<Vec<IrValue>, InterpError>>,
-            > = Vec::new();
-
-            'blocks: loop {
+        'blocks: loop {
                 let block = func
                     .block(current)
                     .ok_or(InterpError::UndefinedValue { id: current.0 })?;
@@ -800,6 +831,7 @@ impl<'m> Interpreter<'m> {
                                         prof.borrow_mut().enter_function(callee);
                                     }
                                     let ret = sub.run(callee_func, &call_args)?;
+                                    self.spawn_handles.extend(sub.spawn_handles.drain(..));
                                     if let Some(ref prof) = self.profiler {
                                         prof.borrow_mut().exit_function(callee);
                                     }
@@ -1293,6 +1325,7 @@ impl<'m> Interpreter<'m> {
                                     call_args.extend(cap_vals.iter().cloned());
                                     let mut sub = Interpreter::new(module, opts, depth + 1);
                                     sub.run(&callee, &call_args)?;
+                                    self.spawn_handles.extend(sub.spawn_handles.drain(..));
                                 }
                             } else {
                                 let chunk_size = n_iters.div_ceil(n_threads);
@@ -1334,18 +1367,33 @@ impl<'m> Interpreter<'m> {
                             }
                         }
 
-                        IrInstr::ChanNew { result, .. } => {
-                            let q = std::sync::Arc::new(std::sync::Mutex::new(
-                                std::collections::VecDeque::new(),
-                            ));
-                            self.values.insert(*result, IrValue::Chan(q));
+                        IrInstr::ChanNew { result, capacity, .. } => {
+                            let cap_val = self.get(*capacity)?;
+                            let cap = match cap_val {
+                                IrValue::I64(c) => if c <= 0 { std::usize::MAX } else { c as usize },
+                                _ => return Err(InterpError::TypeError { detail: "ChanNew capacity must be an integer".into() }),
+                            };
+                            let ch = Arc::new(SharedChannel {
+                                queue: Mutex::new(std::collections::VecDeque::new()),
+                                not_empty: Condvar::new(),
+                                not_full: Condvar::new(),
+                                capacity: cap,
+                            });
+                            self.values.insert(*result, IrValue::Chan(ch));
                         }
 
                         IrInstr::ChanSend { chan, value } => {
                             let ch = self.get(*chan)?;
                             let v = self.get(*value)?;
                             match ch {
-                                IrValue::Chan(q) => q.lock().unwrap().push_back(v),
+                                IrValue::Chan(q) => {
+                                    let mut queue = q.queue.lock().unwrap();
+                                    while queue.len() >= q.capacity {
+                                        queue = q.not_full.wait(queue).unwrap();
+                                    }
+                                    queue.push_back(v);
+                                    q.not_empty.notify_one();
+                                }
                                 other => {
                                     return Err(InterpError::TypeError {
                                         detail: format!("ChanSend on non-channel: {:?}", other),
@@ -1358,25 +1406,13 @@ impl<'m> Interpreter<'m> {
                             let ch = self.get(*chan)?;
                             match ch {
                                 IrValue::Chan(q) => {
-                                    // Spin-wait for a value to appear (up to 10 000 attempts
-                                    // with small yields).  This avoids a hard error when a
-                                    // send happens after the recv is issued in sequential
-                                    // simulation — and works correctly when Spawn actually
-                                    // runs the producer on another thread.
-                                    let mut attempts = 0u32;
-                                    let v = loop {
-                                        if let Some(val) = q.lock().unwrap().pop_front() {
-                                            break val;
-                                        }
-                                        attempts += 1;
-                                        if attempts > 10_000 {
-                                            return Err(InterpError::Unsupported {
-                                            detail: "recv timed out: channel is empty after 10 000 attempts".into(),
-                                        });
-                                        }
-                                        std::thread::yield_now();
-                                    };
-                                    self.values.insert(*result, v);
+                                    let mut queue = q.queue.lock().unwrap();
+                                    while queue.is_empty() {
+                                        queue = q.not_empty.wait(queue).unwrap();
+                                    }
+                                    let val = queue.pop_front().unwrap();
+                                    q.not_full.notify_one();
+                                    self.values.insert(*result, val);
                                 }
                                 other => {
                                     return Err(InterpError::TypeError {
@@ -1399,11 +1435,18 @@ impl<'m> Interpreter<'m> {
                             for a in args {
                                 call_args.push(self.get(*a)?);
                             }
-                            let module = self.module;
+                            let module_raw: usize = self
+                                .module
+                                .map(|m| m as *const IrModule as usize)
+                                .unwrap_or(0);
                             let opts = self.opts;
                             let depth = self.depth;
-                            // Fire-and-forget: collect handle for join at function end.
-                            spawn_handles.push(scope.spawn(move || {
+                            self.spawn_handles.push(std::thread::spawn(move || {
+                                let module: Option<&IrModule> = if module_raw == 0 {
+                                    None
+                                } else {
+                                    Some(unsafe { &*(module_raw as *const IrModule) })
+                                };
                                 let mut sub = Interpreter::new(module, opts, depth + 1);
                                 sub.run(&callee, &call_args)
                             }));
@@ -1941,6 +1984,7 @@ impl<'m> Interpreter<'m> {
                             closure,
                             args,
                             result_ty,
+                            ..
                         } => {
                             let closure_val = self.get(*closure)?;
                             let (fn_name, captured) = match closure_val {
@@ -1981,6 +2025,7 @@ impl<'m> Interpreter<'m> {
                                 prof.borrow_mut().enter_function(&fn_name);
                             }
                             let ret = sub.run(&callee, &call_args)?;
+                            self.spawn_handles.extend(sub.spawn_handles.drain(..));
                             if let Some(ref prof) = self.profiler {
                                 prof.borrow_mut().exit_function(&fn_name);
                             }
@@ -2465,9 +2510,10 @@ impl<'m> Interpreter<'m> {
                             security::check_fs_write(&path_str)?;
                             match std::fs::write(&path_str, &content_str) {
                                 Ok(()) => {
+                                    let written_len = content_str.len() as i64;
                                     self.values.insert(
                                         *result,
-                                        IrValue::ResultVal(Ok(Box::new(IrValue::Unit))),
+                                        IrValue::ResultVal(Ok(Box::new(IrValue::I64(written_len)))),
                                     );
                                 }
                                 Err(e) => {
@@ -3064,7 +3110,6 @@ impl<'m> Interpreter<'m> {
                     detail: format!("block {} has no terminator", current),
                 });
             }
-        }) // std::thread::scope — joins all Spawn threads here
     }
 
     /// Looks up a value by ID, returning a clone.
@@ -3201,6 +3246,7 @@ impl<'m> Interpreter<'m> {
         }
         let mut sub = Interpreter::new(self.module, self.opts, self.depth + 1);
         let ret = sub.run(&callee, &args_full)?;
+        self.spawn_handles.extend(sub.spawn_handles.drain(..));
         Ok(ret.into_iter().next().unwrap_or(IrValue::Unit))
     }
 
@@ -4257,14 +4303,79 @@ fn eval_binop(op: BinOp, lv: &IrValue, rv: &IrValue) -> Result<IrValue, InterpEr
 
 /// Thread-local store for TCP streams/listeners used by the interpreter.
 mod tcp_store {
-    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::net::{TcpListener, TcpStream};
+    use std::sync::atomic::{AtomicI64, Ordering};
+    use std::sync::{Arc, LazyLock, Mutex};
+
+    static STREAMS: LazyLock<Mutex<HashMap<i64, Arc<Mutex<TcpStream>>>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    static LISTENERS: LazyLock<Mutex<HashMap<i64, TcpListener>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    static NEXT_ID: AtomicI64 = AtomicI64::new(1);
+
+    fn next_handle() -> i64 {
+        NEXT_ID.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub fn store_stream(s: TcpStream) -> i64 {
+        let id = next_handle();
+        STREAMS
+            .lock()
+            .unwrap()
+            .insert(id, Arc::new(Mutex::new(s)));
+        id
+    }
+    pub fn store_listener(l: TcpListener) -> i64 {
+        let id = next_handle();
+        LISTENERS.lock().unwrap().insert(id, l);
+        id
+    }
+    pub fn read_stream(id: i64) -> Result<String, ()> {
+        use std::io::Read;
+        let map = STREAMS.lock().unwrap();
+        if let Some(stream) = map.get(&id) {
+            let mut buf = vec![0u8; 8192];
+            match stream.lock().unwrap().read(&mut buf) {
+                Ok(n) => Ok(String::from_utf8_lossy(&buf[..n]).to_string()),
+                Err(_) => Err(()),
+            }
+        } else {
+            Err(())
+        }
+    }
+    pub fn write_stream(id: i64, data: &str) {
+        use std::io::Write;
+        let map = STREAMS.lock().unwrap();
+        if let Some(stream) = map.get(&id) {
+            let _ = stream.lock().unwrap().write_all(data.as_bytes());
+        }
+    }
+    pub fn accept_listener(id: i64) -> Result<i64, ()> {
+        let map = LISTENERS.lock().unwrap();
+        if let Some(listener) = map.get(&id) {
+            match listener.accept() {
+                Ok((stream, _)) => Ok(store_stream(stream)),
+                Err(_) => Err(()),
+            }
+        } else {
+            Err(())
+        }
+    }
+    pub fn close(id: i64) {
+        STREAMS.lock().unwrap().remove(&id);
+        LISTENERS.lock().unwrap().remove(&id);
+    }
+}
+
+mod udp_store {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::net::UdpSocket;
 
     thread_local! {
-        static STREAMS: RefCell<HashMap<i64, TcpStream>> = RefCell::new(HashMap::new());
-        static LISTENERS: RefCell<HashMap<i64, TcpListener>> = RefCell::new(HashMap::new());
-        static NEXT_ID: RefCell<i64> = const { RefCell::new(1) };
+        static SOCKETS: RefCell<HashMap<i64, UdpSocket>> = RefCell::new(HashMap::new());
+        static NEXT_ID: RefCell<i64> = const { RefCell::new(1000) };
     }
 
     fn next_handle() -> i64 {
@@ -4275,46 +4386,28 @@ mod tcp_store {
         })
     }
 
-    pub fn store_stream(s: TcpStream) -> i64 {
+    pub fn store_socket(s: UdpSocket) -> i64 {
         let id = next_handle();
-        STREAMS.with(|m| m.borrow_mut().insert(id, s));
+        SOCKETS.with(|m| m.borrow_mut().insert(id, s));
         id
     }
-    pub fn store_listener(l: TcpListener) -> i64 {
-        let id = next_handle();
-        LISTENERS.with(|m| m.borrow_mut().insert(id, l));
-        id
-    }
-    pub fn read_stream(id: i64) -> Result<String, ()> {
-        use std::io::Read;
-        STREAMS.with(|m| {
-            let mut map = m.borrow_mut();
-            if let Some(stream) = map.get_mut(&id) {
-                let mut buf = vec![0u8; 8192];
-                match stream.read(&mut buf) {
-                    Ok(n) => Ok(String::from_utf8_lossy(&buf[..n]).to_string()),
-                    Err(_) => Err(()),
-                }
+    pub fn send_socket(id: i64, addr_port: &str) -> Result<(), ()> {
+        SOCKETS.with(|m| {
+            let map = m.borrow();
+            if let Some(sock) = map.get(&id) {
+                sock.send_to(b"hello", addr_port).map(|_| ()).map_err(|_| ())
             } else {
                 Err(())
             }
         })
     }
-    pub fn write_stream(id: i64, data: &str) {
-        use std::io::Write;
-        STREAMS.with(|m| {
-            let mut map = m.borrow_mut();
-            if let Some(stream) = map.get_mut(&id) {
-                let _ = stream.write_all(data.as_bytes());
-            }
-        });
-    }
-    pub fn accept_listener(id: i64) -> Result<i64, ()> {
-        LISTENERS.with(|m| {
+    pub fn recv_socket(id: i64) -> Result<String, ()> {
+        SOCKETS.with(|m| {
             let map = m.borrow();
-            if let Some(listener) = map.get(&id) {
-                match listener.accept() {
-                    Ok((stream, _)) => Ok(store_stream(stream)),
+            if let Some(sock) = map.get(&id) {
+                let mut buf = vec![0u8; 8192];
+                match sock.recv_from(&mut buf) {
+                    Ok((n, _)) => Ok(String::from_utf8_lossy(&buf[..n]).to_string()),
                     Err(_) => Err(()),
                 }
             } else {
@@ -4323,10 +4416,7 @@ mod tcp_store {
         })
     }
     pub fn close(id: i64) {
-        STREAMS.with(|m| {
-            m.borrow_mut().remove(&id);
-        });
-        LISTENERS.with(|m| {
+        SOCKETS.with(|m| {
             m.borrow_mut().remove(&id);
         });
     }
@@ -4449,6 +4539,81 @@ fn i64_arg(v: &IrValue) -> i64 {
 
 fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> {
     match name {
+        // ---- File Streams ----
+        "file_open" => {
+            let path = str_arg(&args[0]);
+            let mode = str_arg(&args[1]);
+            security::check_fs_read(&path)?;
+            if mode.contains('w') || mode.contains('a') || mode.contains('+') {
+                security::check_fs_write(&path)?;
+            }
+            let mut options = std::fs::OpenOptions::new();
+            if mode.contains('r') {
+                options.read(true);
+            }
+            if mode.contains('w') {
+                options.write(true).create(true).truncate(true);
+            }
+            if mode.contains('a') {
+                options.write(true).create(true).append(true);
+            }
+            if !mode.contains('r') && !mode.contains('w') && !mode.contains('a') {
+                options.read(true);
+            }
+            match options.open(&path) {
+                Ok(file) => {
+                    let handle = Box::into_raw(Box::new(file)) as i64;
+                    Ok(IrValue::I64(handle))
+                }
+                Err(_) => Ok(IrValue::I64(0)),
+            }
+        }
+        "file_close" => {
+            let handle = i64_arg(&args[0]);
+            if handle != 0 {
+                let _file = unsafe { Box::from_raw(handle as *mut std::fs::File) };
+                Ok(IrValue::Bool(true))
+            } else {
+                Ok(IrValue::Bool(false))
+            }
+        }
+        "file_read" => {
+            let handle = i64_arg(&args[0]);
+            let bytes = i64_arg(&args[1]);
+            if handle != 0 && bytes > 0 {
+                let file_ref = unsafe { &*(handle as *const std::fs::File) };
+                let mut buf = vec![0u8; bytes as usize];
+                use std::io::Read;
+                match (&*file_ref).read(&mut buf) {
+                    Ok(n) => {
+                        buf.truncate(n);
+                        let s = String::from_utf8_lossy(&buf).into_owned();
+                        Ok(IrValue::Str(s))
+                    }
+                    Err(_) => Ok(IrValue::Str(String::new())),
+                }
+            } else {
+                Ok(IrValue::Str(String::new()))
+            }
+        }
+        "file_write" => {
+            let handle = i64_arg(&args[0]);
+            let data = str_arg(&args[1]);
+            if handle != 0 {
+                let file_ref = unsafe { &*(handle as *const std::fs::File) };
+                use std::io::Write;
+                match (&*file_ref).write_all(data.as_bytes()) {
+                    Ok(()) => {
+                        let _ = (&*file_ref).flush();
+                        Ok(IrValue::Bool(true))
+                    }
+                    Err(_) => Ok(IrValue::Bool(false)),
+                }
+            } else {
+                Ok(IrValue::Bool(false))
+            }
+        }
+
         // ---- TCP ----
         "tcp_connect" => {
             let host = str_arg(&args[0]);
@@ -4486,6 +4651,38 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
             tcp_store::close(id);
             Ok(IrValue::I64(0))
         }
+        // ---- UDP ----
+        "udp_open" => {
+            let host = str_arg(&args[0]);
+            let port = i64_arg(&args[1]);
+            security::check_network(&host)?;
+            match std::net::UdpSocket::bind(format!("{}:{}", host, port)) {
+                Ok(sock) => {
+                    let _ = sock.set_read_timeout(Some(std::time::Duration::from_millis(100)));
+                    Ok(IrValue::I64(udp_store::store_socket(sock)))
+                }
+                Err(_) => Ok(IrValue::I64(-1)),
+            }
+        }
+        "udp_send" => {
+            let id = i64_arg(&args[0]);
+            let addr = str_arg(&args[1]);
+            security::check_network(&addr)?;
+            if udp_store::send_socket(id, &addr).is_ok() {
+                Ok(IrValue::I64(0))
+            } else {
+                Ok(IrValue::I64(-1))
+            }
+        }
+        "udp_recv" => {
+            let id = i64_arg(&args[0]);
+            Ok(IrValue::Str(udp_store::recv_socket(id).unwrap_or_default()))
+        }
+        "udp_close" => {
+            let id = i64_arg(&args[0]);
+            udp_store::close(id);
+            Ok(IrValue::I64(0))
+        }
         // ---- HTTP ----
         "http_get" => {
             let url = str_arg(&args[0]);
@@ -4515,11 +4712,6 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
             security::check_network(&url)?;
             Ok(IrValue::Str(http_request("POST", &url, &body)))
         }
-        // ---- UDP (interpreter stubs — use OS sockets via std) ----
-        "udp_open" => Ok(IrValue::I64(-1)), // not supported in interpreter
-        "udp_send" => Ok(IrValue::I64(0)),
-        "udp_recv" => Ok(IrValue::Str(String::new())),
-        "udp_close" => Ok(IrValue::I64(0)),
         // ---- Terminal ----
         "read_key" => {
             // Simple: read one byte from stdin
@@ -4847,9 +5039,12 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
         // ---- Async/Concurrency extensions ----
         "chan_try_recv" => {
             if let IrValue::Chan(rc) = &args[0] {
-                let mut q = rc.lock().unwrap();
+                let mut q = rc.queue.lock().unwrap();
                 match q.pop_front() {
-                    Some(v) => Ok(IrValue::OptionVal(Some(Box::new(v)))),
+                    Some(v) => {
+                        rc.not_full.notify_one();
+                        Ok(IrValue::OptionVal(Some(Box::new(v))))
+                    }
                     None => Ok(IrValue::OptionVal(None)),
                 }
             } else {
@@ -4858,7 +5053,7 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
         }
         "chan_len" => {
             if let IrValue::Chan(rc) = &args[0] {
-                Ok(IrValue::I64(rc.lock().unwrap().len() as i64))
+                Ok(IrValue::I64(rc.queue.lock().unwrap().len() as i64))
             } else {
                 Ok(IrValue::I64(0))
             }
@@ -4867,7 +5062,7 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
             // select(chan1, chan2, ...) → index of the first non-empty channel, or -1
             for (i, arg) in args.iter().enumerate() {
                 if let IrValue::Chan(rc) = arg {
-                    if !rc.lock().unwrap().is_empty() {
+                    if !rc.queue.lock().unwrap().is_empty() {
                         return Ok(IrValue::I64(i as i64));
                     }
                 }

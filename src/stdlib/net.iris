@@ -1,0 +1,140 @@
+// src/stdlib/net.iris -- IRIS networking library.
+// Exposes robust object-like wrapper records and helpers for TCP and UDP sockets.
+
+// ── TCP Connection ───────────────────────────────────────────────────────────
+
+/// A TCP client connection with host, port, and socket handle.
+pub record TcpConnection {
+    handle: i64,
+    host: str,
+    port: i64,
+}
+
+/// Connect to a remote TCP host and port.
+/// Returns `some(TcpConnection)` on success, or `none` on failure.
+pub def tcp_connect_to(host: str, port: i64) -> option<TcpConnection> {
+    val handle = tcp_connect(host, port)
+    if handle < 0 {
+        none
+    } else {
+        some(TcpConnection { handle: handle, host: host, port: port })
+    }
+}
+
+/// Write string data to a TCP connection.
+/// Returns `true` on success.
+pub def tcp_write_conn(conn: TcpConnection, data: str) -> bool {
+    tcp_write(conn.handle, data);
+    true
+}
+
+/// Read incoming data from a TCP connection as a string.
+/// Blocks until data is available or connection closes.
+pub def tcp_read_conn(conn: TcpConnection) -> str {
+    tcp_read(conn.handle)
+}
+
+/// Close a TCP connection.
+/// Returns `true` on success.
+pub def tcp_close_conn(conn: TcpConnection) -> bool {
+    tcp_close(conn.handle);
+    true
+}
+
+// ── TCP Server ───────────────────────────────────────────────────────────────
+
+/// A TCP listening server with port and socket handle.
+pub record TcpServer {
+    handle: i64,
+    port: i64,
+}
+
+/// Listen on a local TCP port for incoming connections.
+/// Returns `some(TcpServer)` on success, or `none` on failure.
+pub def tcp_listen_on(port: i64) -> option<TcpServer> {
+    val handle = tcp_listen(port)
+    if handle < 0 {
+        none
+    } else {
+        some(TcpServer { handle: handle, port: port })
+    }
+}
+
+/// Accept an incoming client connection on a TCP server.
+/// Blocks until a connection is received.
+/// Returns `some(TcpConnection)` on success, or `none` on failure.
+pub def tcp_accept_conn(server: TcpServer) -> option<TcpConnection> {
+    val conn_handle = tcp_accept(server.handle)
+    if conn_handle < 0 {
+        none
+    } else {
+        // Source host is set to a dummy name since raw tcp_accept doesn't extract remote address.
+        some(TcpConnection { handle: conn_handle, host: "client", port: 0 })
+    }
+}
+
+/// Close a TCP listening server.
+/// Returns `true` on success.
+pub def tcp_close_server(server: TcpServer) -> bool {
+    tcp_close(server.handle);
+    true
+}
+
+// ── UDP Socket ───────────────────────────────────────────────────────────────
+
+/// A UDP socket with port and socket handle.
+pub record UdpSocket {
+    handle: i64,
+    port: i64,
+}
+
+/// Bind a UDP socket to a local port (or port 0 for an ephemeral port).
+/// Returns `some(UdpSocket)` on success, or `none` on failure.
+pub def udp_bind(port: i64) -> option<UdpSocket> {
+    val handle = udp_open(port)
+    if handle < 0 {
+        none
+    } else {
+        some(UdpSocket { handle: handle, port: port })
+    }
+}
+
+/// Send data over a UDP socket to a target host and port.
+/// Returns `true` on success.
+pub def udp_send_to(socket: UdpSocket, host: str, port: i64, data: str) -> bool {
+    val addr_port = concat(concat(concat(concat(host, ":"), to_str(port)), ":"), data)
+    udp_send(socket.handle, addr_port);
+    true
+}
+
+/// Receive data from a UDP socket.
+/// Blocks until a packet is received.
+/// Returns a tuple containing: (source_ip, source_port, payload_data).
+pub def udp_recv_from(socket: UdpSocket) -> (str, i64, str) {
+    val raw = udp_recv(socket.handle)
+    val first_colon = find(raw, ":")
+    if is_some(first_colon) {
+        val fidx = unwrap(first_colon)
+        val ip = slice(raw, 0, fidx)
+        val rest = slice(raw, fidx + 1, len(raw))
+        val second_colon = find(rest, ":")
+        if is_some(second_colon) {
+            val sidx = unwrap(second_colon)
+            val port_str = slice(rest, 0, sidx)
+            val data = slice(rest, sidx + 1, len(rest))
+            val port = parse_i64(port_str)
+            (ip, if is_some(port) { unwrap(port) } else { 0 }, data)
+        } else {
+            (raw, 0, "")
+        }
+    } else {
+        (raw, 0, "")
+    }
+}
+
+/// Close a UDP socket.
+/// Returns `true` on success.
+pub def udp_close_socket(socket: UdpSocket) -> bool {
+    udp_close(socket.handle);
+    true
+}

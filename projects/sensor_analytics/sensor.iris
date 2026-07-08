@@ -1,0 +1,65 @@
+// sensor.iris — Sensor data generation with periodic signals + noise
+
+pub const NUM_SENSORS: i64 = 4
+pub const READINGS_PER_SENSOR: i64 = 50
+
+// A single reading from one sensor at a point in time
+pub record SensorReading {
+    sensor_id: i64,
+    timestamp: i64,
+    temperature: f64,
+    humidity: f64,
+    pressure: f64
+}
+
+// Generate one sensor reading for a given sensor at a given time step.
+// Uses sin/cos periodic signals offset by sensor_id, plus random noise.
+pub def generate_reading(sensor_id: i64, step: i64) -> SensorReading {
+    val t = to_f64(step);
+    val sid = to_f64(sensor_id);
+
+    // Temperature: base 20°C + sinusoidal variation + sensor offset + noise
+    val temp_base = 20.0 + 5.0 * sin(t * 0.1 + sid * 0.5);
+    val temp_noise = (random() - 0.5) * 2.0;
+    val temperature = temp_base + temp_noise;
+
+    // Humidity: base 50% + cosine variation + noise
+    val hum_base = 50.0 + 10.0 * cos(t * 0.08 + sid * 0.3);
+    val hum_noise = (random() - 0.5) * 4.0;
+    val humidity = hum_base + hum_noise;
+
+    // Pressure: base 1013 hPa + slow drift + noise
+    val press_base = 1013.0 + 3.0 * sin(t * 0.05 + sid * 0.7);
+    val press_noise = (random() - 0.5) * 1.0;
+    val pressure = press_base + press_noise;
+
+    val reading = SensorReading {
+        sensor_id: sensor_id,
+        timestamp: now_ms(),
+        temperature: temperature,
+        humidity: humidity,
+        pressure: pressure
+    };
+    reading
+}
+
+// Generate a batch of readings for one sensor
+pub def generate_batch(sensor_id: i64, count: i64) -> list<SensorReading> {
+    val batch: list<SensorReading> = list();
+    var i = 0;
+    while i < count {
+        val r = generate_reading(sensor_id, i);
+        list_push(batch, r);
+        i = i + 1;
+    };
+    batch
+}
+
+// Convert a reading to a human-readable string
+pub def reading_to_str(r: SensorReading) -> str {
+    val s1 = concat("Sensor ", to_str(r.sensor_id));
+    val s2 = concat(s1, concat(" | T=", to_str(r.temperature)));
+    val s3 = concat(s2, concat(" H=", to_str(r.humidity)));
+    val s4 = concat(s3, concat(" P=", to_str(r.pressure)));
+    s4
+}

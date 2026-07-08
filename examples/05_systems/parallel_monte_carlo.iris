@@ -1,0 +1,65 @@
+// parallel_monte_carlo.iris -- Parallel Monte Carlo Pi Estimation
+//
+// Shows off IRIS's data-parallelism via the `par for` loop, 
+// thread-safe atomic variables (`atomic`, `atomic_add`, `atomic_load`),
+// and optimized register-level mathematics.
+//
+// Run: iris run examples/05_systems/parallel_monte_carlo.iris
+
+bring std.time
+
+def estimate_pi_parallel(total_samples: i64, num_workers: i64) -> f64 {
+    val hits = atomic(0)
+    val samples_per_worker = total_samples / num_workers
+
+    print(f"[Main] Running Monte Carlo Pi estimation with {total_samples} samples");
+    print(f"[Main] Distributing load across {num_workers} parallel workers ({samples_per_worker} samples each)");
+
+    val start_t = now_ms()
+
+    // Parallel loop: executes iterations concurrently in the thread pool
+    par for w in 0 .. num_workers {
+        var state = w * 73 + 13 // Unique seed per worker
+        var worker_hits = 0
+        var i = 0
+        while i < samples_per_worker {
+            // Optimized inline LCG to avoid heap allocation overhead of tuples
+            state = (state * 1103515245 + 12345) % 2147483648;
+            val x = (state to f64) / 2147483647.0
+            
+            state = (state * 1103515245 + 12345) % 2147483648;
+            val y = (state to f64) / 2147483647.0
+            
+            if (x * x + y * y) <= 1.0 {
+                worker_hits = worker_hits + 1
+            };
+            i = i + 1
+        }
+        
+        // Atomically accumulate local hits into the global counter
+        val _ = atomic_add(hits, worker_hits);
+    }
+
+    val end_t = now_ms()
+    val elapsed = end_t - start_t
+    print(f"[Main] Parallel loop joined. Time elapsed: {elapsed} ms");
+
+    val total_hits = atomic_load(hits)
+    val pi = 4.0 * (to_f64(total_hits) / to_f64(total_samples))
+    pi
+}
+
+def main() -> i64 {
+    print("=== Parallel Monte Carlo Showcase ===");
+    
+    val total_samples = 10000000 // 10 Million points
+    val num_workers = 8          // 8 threads
+    
+    val pi = estimate_pi_parallel(total_samples, num_workers)
+    
+    print("");
+    print(f"Estimated Pi: {pi}");
+    print(concat("Difference from Math PI: ", to_str(pi - 3.14159265358979)));
+    
+    0
+}

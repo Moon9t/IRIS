@@ -1,0 +1,61 @@
+// worker.iris — Concurrent transaction generation
+
+bring "types.iris"
+bring "engine.iris"
+
+// Generate random transactions concurrently and send them over a channel
+pub def spawn_workers(ledger: Ledger, n_workers: i64) -> list<Transaction> {
+    val results_ch = channel();
+    val active_counter = atomic(0);
+    
+    // Total transactions to generate per worker
+    val txs_per_worker = 3;
+    
+    var w = 0;
+    while w < n_workers {
+        val worker_id = w;
+        val _ = atomic_add(active_counter, 1);
+        
+        // Spawn a worker thread
+        spawn {
+            var i = 0;
+            while i < txs_per_worker {
+                val amount = random() * 100.0 + 1.0;
+                val sender_name = concat("Worker_", to_str(worker_id));
+                val receiver_name = concat("Recipient_", to_str(i));
+                
+                val tx = create_transaction(sender_name, receiver_name, amount);
+                send(results_ch, tx);
+                
+                sleep_ms(10);
+                i = i + 1;
+            };
+            val _ = atomic_add(active_counter, 0 - 1);
+        };
+        w = w + 1;
+    };
+    
+    // Collect all transactions from the channel
+    val collected_txs: list<Transaction> = list();
+    val total_expected = n_workers * txs_per_worker;
+    
+    var count = 0;
+    while count < total_expected {
+        val tx = recv(results_ch);
+        list_push(collected_txs, tx);
+        count = count + 1;
+    };
+    
+    collected_txs
+}
+
+pub def process_batch(ledger: Ledger, transactions: list<Transaction>) -> i64 {
+    val n = list_len(transactions);
+    var i = 0;
+    while i < n {
+        val tx = list_get(transactions, i);
+        list_push(ledger.pending, tx);
+        i = i + 1;
+    };
+    0
+}

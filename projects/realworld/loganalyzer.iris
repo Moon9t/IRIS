@@ -1,0 +1,135 @@
+// ============================================================================
+// IRIS Log Analyzer — Apache/Nginx log parser with stats
+// ============================================================================
+bring std.fs
+
+def parse_line(line: str) -> (str, str, i64, i64) {
+    val first_q = find(line, "\"");
+    if !is_some(first_q) { return ("", "", 0, 0) };
+    val ip_end = find(line, " ");
+    val ip = if is_some(ip_end) { slice(line, 0, unwrap(ip_end)) } else { "" };
+    val req_line = slice(line, unwrap(first_q) + 1, len(line));
+    val second_q = find(req_line, "\"");
+    if !is_some(second_q) { return (ip, "", 0, 0) };
+    val req = slice(req_line, 0, unwrap(second_q));
+    val parts = split(req, " ");
+    val url = if list_len(parts) >= 2 { list_get(parts, 1) } else { "" };
+    val after_req = unwrap(first_q) + unwrap(second_q) + 2;
+    val status_line = trim(slice(line, after_req, len(line)));
+    val sp = find(status_line, " ");
+    val status = if is_some(sp) {
+        val s = parse_i64(slice(status_line, 0, unwrap(sp)));
+        if is_some(s) { unwrap(s) } else { 0 }
+    } else { 0 };
+    val size_str = if is_some(sp) { trim(slice(status_line, unwrap(sp), len(status_line))) } else { "0" };
+    val size_sp = find(size_str, " ");
+    val sz = if is_some(size_sp) { slice(size_str, 0, unwrap(size_sp)) } else { size_str };
+    val size = if is_some(parse_i64(sz)) { unwrap(parse_i64(sz)) } else { 0 };
+    (ip, url, status, size)
+}
+
+def main() -> i64 {
+    val a = args();
+    if list_len(a) < 2 { print("Usage: loganalyzer <access.log>"); return 1 };
+    
+    val f = file_read_all(list_get(a, 1));
+    if is_err(f) { print("Cannot read file"); return 1 };
+    
+    val lines = split(unwrap(f), "\n");
+    val ip_counts: map<str, i64> = map();
+    val url_counts: map<str, i64> = map();
+    val status_counts: map<str, i64> = map();
+    var total = 0;
+    var errors = 0;
+    var total_size = 0;
+    
+    var i = 0;
+    while i < list_len(lines) {
+        val line = trim(list_get(lines, i));
+        if line != "" {
+            val (ip, url, status, size) = parse_line(line);
+            if url != "" {
+                total = total + 1;
+                total_size = total_size + size;
+                if status >= 400 { errors = errors + 1 };
+                
+                val ipc = map_get(ip_counts, ip);
+                map_set(ip_counts, ip, if is_some(ipc) { unwrap(ipc) + 1 } else { 1 });
+                
+                val urlc = map_get(url_counts, url);
+                map_set(url_counts, url, if is_some(urlc) { unwrap(urlc) + 1 } else { 1 });
+                
+                val sc = map_get(status_counts, to_str(status));
+                map_set(status_counts, to_str(status), if is_some(sc) { unwrap(sc) + 1 } else { 1 })
+            }
+        };
+        i = i + 1
+    };
+    
+    print("=== Log Analysis Report ===");
+    print(concat("File: ", list_get(a, 1)));
+    print(concat("Total requests: ", to_str(total)));
+    print(concat("Errors (4xx/5xx): ", to_str(errors)));
+    print(concat(concat("Total data: ", to_str(total_size)), " bytes"));
+    print("");
+    
+    print("--- Status Codes ---");
+    val status_keys = map_keys(status_counts);
+    i = 0;
+    while i < list_len(status_keys) {
+        val code = list_get(status_keys, i);
+        val cnt = map_get(status_counts, code);
+        if is_some(cnt) {
+            print(concat(concat(concat("  ", code), ": "), to_str(unwrap(cnt))))
+        };
+        i = i + 1
+    };
+    
+    print("");
+    print("--- Top IPs ---");
+    val ips = map_keys(ip_counts);
+    val ip_cnts: list<i64> = list();
+    val ip_names: list<str> = list();
+    i = 0;
+    while i < list_len(ips) {
+        val c = map_get(ip_counts, list_get(ips, i));
+        if is_some(c) { list_push(ip_cnts, unwrap(c)); list_push(ip_names, list_get(ips, i)) };
+        i = i + 1
+    };
+    // Sort by count
+    var j = 0;
+    while j < list_len(ip_cnts) {
+        var k = j + 1;
+        while k < list_len(ip_cnts) {
+            if list_get(ip_cnts, j) < list_get(ip_cnts, k) {
+                val tc = list_get(ip_cnts, j); val tn = list_get(ip_names, j);
+                list_set(ip_cnts, j, list_get(ip_cnts, k)); list_set(ip_names, j, list_get(ip_names, k));
+                list_set(ip_cnts, k, tc); list_set(ip_names, k, tn)
+            };
+            k = k + 1
+        };
+        j = j + 1
+    };
+    val top = if list_len(ips) > 10 { 10 } else { list_len(ips) };
+    i = 0;
+    while i < top {
+        print(concat(concat(concat(concat("  ", list_get(ip_names, i)), " ("), to_str(list_get(ip_cnts, i))), ")"));
+        i = i + 1
+    };
+    
+    print("");
+    print("--- Suspicious ---");
+    i = 0;
+    var suspects = 0;
+    while i < list_len(ips) {
+        val cnt = map_get(ip_counts, list_get(ips, i));
+        if is_some(cnt) && unwrap(cnt) > 50 {
+            print(concat(concat(concat(concat("  ! ", list_get(ips, i)), " — "), to_str(unwrap(cnt))), " requests"));
+            suspects = suspects + 1
+        };
+        i = i + 1
+    };
+    if suspects == 0 { print("  None detected") };
+    print("Done.");
+    0
+}

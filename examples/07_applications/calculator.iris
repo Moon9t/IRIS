@@ -1,6 +1,6 @@
 // calculator.iris -- Simple calculator with records and choice types
 //
-// Run: cargo run -- --emit eval examples/calculator.iris
+// Run: iris run examples/07_applications/calculator.iris
 
 record Expr {
     left: f64,

@@ -1,0 +1,6 @@
+bring std.math
+
+def main() -> i64 {
+    val x = 42
+    x
+}

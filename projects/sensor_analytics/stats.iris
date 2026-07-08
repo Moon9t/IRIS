@@ -1,0 +1,158 @@
+// stats.iris — Statistical analysis functions
+
+// Summary record for a set of values
+pub record StatsSummary {
+    mean: f64,
+    std_dev: f64,
+    min: f64,
+    max: f64,
+    anomalies: i64
+}
+
+// Arithmetic mean
+pub def mean(values: list<f64>) -> f64 {
+    val n = list_len(values);
+    if n == 0 {
+        return 0.0;
+    };
+    var sum = 0.0;
+    var i = 0;
+    while i < n {
+        sum = sum + list_get(values, i);
+        i = i + 1;
+    };
+    sum / to_f64(n)
+}
+
+// Population variance
+pub def variance(values: list<f64>) -> f64 {
+    val n = list_len(values);
+    if n == 0 {
+        return 0.0;
+    };
+    val m = mean(values);
+    var sum_sq = 0.0;
+    var i = 0;
+    while i < n {
+        val diff = list_get(values, i) - m;
+        sum_sq = sum_sq + diff * diff;
+        i = i + 1;
+    };
+    sum_sq / to_f64(n)
+}
+
+// Standard deviation
+pub def std_dev(values: list<f64>) -> f64 {
+    sqrt(variance(values))
+}
+
+// Minimum value
+pub def min_val(values: list<f64>) -> f64 {
+    val n = list_len(values);
+    if n == 0 {
+        return 0.0;
+    };
+    var mn = list_get(values, 0);
+    var i = 1;
+    while i < n {
+        val v = list_get(values, i);
+        if v < mn {
+            mn = v;
+        };
+        i = i + 1;
+    };
+    mn
+}
+
+// Maximum value
+pub def max_val(values: list<f64>) -> f64 {
+    val n = list_len(values);
+    if n == 0 {
+        return 0.0;
+    };
+    var mx = list_get(values, 0);
+    var i = 1;
+    while i < n {
+        val v = list_get(values, i);
+        if v > mx {
+            mx = v;
+        };
+        i = i + 1;
+    };
+    mx
+}
+
+// Moving average with given window size
+pub def moving_average(values: list<f64>, window: i64) -> list<f64> {
+    val result: list<f64> = list();
+    val n = list_len(values);
+    var i = 0;
+    while i < n {
+        var sum = 0.0;
+        var count = 0;
+        var j = i - window + 1;
+        if j < 0 {
+            j = 0;
+        };
+        while j <= i {
+            sum = sum + list_get(values, j);
+            count = count + 1;
+            j = j + 1;
+        };
+        list_push(result, sum / to_f64(count));
+        i = i + 1;
+    };
+    result
+}
+
+// Compute z-scores for each value
+pub def z_scores(values: list<f64>) -> list<f64> {
+    val result: list<f64> = list();
+    val m = mean(values);
+    val sd = std_dev(values);
+    val n = list_len(values);
+    if sd == 0.0 {
+        // All values identical — z-score is 0 for all
+        var i = 0;
+        while i < n {
+            list_push(result, 0.0);
+            i = i + 1;
+        };
+        return result;
+    };
+    var i = 0;
+    while i < n {
+        val z = (list_get(values, i) - m) / sd;
+        list_push(result, z);
+        i = i + 1;
+    };
+    result
+}
+
+// Count values where |z-score| exceeds the threshold
+pub def count_anomalies(values: list<f64>, threshold: f64) -> i64 {
+    val zs = z_scores(values);
+    val n = list_len(zs);
+    var count = 0;
+    var i = 0;
+    while i < n {
+        val z = list_get(zs, i);
+        if abs(z) > threshold {
+            count = count + 1;
+        };
+        i = i + 1;
+    };
+    count
+}
+
+// Compute a full summary for a list of values
+pub def compute_summary(values: list<f64>) -> StatsSummary {
+    val summary = StatsSummary {
+        mean: mean(values),
+        std_dev: std_dev(values),
+        min: min_val(values),
+        max: max_val(values),
+        anomalies: count_anomalies(values, 2.0)
+    };
+    summary
+}

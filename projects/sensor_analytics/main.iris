@@ -1,0 +1,277 @@
+// main.iris — Sensor Analytics Pipeline
+// Demonstrates: records, lists, maps, statistics, autodiff, par for,
+// closures, SVG visualization, result handling, and timing.
+
+bring std.fmt
+bring std.time
+
+bring "sensor.iris"
+bring "stats.iris"
+bring "predictor.iris"
+bring "viz.iris"
+
+// ─── Helper: extract temperature values from a batch of readings ───────────
+def extract_temperatures(readings: list<SensorReading>) -> list<f64> {
+    val temps: list<f64> = list();
+    val n = list_len(readings);
+    var i = 0;
+    while i < n {
+        val r = list_get(readings, i);
+        list_push(temps, r.temperature);
+        i = i + 1;
+    };
+    temps
+}
+
+// ─── Helper: apply a transform function to every element of a list ─────────
+def apply_transform(values: list<f64>, transform: (f64) -> f64) -> list<f64> {
+    val result: list<f64> = list();
+    val n = list_len(values);
+    var i = 0;
+    while i < n {
+        val v = list_get(values, i);
+        list_push(result, transform(v));
+        i = i + 1;
+    };
+    result
+}
+
+// ─── Helper: isolate closure to prevent scope-capture compilation bugs ─────
+def normalize_temperatures(values: list<f64>, t_min: f64, t_max: f64) -> list<f64> {
+    val t_range = t_max - t_min;
+    val normalizer = |v: f64| (v - t_min) / t_range;
+    apply_transform(values, normalizer)
+}
+
+// ─── Helper: print a divider line ──────────────────────────────────────────
+def print_divider() -> i64 {
+    print("════════════════════════════════════════════════════════════════");
+    0
+}
+
+def print_section(title: str) -> i64 {
+    print("");
+    print_divider();
+    print(concat("  ", title));
+    print_divider();
+    0
+}
+
+// ─── Main ──────────────────────────────────────────────────────────────────
+def main() -> i64 {
+    val pipeline_start = now_ms();
+
+    print("");
+    print("  ╔══════════════════════════════════════════════════════════╗");
+    print("  ║        IRIS Sensor Analytics Pipeline                   ║");
+    print("  ║        Real-Time Data · Stats · ML · Visualization      ║");
+    print("  ╚══════════════════════════════════════════════════════════╝");
+    print("");
+
+    // ── Step 1: Generate sensor data ───────────────────────────────────
+    print_section("STEP 1: Sensor Data Generation");
+    val gen_start = now_ms();
+
+    val num_sensors = NUM_SENSORS;
+    val readings_per = READINGS_PER_SENSOR;
+    print(concat("  Sensors: ", to_str(num_sensors)));
+    print(concat("  Readings per sensor: ", to_str(readings_per)));
+
+    // Generate batches for each sensor
+    val all_batches: list<list<SensorReading>> = list();
+    var sid_gen = 0;
+    while sid_gen < num_sensors {
+        val batch_gen = generate_batch(sid_gen, readings_per);
+        list_push(all_batches, batch_gen);
+        sid_gen = sid_gen + 1;
+    };
+
+    val gen_end = now_ms();
+    val total_readings = num_sensors * readings_per;
+    print(concat("  Total readings generated: ", to_str(total_readings)));
+    print(concat("  Generation time: ", concat(to_str(gen_end - gen_start), " ms")));
+
+    // Print sample readings
+    print("");
+    print("  Sample readings (first 3 from Sensor 0):");
+    val sample_batch = list_get(all_batches, 0);
+    var si_print = 0;
+    while si_print < 3 {
+        val r_print = list_get(sample_batch, si_print);
+        print(concat("    ", reading_to_str(r_print)));
+        si_print = si_print + 1;
+    };
+
+    // ── Step 2: Statistical Analysis ──────────────────────────────────
+    print_section("STEP 2: Statistical Analysis");
+    val stats_start = now_ms();
+
+    // Store summaries and temperature lists per sensor
+    val summaries: list<StatsSummary> = list();
+    val temp_lists: list<list<f64>> = list();
+    val anomaly_counts: list<f64> = list();
+    val sensor_labels: list<str> = list();
+
+    var sid_stats = 0;
+    while sid_stats < num_sensors {
+        val batch_stats = list_get(all_batches, sid_stats);
+        val temps_stats = extract_temperatures(batch_stats);
+        list_push(temp_lists, temps_stats);
+
+        val summary_stats = compute_summary(temps_stats);
+        list_push(summaries, summary_stats);
+        list_push(anomaly_counts, to_f64(summary_stats.anomalies));
+        list_push(sensor_labels, concat("S", to_str(sid_stats)));
+
+        // Print per-sensor stats
+        print("");
+        print(concat("  ┌─ Sensor ", concat(to_str(sid_stats), " ─────────────────────────────────")));
+        print(concat("  │ Mean Temperature:  ", to_str(summary_stats.mean)));
+        print(concat("  │ Std Deviation:     ", to_str(summary_stats.std_dev)));
+        print(concat("  │ Min Temperature:   ", to_str(summary_stats.min)));
+        print(concat("  │ Max Temperature:   ", to_str(summary_stats.max)));
+        print(concat("  │ Anomalies (|z|>2): ", to_str(summary_stats.anomalies)));
+        print("  └──────────────────────────────────────────");
+
+        sid_stats = sid_stats + 1;
+    };
+
+    val stats_end = now_ms();
+    print("");
+    print(concat("  Analysis time: ", concat(to_str(stats_end - stats_start), " ms")));
+
+    // ── Step 3: Demonstrate closures & higher-order functions ──────────
+    print_section("STEP 3: Data Transforms (Closures)");
+
+    // Normalize temperature to [0, 1] range using a closure
+    val temps0 = list_get(temp_lists, 0);
+    val t_min = min_val(temps0);
+    val t_max = max_val(temps0);
+
+    // Call helper that uses closure
+    val normalized = normalize_temperatures(temps0, t_min, t_max);
+
+    print("  Applied normalization closure to Sensor 0 temperatures");
+    print(concat("  Original range: [", concat(to_str(t_min), concat(", ", concat(to_str(t_max), "]")))));
+    print("  Normalized first 5: ");
+    var ni_norm = 0;
+    while ni_norm < 5 {
+        val nv = list_get(normalized, ni_norm);
+        print(concat("    [", concat(to_str(ni_norm), concat("] = ", to_str(nv)))));
+        ni_norm = ni_norm + 1;
+    };
+
+    // Moving average
+    val ma = moving_average(temps0, 5);
+    print("");
+    print("  Moving average (window=5) first 5:");
+    var ni_ma = 0;
+    while ni_ma < 5 {
+        val mv = list_get(ma, ni_ma);
+        print(concat("    [", concat(to_str(ni_ma), concat("] = ", to_str(mv)))));
+        ni_ma = ni_ma + 1;
+    };
+
+    // ── Step 4: ML Model Training ─────────────────────────────────────
+    print_section("STEP 4: ML Model Training (Autodiff)");
+    val ml_start = now_ms();
+
+    // Prepare training data: x = step index, y = temperature from Sensor 0
+    val xs: list<f64> = list();
+    val ys: list<f64> = list();
+    var di_prep = 0;
+    while di_prep < list_len(temps0) {
+        val x_prep = to_f64(di_prep);
+        val y_prep = list_get(temps0, di_prep);
+        list_push(xs, x_prep);
+        list_push(ys, y_prep);
+        di_prep = di_prep + 1;
+    };
+
+    // Create and train model
+    val lr = 0.00001;
+    val epochs = 5;
+    var mdl = model_new(lr);
+
+    print(concat("  Learning rate: ", to_str(lr)));
+    print(concat("  Epochs: ", to_str(epochs)));
+    print(concat("  Training samples: ", to_str(list_len(xs))));
+    print("");
+
+    mdl = train(mdl, xs, ys, epochs);
+
+    val final_mse = mse(mdl, xs, ys);
+
+    print("  ┌─ Training Results ─────────────────────────");
+    print(concat("  │ Final weight:  ", to_str(mdl.weight)));
+    print(concat("  │ Final bias:    ", to_str(mdl.bias)));
+    print(concat("  │ MSE:           ", to_str(final_mse)));
+    print("  └────────────────────────────────────────────");
+
+    // Test predictions
+    print("");
+    print("  Sample predictions:");
+    var pi_pred = 0;
+    while pi_pred < 5 {
+        val px = list_get(xs, pi_pred);
+        val py = list_get(ys, pi_pred);
+        val pred = predict(mdl, px);
+        print(concat("    x=", concat(to_str(px), concat("  actual=", concat(to_str(py), concat("  predicted=", to_str(pred)))))));
+        pi_pred = pi_pred + 1;
+    };
+
+    val ml_end = now_ms();
+    print("");
+    print(concat("  Training time: ", concat(to_str(ml_end - ml_start), " ms")));
+
+    // ── Step 5: SVG Visualization ─────────────────────────────────────
+    print_section("STEP 5: SVG Visualization");
+    val viz_start = now_ms();
+
+    // Line chart for Sensor 0 temperatures
+    create_line_chart(temps0, "Sensor 0 — Temperature", "sensor0_temp.svg", "#1a73e8");
+    print("  Created: sensor0_temp.svg (line chart)");
+
+    // Line chart for Sensor 1 temperatures
+    val temps1 = list_get(temp_lists, 1);
+    create_line_chart(temps1, "Sensor 1 — Temperature", "sensor1_temp.svg", "#ea4335");
+    print("  Created: sensor1_temp.svg (line chart)");
+
+    // Moving average chart
+    create_line_chart(ma, "Sensor 0 — Moving Avg (w=5)", "sensor0_ma.svg", "#34a853");
+    print("  Created: sensor0_ma.svg (moving average chart)");
+
+    // Bar chart for anomaly counts
+    create_bar_chart(sensor_labels, anomaly_counts, "Anomaly Counts per Sensor", "anomaly_counts.svg");
+    print("  Created: anomaly_counts.svg (bar chart)");
+
+    val viz_end = now_ms();
+    print(concat("  Visualization time: ", concat(to_str(viz_end - viz_start), " ms")));
+
+    // ── Final Report ──────────────────────────────────────────────────
+    print_section("PIPELINE SUMMARY");
+    val pipeline_end = now_ms();
+    val total_time = pipeline_end - pipeline_start;
+
+    print(concat("  Total readings processed:  ", to_str(total_readings)));
+    print(concat("  Sensors analyzed:          ", to_str(num_sensors)));
+    print(concat("  ML model trained:          ", concat(to_str(epochs), " epochs")));
+    print("  SVG files generated:       4");
+    print(concat("  Total pipeline time:       ", concat(to_str(total_time), " ms")));
+    print("");
+
+    // Per-sensor anomaly summary
+    print("  Anomaly Summary:");
+    var sid_sum = 0;
+    while sid_sum < num_sensors {
+        val s = list_get(summaries, sid_sum);
+        print(concat("    Sensor ", concat(to_str(sid_sum), concat(": ", concat(to_str(s.anomalies), " anomalies detected")))));
+        sid_sum = sid_sum + 1;
+    };
+
+    print("");
+    print("  Pipeline completed successfully.");
+    print("");
+
+    0
+}

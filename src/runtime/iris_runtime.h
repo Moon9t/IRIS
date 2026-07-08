@@ -157,6 +157,7 @@ typedef struct {
 typedef struct {
     IrisVal**       buf;
     size_t          cap;
+    int64_t         max_cap;
     size_t          head;
     size_t          tail;
     size_t          count;
@@ -342,10 +343,15 @@ IrisList* iris_map_values(IrisMap* map);
 // ---------------------------------------------------------------------------
 // File I/O
 // ---------------------------------------------------------------------------
-char*    iris_file_read_all(const char* path);
-char*    iris_file_write_all(const char* path, const char* contents);
+IrisResult* iris_file_read_all(const char* path);
+IrisResult* iris_file_write_all(const char* path, const char* contents);
 int      iris_file_exists(const char* path);
 IrisList* iris_file_lines(const char* path);
+/* Streaming File I/O */
+int64_t  iris_file_open(const char* path, const char* mode);
+int      iris_file_close(int64_t handle);
+char*    iris_file_read(int64_t handle, int64_t bytes);
+int      iris_file_write(int64_t handle, const char* data);
 
 // ---------------------------------------------------------------------------
 // Database operations (SQLite via embedded sqlite3)
@@ -368,9 +374,12 @@ IrisOption* iris_env_var(const char* key);
 // ---------------------------------------------------------------------------
 // Channels and concurrency
 // ---------------------------------------------------------------------------
-IrisChannel* iris_chan_new(void);
-void         iris_chan_send(IrisChannel* chan, IrisVal* val);
+IrisChannel* iris_chan_new(int64_t capacity);
+void         iris_chan_send(IrisChannel* c, IrisVal* val);
 IrisVal*     iris_chan_recv(IrisChannel* chan);
+int64_t      iris_chan_len(IrisChannel* c);
+IrisOption*  iris_chan_try_recv(IrisChannel* c);
+int          iris_timeout(int64_t ms);
 void         iris_spawn_fn(void* fn, void* arg);
 void         iris_par_for(void (*fn)(int64_t, void*), int64_t start, int64_t end, void* arg);
 void         iris_barrier(void);
@@ -735,6 +744,89 @@ int       iris_sandbox_check_fs_write(const char* path);
 int       iris_sandbox_check_network(const char* host);
 int       iris_sandbox_check_ffi(const char* lib_path);
 void      iris_sandbox_set_policy(int allow_fs, int allow_net, int allow_ffi);
+
+// ── Adaptive AI runtime (std.adaptive) ────────────────────────────────────
+typedef struct IrisAdaptiveState IrisAdaptiveState;
+
+typedef struct {
+    double  mean_error;
+    double  max_error;
+    int64_t observations;
+    int64_t errors;
+    double  last_risk;
+    double  confidence;
+} IrisRiskMetrics;
+
+typedef struct {
+    double  mean;
+    double  variance;
+    double  lower_95;
+    double  upper_95;
+    double  confidence;
+} IrisUncertainty;
+
+// Internal implementations (IrisAdaptiveState*)
+IrisAdaptiveState* iris_adaptive_new_impl(const char* name, int64_t n_params,
+                                          double learning_rate, double risk_threshold);
+void               iris_adaptive_free_impl(IrisAdaptiveState* state);
+const char*        iris_adaptive_name_impl(IrisAdaptiveState* state);
+double             iris_adaptive_get_param_impl(IrisAdaptiveState* state, int64_t idx);
+void               iris_adaptive_set_param_impl(IrisAdaptiveState* state, int64_t idx, double value);
+int64_t            iris_adaptive_n_params_impl(IrisAdaptiveState* state);
+double             iris_adaptive_learning_rate_impl(IrisAdaptiveState* state);
+void               iris_adaptive_set_learning_rate_impl(IrisAdaptiveState* state, double lr);
+void               iris_adaptive_observe_impl(IrisAdaptiveState* state,
+                                              const double* inputs, int64_t n_inputs, double target);
+double             iris_adaptive_predict_impl(IrisAdaptiveState* state,
+                                              const double* inputs, int64_t n_inputs);
+double             iris_adaptive_train_batch_impl(IrisAdaptiveState* state,
+                                                  const double* inputs, int64_t n_samples,
+                                                  int64_t n_features, const double* targets);
+void               iris_adaptive_record_error_impl(IrisAdaptiveState* state, double error);
+IrisRiskMetrics    iris_adaptive_get_risk_impl(IrisAdaptiveState* state);
+int                iris_adaptive_is_unsafe_impl(IrisAdaptiveState* state);
+void               iris_adaptive_set_risk_threshold_impl(IrisAdaptiveState* state, double threshold);
+IrisUncertainty    iris_adaptive_predict_with_uncertainty_impl(IrisAdaptiveState* state,
+                                                               const double* inputs, int64_t n_inputs);
+double             iris_adaptive_uncertainty_bayes_update_impl(IrisAdaptiveState* state,
+                                                                double prior_mean, double prior_var,
+                                                                double observation, double obs_var);
+int                iris_adaptive_should_retrain_impl(IrisAdaptiveState* state);
+double             iris_adaptive_auto_retrain_impl(IrisAdaptiveState* state,
+                                                   const double* inputs, int64_t n_samples,
+                                                   int64_t n_features, const double* targets);
+void               iris_adaptive_set_retrain_threshold_impl(IrisAdaptiveState* state, double threshold);
+void               iris_adaptive_set_min_observations_for_retrain_impl(IrisAdaptiveState* state, int64_t n);
+void               iris_adaptive_adapt_threshold_impl(IrisAdaptiveState* state, double observed_error);
+double             iris_adaptive_current_threshold_impl(IrisAdaptiveState* state);
+int64_t            iris_adaptive_observation_count_impl(IrisAdaptiveState* state);
+double             iris_adaptive_mean_error_impl(IrisAdaptiveState* state);
+void               iris_adaptive_reset_stats_impl(IrisAdaptiveState* state);
+
+// Extern-compatible wrappers (int64_t handle, matching adaptive.iris extern def)
+int64_t      iris_adaptive_new(const char* name, int64_t n_params,
+                                double learning_rate, double risk_threshold);
+int64_t      iris_adaptive_free(int64_t handle);
+const char*  iris_adaptive_name(int64_t handle);
+double       iris_adaptive_get_param(int64_t handle, int64_t idx);
+int64_t      iris_adaptive_set_param(int64_t handle, int64_t idx, double value);
+int64_t      iris_adaptive_n_params(int64_t handle);
+double       iris_adaptive_learning_rate(int64_t handle);
+int64_t      iris_adaptive_set_learning_rate(int64_t handle, double lr);
+int64_t      iris_adaptive_record_error(int64_t handle, double error);
+int          iris_adaptive_is_unsafe(int64_t handle);
+int64_t      iris_adaptive_set_risk_threshold(int64_t handle, double threshold);
+int          iris_adaptive_should_retrain(int64_t handle);
+int64_t      iris_adaptive_set_retrain_threshold(int64_t handle, double threshold);
+int64_t      iris_adaptive_set_min_observations_for_retrain(int64_t handle, int64_t n);
+int64_t      iris_adaptive_adapt_threshold(int64_t handle, double observed_error);
+double       iris_adaptive_current_threshold(int64_t handle);
+int64_t      iris_adaptive_observation_count(int64_t handle);
+double       iris_adaptive_mean_error(int64_t handle);
+int64_t      iris_adaptive_reset_stats(int64_t handle);
+double       iris_adaptive_uncertainty_bayes_update(int64_t handle,
+                                                     double prior_mean, double prior_var,
+                                                     double observation, double obs_var);
 
 #ifdef __cplusplus
 }

@@ -234,50 +234,53 @@ fn block_index(func: &IrFunction, bid: BlockId) -> Option<usize> {
 }
 
 fn is_side_effecting_for_licm(instr: &IrInstr) -> bool {
-    matches!(
+    !matches!(
         instr,
-        IrInstr::Store { .. }
-            | IrInstr::Br { .. }
-            | IrInstr::CondBr { .. }
-            | IrInstr::Return { .. }
-            | IrInstr::Call { .. }
-            | IrInstr::SwitchVariant { .. }
-            | IrInstr::Print { .. }
-            | IrInstr::Panic { .. }
-            | IrInstr::ArrayStore { .. }
-            | IrInstr::ArrayLoad { .. }
-            // Fresh allocations/resources must remain inside the loop so each
-            // iteration gets a distinct object identity.
-            | IrInstr::ListNew { .. }
-            | IrInstr::MapNew { .. }
-            | IrInstr::ChanNew { .. }
-            | IrInstr::AtomicNew { .. }
-            | IrInstr::MakeClosure { .. }
-            | IrInstr::ChanSend { .. }
-            | IrInstr::ChanRecv { .. }
-            | IrInstr::Spawn { .. }
-            | IrInstr::ParFor { .. }
-            | IrInstr::AtomicStore { .. }
-            | IrInstr::AtomicAdd { .. }
-            | IrInstr::AtomicLoad { .. }
-            | IrInstr::Load { .. }
-            | IrInstr::Retain { .. }
-            | IrInstr::Release { .. }
-            | IrInstr::TapeRecord { .. }
-            | IrInstr::Backward { .. }
-            // Mutable collection reads — must not be hoisted past writes.
-            | IrInstr::ListGet { .. }
-            | IrInstr::ListPop { .. }
-            | IrInstr::ListLen { .. }
-            | IrInstr::ListPush { .. }
-            | IrInstr::ListSet { .. }
-            | IrInstr::MapGet { .. }
-            | IrInstr::MapContains { .. }
-            | IrInstr::MapSet { .. }
-            | IrInstr::MapKeys { .. }
-            | IrInstr::MapValues { .. }
-            | IrInstr::MapLen { .. }
-            | IrInstr::MapRemove { .. }
+        IrInstr::BinOp { .. }
+            | IrInstr::ConstFloat { .. }
+            | IrInstr::ConstInt { .. }
+            | IrInstr::ConstBool { .. }
+            | IrInstr::ConstStr { .. }
+            | IrInstr::UnaryOp { .. }
+            | IrInstr::TensorOp { .. }
+            | IrInstr::Cast { .. }
+            | IrInstr::MakeStruct { .. }
+            | IrInstr::GetField { .. }
+            | IrInstr::MakeVariant { .. }
+            | IrInstr::ExtractVariantField { .. }
+            | IrInstr::MakeTuple { .. }
+            | IrInstr::GetElement { .. }
+            | IrInstr::MakeSome { .. }
+            | IrInstr::MakeNone { .. }
+            | IrInstr::IsSome { .. }
+            | IrInstr::MakeOk { .. }
+            | IrInstr::MakeErr { .. }
+            | IrInstr::IsOk { .. }
+            | IrInstr::StrLen { .. }
+            | IrInstr::StrConcat { .. }
+            | IrInstr::StrContains { .. }
+            | IrInstr::StrStartsWith { .. }
+            | IrInstr::StrEndsWith { .. }
+            | IrInstr::StrToUpper { .. }
+            | IrInstr::StrToLower { .. }
+            | IrInstr::StrTrim { .. }
+            | IrInstr::StrRepeat { .. }
+            | IrInstr::ValueToStr { .. }
+            | IrInstr::ParseI64 { .. }
+            | IrInstr::ParseF64 { .. }
+            | IrInstr::StrIndex { .. }
+            | IrInstr::StrSlice { .. }
+            | IrInstr::StrFind { .. }
+            | IrInstr::StrReplace { .. }
+            | IrInstr::StrSplit { .. }
+            | IrInstr::StrJoin { .. }
+            | IrInstr::GetVariantTag { .. }
+            | IrInstr::GradValue { .. }
+            | IrInstr::GradTangent { .. }
+            | IrInstr::TapeGrad { .. }
+            | IrInstr::Sparsify { .. }
+            | IrInstr::Densify { .. }
+            | IrInstr::MakeGrad { .. }
     )
 }
 

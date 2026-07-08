@@ -6,35 +6,35 @@
 
 // ── HTTP Client ───────────────────────────────────────────────────────────────
 
-// Perform a GET request. Returns the response body as a string.
+/// Perform a GET request. Returns the response body as a string.
 pub def http_get(url: str) -> str {
     http_get(url)
 }
 
-// Perform a POST request with a plain-text body. Returns the response body.
+/// Perform a POST request with a plain-text body. Returns the response body.
 pub def http_post(url: str, body: str) -> str {
     http_post(url, body)
 }
 
-// Perform an HTTP request with explicit method, url, and body.
-// method is "GET", "POST", "PUT", "DELETE", etc.
+/// Perform an HTTP request with explicit method, url, and body.
+/// `method` is "GET", "POST", "PUT", "DELETE", etc.
 pub def http_request(method: str, url: str, body: str) -> str {
     http_request(method, url, body)
 }
 
-// Perform a POST request with a JSON body (sets Content-Type: application/json).
+/// Perform a POST request with a JSON body (sets Content-Type: application/json).
 pub def http_post_json(url: str, json_body: str) -> str {
     http_post_json(url, json_body)
 }
 
 // ── HTTP Request building ────────────────────────────────────────────────────
 
-// Build a minimal GET request string.
+/// Build a minimal GET request string for raw TCP usage.
 pub def http_get_request(host: str, path: str) -> str {
     concat(concat(concat(concat("GET ", path), " HTTP/1.1\r\nHost: "), host), "\r\n\r\n")
 }
 
-// Build a minimal POST request string.
+/// Build a minimal POST request string for raw TCP usage.
 pub def http_post_request(host: str, path: str, body: str) -> str {
     val body_len = to_str(len(body))
     concat(concat(concat(concat(concat(concat(concat(
@@ -42,7 +42,7 @@ pub def http_post_request(host: str, path: str, body: str) -> str {
         "\r\nContent-Length: "), body_len), "\r\n\r\n"), body)
 }
 
-// Build an HTTP/1.1 response string.
+/// Build an HTTP/1.1 response string with status, status text, and body.
 pub def http_response(status: i64, status_text: str, body: str) -> str {
     val body_len = to_str(len(body))
     val line1 = concat(concat(concat(concat("HTTP/1.1 ", to_str(status)), " "), status_text), "\r\n")
@@ -50,9 +50,9 @@ pub def http_response(status: i64, status_text: str, body: str) -> str {
     concat(concat(concat(line1, headers), "\r\n"), body)
 }
 
-// ── HTTP Request parsing ─────────────────────────────────────────────────────
+// ── HTTP Request parsing ────────────────────────────────────────────────────
 
-// Extract the method from a raw HTTP request ("GET", "POST", etc.).
+/// Extract the HTTP method from a raw request ("GET", "POST", etc.).
 pub def http_request_method(raw: str) -> str {
     val first_space = find(raw, " ")
     if is_some(first_space) {
@@ -62,7 +62,7 @@ pub def http_request_method(raw: str) -> str {
     }
 }
 
-// Extract the path from a raw HTTP request.
+/// Extract the request path from a raw HTTP request.
 pub def http_request_path(raw: str) -> str {
     val first_space = find(raw, " ")
     if is_some(first_space) {
@@ -78,7 +78,7 @@ pub def http_request_path(raw: str) -> str {
     }
 }
 
-// Extract the body from a raw HTTP message (after "\r\n\r\n").
+/// Extract the body from a raw HTTP message (after "\r\n\r\n").
 pub def http_body(raw: str) -> str {
     val sep = find(raw, "\r\n\r\n")
     if is_some(sep) {
@@ -90,9 +90,9 @@ pub def http_body(raw: str) -> str {
 
 // ── HTTP Response parsing ────────────────────────────────────────────────────
 
-// Extract the status code (as i64) from a raw HTTP response.
+/// Extract the status code (as i64) from a raw HTTP response.
+/// Format: "HTTP/1.1 200 OK\r\n..."
 pub def http_status_code(raw: str) -> i64 {
-    // Format: "HTTP/1.1 200 OK\r\n..."
     val space1 = find(raw, " ")
     if is_some(space1) {
         val after_version = slice(raw, unwrap(space1) + 1, len(raw))
@@ -109,7 +109,8 @@ pub def http_status_code(raw: str) -> i64 {
     }
 }
 
-// Extract a named header value from a raw HTTP message.
+/// Extract a named header value from a raw HTTP message.
+/// Returns empty string if header not found.
 pub def http_header(raw: str, name: str) -> str {
     val header_search = concat(name, ": ")
     // Split headers section (before \r\n\r\n)

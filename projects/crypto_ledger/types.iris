@@ -1,0 +1,87 @@
+// types.iris — Core data types and traits for the crypto ledger
+
+pub trait Hashable {
+    def compute_hash(self: Self) -> str
+}
+
+pub choice TxStatus {
+    Pending,
+    Confirmed,
+    Rejected
+}
+
+pub record Transaction {
+    id: str,
+    sender: str,
+    receiver: str,
+    amount: f64,
+    timestamp: i64,
+    hash: str
+}
+
+pub record Block {
+    index: i64,
+    transactions: list<Transaction>,
+    prev_hash: str,
+    hash: str,
+    timestamp: i64,
+    nonce: i64
+}
+
+pub record Ledger {
+    blocks: list<Block>,
+    pending: list<Transaction>
+}
+
+impl Hashable for Transaction {
+    def compute_hash(self: Transaction) -> str {
+        val s = concat(self.id, concat(self.sender, concat(self.receiver, concat(to_str(self.amount), to_str(self.timestamp)))));
+        sha256(s)
+    }
+}
+
+impl Hashable for Block {
+    def compute_hash(self: Block) -> str {
+        // We need to hash block index, prev_hash, timestamp, nonce, and all transactions
+        var tx_hashes = "";
+        val n = list_len(self.transactions);
+        var i = 0;
+        while i < n {
+            val tx = list_get(self.transactions, i);
+            tx_hashes = concat(tx_hashes, tx.hash);
+            i = i + 1;
+        };
+        val s = concat(to_str(self.index), concat(self.prev_hash, concat(to_str(self.timestamp), concat(to_str(self.nonce), tx_hashes))));
+        sha256(s)
+    }
+}
+
+pub def status_to_str(status: TxStatus) -> str {
+    when status {
+        TxStatus.Pending => "Pending",
+        TxStatus.Confirmed => "Confirmed",
+        TxStatus.Rejected => "Rejected"
+    }
+}
+
+pub def new_transaction(id: str, sender: str, receiver: str, amount: f64, timestamp: i64, hash: str) -> Transaction {
+    val tx = Transaction {
+        id: id,
+        sender: sender,
+        receiver: receiver,
+        amount: amount,
+        timestamp: timestamp,
+        hash: hash
+    };
+    tx
+}
+
+pub def new_ledger() -> Ledger {
+    val blocks: list<Block> = list();
+    val pending: list<Transaction> = list();
+    val l = Ledger {
+        blocks: blocks,
+        pending: pending
+    };
+    l
+}

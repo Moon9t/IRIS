@@ -3,31 +3,11 @@ name: Native Smoke
 on:
   push:
     branches: [master, main, dev]
-    paths-ignore:
-      - 'README.md'
-      - 'CHANGELOG.md'
-      - 'LICENSE'
-      - 'docs/**'
-      - 'logo/**'
-      - '.vscode/**'
-      - '.gitignore'
-      - '.yamllint'
   pull_request:
     branches: [master, main]
-    paths-ignore:
-      - 'README.md'
-      - 'CHANGELOG.md'
-      - 'LICENSE'
-      - 'docs/**'
-      - 'logo/**'
-      - '.vscode/**'
-      - '.gitignore'
-      - '.yamllint'
-  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: 0
 
 jobs:
   native-smoke:
@@ -49,6 +29,10 @@ jobs:
           - label: windows-x64
             runner: windows-latest
             shell_family: windows
+          - label: macos-x64
+            runner: macos-13
+            shell_family: unix
+            timeout_cmd: gtimeout
           - label: macos-arm64
             runner: macos-14
             shell_family: unix
@@ -85,9 +69,14 @@ jobs:
           echo "IRIS_CLANG=$LLVM_PREFIX/bin/clang" >> "$GITHUB_ENV"
 
       - name: Cache cargo registry & build
-        uses: Swatinem/rust-cache@v2
+        uses: actions/cache@v4
         with:
-          key: ${{ matrix.label }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: native-smoke-${{ matrix.label }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: native-smoke-${{ matrix.label }}-
 
       - name: Build debug compiler
         run: cargo build --verbose

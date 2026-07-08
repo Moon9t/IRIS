@@ -1,0 +1,95 @@
+// predictor.iris — Linear regression model with reverse-mode autodiff training
+
+// A simple linear model: y = weight * x + bias
+pub record LinearModel {
+    weight: f64,
+    bias: f64,
+    learning_rate: f64
+}
+
+// Create a new model with small initial weights
+pub def model_new(lr: f64) -> LinearModel {
+    val m = LinearModel {
+        weight: 0.01,
+        bias: 0.0,
+        learning_rate: lr
+    };
+    m
+}
+
+// Forward prediction: y = weight * x + bias
+pub def predict(m: LinearModel, x: f64) -> f64 {
+    m.weight * x + m.bias
+}
+
+// One training step using reverse-mode autodiff.
+// Computes MSE loss for a single (x, y) pair and updates weights via gradient descent.
+pub def train_step(m: LinearModel, x: f64, y: f64) -> LinearModel {
+    // Place parameters and input on the tape
+    val w = tape(m.weight);
+    val b = tape(m.bias);
+    val x_t = tape(x);
+    val y_t = tape(y);
+
+    // Forward pass: pred = w * x_t + b
+    val pred = w * x_t + b;
+
+    // Loss: (pred - y)^2
+    val error = pred - y_t;
+    val loss = error * error;
+
+    // Backpropagation
+    val _ = backward(loss);
+
+    // Extract gradients
+    val dw = grad(w);
+    val db = grad(b);
+
+    // Gradient descent update
+    val new_weight = m.weight - m.learning_rate * dw;
+    val new_bias = m.bias - m.learning_rate * db;
+
+    val updated = LinearModel {
+        weight: new_weight,
+        bias: new_bias,
+        learning_rate: m.learning_rate
+    };
+    updated
+}
+
+// Train the model over multiple epochs on a dataset
+pub def train(m: LinearModel, xs: list<f64>, ys: list<f64>, epochs: i64) -> LinearModel {
+    val n = list_len(xs);
+    var current = m;
+    var epoch = 0;
+    while epoch < epochs {
+        var i = 0;
+        while i < n {
+            val x = list_get(xs, i);
+            val y = list_get(ys, i);
+            current = train_step(current, x, y);
+            i = i + 1;
+        };
+        epoch = epoch + 1;
+    };
+    current
+}
+
+// Mean Squared Error evaluation
+pub def mse(m: LinearModel, xs: list<f64>, ys: list<f64>) -> f64 {
+    val n = list_len(xs);
+    if n == 0 {
+        return 0.0;
+    };
+    var sum_err = 0.0;
+    var i = 0;
+    while i < n {
+        val x = list_get(xs, i);
+        val y = list_get(ys, i);
+        val pred = predict(m, x);
+        val diff = pred - y;
+        sum_err = sum_err + diff * diff;
+        i = i + 1;
+    };
+    sum_err / to_f64(n)
+}

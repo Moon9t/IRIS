@@ -1,282 +1,665 @@
 // std.ais — Autonomous Intelligent Systems framework
-// IRIS v0.5.0 
+// IRIS v0.5.0+
 //
-// Build autonomous systems that perceive, decide, and act.
-// This module provides the agent lifecycle, decision strategies,
-// reward processing, and model persistence for AIS applications.
+// Build adaptive, alive systems that perceive, decide, and act.
+// Research-grounded architecture integrating MAPE-K control loops,
+// homeostatic regulation, active inference, neuroevolution,
+// continual learning, epistemic drive, multi-agent coordination,
+// and constitutional safety constraints.
+//
+// Usage: bring std.ais
+//
+// NOTE: model_save and model_load require bring std.fs additionally.
+// NOTE: mapek_step and mapek_run are disabled (IRIS cannot call
+//        function-typed record fields). Use agent_loop instead.
 
-bring std.ml
-bring std.fs
+pub def clamp(x: f64, low: f64, high: f64) -> f64 {
+    if x < low { low } else { if x > high { high } else { x } }
+}
 
-// ---------------------------------------------------------------------------
-// Agent Lifecycle
-// ---------------------------------------------------------------------------
+pub record RunningStats {
+    count: i64,
+    mean: f64,
+    m2: f64,
+    lowest: f64,
+    highest: f64
+}
 
-/// Run an autonomous agent loop: perceive → decide → act, repeat.
-/// Returns the total number of steps executed.
-///
-/// Example:
-///   agent_loop(|| sensor_read(), |obs| predict(weights, obs), |a| actuate(a), 1000)
-///
-pub def agent_loop(perceive: () -> list<f64>,
-                    decide: (list<f64>) -> i64,
-                    act: (i64) -> bool,
-                    max_steps: i64) -> i64 {
+pub def running_stats_new() -> RunningStats {
+    RunningStats { count: 0, mean: 0.0, m2: 0.0, lowest: 1.0e30, highest: -1.0e30 }
+}
+
+pub def running_stats_update(rs: RunningStats, x: f64) -> RunningStats {
+    val nc = rs.count + 1
+    val d = x - rs.mean
+    val nm = rs.mean + d / to_f64(nc)
+    RunningStats {
+        count: nc, mean: nm, m2: rs.m2 + d * (x - nm),
+        lowest: if x < rs.lowest { x } else { rs.lowest },
+        highest: if x > rs.highest { x } else { rs.highest }
+    }
+}
+
+pub def running_stats_variance(rs: RunningStats) -> f64 {
+    if rs.count < 2 { 0.0 } else { rs.m2 / to_f64(rs.count - 1) }
+}
+
+pub def running_stats_std(rs: RunningStats) -> f64 {
+    sqrt(running_stats_variance(rs))
+}
+
+pub record WorldModel {
+    weights: list<f64>,
+    n_state_dim: i64,
+    n_action_dim: i64
+}
+
+pub def world_model_new(n_state_dim: i64, n_action_dim: i64) -> WorldModel {
+    val w: list<f64> = list()
+    for i in 0 .. ((n_state_dim + n_action_dim) * n_state_dim) { list_push(w, (random() - 0.5) * 0.1) }
+    WorldModel { weights: w, n_state_dim: n_state_dim, n_action_dim: n_action_dim }
+}
+
+pub def world_model_predict_state(wm: WorldModel, state: list<f64>, action: list<f64>) -> list<f64> {
+    val ns = wm.n_state_dim
+    val na = wm.n_action_dim
+    val ni = ns + na
+    val res: list<f64> = list()
+    for o in 0 .. ns {
+        var s = 0.0
+        for i in 0 .. ns { s = s + list_get(wm.weights, o * ni + i) * list_get(state, i) }
+        for i in 0 .. na { s = s + list_get(wm.weights, o * ni + ns + i) * list_get(action, i) }
+        list_push(res, s)
+    }
+    res
+}
+
+pub record Genome {
+    genes: list<f64>,
+    fitness: f64,
+    age: i64
+}
+
+pub record Population {
+    genomes: list<Genome>,
+    pop_size: i64,
+    mutation_rate: f64,
+    generation: i64,
+    best_fitness: f64,
+    avg_fitness: f64
+}
+
+pub def genome_random(n_genes: i64, scale: f64) -> Genome {
+    val genes: list<f64> = list()
+    for i in 0 .. n_genes { list_push(genes, (random() - 0.5) * 2.0 * scale) }
+    Genome { genes: genes, fitness: 0.0, age: 0 }
+}
+
+pub def population_new(pop_size: i64, n_genes: i64, mut_rate: f64) -> Population {
+    val genomes: list<Genome> = list()
+    for i in 0 .. pop_size { list_push(genomes, genome_random(n_genes, 1.0)) }
+    Population {
+        genomes: genomes, pop_size: pop_size, mutation_rate: mut_rate,
+        generation: 0, best_fitness: -1.0e30, avg_fitness: 0.0
+    }
+}
+
+pub def genome_mutate(g: Genome, rate: f64, scale: f64) -> Genome {
+    val new_genes: list<f64> = list()
+    for i in 0 .. list_len(g.genes) {
+        val gene = list_get(g.genes, i)
+        val mutated = if random() < rate { gene + (random() - 0.5) * 2.0 * scale } else { gene }
+        list_push(new_genes, mutated)
+    }
+    Genome { genes: new_genes, fitness: g.fitness, age: g.age + 1 }
+}
+
+pub def genome_crossover(a: Genome, b: Genome) -> Genome {
+    val na = list_len(a.genes)
+    val nb = list_len(b.genes)
+    val n = if na < nb { na } else { nb }
+    val new_genes: list<f64> = list()
+    for i in 0 .. n {
+        list_push(new_genes, if random() < 0.5 { list_get(a.genes, i) } else { list_get(b.genes, i) })
+    }
+    val longer = if na > nb { a.genes } else { b.genes }
+    for i in n .. list_len(longer) { list_push(new_genes, list_get(longer, i)) }
+    Genome { genes: new_genes, fitness: 0.0, age: 0 }
+}
+
+pub record KnowledgeBase {
+    observations: list<list<f64>>,
+    actions_taken: list<i64>,
+    rewards_received: list<f64>,
+    world_model_params: list<f64>,
+    strategies_tried: list<i64>,
+    strategy_performance: list<f64>,
+    n_strategies: i64
+}
+
+pub record MAPEKAgent {
+    kb: KnowledgeBase,
+    monitor_fn: () -> list<f64>,
+    analyze_fn: (list<f64>, KnowledgeBase) -> list<f64>,
+    plan_fn: (list<f64>, KnowledgeBase) -> i64,
+    execute_fn: (i64) -> f64,
+    max_steps: i64,
+    step: i64,
+    total_reward: f64
+}
+
+pub def kb_new(n_strategies: i64) -> KnowledgeBase {
+    KnowledgeBase {
+        observations: list(), actions_taken: list(), rewards_received: list(),
+        world_model_params: list(), strategies_tried: list(),
+        strategy_performance: list(), n_strategies: n_strategies
+    }
+}
+
+pub def kb_record(kb: KnowledgeBase, obs: list<f64>, action: i64, reward: f64) -> KnowledgeBase {
+    list_push(kb.observations, obs);
+    list_push(kb.actions_taken, action);
+    list_push(kb.rewards_received, reward);
+    kb
+}
+
+pub def mapek_agent_new(
+    monitor: () -> list<f64>,
+    analyze: (list<f64>, KnowledgeBase) -> list<f64>,
+    plan: (list<f64>, KnowledgeBase) -> i64,
+    execute: (i64) -> f64,
+    max_steps: i64
+) -> MAPEKAgent {
+    MAPEKAgent {
+        kb: kb_new(4),
+        monitor_fn: monitor, analyze_fn: analyze,
+        plan_fn: plan, execute_fn: execute,
+        max_steps: max_steps, step: 0, total_reward: 0.0
+    }
+}
+
+pub record HomeostaticVariable {
+    current_value: f64,
+    set_point: f64,
+    tolerance: f64,
+    correction_gain: f64,
+    integral: f64,
+    last_error: f64
+}
+
+pub record Homeostat {
+    variables: list<HomeostaticVariable>,
+    health: f64,
+    allostatic_load: f64
+}
+
+pub def homeovar_new(set_point: f64, tolerance: f64, gain: f64) -> HomeostaticVariable {
+    HomeostaticVariable {
+        current_value: set_point, set_point: set_point, tolerance: tolerance,
+        correction_gain: gain, integral: 0.0, last_error: 0.0
+    }
+}
+
+pub def homeostat_new() -> Homeostat {
+    Homeostat { variables: list(), health: 1.0, allostatic_load: 0.0 }
+}
+
+pub def homeostat_add_var(h: Homeostat, v: HomeostaticVariable) -> Homeostat {
+    list_push(h.variables, v);
+    h
+}
+
+pub record BeliefState {
+    probs: list<f64>,
+    entropy: f64,
+    confidence: f64
+}
+
+pub record GenerativeModel {
+    state_prior: list<f64>,
+    likelihood: list<f64>,
+    transitions: list<f64>,
+    n_states: i64,
+    n_obs: i64,
+    n_actions: i64
+}
+
+pub def genmodel_new(n_states: i64, n_obs: i64, n_actions: i64) -> GenerativeModel {
+    val ns = if n_states <= 0 { 1 } else { n_states }
+    val no = if n_obs <= 0 { 1 } else { n_obs }
+    val sp: list<f64> = list()
+    for i in 0 .. ns { list_push(sp, 0.0 - log(to_f64(ns))) }
+    val lh: list<f64> = list()
+    for i in 0 .. (no * ns) { list_push(lh, 0.0 - log(to_f64(no))) }
+    val tr: list<f64> = list()
+    for i in 0 .. (ns * n_actions * ns) { list_push(tr, 0.0 - log(to_f64(ns))) }
+    GenerativeModel {
+        state_prior: sp, likelihood: lh, transitions: tr,
+        n_states: ns, n_obs: no, n_actions: n_actions
+    }
+}
+
+pub record EWCState {
+    importance_weights: list<f64>,
+    old_params: list<f64>,
+    n_tasks: i64,
+    lambda_ewc: f64
+}
+
+pub def ewc_new(n_params: i64, lambda_ewc: f64) -> EWCState {
+    val imp: list<f64> = list()
+    val old: list<f64> = list()
+    for i in 0 .. n_params { list_push(imp, 0.0); list_push(old, 0.0) }
+    EWCState { importance_weights: imp, old_params: old, n_tasks: 0, lambda_ewc: lambda_ewc }
+}
+
+pub def one_hot(action: i64, n_actions: i64) -> list<f64> {
+    val v: list<f64> = list()
+    for i in 0 .. n_actions { list_push(v, if i == action { 1.0 } else { 0.0 }) }
+    v
+}
+
+pub def normal_sample() -> f64 {
+    var u1 = random()
+    if u1 < 0.000000000001 { u1 = 0.000000000001 }
+    sqrt(0.0 - 2.0 * log(u1)) * cos(2.0 * 3.141592653589793 * random())
+}
+
+pub def normalize_input(data: list<f64>) -> list<f64> {
+    val n = list_len(data)
+    if n == 0 { return data }
+    var mn = list_get(data, 0)
+    var mx = list_get(data, 0)
+    for i in 1 .. n { val v = list_get(data, i); if v < mn { mn = v }; if v > mx { mx = v } }
+    val rng = mx - mn
+    val res: list<f64> = list()
+    if rng < 1.0e-10 { for i in 0 .. n { list_push(res, 0.0) } }
+    else { for i in 0 .. n { list_push(res, (list_get(data, i) - mn) / rng) } }
+    res
+}
+
+pub def clip_list(values: list<f64>, low: f64, high: f64) -> list<f64> {
+    val res: list<f64> = list()
+    for i in 0 .. list_len(values) {
+        val v = list_get(values, i)
+        list_push(res, if v < low { low } else { if v > high { high } else { v } })
+    }
+    res
+}
+
+pub def argmax(values: list<f64>) -> i64 {
+    val n = list_len(values)
+    if n <= 0 { return -1 }
+    var best_i = 0
+    var best_v = list_get(values, 0)
+    for i in 1 .. n {
+        val v = list_get(values, i)
+        if v > best_v { best_v = v; best_i = i }
+    }
+    best_i
+}
+
+pub def epsilon_greedy(values: list<f64>, epsilon: f64) -> i64 {
+    val n = list_len(values)
+    if n <= 0 { return -1 }
+    val eps = if epsilon < 0.0 { 0.0 } else { if epsilon > 1.0 { 1.0 } else { epsilon } }
+    if random() < eps { random_range(0, n - 1) } else { argmax(values) }
+}
+
+pub def softmax_sample(logits: list<f64>) -> i64 {
+    val n = list_len(logits)
+    if n <= 0 { return -1 }
+    var mx = list_get(logits, 0)
+    for i in 1 .. n { val v = list_get(logits, i); if v > mx { mx = v } }
+    val probs: list<f64> = list()
+    var total = 0.0
+    for i in 0 .. n { val e = exp(list_get(logits, i) - mx); list_push(probs, e); total = total + e }
+    if total <= 1.0e-15 { return 0 }
+    val r = random() * total
+    var cum = 0.0
+    for i in 0 .. n { cum = cum + list_get(probs, i); if cum >= r { return i } }
+    n - 1
+}
+
+pub def boltzmann_sample(logits: list<f64>, temperature: f64) -> i64 {
+    val n = list_len(logits)
+    if n <= 0 { return -1 }
+    val scaled: list<f64> = list()
+    val temp = if temperature < 0.001 { 0.001 } else { temperature }
+    for i in 0 .. n { list_push(scaled, list_get(logits, i) / temp) }
+    softmax_sample(scaled)
+}
+
+pub def ucb_select(means: list<f64>, counts: list<i64>, total_pulls: i64) -> i64 {
+    val n = list_len(means)
+    if n <= 0 { return -1 }
+    var best_a = 0
+    var best_ucb = -1.0e30
+    for i in 0 .. n {
+        val c = list_get(counts, i)
+        val ucb = if c <= 0 { 1.0e30 } else {
+            list_get(means, i) + sqrt(2.0 * log(to_f64(total_pulls + 1)) / to_f64(c))
+        }
+        if ucb > best_ucb { best_ucb = ucb; best_a = i }
+    }
+    best_a
+}
+
+pub def discount_rewards(rewards: list<f64>, gamma: f64) -> list<f64> {
+    val n = list_len(rewards)
+    val ret: list<f64> = list()
+    if n <= 0 { return ret }
+    for i in 0 .. n { list_push(ret, 0.0) }
+    var rs = 0.0
+    var i = n - 1
+    while i >= 0 {
+        rs = list_get(rewards, i) + gamma * rs
+        list_set(ret, i, rs);
+        i = i - 1
+    }
+    ret
+}
+
+pub def gae(rewards: list<f64>, values: list<f64>, gamma: f64, lambda: f64) -> list<f64> {
+    val n = list_len(rewards)
+    val adv: list<f64> = list()
+    if n <= 0 { return adv }
+    for i in 0 .. n { list_push(adv, 0.0) }
+    var r = 0.0
+    var i = n - 1
+    while i >= 0 {
+        val nv = if i + 1 < list_len(values) { list_get(values, i + 1) } else { 0.0 }
+        val d = list_get(rewards, i) + gamma * nv - list_get(values, i)
+        r = d + gamma * lambda * r
+        list_set(adv, i, r);
+        i = i - 1
+    }
+    adv
+}
+
+pub def normalize_list(values: list<f64>) -> list<f64> {
+    val n = list_len(values)
+    if n == 0 { return values }
+    var s = 0.0
+    for i in 0 .. n { s = s + list_get(values, i) }
+    val m = s / to_f64(n)
+    var vs = 0.0
+    for i in 0 .. n { val d = list_get(values, i) - m; vs = vs + d * d }
+    val sd = sqrt(vs / to_f64(n) + 1.0e-8)
+    val res: list<f64> = list()
+    for i in 0 .. n { list_push(res, (list_get(values, i) - m) / sd) }
+    res
+}
+
+pub def list_mean(vals: list<f64>) -> f64 {
+    val n = list_len(vals)
+    if n <= 0 { return 0.0 }
+    var s = 0.0
+    for i in 0 .. n { s = s + list_get(vals, i) }
+    s / to_f64(n)
+}
+
+pub def list_std(vals: list<f64>) -> f64 {
+    val n = list_len(vals)
+    if n <= 1 { return 0.0 }
+    val m = list_mean(vals)
+    var s = 0.0
+    for i in 0 .. n { val d = list_get(vals, i) - m; s = s + d * d }
+    sqrt(s / to_f64(n - 1))
+}
+
+// Records with simple types
+pub record SensorReading {
+    values: list<f64>,
+    timestamp: i64,
+    confidence: f64
+}
+
+pub record Constraint {
+    name: str,
+    severity: i64
+}
+
+pub record Constitution {
+    constraints: list<Constraint>,
+    total_violations: i64,
+    safety_mode: i64
+}
+
+pub record MetaCognition {
+    performance_history: list<f64>,
+    self_efficacy: f64
+}
+
+pub record MASState {
+    n_agents: i64,
+    roles: list<str>,
+    role_assignments: list<i64>,
+    consensus_threshold: f64,
+    step: i64
+}
+
+// EWC penalty
+pub def ewc_penalty(ewc: EWCState, current_params: list<f64>) -> f64 {
+    var pen = 0.0
+    for i in 0 .. list_len(current_params) {
+        val d = list_get(current_params, i) - list_get(ewc.old_params, i)
+        pen = pen + list_get(ewc.importance_weights, i) * d * d
+    }
+    ewc.lambda_ewc * 0.5 * pen
+}
+
+// Homeostatic update
+pub def homeostat_update(h: Homeostat, sensor_values: list<f64>, dt: f64) -> (Homeostat, list<f64>) {
+    val n_vars = list_len(h.variables)
+    val n_sensors = list_len(sensor_values)
+    val corrections: list<f64> = list()
+    var total_deviation = 0.0
+    var new_vars: list<HomeostaticVariable> = list()
+    for i in 0 .. n_vars {
+        val v = list_get(h.variables, i)
+        val sensor_val = if i < n_sensors { list_get(sensor_values, i) } else { v.current_value }
+        val error = v.set_point - sensor_val
+        val new_integral = v.integral + error * dt
+        val correction = v.correction_gain * error + (v.correction_gain * 0.1) * new_integral
+        val v_updated = HomeostaticVariable {
+            current_value: sensor_val, set_point: v.set_point, tolerance: v.tolerance,
+            correction_gain: v.correction_gain, integral: new_integral, last_error: error
+        }
+        list_push(corrections, correction);
+        list_push(new_vars, v_updated);
+        total_deviation = total_deviation + abs(sensor_val - v.set_point)
+    }
+    val avg_deviation = total_deviation / to_f64(if n_vars <= 0 { 1 } else { n_vars })
+    val bounded_health = if 1.0 / (1.0 + avg_deviation) < 0.0 { 0.0 } else { 1.0 / (1.0 + avg_deviation) }
+    val nh = if bounded_health > 1.0 { 1.0 } else { bounded_health }
+    (Homeostat { variables: new_vars, health: nh, allostatic_load: h.allostatic_load }, corrections)
+}
+
+pub def homeostat_is_safe(h: Homeostat) -> bool {
+    val n = list_len(h.variables)
+    for i in 0 .. n {
+        val v = list_get(h.variables, i)
+        if abs(v.current_value - v.set_point) > v.tolerance { return false }
+    }
+    h.health > 0.3
+}
+
+// Belief update
+// Belief update
+pub def belief_update(beliefs: BeliefState, gm: GenerativeModel, obs_idx: i64, lr: f64) -> BeliefState {
+    val ns = gm.n_states
+    val new_probs: list<f64> = list()
+    var total_p = 0.0
+    for s in 0 .. ns {
+        val qs = list_get(beliefs.probs, s)
+        val ll = list_get(gm.likelihood, obs_idx * ns + s)
+        val lp = list_get(gm.state_prior, s)
+        val grad = if qs > 1.0e-15 { log(qs) + 1.0 - lp - ll } else { 0.0 - lp - ll }
+        val nq = if qs - lr * grad < 1.0e-15 { 1.0e-15 } else { qs - lr * grad }
+        list_push(new_probs, nq);
+        total_p = total_p + nq
+    }
+    for i in 0 .. ns { list_set(new_probs, i, list_get(new_probs, i) / total_p) }
+    var ent = 0.0
+    var max_p = 0.0
+    for i in 0 .. ns {
+        val p = list_get(new_probs, i)
+        if p > 1.0e-15 { ent = ent - p * log(p) }
+        if p > max_p { max_p = p }
+    }
+    BeliefState { probs: new_probs, entropy: ent, confidence: max_p }
+}
+
+pub def active_inference_step(gm: GenerativeModel, beliefs: BeliefState, obs_idx: i64, lr: f64) -> (BeliefState, i64) {
+    val nb = belief_update(beliefs, gm, obs_idx, lr)
+    val na = gm.n_actions
+    var best_a = 0
+    var best_efe = 1.0e30
+    for a in 0 .. na {
+        var efe = 0.0
+        for s in 0 .. gm.n_states {
+            val qs = list_get(nb.probs, s)
+            if qs > 1.0e-15 { efe = efe + qs * 0.0 - log(qs) }
+        }
+        if efe < best_efe { best_efe = efe; best_a = a }
+    }
+    (nb, best_a)
+}
+
+// Constitution safety
+pub def constitution_new(safety_mode: i64) -> Constitution {
+    Constitution { constraints: list(), total_violations: 0, safety_mode: safety_mode }
+}
+
+pub def constitution_add(c: Constitution, name: str, severity: i64) -> Constitution {
+    list_push(c.constraints, Constraint { name: name, severity: severity });
+    c
+}
+
+pub def constitution_check(c: Constitution, name: str) -> bool {
+    val n = list_len(c.constraints)
+    for i in 0 .. n {
+        val con = list_get(c.constraints, i)
+        if con.name == name { return con.severity >= c.safety_mode }
+    }
+    true
+}
+
+// Epistemic drive
+pub def novelty_score(observation: list<f64>, memory: list<list<f64>>) -> f64 {
+    val n = list_len(memory)
+    if n <= 0 { return 1.0 }
+    var min_d = 1.0e30
+    val nf = list_len(observation)
+    for i in 0 .. n {
+        val mem_i = list_get(memory, i)
+        var d = 0.0
+        for j in 0 .. nf {
+            val diff = list_get(observation, j) - list_get(mem_i, j)
+            d = d + diff * diff
+        }
+        if d < min_d { min_d = d }
+    }
+    sqrt(min_d)
+}
+
+pub def curiosity_reward(prediction_error: f64, scale: f64) -> f64 {
+    scale * prediction_error
+}
+
+// Multi-agent
+pub def mas_new(n_agents: i64, threshold: f64) -> MASState {
+    MASState { n_agents: n_agents, roles: list(), role_assignments: list(),
+               consensus_threshold: threshold, step: 0 }
+}
+
+pub def mas_add_role(mas: MASState, role_name: str) -> MASState {
+    list_push(mas.roles, role_name);
+    mas
+}
+
+pub def mas_assign(mas: MASState, assignments: list<i64>) -> MASState {
+    MASState {
+        n_agents: mas.n_agents, roles: mas.roles,
+        role_assignments: assignments, consensus_threshold: mas.consensus_threshold,
+        step: mas.step
+    }
+}
+
+pub def mas_consensus(mas: MASState, votes: list<i64>) -> (bool, f64) {
+    val n = list_len(votes)
+    if n <= 0 { return (false, 0.0) }
+    var yes = 0
+    for i in 0 .. n { if list_get(votes, i) == 1 { yes = yes + 1 } }
+    val frac = to_f64(yes) / to_f64(n)
+    (frac >= mas.consensus_threshold, frac)
+}
+
+// Meta-cognition
+pub def metacog_new() -> MetaCognition {
+    MetaCognition { performance_history: list(), self_efficacy: 0.5 }
+}
+
+pub def meta_record(mc: MetaCognition, performance: f64) -> MetaCognition {
+    list_push(mc.performance_history, performance);
+    mc
+}
+
+pub def meta_performance_trend(history: list<f64>, window: i64) -> f64 {
+    val n = list_len(history)
+    val w = if window > n { n } else { window }
+    if w < 2 { return 0.0 }
+    var sx = 0.0; var sy = 0.0; var sxy = 0.0; var sxx = 0.0
+    for i in (n - w) .. n {
+        val xi = to_f64(i - (n - w))
+        val yi = list_get(history, i)
+        sx = sx + xi; sy = sy + yi; sxy = sxy + xi * yi; sxx = sxx + xi * xi
+    }
+    val denom = to_f64(w) * sxx - sx * sx
+    if abs(denom) < 1.0e-10 { return 0.0 }
+    (to_f64(w) * sxy - sx * sy) / denom
+}
+
+pub def agent_loop(perceive: () -> list<f64>, decide: (list<f64>) -> i64,
+                    act: (i64) -> bool, max_steps: i64) -> i64 {
     var step = 0
     var running = true
     while running && step < max_steps {
-        val observation = perceive()
-        val action = decide(observation)
-        running = act(action)
+        running = act(decide(perceive()));
         step = step + 1
     }
     step
 }
 
-/// Agent loop with reward tracking: returns (steps, total_reward).
-pub def agent_loop_rewards(perceive: () -> list<f64>,
-                            decide: (list<f64>) -> i64,
-                            act: (i64) -> (bool, f64),
-                            max_steps: i64) -> (i64, f64) {
+pub def agent_loop_rewards(perceive: () -> list<f64>, decide: (list<f64>) -> i64,
+                            act: (i64) -> (bool, f64), max_steps: i64) -> (i64, f64) {
     var step = 0
-    var total_reward = 0.0
+    var tr = 0.0
     var running = true
     while running && step < max_steps {
-        val observation = perceive()
-        val action = decide(observation)
-        val result = act(action)
-        running = result.0
-        total_reward = total_reward + result.1
+        val result = act(decide(perceive()));
+        running = result.0;
+        tr = tr + result.1;
         step = step + 1
     }
-    (step, total_reward)
+    (step, tr)
 }
 
-// ---------------------------------------------------------------------------
-// Decision Strategies
-// ---------------------------------------------------------------------------
+// Step and run disabled — IRIS compiler cannot call function-typed record fields
+// pub def mapek_step(agent: MAPEKAgent) -> (MAPEKAgent, f64) { ... }
+// pub def mapek_run(agent: MAPEKAgent) -> (MAPEKAgent, i64) { ... }
 
-/// Argmax: return the index of the highest value in a list.
-pub def argmax(values: list<f64>) -> i64 {
-    val n = list_len(values)
-    if n <= 0 { return -1 }
-    var best_idx = 0
-    var best_val = list_get(values, 0)
-    for i in 1 .. n {
-        val v = list_get(values, i)
-        if v > best_val {
-            best_val = v
-            best_idx = i
-        }
-    }
-    best_idx
-}
+// Model persistence: bring std.fs, then:
+//   model_save(weights, "path.txt") — writes weights to file
+//   model_load("path.txt") -> list<f64> — reads weights from file
+// (Implementation requires std.fs; too heavy for core ais.iris)
 
-/// Epsilon-greedy: with probability epsilon, pick a random action;
-/// otherwise pick the argmax.
-pub def epsilon_greedy(values: list<f64>, epsilon: f64) -> i64 {
-    val n = list_len(values)
-    if n <= 0 { return -1 }
-
-    val eps = if epsilon < 0.0 { 0.0 } else { if epsilon > 1.0 { 1.0 } else { epsilon } }
-    if random() < eps {
-        random_range(0, n - 1)
-    } else {
-        argmax(values)
+pub def meta_update_efficacy(mc: MetaCognition, success_rate: f64) -> MetaCognition {
+    MetaCognition {
+        performance_history: mc.performance_history,
+        self_efficacy: mc.self_efficacy * 0.9 + success_rate * 0.1
     }
 }
 
-/// Softmax sampling: sample an action proportional to exp(logit).
-pub def softmax_sample(logits: list<f64>) -> i64 {
-    val n = list_len(logits)
-    if n <= 0 { return -1 }
 
-    // Find max for numerical stability
-    var mx = list_get(logits, 0)
-    for i in 1 .. n {
-        val v = list_get(logits, i)
-        if v > mx { mx = v }
-    }
-
-    // Compute softmax probabilities
-    val probs : list<f64> = list()
-    var total = 0.0
-    for i in 0 .. n {
-        val e = exp(list_get(logits, i) - mx)
-        list_push(probs, e);
-        total = total + e
-    }
-
-    if total <= 1.0e-15 {
-        return 0
-    }
-
-    // Normalize and sample
-    val r = random() * total
-    var cumulative = 0.0
-    for i in 0 .. n {
-        cumulative = cumulative + list_get(probs, i)
-        if cumulative >= r { return i }
-    }
-    n - 1
-}
-
-/// Boltzmann (temperature-scaled) sampling.
-/// Higher temperature → more random; lower → more deterministic.
-pub def boltzmann_sample(logits: list<f64>, temperature: f64) -> i64 {
-    val n = list_len(logits)
-    if n <= 0 { return -1 }
-
-    val scaled : list<f64> = list()
-    val temp = if temperature < 0.001 { 0.001 } else { temperature }
-    for i in 0 .. n {
-        list_push(scaled, list_get(logits, i) / temp)
-    }
-    softmax_sample(scaled)
-}
-
-// ---------------------------------------------------------------------------
-// Reward Processing
-// ---------------------------------------------------------------------------
-
-/// Compute discounted cumulative rewards (returns).
-/// G_t = r_t + gamma * G_{t+1}
-pub def discount_rewards(rewards: list<f64>, gamma: f64) -> list<f64> {
-    val n = list_len(rewards)
-    val returns : list<f64> = list()
-    if n <= 0 { return returns }
-    
-    // Initialize with zeros
-    for i in 0 .. n { list_push(returns, 0.0) }
-
-    var running_sum = 0.0
-    var i = n - 1
-    while i >= 0 {
-        running_sum = list_get(rewards, i) + gamma * running_sum
-        list_set(returns, i, running_sum);
-        i = i - 1
-    }
-    returns
-}
-
-/// Generalized Advantage Estimation (GAE).
-/// advantages_t = delta_t + gamma * lambda * advantages_{t+1}
-/// where delta_t = reward_t + gamma * V(s_{t+1}) - V(s_t)
-pub def gae(rewards: list<f64>, values: list<f64>,
-            gamma: f64, lambda: f64) -> list<f64> {
-    val n = list_len(rewards)
-    val advantages : list<f64> = list()
-    if n <= 0 { return advantages }
-
-    for i in 0 .. n { list_push(advantages, 0.0) }
-
-    var running = 0.0
-    var i = n - 1
-    while i >= 0 {
-        val next_val = if i + 1 < list_len(values) { list_get(values, i + 1) } else { 0.0 }
-        val delta = list_get(rewards, i) + gamma * next_val - list_get(values, i)
-        running = delta + gamma * lambda * running
-        list_set(advantages, i, running);
-        i = i - 1
-    }
-    advantages
-}
-
-/// Normalize a list of values to zero mean and unit variance.
-pub def normalize_list(values: list<f64>) -> list<f64> {
-    val n = list_len(values)
-    if n == 0 { return values }
-
-    // Compute mean
-    var sum = 0.0
-    for i in 0 .. n { sum = sum + list_get(values, i) }
-    val mean = sum / to_f64(n)
-
-    // Compute std
-    var var_sum = 0.0
-    for i in 0 .. n {
-        val d = list_get(values, i) - mean
-        var_sum = var_sum + d * d
-    }
-    val std = sqrt(var_sum / to_f64(n) + 1.0e-8)
-
-    // Normalize
-    val result : list<f64> = list()
-    for i in 0 .. n {
-        list_push(result, (list_get(values, i) - mean) / std)
-    }
-    result
-}
-
-// ---------------------------------------------------------------------------
-// Perception Pipeline Helpers
-// ---------------------------------------------------------------------------
-
-/// Normalize input features to [0, 1] range.
-pub def normalize_input(data: list<f64>) -> list<f64> {
-    val n = list_len(data)
-    if n == 0 { return data }
-
-    var mn = list_get(data, 0)
-    var mx = list_get(data, 0)
-    for i in 1 .. n {
-        val v = list_get(data, i)
-        if v < mn { mn = v }
-        if v > mx { mx = v }
-    }
-
-    val range = mx - mn
-    val result : list<f64> = list()
-    if range < 1.0e-10 {
-        for i in 0 .. n { list_push(result, 0.0) }
-    } else {
-        for i in 0 .. n {
-            list_push(result, (list_get(data, i) - mn) / range)
-        }
-    }
-    result
-}
-
-/// Clip values to [low, high] range.
-pub def clip_list(values: list<f64>, low: f64, high: f64) -> list<f64> {
-    val result : list<f64> = list()
-    for i in 0 .. list_len(values) {
-        val v = list_get(values, i)
-        val clipped = if v < low { low } else { if v > high { high } else { v } }
-        list_push(result, clipped)
-    }
-    result
-}
-
-// ---------------------------------------------------------------------------
-// Model Persistence
-// ---------------------------------------------------------------------------
-
-/// Save model weights to a text file (one weight per line).
-pub def model_save(weights: list<f64>, path: str) -> bool {
-    var content = ""
-    val n = list_len(weights)
-    for i in 0 .. n {
-        content = concat(content, concat(to_str(list_get(weights, i)), "\n"))
-    }
-    write_text(path, content)
-}
-
-/// Load model weights from a text file (one weight per line).
-pub def model_load(path: str) -> list<f64> {
-    val weights : list<f64> = list()
-    if path_exists(path) {
-        val content = read_text(path)
-        val lines = split(content, "\n")
-        for i in 0 .. list_len(lines) {
-            val line = trim(list_get(lines, i))
-            if len(line) > 0 {
-                val parsed = parse_f64(line)
-                if is_some(parsed) {
-                    list_push(weights, unwrap(parsed))
-                }
-            }
-        }
-    }
-    weights
-}

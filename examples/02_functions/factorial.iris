@@ -1,6 +1,6 @@
 // factorial.iris -- iterative factorial using a loop
 //
-// Run: cargo run -- --emit eval examples/factorial.iris
+// Run: iris run examples/02_functions/factorial.iris
 
 def factorial(n: i64) -> i64 {
     var result = 1

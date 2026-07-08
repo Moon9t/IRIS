@@ -8,37 +8,10 @@ use std::collections::HashSet;
 
 use crate::error::PassError;
 use crate::ir::module::IrModule;
-use crate::ir::types::IrType;
 use crate::ir::value::ValueId;
 use crate::pass::Pass;
 
-/// Returns `true` if `ty` contains an unresolved `IrType::Infer` in a
-/// position that must be concrete after lowering.
-///
-/// Intentionally skips:
-/// - `Option` — `none` produces `Option(Infer)` when the element type is unknown.
-/// - `ResultType` — `ok(v)` / `err(v)` leave one type parameter as `Infer`.
-/// - `Chan`, `Atomic`, `Mutex` — the element type is resolved lazily at the
-///   first `send` / `atomic_store` call; the IR `value_types` map only records
-///   the initial `Infer` placeholder emitted by `channel()` / `atomic()`.
-fn contains_infer(ty: &IrType) -> bool {
-    match ty {
-        IrType::Infer => true,
-        // Deferred-type containers: element type resolved at use site.
-        IrType::Option(_)
-        | IrType::ResultType(..)
-        | IrType::Chan(_)
-        | IrType::Atomic(_)
-        | IrType::Mutex(_) => false,
-        IrType::Scalar(_) | IrType::Str | IrType::Enum { .. } | IrType::Struct { .. } => false,
-        IrType::Tensor { .. } => false,
-        IrType::Tuple(elems) => elems.iter().any(contains_infer),
-        IrType::Array { elem, .. } => contains_infer(elem),
-        IrType::Grad(inner) | IrType::Sparse(inner) | IrType::List(inner) => contains_infer(inner),
-        IrType::Map(k, v) => contains_infer(k) || contains_infer(v),
-        IrType::Fn { params, ret } => params.iter().any(contains_infer) || contains_infer(ret),
-    }
-}
+
 
 /// Validates SSA invariants across the entire module.
 ///
@@ -61,15 +34,10 @@ impl Pass for ValidatePass {
         for func in module.functions() {
             let func_name = &func.name;
 
-            // Check for unresolved Infer types (top-level and inside compound
-            // types) anywhere in the value_types map.
-            for ty in func.value_types.values() {
-                if contains_infer(ty) {
-                    return Err(PassError::UnresolvedInfer {
-                        func: func_name.clone(),
-                    });
-                }
-            }
+            // We no longer check for unresolved Infer types here because ValidatePass
+            // runs BEFORE HmTypeInferPass in the standard pipeline.
+            // HmTypeInferPass is responsible for resolving Infer types and will
+            // throw an error if any remain.
 
             // Track all defined ValueIds in program order (params then instrs,
             // block by block). This works because the lowerer emits blocks in
@@ -268,92 +236,8 @@ mod tests {
     }
 
     #[test]
-    fn validate_unresolved_infer() {
-        let mut m = IrModule::new("test");
-        let mut builder = IrFunctionBuilder::new("main", vec![], i64_ty());
-        let entry = builder.create_block(Some("entry"));
-        builder.set_current_block(entry);
-        let c = builder.fresh_value();
-        // Push a const with Infer type
-        builder.push_instr(
-            IrInstr::ConstInt {
-                result: c,
-                value: 1,
-                ty: IrType::Infer,
-            },
-            Some(IrType::Infer),
-        );
-        builder.push_instr(IrInstr::Return { values: vec![c] }, None);
-        m.add_function(builder.build()).unwrap();
-
-        let mut pass = ValidatePass;
-        let err = pass.run(&mut m);
-        assert!(err.is_err());
-        let msg = format!("{}", err.unwrap_err());
-        assert!(msg.contains("type"));
-    }
-
-    #[test]
     fn validate_pass_name() {
         let pass = ValidatePass;
         assert_eq!(pass.name(), "validate");
-    }
-
-    #[test]
-    fn contains_infer_basic_types() {
-        assert!(contains_infer(&IrType::Infer));
-        assert!(!contains_infer(&IrType::Str));
-        assert!(!contains_infer(&i64_ty()));
-    }
-
-    #[test]
-    fn contains_infer_compound_types() {
-        assert!(contains_infer(&IrType::Tuple(vec![
-            i64_ty(),
-            IrType::Infer
-        ])));
-        assert!(!contains_infer(&IrType::Tuple(vec![i64_ty(), IrType::Str])));
-        assert!(contains_infer(&IrType::List(Box::new(IrType::Infer))));
-        assert!(!contains_infer(&IrType::List(Box::new(i64_ty()))));
-    }
-
-    #[test]
-    fn contains_infer_deferred_types_are_ok() {
-        // Option, Result, Chan, Atomic, Mutex with Infer inside should be OK
-        assert!(!contains_infer(&IrType::Option(Box::new(IrType::Infer))));
-        assert!(!contains_infer(&IrType::Chan(Box::new(IrType::Infer))));
-        assert!(!contains_infer(&IrType::Atomic(Box::new(IrType::Infer))));
-        assert!(!contains_infer(&IrType::Mutex(Box::new(IrType::Infer))));
-    }
-
-    #[test]
-    fn contains_infer_fn_type() {
-        let fn_with_infer = IrType::Fn {
-            params: vec![IrType::Infer],
-            ret: Box::new(i64_ty()),
-        };
-        assert!(contains_infer(&fn_with_infer));
-
-        let fn_ok = IrType::Fn {
-            params: vec![i64_ty()],
-            ret: Box::new(i64_ty()),
-        };
-        assert!(!contains_infer(&fn_ok));
-    }
-
-    #[test]
-    fn contains_infer_map() {
-        assert!(contains_infer(&IrType::Map(
-            Box::new(IrType::Infer),
-            Box::new(i64_ty())
-        )));
-        assert!(contains_infer(&IrType::Map(
-            Box::new(IrType::Str),
-            Box::new(IrType::Infer)
-        )));
-        assert!(!contains_infer(&IrType::Map(
-            Box::new(IrType::Str),
-            Box::new(i64_ty())
-        )));
     }
 }

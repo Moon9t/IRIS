@@ -40,7 +40,7 @@ def area() -> f32 {
     val s = Shape.Circle(5.0)
     when s {
         Shape.Circle(r) => r * r,
-        Shape.Point => 0.0,
+        Shape.Point => 0.0 to f32,
     }
 }
 "#;
@@ -68,7 +68,7 @@ def area() -> f32 {
     val s = Shape.Rect(4.0, 3.0)
     when s {
         Shape.Rect(w, h) => w * h,
-        Shape.Point => 0.0,
+        Shape.Point => 0.0 to f32,
     }
 }
 "#;

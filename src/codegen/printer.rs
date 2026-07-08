@@ -383,6 +383,7 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
             var: _,
             start,
             end,
+            inclusive: _,
             body_fn,
             args,
         } => {
@@ -399,8 +400,8 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
             }
         }
 
-        IrInstr::ChanNew { result, elem_ty } => {
-            write!(out, "{} = chan_new : chan<{}>", result, elem_ty)?;
+        IrInstr::ChanNew { result, elem_ty, capacity } => {
+            write!(out, "{} = chan_new(cap: {}) : chan<{}>", result, capacity, elem_ty)?;
         }
 
         IrInstr::ChanSend { chan, value } => {

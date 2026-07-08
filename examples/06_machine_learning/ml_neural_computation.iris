@@ -14,13 +14,6 @@ def print_list(v : list<f64>) -> () {
     
 }
 def main() -> i64 {
-    val input : list<f64> = [1.0, 0.5];
-    val h1_w : list<f64> = [0.1, 0.2];
-    val h2_w : list<f64> = [0.3, -0.2];
-    val h3_w : list<f64> = [-0.1, 0.4];
-    val h1_b = 0.05;
-    val h2_b = - 0.1;
-    val h3_b = 0.15;
     val input : list<f64> = list();
     list_push(input, 1.0);
     list_push(input, 0.5);

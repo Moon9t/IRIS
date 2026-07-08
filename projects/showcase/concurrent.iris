@@ -1,0 +1,150 @@
+// concurrent.iris — Concurrent Programming Showcase
+// Demonstrates: spawn, channels, pipeline, fan-out/fan-in, parallel Monte Carlo
+//
+// NOTE: Spawn + channels use real OS threads in the interpreter.
+// The native backend (--emit binary) has pre-existing codegen issues
+// with spawn/channel — crashes with STATUS_ACCESS_VIOLATION on Windows.
+// Use --emit eval to run this showcase.
+
+bring std.fmt
+
+def section(title: str) -> i64 {
+    print("");
+    print("══════════════════════════════════════════════════════════");
+    print(concat("  ", title));
+    print("══════════════════════════════════════════════════════════");
+    0
+}
+
+// ─── Pattern 1: Channel Pipeline ────────────────────────────────
+// Three stages connected by f64 channels: generator → doubler → summer
+
+def run_pipeline(count: i64) -> f64 {
+    val c1: chan<f64> = channel();
+    val c2: chan<f64> = channel();
+    spawn {
+        var i = 1;
+        while i <= count { send(c1, to_f64(i)); i = i + 1 };
+        send(c1, -1.0)
+    };
+    spawn {
+        var running = 1;
+        while running != 0 {
+            val v = recv(c1);
+            if v < 0.0 { running = 0 } else { send(c2, v * 2.0) }
+        };
+        send(c2, -1.0)
+    };
+    var sum = 0.0; var running = 1;
+    while running != 0 {
+        val v = recv(c2);
+        if v < 0.0 { running = 0 } else { sum = sum + v }
+    };
+    sum
+}
+
+// ─── Pattern 2: Worker pool pattern ─────────────────────────────
+// Simplified fan-out: a fixed list of independent spawns
+// each doing its own share of work, results collected via channel.
+
+def parallel_sum_squares(count: i64, workers: i64) -> (f64, f64) {
+    // Build data
+    val data: list<f64> = list();
+    var i = 1;
+    while i <= count { val _ = list_push(data, to_f64(i * i)); i = i + 1 };
+    // Sequential sum for comparison
+    i = 0; var seq = 0.0;
+    while i < count { seq = seq + list_get(data, i); i = i + 1 };
+    // Parallel sum
+    val n = count; val chunk = (n + workers - 1) / workers;
+    val ch: chan<f64> = channel();
+    var w = 0;
+    while w < workers {
+        val start = w * chunk;
+        val end = if start + chunk < n { start + chunk } else { n };
+        spawn {
+            var s = 0.0; var j = start;
+            while j < end { s = s + list_get(data, j); j = j + 1 };
+            send(ch, s)
+        };
+        w = w + 1
+    };
+    var total = 0.0; w = 0;
+    while w < workers { total = total + recv(ch); w = w + 1 };
+    (total, seq)
+}
+
+// ─── Pattern 3: Parallel Monte Carlo Pi Estimation ──────────────
+// Uses a simple LCG PRNG (in pure IRIS) since builtin random() is
+// unseeded in the native backend. Each worker gets a unique seed.
+
+def lcg_next(state: i64) -> (i64, f64) {
+    val new_state = (state * 1103515245 + 12345) % 2147483648;
+    val rv = (new_state to f64) / 2147483648.0;
+    (new_state, rv)
+}
+
+def parallel_pi(total: i64, workers: i64) -> f64 {
+    val spp = total / workers;
+    val ch: chan<f64> = channel();
+    var w = 0;
+    while w < workers {
+        val w_seed = (w + 1) * 123456;
+        spawn {
+            var s = w_seed; var inside = 0; var i = 0;
+            while i < spp {
+                val (s1, x) = lcg_next(s);
+                val (s2, y) = lcg_next(s1);
+                s = s2;
+                if x * x + y * y <= 1.0 { inside = inside + 1 } else { 0 };
+                i = i + 1
+            };
+            send(ch, 4.0 * (to_f64(inside) / to_f64(spp)))
+        };
+        w = w + 1
+    };
+    var sum = 0.0; w = 0;
+    while w < workers { sum = sum + recv(ch); w = w + 1 };
+    sum / to_f64(workers)
+}
+
+// ─── Main ────────────────────────────────────────────────────────
+
+def main() -> i64 {
+    print("");
+    print("  ╔══════════════════════════════════════════╗");
+    print("  ║  IRIS Concurrent Programming Showcase   ║");
+    print("  ║  spawn · channels · pipeline · fan-in   ║");
+    print("  ╚══════════════════════════════════════════╝");
+
+    section("Pattern 1: Channel Pipeline (generate → double → sum)");
+    val pipeline_result = run_pipeline(50);
+    val pa = list(); list_push(pa, to_str(pipeline_result));
+    print(concat("  Sum of 2*(1..50) = ", fmt.sprintf("%.0f", pa)));
+    print(concat("  Expected: 2550 — Match: ", if pipeline_result == 2550.0 { "YES" } else { "NO" }));
+
+    section("Pattern 2: Fan-out/Fan-in (parallel sum of squares)");
+    print("  Input: squares of 1..1000 (1,000 elements)");
+    val (par_sum, seq_total) = parallel_sum_squares(1000, 4);
+    print(concat("  Sequential sum: ", to_str(seq_total)));
+    print(concat("  Parallel sum:   ", to_str(par_sum)));
+    print(concat("  Match: ", if seq_total == par_sum { "YES" } else { "NO" }));
+
+    section("Pattern 3: Parallel Monte Carlo Pi Estimation");
+    val total = 10000; val workers = 4;
+    print(concat("  Total samples: ", concat(to_str(total), concat(", Workers: ", to_str(workers)))));
+    val pi_est = parallel_pi(total, workers);
+    val pb = list(); list_push(pb, to_str(pi_est));
+    print(concat("  Estimated π = ", fmt.sprintf("%.6f", pb)));
+    print("  Actual π    = 3.141593");
+    val err = if pi_est > 3.141593 { pi_est - 3.141593 } else { 3.141593 - pi_est };
+    val pc = list(); list_push(pc, to_str(err));
+    print(concat("  Error       = ", fmt.sprintf("%.6f", pc)));
+
+    section("Summary");
+    print("  ✓ Pipeline: 3 stages connected by f64 channels");
+    print("  ✓ Fan-out/Fan-in: 4 workers sum chunks in parallel");
+    print("  ✓ Monte Carlo Pi: 4 workers estimate π via random sampling");
+    print("");
+    0
+}

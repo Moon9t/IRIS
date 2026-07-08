@@ -1,0 +1,9 @@
+bring std.rl
+
+def main() -> i64 {
+    val buf = replay_buffer_new(100);
+    val exp = Experience { state: list(), action: 0, reward: 1.0, next_state: list(), done: false };
+    val buf2 = replay_buffer_push(buf, exp);
+    print(concat("Buffer size: ", to_str(buf2.size)));
+    0
+}

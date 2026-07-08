@@ -1,0 +1,323 @@
+bring std.fmt
+bring std.rl
+bring std.svg
+bring std.math
+bring std.string
+
+// ── 1. Constants ──────────────────────────────────────────────────────
+
+const PI: f64 = 3.14159265358979
+const VERSION: str = "1.0.0"
+
+// ── 2. Records ────────────────────────────────────────────────────────
+
+record Point { x: f64, y: f64 }
+record Particle { pos: Point, vel: Point, mass: f64 }
+
+def move_particle(p: Particle, dt: f64) -> Particle {
+    Particle {
+        pos: Point { x: p.pos.x + p.vel.x * dt, y: p.pos.y + p.vel.y * dt },
+        vel: p.vel,
+        mass: p.mass,
+    }
+}
+
+// ── 3. Traits ─────────────────────────────────────────────────────────
+
+trait Show {
+    def show(self: Self) -> str
+}
+
+impl Show for Point {
+    def show(self: Point) -> str {
+        f"Point({self.x}, {self.y})"
+    }
+}
+
+// ── 4. Generics ──────────────────────────────────────────────────────
+
+def identity[T](x: T) -> T { x }
+def my_min[T](a: T, b: T) -> T { if a <= b { a } else { b } }
+
+// ── 5. Choice types ───────────────────────────────────────────────────
+
+choice Shape { Circle, Rect, Triangle }
+
+def shape_sides(s: Shape) -> i64 {
+    when s {
+        Shape.Circle   => 0,
+        Shape.Rect     => 4,
+        Shape.Triangle => 3,
+    }
+}
+
+// ── 6. Concurrency (spawn + channels) ─────────────────────────────────
+
+def concurrent_pipeline() -> i64 {
+    print("── Concurrency ──");
+    val tx = channel();
+    val rx = channel();
+    spawn {
+        for n in 1..6 { send(tx, n) };
+        send(tx, -1)
+    };
+    spawn {
+        var running = 1;
+        while running != 0 {
+            val v = recv(tx);
+            if v < 0 { running = 0; 0 } else { send(rx, (to_f64(v * v)) * 3.14159); 0 }
+        };
+        0
+    };
+    for i in 1..6 {
+        val res = recv(rx);
+        print(f"  worker({i}) = {res}")
+    };
+    0
+}
+
+// ── 7. AD ─────────────────────────────────────────────────────────────
+
+def ad_demo() -> i64 {
+    print("── AD ──");
+    val x = tape(3.0);
+    val w = tape(2.0);
+    val b = tape(1.0);
+    val y = (x * w) + b;
+    val loss = y * y;
+    val _ = backward(loss);
+    print(f"  grad x={grad(x)}, w={grad(w)}, b={grad(b)}");
+    0
+}
+
+// ── 8. BLAS ───────────────────────────────────────────────────────────
+
+def blas_demo() -> i64 {
+    print("── BLAS ──");
+    val a: list<f64> = list(); push(a, 1.0); push(a, 2.0); push(a, 3.0);
+    val b: list<f64> = list(); push(b, 4.0); push(b, 5.0); push(b, 6.0);
+    val dot = list_dot_blas(a, b);
+    print(f"  dot([1,2,3],[4,5,6]) = {dot}");
+    val scaled = list_scale_blas(a, 2.0);
+    print(f"  scale by 2 = [{list_get(scaled,0)}, {list_get(scaled,1)}, {list_get(scaled,2)}]");
+    val A: list<f64> = list(); push(A, 1.0); push(A, 2.0); push(A, 3.0);
+    push(A, 4.0); push(A, 5.0); push(A, 6.0);
+    val B: list<f64> = list(); push(B, 7.0); push(B, 8.0);
+    push(B, 9.0); push(B, 10.0); push(B, 11.0); push(B, 12.0);
+    val C = matmul(A, 2, 3, B, 2);
+    print(f"  matmul = [{list_get(C,0)}, {list_get(C,1)}, {list_get(C,2)}, {list_get(C,3)}]");
+    0
+}
+
+// ── 9. ML Backend ─────────────────────────────────────────────────────
+
+def ml_demo() -> i64 {
+    print("── ML ──");
+    print("  ML backends available in native compilation (IRIS_LINK_ML_SHIMS=1)");
+    print("  ONNX Runtime, LibTorch, TensorFlow, OpenBLAS");
+    0
+}
+
+// ── 10. RL ────────────────────────────────────────────────────────────
+
+def rl_demo() -> i64 {
+    print("── RL ──");
+    val init = rl.replay_buffer_new(100);
+    val s: list<f64> = list(); push(s, 0.5); push(s, 0.3);
+    val ns: list<f64> = list(); push(ns, 0.6); push(ns, 0.4);
+    val exp = rl.Experience {
+        state: s,
+        action: 1,
+        reward: 1.0,
+        next_state: ns,
+        done: false
+    };
+    val buf = rl.replay_buffer_push(init, exp);
+    val sz = buf.size;
+    print(f"  replay buffer filled = {sz}");
+    0
+}
+
+// ── 11. Error handling (option/result) ────────────────────────────────
+
+def safe_divide(a: i64, b: i64) -> option<i64> {
+    if b == 0 { none } else { some(a / b) }
+}
+
+def parse_age(s: str) -> result<i64, str> {
+    val p = parse_i64(s);
+    if is_some(p) {
+        val n = unwrap(p);
+        if n < 0 { err("negative") } else { ok(n) }
+    } else { err(concat("bad: ", s)) }
+}
+
+def error_handling_demo() -> i64 {
+    print("── Error Handling ──");
+    val r1 = safe_divide(10, 3);
+    val a = when r1 { some(v) => v, none => -1 };
+    val r2 = safe_divide(10, 0);
+    val _b = when r2 { some(v) => v, none => -1 };
+    print(f"  10/3 = {a}");
+    when parse_age("42") { ok(v) => print(f"  42 => Ok({v})"), err(e) => print(concat("  42 => Err(", concat(e, ")"))) };
+    when parse_age("abc") { ok(v) => print(f"  abc => Ok({v})"), err(e) => print(concat("  abc => Err(", concat(e, ")"))) };
+    0
+}
+
+// ── 12. Maps ──────────────────────────────────────────────────────────
+
+def map_demo() -> i64 {
+    print("── Maps ──");
+    val m = map();
+    map_set(m, "name", "IRIS");
+    map_set(m, "version", "1.0");
+    map_set(m, "year", "2026");
+    print(f"  size = {map_len(m)}");
+    val contained = map_contains(m, "name");
+    print(f"  has 'name' = {contained}");
+    0
+}
+
+// ── 13. Lambdas + Higher-order ────────────────────────────────────────
+
+def apply(f: (i64) -> i64, x: i64) -> i64 { f(x) }
+
+def lambda_demo() -> i64 {
+    print("── Lambdas ──");
+    val dbl = |x: i64| x * 2;
+    print(f"  double(21) = {apply(dbl, 21)}");
+    val add = |a: i64, b: i64| a + b;
+    print(f"  add(3,4) = {add(3, 4)}");
+    0
+}
+
+// ── 14. Loops + Lists ────────────────────────────────────────────────
+
+def loop_demo() -> i64 {
+    print("── Loops+Lists ──");
+    val nums: list<i64> = list();
+    for i in 1..6 { push(nums, i) };
+    var sum = 0;
+    for n in nums { sum = sum + n }
+    print(f"  for sum 1..5 = {sum}");
+    var i = 0;
+    var s2 = 0;
+    while i < 5 {
+        s2 = s2 + list_get(nums, i);
+        i = i + 1
+    };
+    print(f"  while sum 1..5 = {s2}");
+    0
+}
+
+// ── 15. Arrays ───────────────────────────────────────────────────────
+
+def array_demo() -> i64 {
+    print("── Arrays ──");
+    val arr = [10, 20, 30, 40, 50];
+    var s = 0;
+    for i in 0..5 { s = s + arr[i] };
+    print(f"  array sum = {s}");
+    0
+}
+
+// ── 16. F-strings + Tuples + Blocks ──────────────────────────────────
+
+def misc_demo() -> i64 {
+    print("── Misc ──");
+    val pair = (42, "hello");
+    print(f"  tuple = ({pair.0}, {pair.1})");
+    val b1 = { val a = 10; val b = 20; a + b };
+    print(f"  block = {b1}");
+    val up = to_upper("iris");
+    print(f"  upper: {up}");
+    val parts = split("a,b,c", ",");
+    val joined = join(parts, "-");
+    print(f"  split/join: {joined}");
+    0
+}
+
+// ── 17. Tensors ──────────────────────────────────────────────────────
+
+def make_list_i64(a: i64, b: i64) -> list<i64> {
+    val l: list<i64> = list(); push(l, a); push(l, b); l
+}
+
+def tensor_demo() -> i64 {
+    print("── Tensors ──");
+    val shape = make_list_i64(2, 2);
+    val t = tensor_zeros(shape);
+    val _ = tensor_set(t, make_list_i64(0, 0), 1.0);
+    val _ = tensor_set(t, make_list_i64(0, 1), 2.0);
+    val _ = tensor_set(t, make_list_i64(1, 0), 3.0);
+    val _ = tensor_set(t, make_list_i64(1, 1), 4.0);
+    val g = tensor_zeros(shape);
+    val _ = tensor_set(g, make_list_i64(0, 0), 5.0);
+    val _ = tensor_set(g, make_list_i64(0, 1), 6.0);
+    val _ = tensor_set(g, make_list_i64(1, 0), 7.0);
+    val _ = tensor_set(g, make_list_i64(1, 1), 8.0);
+    val out = tensor_add(t, g);
+    val v = tensor_get(out, make_list_i64(0, 0));
+    print(f"  t+g [0,0] = {v}");
+    val params = tensor_zeros(shape);
+    val step = tensor_sgd_step(params, g, 0.01);
+    val sv = tensor_get(step, make_list_i64(0, 0));
+    print(f"  sgd step [0,0] = {sv}");
+    0
+}
+
+// ── 18. Math ─────────────────────────────────────────────────────────
+
+def math_demo() -> i64 {
+    print("── Math ──");
+    val r = random();
+    val r100 = r * 100.0;
+    val rounded = (r100 to i64) to f64 / 100.0;
+    print(f"  random = {rounded}");
+    print(f"  pi = {PI}");
+    0
+}
+
+// ── 19. SVG ──────────────────────────────────────────────────────────
+
+def svg_demo() -> i64 {
+    print("── SVG ──");
+    val ctx = svg_new(200, 100);
+    val ctx2 = svg_rect(ctx, 10, 20, 50, 30, "blue");
+    val ctx3 = svg_line(ctx2, 10, 20, 60, 50, "red", 2.0);
+    val svg_dat = concat(ctx3.content, "</svg>\n");
+    print(f"  svg len = {len(svg_dat)}");
+    0
+}
+
+// ── 20. Generic function demo ─────────────────────────────────────────
+
+def generic_demo() -> i64 {
+    print("── Generics ──");
+    print(f"  identity(42) = {identity(42)}");
+    print(f"  min(3, 7) = {my_min(3, 7)}");
+    0
+}
+
+// ── Main ─────────────────────────────────────────────────────────────
+
+def main() -> i64 {
+    print(f"=== IRIS Omnibus {VERSION} ===");
+    val _ = concurrent_pipeline();
+    val _ = ad_demo();
+    val _ = blas_demo();
+    val _ = ml_demo();
+    val _ = rl_demo();
+    val _ = error_handling_demo();
+    val _ = map_demo();
+    val _ = lambda_demo();
+    val _ = loop_demo();
+    val _ = array_demo();
+    val _ = misc_demo();
+    val _ = tensor_demo();
+    val _ = math_demo();
+    val _ = svg_demo();
+    val _ = generic_demo();
+    print(f"=== Done ===");
+    0
+}

@@ -1,64 +1,67 @@
 // src/stdlib/crypto.iris -- IRIS standard crypto/hashing library
-// Provides hashing, encoding, and authentication helpers for ML services.
+//
+// Provides hashing, encoding, and authentication helpers for ML services and secure communication.
 
-// Generate a UUID v4 string.
+/// Generate a UUID v4 string (random).
 pub def generate_uuid() -> str {
     uuid()
 }
 
-// Alias: uuid() is also exposed directly.
+/// Alias: `uuid()` is also exposed directly.
 pub def new_uuid() -> str {
     uuid()
 }
 
-// Compute SHA-256 hash of a string.
+/// Compute SHA-256 hash of a string.
+/// Returns a 64-character hexadecimal string.
 pub def hash_sha256(data: str) -> str {
     sha256(data)
 }
 
-// Encode a string to hexadecimal.
+/// Encode a string to hexadecimal.
 pub def to_hex(data: str) -> str {
     hex_encode(data)
 }
 
-// Decode a hexadecimal string.
+/// Decode a hexadecimal string back to the original bytes.
 pub def from_hex(data: str) -> str {
     hex_decode(data)
 }
 
-// Compute a simple hash of a string (returns i64).
+/// Compute a simple hash of a string (returns i64).
+/// Suitable for hash table keys or quick checksums.
 pub def hash_code(data: str) -> i64 {
     hash(data)
 }
 
-// Encode to base64.
+/// Encode a string to base64.
 pub def to_base64(data: str) -> str {
     base64_encode(data)
 }
 
-// Decode from base64.
+/// Decode a base64 string back to the original bytes.
 pub def from_base64(data: str) -> str {
     base64_decode(data)
 }
 
-// Compute a simple HMAC-like signature: sha256(key + ":" + data).
-// For a real HMAC use an external C library via FFI; this is a lightweight
-// substitute for request signing in trusted internal services.
+/// Compute a simple HMAC-like signature: `sha256(key + ":" + data)`.
+/// For a real HMAC use an external C library via FFI; this is a lightweight
+/// substitute for request signing in trusted internal services.
 pub def hmac_simple(key: str, data: str) -> str {
     sha256(concat(concat(key, ":"), data))
 }
 
-// Verify a simple signature produced by hmac_simple.
+/// Verify a simple signature produced by `hmac_simple`.
 pub def hmac_verify(key: str, data: str, signature: str) -> bool {
     hmac_simple(key, data) == signature
 }
 
-// Build a Bearer-token Authorization header value.
+/// Build a Bearer-token Authorization header value.
 pub def bearer_token(token: str) -> str {
     concat("Bearer ", token)
 }
 
-// Build a Basic-auth header value (base64(user:pass)).
+/// Build a Basic-auth header value (base64(user:pass)).
 pub def basic_auth(user: str, pass: str) -> str {
     concat("Basic ", to_base64(concat(concat(user, ":"), pass)))
 }

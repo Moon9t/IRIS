@@ -155,12 +155,60 @@ impl UnionFind {
                 self.slots[rb] = Slot::Link(ra);
             }
             (Some(t1), Some(t2)) => {
-                if t1 != t2 {
-                    errors.push(format!("type mismatch: {:?} vs {:?}", t1, t2));
-                }
+                let merged = structural_unify(&t1, &t2, errors);
                 // Even on mismatch, keep one root to avoid further explosions.
-                self.slots[ra] = Slot::Link(rb);
+                self.slots[ra] = Slot::Root(Some(merged));
+                self.slots[rb] = Slot::Link(ra);
             }
+        }
+    }
+}
+
+fn structural_unify(t1: &IrType, t2: &IrType, errors: &mut Vec<String>) -> IrType {
+    match (t1, t2) {
+        (IrType::ResultType(ok1, err1), IrType::ResultType(ok2, err2)) => {
+            let merged_ok = structural_unify(ok1, ok2, errors);
+            let merged_err = structural_unify(err1, err2, errors);
+            IrType::ResultType(Box::new(merged_ok), Box::new(merged_err))
+        }
+        (IrType::Option(inner1), IrType::Option(inner2)) => {
+            let merged_inner = structural_unify(inner1, inner2, errors);
+            IrType::Option(Box::new(merged_inner))
+        }
+        (IrType::Tuple(elems1), IrType::Tuple(elems2)) => {
+            if elems1.len() != elems2.len() {
+                errors.push(format!("tuple length mismatch: {:?} vs {:?}", t1, t2));
+                t1.clone()
+            } else {
+                let merged = elems1.iter().zip(elems2.iter()).map(|(e1, e2)| structural_unify(e1, e2, errors)).collect();
+                IrType::Tuple(merged)
+            }
+        }
+        (IrType::List(inner1), IrType::List(inner2)) => {
+            let merged = structural_unify(inner1, inner2, errors);
+            IrType::List(Box::new(merged))
+        }
+        (IrType::Map(k1, v1), IrType::Map(k2, v2)) => {
+            let mk = structural_unify(k1, k2, errors);
+            let mv = structural_unify(v1, v2, errors);
+            IrType::Map(Box::new(mk), Box::new(mv))
+        }
+        (IrType::Fn { params: p1, ret: r1 }, IrType::Fn { params: p2, ret: r2 }) => {
+            if p1.len() != p2.len() {
+                errors.push(format!("fn param length mismatch: {:?} vs {:?}", t1, t2));
+                t1.clone()
+            } else {
+                let mp = p1.iter().zip(p2.iter()).map(|(e1, e2)| structural_unify(e1, e2, errors)).collect();
+                let mr = structural_unify(r1, r2, errors);
+                IrType::Fn { params: mp, ret: Box::new(mr) }
+            }
+        }
+        (IrType::Infer, other) | (other, IrType::Infer) => other.clone(),
+        (a, b) => {
+            if a != b {
+                errors.push(format!("type mismatch: {:?} vs {:?}", a, b));
+            }
+            a.clone()
         }
     }
 }
@@ -366,9 +414,14 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
                         }
                     }
                     _ => {
+                        let resolved = if let Some(&s) = slots.get(&vid) {
+                            uf.get_type(s).unwrap_or_else(|| default_infer(&ty))
+                        } else {
+                            default_infer(&ty)
+                        };
                         module.functions[fn_idx]
                             .value_types
-                            .insert(vid, default_infer(&ty));
+                            .insert(vid, resolved);
                     }
                 }
             }
@@ -395,9 +448,10 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
     for vid in value_ids {
         if let Some(ty) = module.functions[fn_idx].value_types.get(&vid).cloned() {
             if local_contains_infer(&ty) {
+                let new_ty = default_infer(&ty);
                 module.functions[fn_idx]
                     .value_types
-                    .insert(vid, default_infer(&ty));
+                    .insert(vid, new_ty);
             }
         }
     }
@@ -411,6 +465,20 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
         for pi in 0..num_params {
             let param = &mut module.functions[fn_idx].blocks[bi].params[pi];
             if let Some(resolved) = value_types.get(&param.id) {
+                param.ty = resolved.clone();
+            }
+        }
+    }
+
+    // Sweep func.params to match entry block param resolved types.
+    let bp_ids: Vec<ValueId> = module.functions[fn_idx]
+        .blocks
+        .first()
+        .map(|b| b.params.iter().map(|p| p.id).collect())
+        .unwrap_or_default();
+    for (pi, param) in module.functions[fn_idx].params.iter_mut().enumerate() {
+        if pi < bp_ids.len() {
+            if let Some(resolved) = value_types.get(&bp_ids[pi]) {
                 param.ty = resolved.clone();
             }
         }
@@ -886,6 +954,7 @@ fn collect_constraints(
             closure,
             args,
             result_ty,
+            ..
         } => {
             // If the call produces a result, register its expected type.
             if let Some(rid) = result {

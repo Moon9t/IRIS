@@ -1,0 +1,119 @@
+// ============================================================================
+// IRIS CSV Data Processor
+// Parses CSV, computes per-column stats, detects outliers, exports JSON.
+// ============================================================================
+bring std.csv
+bring std.fs
+bring std.fmt
+
+def format_num(x: f64) -> str {
+    val s = to_str(x);
+    val dot = find(s, ".");
+    if is_some(dot) {
+        val d = unwrap(dot);
+        if len(s) > d + 4 { slice(s, 0, d + 4) } else { s }
+    } else { s }
+}
+
+def stats(col: list<f64>) -> i64 {
+    val n = list_len(col);
+    if n == 0 { print("  empty column"); return };
+    var sum = 0.0;
+    var min_v = list_get(col, 0);
+    var max_v = list_get(col, 0);
+    var i = 0;
+    while i < n {
+        val v = list_get(col, i);
+        sum = sum + v;
+        if v < min_v { min_v = v };
+        if v > max_v { max_v = v };
+        i = i + 1
+    };
+    val mean = sum / to_f64(n);
+    var var_sum = 0.0;
+    i = 0;
+    while i < n {
+        val d = list_get(col, i) - mean;
+        var_sum = var_sum + d * d;
+        i = i + 1
+    };
+    val stddev = sqrt(var_sum / to_f64(n));
+    
+    print(concat("  Count: ", to_str(n)));
+    print(concat("  Mean:  ", format_num(mean)));
+    print(concat("  Std:   ", format_num(stddev)));
+    print(concat("  Min:   ", format_num(min_v)));
+    print(concat("  Max:   ", format_num(max_v)));
+    
+    // Outlier detection (z-score)
+    var outliers = 0;
+    i = 0;
+    while i < n {
+        val v = list_get(col, i);
+        val z = (v - mean) / stddev;
+        if z > 2.0 || z < -2.0 { outliers = outliers + 1 };
+        i = i + 1
+    };
+    print(concat("  Outliers: ", to_str(outliers)));
+    0
+}
+
+def main() -> i64 {
+    val a = args();
+    if list_len(a) < 2 { print("Usage: csvproc <file.csv>"); return 1 };
+    
+    val f = file_read_all(list_get(a, 1));
+    if is_err(f) { print("Cannot read file"); return 1 };
+    
+    val lines = split(unwrap(f), "\n");
+    if list_len(lines) < 2 { print("CSV must have header + data"); return 1 };
+    
+    val header = csv_parse_row(list_get(lines, 0));
+    val ncols = list_len(header);
+    print(concat("File: ", list_get(a, 1)));
+    print(concat("Columns: ", to_str(ncols)));
+    
+    val col_data: list<list<f64>> = list();
+    var i = 0;
+    while i < ncols { list_push(col_data, list()); i = i + 1 };
+    
+    i = 1;
+    while i < list_len(lines) {
+        val line = trim(list_get(lines, i));
+        if line != "" {
+            val row = csv_parse_row(line);
+            var j = 0;
+            while j < ncols && j < list_len(row) {
+                val parsed = parse_f64(list_get(row, j));
+                if is_some(parsed) {
+                    val col = list_get(col_data, j);
+                    list_push(col, unwrap(parsed))
+                };
+                j = j + 1
+            }
+        };
+        i = i + 1
+    };
+    
+    print("");
+    i = 0;
+    while i < ncols {
+        print(concat("Column: ", list_get(header, i)));
+        stats(list_get(col_data, i));
+        print("");
+        i = i + 1
+    };
+    
+    // Export JSON report
+    val json = list();
+    list_push(json, concat("{\"file\":\"", concat(list_get(a, 1), "\"")));
+    list_push(json, concat(",\"rows\":", to_str(list_len(lines) - 1)));
+    list_push(json, concat(",\"columns\":", to_str(ncols)));
+    list_push(json, "}");
+    var report = "";
+    var j = 0;
+    while j < list_len(json) { report = concat(report, list_get(json, j)); j = j + 1 };
+    file_write_all("csv_report.json", report);
+    print("Report: csv_report.json");
+    0
+}

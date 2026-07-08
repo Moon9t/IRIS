@@ -59,32 +59,6 @@ use std::collections::{HashMap, HashSet};
 thread_local! {
     static CURRENT_BRING_PREFIXES: RefCell<Vec<Vec<String>>> = const { RefCell::new(Vec::new()) };
     static CURRENT_BRING_MAPPINGS: RefCell<Vec<HashMap<String, String>>> = const { RefCell::new(Vec::new()) };
-    static CURRENT_FUNCTION_SIGNATURES: RefCell<HashMap<String, Vec<IrType>>> = RefCell::new(HashMap::new());
-    static CURRENT_CALLER_PREFIX: RefCell<Option<String>> = const { RefCell::new(None) };
-    static CURRENT_PUB_MAP: RefCell<HashMap<String, bool>> = RefCell::new(HashMap::new());
-}
-
-fn get_module_prefix(name: &str) -> Option<&str> {
-    if let Some(idx) = name.find("__") {
-        Some(&name[..idx])
-    } else {
-        None
-    }
-}
-
-fn is_visible_global(callee_name: &str) -> bool {
-    CURRENT_PUB_MAP.with(|map| {
-        if let Some(&is_pub) = map.borrow().get(callee_name) {
-            if is_pub {
-                return true;
-            }
-            let caller_prefix = CURRENT_CALLER_PREFIX.with(|prefix| prefix.borrow().clone());
-            let callee_prefix = get_module_prefix(callee_name).map(|s| s.to_string());
-            caller_prefix == callee_prefix
-        } else {
-            true
-        }
-    })
 }
 
 fn set_current_brings(brings: &[crate::parser::ast::AstBring]) {
@@ -150,10 +124,9 @@ pub(crate) fn resolve_brought_name(name: &str, module: &IrModule) -> String {
         if let Some(prefixes) = prefixes_stack.borrow().last() {
             for prefix in prefixes.iter() {
                 let candidate = format!("{}__{}", prefix, name);
-                if (module.struct_def(&candidate).is_some()
+                if module.struct_def(&candidate).is_some()
                     || module.enum_def(&candidate).is_some()
-                    || module.type_alias(&candidate).is_some())
-                    && is_visible_global(&candidate)
+                    || module.type_alias(&candidate).is_some()
                 {
                     return Some(candidate);
                 }
@@ -164,27 +137,26 @@ pub(crate) fn resolve_brought_name(name: &str, module: &IrModule) -> String {
     if let Some(res) = resolved {
         return res;
     }
-    if (module.struct_def(name).is_some()
+    if module.struct_def(name).is_some()
         || module.enum_def(name).is_some()
-        || module.type_alias(name).is_some())
-        && is_visible_global(name)
+        || module.type_alias(name).is_some()
     {
         return name.to_string();
     }
     // Fallback: scan all type registries for any mangled candidate matching `*__name`.
     let suffix = format!("__{}", name);
     for key in module.struct_defs.keys() {
-        if key.ends_with(&suffix) && is_visible_global(key) {
+        if key.ends_with(&suffix) {
             return key.clone();
         }
     }
     for key in module.enum_defs.keys() {
-        if key.ends_with(&suffix) && is_visible_global(key) {
+        if key.ends_with(&suffix) {
             return key.clone();
         }
     }
     for key in module.type_aliases.keys() {
-        if key.ends_with(&suffix) && is_visible_global(key) {
+        if key.ends_with(&suffix) {
             return key.clone();
         }
     }
@@ -221,46 +193,10 @@ fn pattern_has_bindings(pattern: &AstWhenPattern) -> bool {
 /// Lower an `AstModule` to an `IrModule`.
 pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError> {
     set_current_brings(&ast.brings);
-
-    let mut pm = HashMap::new();
-    for func in &ast.functions {
-        pm.insert(func.name.name.clone(), func.is_pub);
-    }
-    for s in &ast.structs {
-        pm.insert(s.name.name.clone(), s.is_pub);
-    }
-    for e in &ast.enums {
-        pm.insert(e.name.name.clone(), e.is_pub);
-    }
-    for c in &ast.consts {
-        pm.insert(c.name.name.clone(), c.is_pub);
-    }
-    for ta in &ast.type_aliases {
-        pm.insert(ta.name.clone(), ta.is_pub);
-    }
-    for impl_def in &ast.impls {
-        for method in &impl_def.methods {
-            let mangled = if impl_def.trait_name.is_empty() {
-                format!("{}__{}", impl_def.type_name, method.name.name)
-            } else {
-                format!(
-                    "{}__{}__{}",
-                    impl_def.trait_name, impl_def.type_name, method.name.name
-                )
-            };
-            pm.insert(mangled, method.is_pub);
-        }
-    }
-
-    CURRENT_PUB_MAP.with(|map| *map.borrow_mut() = pm);
-
     struct ScopeGuard;
     impl Drop for ScopeGuard {
         fn drop(&mut self) {
             clear_current_brings();
-            CURRENT_FUNCTION_SIGNATURES.with(|sigs| sigs.borrow_mut().clear());
-            CURRENT_PUB_MAP.with(|map| map.borrow_mut().clear());
-            CURRENT_CALLER_PREFIX.with(|prefix| *prefix.borrow_mut() = None);
         }
     }
     let _guard = ScopeGuard;
@@ -323,15 +259,6 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
                 ret_ty = IrType::Chan(Box::new(ret_ty));
             }
             fn_sigs.insert(func.name.name.clone(), ret_ty);
-
-            let param_tys: Vec<IrType> = func
-                .params
-                .iter()
-                .map(|p| lower_type_with_structs(&p.ty, &module))
-                .collect();
-            CURRENT_FUNCTION_SIGNATURES.with(|sigs| {
-                sigs.borrow_mut().insert(func.name.name.clone(), param_tys);
-            });
         } else {
             generic_fn_map.insert(func.name.name.clone(), func.clone());
         }
@@ -422,19 +349,6 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
                 ret_ty = IrType::Chan(Box::new(ret_ty));
             }
             fn_sigs.insert(mangled.clone(), ret_ty);
-
-            let mut param_tys: Vec<IrType> = Vec::new();
-            for param in &method.params {
-                if param.name.name == "self" {
-                    param_tys.push(dispatch_ty.clone());
-                } else {
-                    param_tys.push(lower_type_with_structs(&param.ty, &module));
-                }
-            }
-            CURRENT_FUNCTION_SIGNATURES.with(|sigs| {
-                sigs.borrow_mut().insert(mangled.clone(), param_tys);
-            });
-
             if impl_def.trait_name.is_empty() {
                 // Register in struct_method_map for obj.method() dispatch.
                 struct_method_map
@@ -483,11 +397,6 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
         let ret_ty = lower_type_with_structs(&ext.ret_ty, &module);
         // Register in fn_sigs so lower_call resolves the correct return type.
         fn_sigs.insert(ext.name.name.clone(), ret_ty.clone());
-
-        CURRENT_FUNCTION_SIGNATURES.with(|sigs| {
-            sigs.borrow_mut()
-                .insert(ext.name.name.clone(), param_types.clone());
-        });
         module.extern_fns.push(crate::ir::module::IrExternFn {
             name: ext.name.name.clone(),
             param_types,
@@ -498,6 +407,8 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
     // Shared monomorphization state across all top-level function lowerings.
     let mono_cache = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new()));
     let mono_sigs = std::rc::Rc::new(std::cell::RefCell::new(HashMap::new()));
+    // Shared lambda counter across all top-level function lowerings ensures unique names.
+    let lambda_counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
 
     // 4. Lower all non-generic function definitions (including impl methods).
     let mut all_lifted: Vec<crate::ir::function::IrFunction> = Vec::new();
@@ -515,6 +426,7 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
             mono_sigs.clone(),
             trait_dispatch.clone(),
             fn_defaults.clone(),
+            lambda_counter.clone(),
         )?;
         module
             .add_function(ir_func)
@@ -526,10 +438,7 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
     }
     // Add all lambda-lifted functions.
     for lf in all_lifted {
-        // Skip if already added (duplicate lambda name guard).
-        if module.function_by_name(&lf.name).is_none() {
-            let _ = module.add_function(lf);
-        }
+        let _ = module.add_function(lf);
     }
     Ok(module)
 }
@@ -600,13 +509,12 @@ impl<'m> Lowerer<'m> {
             if let Some(prefixes) = prefixes_stack.borrow().last() {
                 for prefix in prefixes.iter() {
                     let candidate = format!("{}__{}", prefix, name);
-                    if (self.fn_sigs.contains_key(&candidate)
+                    if self.fn_sigs.contains_key(&candidate)
                         || self.mono_sigs.borrow().contains_key(&candidate)
                         || self.const_defs.contains_key(&candidate)
                         || self.module.struct_def(&candidate).is_some()
                         || self.module.enum_def(&candidate).is_some()
-                        || self.module.type_alias(&candidate).is_some())
-                        && is_visible_global(&candidate)
+                        || self.module.type_alias(&candidate).is_some()
                     {
                         return Some(candidate);
                     }
@@ -617,13 +525,12 @@ impl<'m> Lowerer<'m> {
         if let Some(res) = resolved {
             return res;
         }
-        if (self.fn_sigs.contains_key(name)
+        if self.fn_sigs.contains_key(name)
             || self.mono_sigs.borrow().contains_key(name)
             || self.const_defs.contains_key(name)
             || self.module.struct_def(name).is_some()
             || self.module.enum_def(name).is_some()
-            || self.module.type_alias(name).is_some())
-            && is_visible_global(name)
+            || self.module.type_alias(name).is_some()
         {
             return name.to_string();
         }
@@ -634,17 +541,17 @@ impl<'m> Lowerer<'m> {
         // `ml__xavier_init` after mangling).
         let suffix = format!("__{}", name);
         for key in self.fn_sigs.keys() {
-            if key.ends_with(&suffix) && is_visible_global(key) {
+            if key.ends_with(&suffix) {
                 return key.clone();
             }
         }
         for key in self.mono_sigs.borrow().keys() {
-            if key.ends_with(&suffix) && is_visible_global(key) {
+            if key.ends_with(&suffix) {
                 return key.clone();
             }
         }
         for key in self.const_defs.keys() {
-            if key.ends_with(&suffix) && is_visible_global(key) {
+            if key.ends_with(&suffix) {
                 return key.clone();
             }
         }
@@ -834,80 +741,15 @@ impl<'m> Lowerer<'m> {
                 // create a first-class function reference via MakeClosure.
                 if !self.scope.contains_key(&resolved_name) {
                     if let Some(ret_ty) = self.fn_sigs.get(&resolved_name).cloned() {
-                        let param_tys = CURRENT_FUNCTION_SIGNATURES
-                            .with(|sigs| sigs.borrow().get(&resolved_name).cloned())
-                            .unwrap_or_default();
-
-                        // Generate a unique name for the wrapper lambda
-                        let counter = self.lambda_counter.get();
-                        self.lambda_counter.set(counter + 1);
-                        let wrapper_fn_name = format!("__lambda_wrap_{}", counter);
-
-                        // Build parameters for the wrapper:
-                        let mut wrapper_params = Vec::new();
-                        for (i, ty) in param_tys.iter().enumerate() {
-                            wrapper_params.push(crate::ir::function::Param {
-                                name: format!("arg{}", i),
-                                ty: ty.clone(),
-                            });
-                        }
-
-                        let mut wrapper_builder = IrFunctionBuilder::new(
-                            &wrapper_fn_name,
-                            wrapper_params.clone(),
-                            ret_ty.clone(),
-                        );
-                        let entry = wrapper_builder.create_block(Some("entry"));
-                        wrapper_builder.set_current_block(entry);
-
-                        // Fetch block param values (corresponding to wrapper_params)
-                        let mut call_args = Vec::new();
-                        for (i, ty) in param_tys.iter().enumerate() {
-                            let arg_val = wrapper_builder.add_block_param(
-                                entry,
-                                Some(&format!("arg{}", i)),
-                                ty.clone(),
-                            );
-                            call_args.push(arg_val);
-                        }
-
-                        // Emit a Call instruction to the original named function
-                        let call_result = wrapper_builder.fresh_value();
-                        wrapper_builder.push_instr(
-                            IrInstr::Call {
-                                result: Some(call_result),
-                                callee: resolved_name.clone(),
-                                args: call_args,
-                                result_ty: Some(ret_ty.clone()),
-                            },
-                            Some(ret_ty.clone()),
-                        );
-
-                        // Emit Return instruction
-                        wrapper_builder.push_instr(
-                            IrInstr::Return {
-                                values: vec![call_result],
-                            },
-                            None,
-                        );
-                        wrapper_builder.seal_unterminated_blocks();
-
-                        let mut ir_func = wrapper_builder.build();
-                        ir_func.capture_count = 0;
-
-                        // Register the wrapper function in lifted_fns
-                        self.lifted_fns.borrow_mut().push(ir_func);
-
-                        // Emit MakeClosure for the wrapper function
                         let fn_ty = IrType::Fn {
-                            params: param_tys.clone(),
+                            params: vec![], // param types not tracked in fn_sigs
                             ret: Box::new(ret_ty.clone()),
                         };
                         let result = self.builder.fresh_value();
                         self.builder.push_instr(
                             IrInstr::MakeClosure {
                                 result,
-                                fn_name: wrapper_fn_name,
+                                fn_name: resolved_name,
                                 captures: vec![],
                                 result_ty: fn_ty.clone(),
                             },
@@ -1013,7 +855,7 @@ impl<'m> Lowerer<'m> {
                     }
                     _ => {
                         // Require operand types to match for all other scalar binops.
-                        if lhs_ty != IrType::Infer && rhs_ty != IrType::Infer && lhs_ty != rhs_ty {
+                        if lhs_ty != rhs_ty {
                             return Err(LowerError::TypeMismatch {
                                 expected: format!("{}", lhs_ty),
                                 found: format!("{}", rhs_ty),
@@ -1673,53 +1515,9 @@ impl<'m> Lowerer<'m> {
                         let variants = variants.clone();
                         if let Some(variant_idx) = variants.iter().position(|v| v == method) {
                             // This is an enum variant constructor with data.
-                            let variant_field_types =
-                                self.module.enum_variant_fields(&base_resolved_enum);
-                            let empty_fields: Vec<IrType> = Vec::new();
-                            let field_tys = variant_field_types
-                                .and_then(|v| v.get(variant_idx))
-                                .unwrap_or(&empty_fields);
                             let mut field_vals = Vec::with_capacity(args.len());
-                            for (i, arg) in args.iter().enumerate() {
-                                let (mut v, ty) = self.lower_expr(arg)?;
-                                if i < field_tys.len() {
-                                    let declared_ty = &field_tys[i];
-                                    match (declared_ty, &ty) {
-                                        (
-                                            IrType::Scalar(DType::F32),
-                                            IrType::Scalar(DType::F64),
-                                        ) => {
-                                            let cast = self.builder.fresh_value();
-                                            self.builder.push_instr(
-                                                IrInstr::Cast {
-                                                    result: cast,
-                                                    operand: v,
-                                                    from_ty: ty.clone(),
-                                                    to_ty: IrType::Scalar(DType::F32),
-                                                },
-                                                Some(IrType::Scalar(DType::F32)),
-                                            );
-                                            v = cast;
-                                        }
-                                        (
-                                            IrType::Scalar(DType::F64),
-                                            IrType::Scalar(DType::F32),
-                                        ) => {
-                                            let cast = self.builder.fresh_value();
-                                            self.builder.push_instr(
-                                                IrInstr::Cast {
-                                                    result: cast,
-                                                    operand: v,
-                                                    from_ty: ty.clone(),
-                                                    to_ty: IrType::Scalar(DType::F64),
-                                                },
-                                                Some(IrType::Scalar(DType::F64)),
-                                            );
-                                            v = cast;
-                                        }
-                                        _ => {}
-                                    }
-                                }
+                            for arg in args {
+                                let (v, _) = self.lower_expr(arg)?;
                                 field_vals.push(v);
                             }
                             let result_ty = IrType::Enum {
@@ -1746,52 +1544,9 @@ impl<'m> Lowerer<'m> {
                     if let Some(variants) = self.module.enum_def(&enum_name) {
                         let variants = variants.clone();
                         if let Some(variant_idx) = variants.iter().position(|v| v == method) {
-                            let variant_field_types = self.module.enum_variant_fields(&enum_name);
-                            let empty_fields: Vec<IrType> = Vec::new();
-                            let field_tys = variant_field_types
-                                .and_then(|v| v.get(variant_idx))
-                                .unwrap_or(&empty_fields);
                             let mut field_vals = Vec::with_capacity(args.len());
-                            for (i, arg) in args.iter().enumerate() {
-                                let (mut v, ty) = self.lower_expr(arg)?;
-                                if i < field_tys.len() {
-                                    let declared_ty = &field_tys[i];
-                                    match (declared_ty, &ty) {
-                                        (
-                                            IrType::Scalar(DType::F32),
-                                            IrType::Scalar(DType::F64),
-                                        ) => {
-                                            let cast = self.builder.fresh_value();
-                                            self.builder.push_instr(
-                                                IrInstr::Cast {
-                                                    result: cast,
-                                                    operand: v,
-                                                    from_ty: ty.clone(),
-                                                    to_ty: IrType::Scalar(DType::F32),
-                                                },
-                                                Some(IrType::Scalar(DType::F32)),
-                                            );
-                                            v = cast;
-                                        }
-                                        (
-                                            IrType::Scalar(DType::F64),
-                                            IrType::Scalar(DType::F32),
-                                        ) => {
-                                            let cast = self.builder.fresh_value();
-                                            self.builder.push_instr(
-                                                IrInstr::Cast {
-                                                    result: cast,
-                                                    operand: v,
-                                                    from_ty: ty.clone(),
-                                                    to_ty: IrType::Scalar(DType::F64),
-                                                },
-                                                Some(IrType::Scalar(DType::F64)),
-                                            );
-                                            v = cast;
-                                        }
-                                        _ => {}
-                                    }
-                                }
+                            for arg in args {
+                                let (v, _) = self.lower_expr(arg)?;
                                 field_vals.push(v);
                             }
                             let result_ty = IrType::Enum {
@@ -1843,9 +1598,48 @@ impl<'m> Lowerer<'m> {
                     }
                 };
 
-                // Build the mangled function name `TypeName__method`.
-                // If not found in fn_sigs, check trait dispatch for `Trait__TypeName__method`.
+                // Check if `method` is a struct field with a function type.
+                // If so, extract the field and call it as a closure.
                 let struct_mangled = format!("{}__{}", type_name, method);
+                if !self.fn_sigs.contains_key(&struct_mangled) {
+                    if let Some(fields) = self.module.struct_def(&type_name) {
+                        if let Some((_, field_ty)) = fields.iter().find(|(name, _)| name == method) {
+                            if let IrType::Fn { params: _, ret } = field_ty {
+                                let field_val = self.builder.fresh_value();
+                                self.builder.push_instr(
+                                    IrInstr::GetField {
+                                        result: field_val,
+                                        base: base_val,
+                                        field_index: fields.iter().position(|(n, _)| n == method).unwrap(),
+                                        result_ty: field_ty.clone(),
+                                    },
+                                    Some(field_ty.clone()),
+                                );
+                                let mut arg_vals = Vec::with_capacity(args.len());
+                                for arg in args {
+                                    let (v, _) = self.lower_expr(arg)?;
+                                    arg_vals.push(v);
+                                }
+                                let ret_ty = *ret.clone();
+                                let result = self.builder.fresh_value();
+                                // Regular function via closure field: no env pointer.
+                                self.builder.push_instr(
+                                    IrInstr::CallClosure {
+                                        result: Some(result),
+                                        closure: field_val,
+                                        args: arg_vals,
+                                        result_ty: ret_ty.clone(),
+                                        pass_env: false,
+                                    },
+                                    Some(ret_ty.clone()),
+                                );
+                                return Ok((result, ret_ty));
+                            }
+                        }
+                    }
+                }
+
+                // Normal method dispatch: find the mangled function `TypeName__method`.
                 let mangled = if self.fn_sigs.contains_key(&struct_mangled) {
                     struct_mangled
                 } else if let Some(impls) = self.trait_dispatch.get(method) {
@@ -2046,11 +1840,29 @@ impl<'m> Lowerer<'m> {
 
         // Built-in: channel() → ChanNew
         if callee.name == "channel" {
-            let elem_ty = IrType::Infer;
+            let elem_ty = if let Some(IrType::Chan(inner)) = &self.binding_ty {
+                (**inner).clone()
+            } else {
+                IrType::Infer
+            };
             let chan_ty = IrType::Chan(Box::new(elem_ty.clone()));
+            let capacity_val = if args.len() == 1 {
+                self.lower_expr(&args[0])?.0
+            } else {
+                let dummy = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ConstInt {
+                        result: dummy,
+                        value: -1,
+                        ty: IrType::Scalar(DType::I64),
+                    },
+                    Some(IrType::Scalar(DType::I64)),
+                );
+                dummy
+            };
             let result = self.builder.fresh_value();
             self.builder
-                .push_instr(IrInstr::ChanNew { result, elem_ty }, Some(chan_ty.clone()));
+                .push_instr(IrInstr::ChanNew { result, elem_ty, capacity: capacity_val }, Some(chan_ty.clone()));
             return Ok((result, chan_ty));
         }
 
@@ -2668,6 +2480,7 @@ impl<'m> Lowerer<'m> {
                     closure: closure_val,
                     args: arg_vals,
                     result_ty: ret_ty.clone(),
+                    pass_env: true,
                 },
                 Some(ret_ty.clone()),
             );
@@ -2754,28 +2567,6 @@ impl<'m> Lowerer<'m> {
                 Some(IrType::Scalar(DType::F64)),
             );
             return Ok((result, IrType::Scalar(DType::F64)));
-        }
-
-        // Built-in: to_i64(v) → Cast to i64
-        if callee.name == "to_i64" {
-            if args.len() != 1 {
-                return Err(LowerError::Unsupported {
-                    detail: "to_i64() requires exactly 1 argument".into(),
-                    span,
-                });
-            }
-            let (operand, from_ty) = self.lower_expr(&args[0])?;
-            let result = self.builder.fresh_value();
-            self.builder.push_instr(
-                IrInstr::Cast {
-                    result,
-                    operand,
-                    from_ty,
-                    to_ty: IrType::Scalar(DType::I64),
-                },
-                Some(IrType::Scalar(DType::I64)),
-            );
-            return Ok((result, IrType::Scalar(DType::I64)));
         }
 
         // Built-in: format("...", args...) — split on "{}" and concat with args
@@ -3949,18 +3740,12 @@ impl<'m> Lowerer<'m> {
                 });
             }
             let (msg, _) = self.lower_expr(&args[0])?;
-            self.builder.push_instr(IrInstr::Panic { msg }, None);
+            if !self.builder.is_current_block_terminated() {
+                self.builder.push_instr(IrInstr::Panic { msg }, None);
+            }
             // Return a dummy value so the type-checker is happy.
             let dummy = self.builder.fresh_value();
             let ty = IrType::Scalar(DType::I64);
-            self.builder.push_instr(
-                IrInstr::ConstInt {
-                    result: dummy,
-                    value: 0,
-                    ty: ty.clone(),
-                },
-                Some(ty.clone()),
-            );
             return Ok((dummy, ty));
         }
 
@@ -4150,6 +3935,7 @@ impl<'m> Lowerer<'m> {
                     closure: closure_val,
                     args: vec![f_plus_call_arg],
                     result_ty: ret_ty.clone(),
+                    pass_env: true,
                 },
                 Some(ret_ty.clone()),
             );
@@ -4176,6 +3962,7 @@ impl<'m> Lowerer<'m> {
                     closure: closure_val,
                     args: vec![f_minus_call_arg],
                     result_ty: ret_ty.clone(),
+                    pass_env: true,
                 },
                 Some(ret_ty.clone()),
             );
@@ -4748,7 +4535,6 @@ impl<'m> Lowerer<'m> {
                 "str_reverse" => Some(("str_reverse", IrType::Str)),
 
                 // ── Phase 105: Async/Concurrency extensions ──
-                "chan_try_recv" => Some(("chan_try_recv", IrType::Scalar(DType::I64))),
                 "chan_len" => Some(("chan_len", IrType::Scalar(DType::I64))),
                 "select" => Some(("select", IrType::Scalar(DType::I64))),
                 "timeout" => Some(("timeout", IrType::Scalar(DType::Bool))),
@@ -4826,6 +4612,12 @@ impl<'m> Lowerer<'m> {
                 "uuid" => Some(("uuid", IrType::Str)),
                 "sha256" => Some(("sha256", IrType::Str)),
                 "hex_encode" => Some(("hex_encode", IrType::Str)),
+
+                // ── File Stream API ──
+                "file_open" => Some(("file_open", IrType::Scalar(DType::I64))),
+                "file_close" => Some(("file_close", IrType::Scalar(DType::Bool))),
+                "file_read" => Some(("file_read", IrType::Str)),
+                "file_write" => Some(("file_write", IrType::Scalar(DType::Bool))),
                 "hex_decode" => Some(("hex_decode", IrType::Str)),
 
                 // ── Phase 105: String extras ──
@@ -4918,6 +4710,34 @@ impl<'m> Lowerer<'m> {
 
                 _ => None,
             };
+
+            // Special handling: chan_try_recv — use the channel's element type.
+            if callee.name == "chan_try_recv" {
+                if args.len() != 1 {
+                    return Err(LowerError::Unsupported {
+                        detail: "chan_try_recv() requires exactly 1 argument".into(),
+                        span,
+                    });
+                }
+                let (chan_val, chan_ty) = self.lower_expr(&args[0])?;
+                let elem_ty = match &chan_ty {
+                    IrType::Chan(elem) => (**elem).clone(),
+                    _ => IrType::Infer,
+                };
+                let ret_ty = IrType::Option(Box::new(elem_ty));
+                let result = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::BuiltinCall {
+                        result,
+                        name: "chan_try_recv".to_string(),
+                        args: vec![chan_val],
+                        result_ty: ret_ty.clone(),
+                    },
+                    Some(ret_ty.clone()),
+                );
+                return Ok((result, ret_ty));
+            }
+
             if let Some((rt_name, ret_ty)) = builtin_info {
                 let mut arg_vals = Vec::with_capacity(args.len());
                 for arg in args {
@@ -5011,6 +4831,7 @@ impl<'m> Lowerer<'m> {
                     subs,
                     self.trait_dispatch.clone(),
                     self.fn_defaults.clone(),
+                    self.lambda_counter.clone(),
                 )?;
 
                 self.lifted_fns.borrow_mut().push(ir_func);
@@ -5278,68 +5099,11 @@ impl<'m> Lowerer<'m> {
             self.scope = outer_scope.clone();
             let then_result = self.lower_block(then_blk)?;
             let then_scope = self.scope.clone();
-            let then_terminated = self.builder.is_current_block_terminated();
-            let then_current_bb = self.builder.current_block();
-            self.scope = outer_scope.clone();
-
-            // Lower ELSE branch.
-            self.builder.set_current_block(else_bb);
-            self.scope = outer_scope.clone();
-            let else_result = self.lower_block(else_blk)?;
-            let else_scope = self.scope.clone();
-            let else_terminated = self.builder.is_current_block_terminated();
-            let else_current_bb = self.builder.current_block();
-            self.scope = outer_scope.clone();
-
-            // Determine if both branches produced a value.
-            let has_value = then_result.is_some() && else_result.is_some();
-            let result_ty = if has_value {
-                let t1 = &then_result.as_ref().unwrap().1;
-                let t2 = &else_result.as_ref().unwrap().1;
-                let mut resolved_ty = t1.clone();
-                match (t1, t2) {
-                    (IrType::Scalar(DType::F32), IrType::Scalar(DType::F64)) => {
-                        resolved_ty = IrType::Scalar(DType::F64);
-                    }
-                    (IrType::Scalar(DType::F64), IrType::Scalar(DType::F32)) => {
-                        resolved_ty = IrType::Scalar(DType::F64);
-                    }
-                    _ => {}
-                }
-                resolved_ty
-            } else {
-                unit_ty.clone()
-            };
-
-            // Emit Br instruction for THEN branch
-            if !then_terminated {
-                self.builder.set_current_block(then_current_bb);
-                let mut then_val = then_result
+            if !self.builder.is_current_block_terminated() {
+                let mut then_args = vec![then_result
                     .as_ref()
-                    .map(|(val, _)| *val)
-                    .unwrap_or(unit_val);
-                if has_value {
-                    let t1 = &then_result.as_ref().unwrap().1;
-                    if let (IrType::Scalar(DType::F32), IrType::Scalar(DType::F64)) =
-                        (t1, &result_ty)
-                    {
-                        let cast = self.builder.fresh_value();
-                        self.builder.push_instr(
-                            IrInstr::Cast {
-                                result: cast,
-                                operand: then_val,
-                                from_ty: t1.clone(),
-                                to_ty: IrType::Scalar(DType::F64),
-                            },
-                            Some(IrType::Scalar(DType::F64)),
-                        );
-                        then_val = cast;
-                    }
-                } else {
-                    then_val = unit_val;
-                }
-
-                let mut then_args = vec![then_val];
+                    .map(|(then_val, _)| *then_val)
+                    .unwrap_or(unit_val)];
                 for name in &rebound_names {
                     let rebound_val = then_scope
                         .get(name)
@@ -5356,36 +5120,18 @@ impl<'m> Lowerer<'m> {
                     None,
                 );
             }
+            self.scope = outer_scope.clone();
 
-            // Emit Br instruction for ELSE branch
-            if !else_terminated {
-                self.builder.set_current_block(else_current_bb);
-                let mut else_val = else_result
+            // Lower ELSE branch.
+            self.builder.set_current_block(else_bb);
+            self.scope = outer_scope.clone();
+            let else_result = self.lower_block(else_blk)?;
+            let else_scope = self.scope.clone();
+            if !self.builder.is_current_block_terminated() {
+                let mut else_args = vec![else_result
                     .as_ref()
-                    .map(|(val, _)| *val)
-                    .unwrap_or(unit_val);
-                if has_value {
-                    let t2 = &else_result.as_ref().unwrap().1;
-                    if let (IrType::Scalar(DType::F32), IrType::Scalar(DType::F64)) =
-                        (t2, &result_ty)
-                    {
-                        let cast = self.builder.fresh_value();
-                        self.builder.push_instr(
-                            IrInstr::Cast {
-                                result: cast,
-                                operand: else_val,
-                                from_ty: t2.clone(),
-                                to_ty: IrType::Scalar(DType::F64),
-                            },
-                            Some(IrType::Scalar(DType::F64)),
-                        );
-                        else_val = cast;
-                    }
-                } else {
-                    else_val = unit_val;
-                }
-
-                let mut else_args = vec![else_val];
+                    .map(|(else_val, _)| *else_val)
+                    .unwrap_or(unit_val)];
                 for name in &rebound_names {
                     let rebound_val = else_scope
                         .get(name)
@@ -5403,6 +5149,13 @@ impl<'m> Lowerer<'m> {
                 );
             }
             self.scope = outer_scope.clone();
+
+            // Merge block parameter type = type of whichever branch produced a value.
+            let result_ty = match (&then_result, &else_result) {
+                (Some((_, ty)), _) => ty.clone(),
+                (_, Some((_, ty))) => ty.clone(),
+                (None, None) => unit_ty,
+            };
 
             let result =
                 self.builder
@@ -5578,13 +5331,15 @@ impl<'m> Lowerer<'m> {
         // 5. RHS block: evaluate rhs, branch to merge.
         self.builder.set_current_block(rhs_bb);
         let (rhs_val, _) = self.lower_expr(rhs)?;
-        self.builder.push_instr(
-            IrInstr::Br {
-                target: merge_bb,
-                args: vec![rhs_val],
-            },
-            None,
-        );
+        if !self.builder.is_current_block_terminated() {
+            self.builder.push_instr(
+                IrInstr::Br {
+                    target: merge_bb,
+                    args: vec![rhs_val],
+                },
+                None,
+            );
+        }
 
         // 6. Merge block with block parameter carrying the result.
         let result = self
@@ -5784,47 +5539,19 @@ impl<'m> Lowerer<'m> {
                 }
             }
 
-            let (mut arm_val, arm_ty) = self.lower_expr(&arm.body)?;
+            let (arm_val, arm_ty) = self.lower_expr(&arm.body)?;
             if result_ty.is_none() {
-                result_ty = Some(arm_ty.clone());
-            } else if let Some(ref rty) = result_ty {
-                match (rty, &arm_ty) {
-                    (IrType::Scalar(DType::F32), IrType::Scalar(DType::F64)) => {
-                        let cast = self.builder.fresh_value();
-                        self.builder.push_instr(
-                            IrInstr::Cast {
-                                result: cast,
-                                operand: arm_val,
-                                from_ty: arm_ty.clone(),
-                                to_ty: IrType::Scalar(DType::F32),
-                            },
-                            Some(IrType::Scalar(DType::F32)),
-                        );
-                        arm_val = cast;
-                    }
-                    (IrType::Scalar(DType::F64), IrType::Scalar(DType::F32)) => {
-                        let cast = self.builder.fresh_value();
-                        self.builder.push_instr(
-                            IrInstr::Cast {
-                                result: cast,
-                                operand: arm_val,
-                                from_ty: arm_ty.clone(),
-                                to_ty: IrType::Scalar(DType::F64),
-                            },
-                            Some(IrType::Scalar(DType::F64)),
-                        );
-                        arm_val = cast;
-                    }
-                    _ => {}
-                }
+                result_ty = Some(arm_ty);
             }
-            self.builder.push_instr(
-                IrInstr::Br {
-                    target: merge_bb,
-                    args: vec![arm_val],
-                },
-                None,
-            );
+            if !self.builder.is_current_block_terminated() {
+                self.builder.push_instr(
+                    IrInstr::Br {
+                        target: merge_bb,
+                        args: vec![arm_val],
+                    },
+                    None,
+                );
+            }
         }
         self.scope = outer_scope;
 
@@ -5883,6 +5610,12 @@ impl<'m> Lowerer<'m> {
         let merge_bb = self.builder.create_block(Some("option_merge"));
 
         let outer_scope = self.scope.clone();
+        let mut rebound_names = Vec::new();
+        for arm in arms {
+            collect_rebound_vars_in_expr(&arm.body, &mut rebound_names);
+        }
+        rebound_names.retain(|name| outer_scope.contains_key(name));
+
         let unit_ty = IrType::Scalar(DType::I64);
 
         // When only one arm is present the whole expression evaluates to unit (i64 0).
@@ -5943,13 +5676,23 @@ impl<'m> Lowerer<'m> {
         } else {
             (unit_val, Some(unit_ty.clone()))
         };
-        self.builder.push_instr(
-            IrInstr::Br {
-                target: merge_bb,
-                args: vec![some_val],
-            },
-            None,
-        );
+        if !self.builder.is_current_block_terminated() {
+            let mut branch_args = vec![some_val];
+            let some_scope = self.scope.clone();
+            for name in &rebound_names {
+                let val = some_scope.get(name).map(|(v, _)| *v).unwrap_or_else(|| {
+                    outer_scope.get(name).map(|(v, _)| *v).expect("missing var in outer_scope")
+                });
+                branch_args.push(val);
+            }
+            self.builder.push_instr(
+                IrInstr::Br {
+                    target: merge_bb,
+                    args: branch_args,
+                },
+                None,
+            );
+        }
 
         // None branch.
         self.builder.set_current_block(none_bb);
@@ -5967,20 +5710,43 @@ impl<'m> Lowerer<'m> {
         } else {
             unit_val
         };
-        self.builder.push_instr(
-            IrInstr::Br {
-                target: merge_bb,
-                args: vec![none_val],
-            },
-            None,
-        );
+        if !self.builder.is_current_block_terminated() {
+            let mut branch_args = vec![none_val];
+            let none_scope = self.scope.clone();
+            for name in &rebound_names {
+                let val = none_scope.get(name).map(|(v, _)| *v).unwrap_or_else(|| {
+                    outer_scope.get(name).map(|(v, _)| *v).expect("missing var in outer_scope")
+                });
+                branch_args.push(val);
+            }
+            self.builder.push_instr(
+                IrInstr::Br {
+                    target: merge_bb,
+                    args: branch_args,
+                },
+                None,
+            );
+        }
 
         self.scope = outer_scope;
         let result_ty = result_ty.unwrap_or(unit_ty);
         let result =
             self.builder
                 .add_block_param(merge_bb, Some("option_result"), result_ty.clone());
+        let mut rebound_params = Vec::new();
+        for name in &rebound_names {
+            let Some((_, ty)) = self.scope.get(name) else {
+                continue;
+            };
+            let param = self
+                .builder
+                .add_block_param(merge_bb, Some(name), ty.clone());
+            rebound_params.push((name.clone(), param, ty.clone()));
+        }
         self.builder.set_current_block(merge_bb);
+        for (name, param, ty) in rebound_params {
+            self.scope.insert(name, (param, ty));
+        }
         Ok((result, result_ty))
     }
 
@@ -6026,6 +5792,12 @@ impl<'m> Lowerer<'m> {
         let merge_bb = self.builder.create_block(Some("result_merge"));
 
         let outer_scope = self.scope.clone();
+        let mut rebound_names = Vec::new();
+        for arm in arms {
+            collect_rebound_vars_in_expr(&arm.body, &mut rebound_names);
+        }
+        rebound_names.retain(|name| outer_scope.contains_key(name));
+
         let unit_ty = IrType::Scalar(DType::I64);
 
         // When only one arm is present the whole expression evaluates to unit (i64 0).
@@ -6083,13 +5855,23 @@ impl<'m> Lowerer<'m> {
         } else {
             (unit_val, Some(unit_ty.clone()))
         };
-        self.builder.push_instr(
-            IrInstr::Br {
-                target: merge_bb,
-                args: vec![ok_val],
-            },
-            None,
-        );
+        if !self.builder.is_current_block_terminated() {
+            let mut branch_args = vec![ok_val];
+            let ok_scope = self.scope.clone();
+            for name in &rebound_names {
+                let val = ok_scope.get(name).map(|(v, _)| *v).unwrap_or_else(|| {
+                    outer_scope.get(name).map(|(v, _)| *v).expect("missing var in outer_scope")
+                });
+                branch_args.push(val);
+            }
+            self.builder.push_instr(
+                IrInstr::Br {
+                    target: merge_bb,
+                    args: branch_args,
+                },
+                None,
+            );
+        }
 
         // Err branch.
         self.builder.set_current_block(err_bb);
@@ -6123,20 +5905,43 @@ impl<'m> Lowerer<'m> {
         } else {
             unit_val
         };
-        self.builder.push_instr(
-            IrInstr::Br {
-                target: merge_bb,
-                args: vec![err_val],
-            },
-            None,
-        );
+        if !self.builder.is_current_block_terminated() {
+            let mut branch_args = vec![err_val];
+            let err_scope = self.scope.clone();
+            for name in &rebound_names {
+                let val = err_scope.get(name).map(|(v, _)| *v).unwrap_or_else(|| {
+                    outer_scope.get(name).map(|(v, _)| *v).expect("missing var in outer_scope")
+                });
+                branch_args.push(val);
+            }
+            self.builder.push_instr(
+                IrInstr::Br {
+                    target: merge_bb,
+                    args: branch_args,
+                },
+                None,
+            );
+        }
 
         self.scope = outer_scope;
         let result_ty = result_ty.unwrap_or(unit_ty);
         let result =
             self.builder
                 .add_block_param(merge_bb, Some("result_result"), result_ty.clone());
+        let mut rebound_params = Vec::new();
+        for name in &rebound_names {
+            let Some((_, ty)) = self.scope.get(name) else {
+                continue;
+            };
+            let param = self
+                .builder
+                .add_block_param(merge_bb, Some(name), ty.clone());
+            rebound_params.push((name.clone(), param, ty.clone()));
+        }
         self.builder.set_current_block(merge_bb);
+        for (name, param, ty) in rebound_params {
+            self.scope.insert(name, (param, ty));
+        }
         Ok((result, result_ty))
     }
 
@@ -6166,6 +5971,12 @@ impl<'m> Lowerer<'m> {
             .add_block_param(no_match_bb, None, scrut_ty.clone());
 
         let outer_scope = self.scope.clone();
+        let mut rebound_names = Vec::new();
+        for arm in arms {
+            collect_rebound_vars_in_expr(&arm.body, &mut rebound_names);
+        }
+        rebound_names.retain(|name| outer_scope.contains_key(name));
+
         let mut result_ty: Option<IrType> = None;
 
         // Extract enum variant info if scrutinee is an enum.
@@ -6333,47 +6144,27 @@ impl<'m> Lowerer<'m> {
                 )?;
             }
 
-            let (mut arm_val, arm_ty) = self.lower_expr(&arm.body)?;
+            let (arm_val, arm_ty) = self.lower_expr(&arm.body)?;
             if result_ty.is_none() {
-                result_ty = Some(arm_ty.clone());
-            } else if let Some(ref rty) = result_ty {
-                match (rty, &arm_ty) {
-                    (IrType::Scalar(DType::F32), IrType::Scalar(DType::F64)) => {
-                        let cast = self.builder.fresh_value();
-                        self.builder.push_instr(
-                            IrInstr::Cast {
-                                result: cast,
-                                operand: arm_val,
-                                from_ty: arm_ty.clone(),
-                                to_ty: IrType::Scalar(DType::F32),
-                            },
-                            Some(IrType::Scalar(DType::F32)),
-                        );
-                        arm_val = cast;
-                    }
-                    (IrType::Scalar(DType::F64), IrType::Scalar(DType::F32)) => {
-                        let cast = self.builder.fresh_value();
-                        self.builder.push_instr(
-                            IrInstr::Cast {
-                                result: cast,
-                                operand: arm_val,
-                                from_ty: arm_ty.clone(),
-                                to_ty: IrType::Scalar(DType::F64),
-                            },
-                            Some(IrType::Scalar(DType::F64)),
-                        );
-                        arm_val = cast;
-                    }
-                    _ => {}
-                }
+                result_ty = Some(arm_ty);
             }
-            self.builder.push_instr(
-                IrInstr::Br {
-                    target: merge_bb,
-                    args: vec![arm_val],
-                },
-                None,
-            );
+            if !self.builder.is_current_block_terminated() {
+                let mut branch_args = vec![arm_val];
+                let arm_scope = self.scope.clone();
+                for name in &rebound_names {
+                    let val = arm_scope.get(name).map(|(v, _)| *v).unwrap_or_else(|| {
+                        outer_scope.get(name).map(|(v, _)| *v).expect("missing var in outer_scope")
+                    });
+                    branch_args.push(val);
+                }
+                self.builder.push_instr(
+                    IrInstr::Br {
+                        target: merge_bb,
+                        args: branch_args,
+                    },
+                    None,
+                );
+            }
 
             // Update current scrutinee value for next iteration (from next_check_bb's block parameter)
             current_scrut_val = next_bb_scrut_opt.unwrap_or(scrut_val);
@@ -6393,16 +6184,27 @@ impl<'m> Lowerer<'m> {
         );
         self.builder
             .push_instr(IrInstr::Panic { msg: panic_msg }, None);
-        // Panic is not a terminator; we still need a Return to satisfy IR structure.
-        self.builder
-            .push_instr(IrInstr::Return { values: vec![] }, None);
+        // Panic is now a terminator; we do not need a dummy branch to merge_bb.
 
         self.scope = outer_scope;
         let result_ty = result_ty.unwrap_or(IrType::Scalar(DType::I64));
         let result = self
             .builder
             .add_block_param(merge_bb, Some("when_result"), result_ty.clone());
+        let mut rebound_params = Vec::new();
+        for name in &rebound_names {
+            let Some((_, ty)) = self.scope.get(name) else {
+                continue;
+            };
+            let param = self
+                .builder
+                .add_block_param(merge_bb, Some(name), ty.clone());
+            rebound_params.push((name.clone(), param, ty.clone()));
+        }
         self.builder.set_current_block(merge_bb);
+        for (name, param, ty) in rebound_params {
+            self.scope.insert(name, (param, ty));
+        }
         Ok((result, result_ty))
     }
 
@@ -7022,6 +6824,7 @@ impl<'m> Lowerer<'m> {
         start: &AstExpr,
         end: &AstExpr,
         body: &AstBlock,
+        inclusive: bool,
         span: Span,
     ) -> Result<(), LowerError> {
         // 1. Evaluate start and end once in the current (pre-loop) block.
@@ -7104,7 +6907,7 @@ impl<'m> Lowerer<'m> {
             None,
         );
 
-        // 8. Header: update scope with params, emit `loop_var < end` condition.
+        // 8. Header: update scope with params, emit loop_var < end (or <=) condition.
         self.builder.set_current_block(header_bb);
         for ((name, _, ty), &param_val) in loop_vars.iter().zip(header_params.iter()) {
             self.scope.insert(name.clone(), (param_val, ty.clone()));
@@ -7114,7 +6917,7 @@ impl<'m> Lowerer<'m> {
         self.builder.push_instr(
             IrInstr::BinOp {
                 result: cond_result,
-                op: BinOp::CmpLt,
+                op: if inclusive { BinOp::CmpLe } else { BinOp::CmpLt },
                 lhs: loop_var_param,
                 rhs: end_val,
                 ty: IrType::Scalar(DType::Bool),
@@ -7537,6 +7340,7 @@ impl<'m> Lowerer<'m> {
                 closure: closure_val,
                 args: vec![elem],
                 result_ty: mapped_elem_ty.clone(),
+                pass_env: true,
             },
             Some(mapped_elem_ty.clone()),
         );
@@ -7684,6 +7488,7 @@ impl<'m> Lowerer<'m> {
                 closure: closure_val,
                 args: vec![elem],
                 result_ty: bool_ty.clone(),
+                pass_env: true,
             },
             Some(bool_ty.clone()),
         );
@@ -7849,6 +7654,7 @@ impl<'m> Lowerer<'m> {
                 closure: closure_val,
                 args: vec![acc_param, elem],
                 result_ty: init_ty.clone(),
+                pass_env: true,
             },
             Some(init_ty.clone()),
         );
@@ -7993,6 +7799,7 @@ impl<'m> Lowerer<'m> {
                 closure: closure_val,
                 args: vec![elem],
                 result_ty: bool_ty.clone(),
+                pass_env: true,
             },
             Some(bool_ty.clone()),
         );
@@ -8148,6 +7955,7 @@ impl<'m> Lowerer<'m> {
                 closure: closure_val,
                 args: vec![elem],
                 result_ty: bool_ty.clone(),
+                pass_env: true,
             },
             Some(bool_ty.clone()),
         );
@@ -12311,9 +12119,7 @@ impl<'m> Lowerer<'m> {
                 self.scope.insert(name.name.clone(), (val, ty));
                 Ok(())
             }
-            AstStmt::LetTuple {
-                names, init, span, ..
-            } => {
+            AstStmt::LetTuple { names, init, span, .. } => {
                 let (tuple_val, tuple_ty) = self.lower_expr(init)?;
                 let elem_types = match &tuple_ty {
                     IrType::Tuple(elems) => elems.clone(),
@@ -12360,21 +12166,44 @@ impl<'m> Lowerer<'m> {
                 start,
                 end,
                 body,
+                inclusive,
                 span,
-            } => self.lower_for_range(var, start, end, body, *span),
+            } => self.lower_for_range(var, start, end, body, *inclusive, *span),
             AstStmt::Loop { body, span } => self.lower_loop(body, *span),
             AstStmt::Break { span } => self.lower_break(*span),
             AstStmt::Continue { span } => self.lower_continue(*span),
             AstStmt::Assign {
                 target,
+                op,
                 value,
                 span,
             } => {
                 match target.as_ref() {
                     // Plain identifier assignment: rebind the name in scope (SSA-style).
                     AstExpr::Ident(ident) => {
-                        let (new_val, new_ty) = self.lower_expr(value)?;
-                        self.scope.insert(ident.name.clone(), (new_val, new_ty));
+                        let new_val = if let Some(bin_op) = op {
+                            let (lhs_val, lhs_ty) = self.scope.get(&ident.name).cloned()
+                                .ok_or_else(|| LowerError::Unsupported {
+                                    detail: format!("variable '{}' not in scope for compound assignment", ident.name),
+                                    span: *span,
+                                })?;
+                            let (rhs_val, _) = self.lower_expr(value)?;
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::BinOp {
+                                    result,
+                                    op: bin_op.clone(),
+                                    lhs: lhs_val,
+                                    rhs: rhs_val,
+                                    ty: lhs_ty.clone(),
+                                },
+                                Some(lhs_ty.clone()),
+                            );
+                            (result, lhs_ty)
+                        } else {
+                            self.lower_expr(value)?
+                        };
+                        self.scope.insert(ident.name.clone(), (new_val.0, new_val.1));
                         Ok(())
                     }
                     // Array element store: `arr[i] = value`  or  tensor store
@@ -12681,6 +12510,7 @@ impl<'m> Lowerer<'m> {
                 start,
                 end,
                 body,
+                inclusive,
                 span,
             } => {
                 // Lambda-lift body into __par_body_N(var: i64, captures...) { body }.
@@ -12767,6 +12597,7 @@ impl<'m> Lowerer<'m> {
                         var: var_id,
                         start: start_val,
                         end: end_val,
+                        inclusive: *inclusive,
                         body_fn: fn_name,
                         args: capture_vals,
                     },
@@ -12791,6 +12622,7 @@ fn lower_function_with_generics(
     mono_sigs: std::rc::Rc<std::cell::RefCell<HashMap<String, IrType>>>,
     trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
     fn_defaults: std::rc::Rc<HashMap<String, Vec<Option<AstExpr>>>>,
+    lambda_counter: std::rc::Rc<std::cell::Cell<u32>>,
 ) -> Result<
     (
         crate::ir::function::IrFunction,
@@ -12809,6 +12641,7 @@ fn lower_function_with_generics(
         HashMap::new(), // no type param subs for top-level functions
         trait_dispatch,
         fn_defaults,
+        lambda_counter,
     )
 }
 
@@ -12824,6 +12657,7 @@ fn lower_function_with_generics_and_subs(
     type_param_subs: HashMap<String, IrType>,
     trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
     fn_defaults: std::rc::Rc<HashMap<String, Vec<Option<AstExpr>>>>,
+    lambda_counter: std::rc::Rc<std::cell::Cell<u32>>,
 ) -> Result<
     (
         crate::ir::function::IrFunction,
@@ -12831,21 +12665,6 @@ fn lower_function_with_generics_and_subs(
     ),
     LowerError,
 > {
-    let old_prefix = CURRENT_CALLER_PREFIX.with(|prefix| {
-        let mut p = prefix.borrow_mut();
-        let old = p.clone();
-        *p = get_module_prefix(&func.name.name).map(|s| s.to_string());
-        old
-    });
-    struct PrefixGuard(Option<String>);
-    impl Drop for PrefixGuard {
-        fn drop(&mut self) {
-            CURRENT_CALLER_PREFIX.with(|prefix| {
-                *prefix.borrow_mut() = self.0.clone();
-            });
-        }
-    }
-    let _prefix_guard = PrefixGuard(old_prefix);
     // Resolve param and return types with substitution applied.
     let resolve = |ty: &AstType| -> IrType {
         if let AstType::Named(name, _) = ty {
@@ -12886,9 +12705,10 @@ fn lower_function_with_generics_and_subs(
             type_param_subs.clone(),
             trait_dispatch.clone(),
             fn_defaults.clone(),
+            lambda_counter.clone(),
         )?;
         // Preserve attributes on the inner implementation only.
-        inner_ir.attrs = func.attrs.clone();
+        inner_ir.attrs = func.attrs.iter().map(|a| ast_attr_to_ir_attr(a)).collect();
 
         // Build the spawn body function: call inner, send on channel, return 0.
         let mut spawn_params: Vec<Param> = Vec::with_capacity(params.len() + 1);
@@ -12955,11 +12775,21 @@ fn lower_function_with_generics_and_subs(
             let v = builder.add_block_param(entry, Some(&p.name), p.ty.clone());
             wrapper_args.push(v);
         }
+        let dummy_cap = builder.fresh_value();
+        builder.push_instr(
+            IrInstr::ConstInt {
+                result: dummy_cap,
+                value: -1,
+                ty: IrType::Scalar(DType::I64),
+            },
+            Some(IrType::Scalar(DType::I64)),
+        );
         let chan_val = builder.fresh_value();
         builder.push_instr(
             IrInstr::ChanNew {
                 result: chan_val,
                 elem_ty: return_ty.clone(),
+                capacity: dummy_cap,
             },
             Some(chan_ty.clone()),
         );
@@ -12992,7 +12822,6 @@ fn lower_function_with_generics_and_subs(
     let entry = builder.create_block(Some("entry"));
     builder.set_current_block(entry);
 
-    let lambda_counter = std::rc::Rc::new(std::cell::Cell::new(0u32));
     let lifted_fns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let mut lowerer = Lowerer::new_generic(
         builder,
@@ -13042,12 +12871,20 @@ fn lower_function_with_generics_and_subs(
 
     let mut ir_func = lowerer.builder.build();
     // Propagate AST function attributes (e.g., "kernel", "differentiable") to IR.
-    ir_func.attrs = func.attrs.clone();
+    ir_func.attrs = func.attrs.iter().map(|a| ast_attr_to_ir_attr(a)).collect();
     let lifted = match std::rc::Rc::try_unwrap(lifted_fns) {
         Ok(cell) => cell.into_inner(),
         Err(rc) => rc.borrow().clone(),
     };
     Ok((ir_func, lifted))
+}
+
+/// Convert an AST attribute to an IR attribute (args omitted for simplicity).
+fn ast_attr_to_ir_attr(attr: &crate::parser::ast::AstAttribute) -> crate::ir::function::IrAttribute {
+    crate::ir::function::IrAttribute {
+        name: attr.name.clone(),
+        args: Vec::new(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -13067,8 +12904,6 @@ pub fn lower_type(ty: &AstType) -> IrType {
         AstType::Named(name, _) => {
             if name == "str" {
                 IrType::Str
-            } else if name == "Infer" {
-                IrType::Infer
             } else {
                 IrType::Struct {
                     name: name.clone(),
@@ -13156,9 +12991,6 @@ pub fn lower_type_with_structs(ty: &AstType, module: &IrModule) -> IrType {
                 return IrType::Infer;
             }
             let resolved_name = resolve_brought_name(name, module);
-            if resolved_name == "Infer" {
-                return IrType::Infer;
-            }
             // Check type aliases first.
             if let Some(aliased) = module.type_alias(&resolved_name) {
                 return aliased.clone();
@@ -13377,18 +13209,6 @@ fn collect_rebound_vars_in_stmt(stmt: &AstStmt, names: &mut Vec<String>, include
             if let AstExpr::Ident(ident) = target.as_ref() {
                 if !names.contains(&ident.name) {
                     names.push(ident.name.clone());
-                }
-            } else if let AstExpr::FieldAccess { base, .. } = target.as_ref() {
-                if let AstExpr::Ident(ident) = base.as_ref() {
-                    if !names.contains(&ident.name) {
-                        names.push(ident.name.clone());
-                    }
-                }
-            } else if let AstExpr::TupleIndex { base, .. } = target.as_ref() {
-                if let AstExpr::Ident(ident) = base.as_ref() {
-                    if !names.contains(&ident.name) {
-                        names.push(ident.name.clone());
-                    }
                 }
             }
             collect_rebound_vars_in_expr(target, names);

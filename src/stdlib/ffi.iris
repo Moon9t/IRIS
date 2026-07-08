@@ -1,73 +1,78 @@
 // src/stdlib/ffi.iris -- IRIS standard FFI (Foreign Function Interface) library
-// Supports C, Python, and Rust interop.
+//
+// Supports C, Python, and Rust interop for dynamic library calls and scripting.
 
 // ── C / Native FFI ──
 
-// Open a dynamic library (.dll / .so / .dylib). Returns a handle (i64), -1 on error.
+/// Open a dynamic library (.dll / .so / .dylib).
+/// Returns a handle (i64), or -1 on error.
 pub def lib_open(path: str) -> i64 {
     ffi_open(path)
 }
 
-// Call a zero-argument function in a loaded library. Returns i64.
+/// Call a zero-argument function in a loaded library.
+/// Returns i64 result.
 pub def lib_call(handle: i64, func_name: str) -> i64 {
     ffi_call(handle, func_name)
 }
 
-// Call a function with i64 arguments, returning i64.
+/// Call a function with an i64 argument, returning i64.
 pub def call_i64(handle: i64, func_name: str, a1: i64) -> i64 {
     ffi_call_i64(handle, func_name, a1)
 }
 
-// Call a function returning f64.
+/// Call a function returning f64.
 pub def call_f64(handle: i64, func_name: str, a1: i64) -> f64 {
     ffi_call_f64(handle, func_name, a1)
 }
 
-// Call a function returning a string.
+/// Call a function returning a string.
 pub def call_str(handle: i64, func_name: str) -> str {
     ffi_call_str(handle, func_name)
 }
 
-// Close a dynamic library handle.
+/// Close a dynamic library handle.
 pub def lib_close(handle: i64) -> bool {
     ffi_close(handle)
 }
 
 // ── Python FFI ──
 
-// Evaluate a Python expression and return the result as a string.
+/// Evaluate a Python expression and return the result as a string.
 pub def py_eval(code: str) -> str {
     python_eval(code)
 }
 
-// Execute a Python script file or inline code. Returns exit code.
+/// Execute a Python script file or inline code.
+/// Returns exit code (0 on success).
 pub def py_exec(code_or_path: str) -> i64 {
     python_exec(code_or_path)
 }
 
-// Call a Python function: py_call("math", "sqrt", "16") => "4.0"
+/// Call a Python function: `py_call("math", "sqrt", "16")` => "4.0".
 pub def py_call(module: str, func: str, args: str) -> str {
     python_call(module, func, args)
 }
 
-// Get the Python version string.
+/// Get the Python version string.
 pub def py_version() -> str {
     python_version()
 }
 
 // ── Rust FFI (cdylib) ──
 
-// Open a Rust cdylib (.dll / .so / .dylib). Uses same mechanism as C FFI.
+/// Open a Rust cdylib (.dll / .so / .dylib).
+/// Uses same mechanism as C FFI.
 pub def rust_open(path: str) -> i64 {
     rust_lib_open(path)
 }
 
-// Call a Rust extern "C" function returning i64.
+/// Call a Rust extern "C" function returning i64.
 pub def rust_i64(handle: i64, func_name: str, a1: i64) -> i64 {
     rust_call_i64(handle, func_name, a1)
 }
 
-// Call a Rust extern "C" function returning f64.
+/// Call a Rust extern "C" function returning f64.
 pub def rust_f64(handle: i64, func_name: str, a1: i64) -> f64 {
     rust_call_f64(handle, func_name, a1)
 }
@@ -75,27 +80,27 @@ pub def rust_f64(handle: i64, func_name: str, a1: i64) -> f64 {
 // ── Two-argument convenience wrappers ──
 // These cover the most common BLAS / LAPACK calling patterns.
 
-// Call a C function with two i64 arguments, returning i64.
+/// Call a C function with two i64 arguments, returning i64.
 pub def call_i64_2(handle: i64, func_name: str, a1: i64, a2: i64) -> i64 {
     ffi_call_i64(handle, func_name, a1, a2)
 }
 
-// Call a C function with three i64 arguments, returning i64.
+/// Call a C function with three i64 arguments, returning i64.
 pub def call_i64_3(handle: i64, func_name: str, a1: i64, a2: i64, a3: i64) -> i64 {
     ffi_call_i64(handle, func_name, a1, a2, a3)
 }
 
-// Call a C function with two i64 arguments, returning f64.
+/// Call a C function with two i64 arguments, returning f64.
 pub def call_f64_2(handle: i64, func_name: str, a1: i64, a2: i64) -> f64 {
     ffi_call_f64(handle, func_name, a1, a2)
 }
 
-// Execute a shell command, returning its stdout as a string.
+/// Execute a shell command, returning its stdout as a string.
 pub def shell(cmd: str) -> str {
     exec_cmd(cmd)
 }
 
-// Convenience: call a Python module function with a single string argument.
+/// Convenience: call a Python module function with a single string argument.
 pub def py_call1(module: str, func: str, arg: str) -> str {
     python_call(module, func, arg)
 }

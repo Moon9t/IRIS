@@ -1,220 +1,345 @@
-//! CLI argument parsing, exported from the library so integration tests can exercise it.
+//! CLI argument parsing using clap derive.
+//!
+//! Exports `parse_args` (backward-compatible with the old signature),
+//! `version_text`, `help_text`, and the `CliArgs` / `ParseArgsResult` types
+//! used by `main.rs`.
 
 use std::path::PathBuf;
 
+use clap::{Parser, Subcommand, ValueEnum};
+
 use crate::EmitKind;
+
+// ---------------------------------------------------------------------------
+// EmitKind as a clap ValueEnum (so --emit values are auto-validated)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum EmitKindCli {
+    Ir,
+    Llvm,
+    #[clap(name = "llvm-complete")]
+    LlvmComplete,
+    Cuda,
+    #[clap(name = "cuda-ptx")]
+    CudaPtx,
+    Simd,
+    Jit,
+    #[clap(name = "pgo-instrument")]
+    PgoInstrument,
+    #[clap(name = "pgo-optimize")]
+    PgoOptimize,
+    Graph,
+    Onnx,
+    #[clap(name = "onnx-binary")]
+    OnnxBinary,
+    Eval,
+    Binary,
+    #[clap(name = "tensorrt")]
+    TensorRt,
+}
+
+impl From<EmitKindCli> for EmitKind {
+    fn from(val: EmitKindCli) -> Self {
+        match val {
+            EmitKindCli::Ir => EmitKind::Ir,
+            EmitKindCli::Llvm => EmitKind::Llvm,
+            EmitKindCli::LlvmComplete => EmitKind::LlvmComplete,
+            EmitKindCli::Cuda => EmitKind::Cuda,
+            EmitKindCli::CudaPtx => EmitKind::CudaPtx,
+            EmitKindCli::Simd => EmitKind::Simd,
+            EmitKindCli::Jit => EmitKind::Jit,
+            EmitKindCli::PgoInstrument => EmitKind::PgoInstrument,
+            EmitKindCli::PgoOptimize => EmitKind::PgoOptimize,
+            EmitKindCli::Graph => EmitKind::Graph,
+            EmitKindCli::Onnx => EmitKind::Onnx,
+            EmitKindCli::OnnxBinary => EmitKind::OnnxBinary,
+            EmitKindCli::Eval => EmitKind::Eval,
+            EmitKindCli::Binary => EmitKind::Binary,
+            EmitKindCli::TensorRt => EmitKind::TensorRt,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Clap CLI definition
+// ---------------------------------------------------------------------------
+
+/// IRIS — Intermediate Representation for Intelligent Systems compiler.
+#[derive(Parser)]
+#[command(name = "iris", version, about, long_about = None)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
+    /// Output kind
+    #[arg(long, value_enum, default_value_t = EmitKindCli::Ir)]
+    pub emit: EmitKindCli,
+
+    /// Write output to <file> instead of stdout
+    #[arg(short = 'o', long = "output")]
+    pub output: Option<PathBuf>,
+
+    /// Target preset/triple for LLVM and native builds
+    #[arg(long = "target")]
+    pub target: Option<String>,
+
+    /// Dump IR to stderr after this pass
+    #[arg(long = "dump-ir-after")]
+    pub dump_ir_after: Option<String>,
+
+    /// Legacy interpreter guardrail (max steps, default: 1 000 000)
+    #[arg(long = "max-steps", default_value_t = 1_000_000)]
+    pub max_steps: usize,
+
+    /// Legacy interpreter guardrail (max call depth, default: 500)
+    #[arg(long = "max-depth", default_value_t = 500)]
+    pub max_depth: usize,
+
+    /// Disable incremental compilation cache
+    #[arg(long = "no-cache")]
+    pub no_cache: bool,
+
+    /// Run with sandboxed security (deny fs/network/ffi/process)
+    #[arg(long = "sandbox")]
+    pub sandbox: bool,
+
+    /// Input file
+    pub file: Option<PathBuf>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Command {
+    /// Build a native binary (same as --emit binary)
+    Build {
+        /// Input file
+        file: Option<PathBuf>,
+    },
+    /// Build and run the binary
+    Run {
+        /// Input file
+        file: Option<PathBuf>,
+    },
+    /// Start an interactive REPL session
+    Repl,
+    /// Start the LSP server (JSON-RPC on stdin/stdout)
+    Lsp,
+    /// Start the DAP debug adapter (JSON-RPC on stdin/stdout)
+    Dap,
+    /// Package manager commands
+    Pkg,
+    /// Run performance benchmarks
+    Bench {
+        /// Input file
+        file: Option<PathBuf>,
+    },
+    /// Run the profiler
+    Profile {
+        /// Input file
+        file: Option<PathBuf>,
+    },
+    /// Discover and run test_ functions
+    Test {
+        /// Input file (optional — scans current directory)
+        file: Option<PathBuf>,
+        /// Filter tests by substring
+        #[arg(long = "filter")]
+        filter: Option<String>,
+        /// Disable colored output
+        #[arg(long = "no-color")]
+        no_color: bool,
+    },
+    /// Show detailed explanation for an error code
+    Explain {
+        /// Error code (e.g. E0100)
+        code: Option<String>,
+    },
+    /// Self-upgrade the IRIS compiler
+    Upgrade {
+        /// Check for available updates without installing
+        #[arg(short = 'c', long = "check")]
+        check: bool,
+        /// Skip confirmation prompts
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+        /// Force reinstall even if up-to-date
+        #[arg(short = 'f', long = "force")]
+        force: bool,
+    },
+    /// Download and configure toolchain dependencies
+    Setup,
+}
+
+// ---------------------------------------------------------------------------
+// Public API — backward-compatible with old parse_args signature
+// ---------------------------------------------------------------------------
 
 /// Fully-parsed CLI arguments for a compilation request.
 #[derive(Debug)]
 pub struct CliArgs {
     pub path: PathBuf,
     pub emit: EmitKind,
-    /// Write output to this file instead of stdout.
     pub output: Option<PathBuf>,
-    /// If true, after building a binary run it (used with `iris run`).
     pub run_after_build: bool,
-    /// Optional target preset/triple for LLVM and native builds.
     pub target: Option<String>,
-    /// Dump IR to stderr immediately after this pass completes.
     pub dump_ir_after: Option<String>,
-    /// Legacy execution guardrail for interpreter-based tooling (default: 1 000 000).
     pub max_steps: usize,
-    /// Legacy execution guardrail for interpreter-based tooling (default: 500).
     pub max_depth: usize,
-    /// Disable the incremental compilation cache.
     pub no_cache: bool,
-    /// Run with sandboxed security policy (deny fs/network/process/ffi).
     pub sandbox: bool,
 }
 
-/// Result of `parse_args`.
+/// Result of `parse_args` — backward-compatible with the old API.
 #[derive(Debug)]
 pub enum ParseArgsResult {
-    /// Normal compilation/evaluation request.
     Args(CliArgs),
-    /// `--help` was present; caller should print usage and exit 0.
     Help,
-    /// `--version` was present; caller should print version and exit 0.
     Version,
-    /// `repl` subcommand: start the interactive REPL.
     Repl,
-    /// `lsp` subcommand: start the LSP server over stdin/stdout.
     Lsp,
-    /// `dap` subcommand: start the DAP debug adapter over stdin/stdout.
     Dap,
-    /// `pkg` subcommand: run the package manager.
     Pkg,
-    /// `bench` subcommand: run performance benchmarks.
     Bench,
-    /// `profile` subcommand: run with profiling.
     Profile,
-    /// `test` subcommand: discover and run test_ functions.
     Test,
-    /// `explain` subcommand: show detailed explanation for an error code.
     Explain(Option<String>),
-    /// `upgrade` subcommand: self-upgrade the IRIS compiler to the latest version.
     Upgrade { check: bool, yes: bool, force: bool },
-    /// `setup` subcommand: download and configure toolchain dependencies.
     Setup,
 }
 
-/// Parses command-line arguments (the full `std::env::args()` slice including `argv[0]`).
+/// Parses command-line arguments.
+///
+/// Uses `clap` internally, but returns the same `ParseArgsResult` enum
+/// that `main.rs` already matches on.
 pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
-    let mut emit = EmitKind::Ir;
-    let mut path: Option<PathBuf> = None;
-    let mut output: Option<PathBuf> = None;
-    let mut run_after_build = false;
-    let mut target: Option<String> = None;
-    let mut dump_ir_after: Option<String> = None;
-    let mut max_steps: usize = 1_000_000;
-    let mut max_depth: usize = 500;
-    let mut no_cache = false;
-    let mut sandbox = false;
-    let mut i = 1usize;
+    let cli = match Cli::try_parse_from(args) {
+        Ok(c) => c,
+        Err(e) => {
+            if e.kind() == clap::error::ErrorKind::DisplayHelp {
+                return Ok(ParseArgsResult::Help);
+            }
+            if e.kind() == clap::error::ErrorKind::DisplayVersion {
+                return Ok(ParseArgsResult::Version);
+            }
+            return Err(e.to_string());
+        }
+    };
 
-    if let Some(first) = args.get(i) {
-        match first.as_str() {
-            "build" => {
-                emit = EmitKind::Binary;
-                i += 1;
+    match cli.command {
+        Some(Command::Build { file }) => {
+            let path = file.or(cli.file).ok_or_else(|| "no input file specified".to_owned())?;
+            Ok(ParseArgsResult::Args(CliArgs {
+                emit: EmitKind::Binary,
+                path,
+                output: cli.output,
+                run_after_build: false,
+                target: cli.target,
+                dump_ir_after: cli.dump_ir_after,
+                max_steps: cli.max_steps,
+                max_depth: cli.max_depth,
+                no_cache: cli.no_cache,
+                sandbox: cli.sandbox,
+            }))
+        }
+        Some(Command::Run { file }) => {
+            let path = file.or(cli.file).ok_or_else(|| "no input file specified".to_owned())?;
+            Ok(ParseArgsResult::Args(CliArgs {
+                emit: EmitKind::Binary,
+                path,
+                output: cli.output,
+                run_after_build: true,
+                target: cli.target,
+                dump_ir_after: cli.dump_ir_after,
+                max_steps: cli.max_steps,
+                max_depth: cli.max_depth,
+                no_cache: cli.no_cache,
+                sandbox: cli.sandbox,
+            }))
+        }
+        Some(Command::Repl) => Ok(ParseArgsResult::Repl),
+        Some(Command::Lsp) => Ok(ParseArgsResult::Lsp),
+        Some(Command::Dap) => Ok(ParseArgsResult::Dap),
+        Some(Command::Pkg) => Ok(ParseArgsResult::Pkg),
+        Some(Command::Bench { file }) => {
+            if file.is_some() {
+                // bench <file.iris> — treat as a compilation request
+                let path = file.unwrap();
+                Ok(ParseArgsResult::Args(CliArgs {
+                    emit: EmitKind::Eval,
+                    path,
+                    output: cli.output,
+                    run_after_build: false,
+                    target: cli.target,
+                    dump_ir_after: cli.dump_ir_after,
+                    max_steps: cli.max_steps,
+                    max_depth: cli.max_depth,
+                    no_cache: cli.no_cache,
+                    sandbox: cli.sandbox,
+                }))
+            } else {
+                Ok(ParseArgsResult::Bench)
             }
-            "run" => {
-                emit = EmitKind::Binary;
-                run_after_build = true;
-                i += 1;
+        }
+        Some(Command::Profile { file }) => {
+            if file.is_some() {
+                let path = file.unwrap();
+                Ok(ParseArgsResult::Args(CliArgs {
+                    emit: EmitKind::Eval,
+                    path,
+                    output: cli.output,
+                    run_after_build: false,
+                    target: cli.target,
+                    dump_ir_after: cli.dump_ir_after,
+                    max_steps: cli.max_steps,
+                    max_depth: cli.max_depth,
+                    no_cache: cli.no_cache,
+                    sandbox: cli.sandbox,
+                }))
+            } else {
+                Ok(ParseArgsResult::Profile)
             }
-            "repl" => return Ok(ParseArgsResult::Repl),
-            "lsp" => return Ok(ParseArgsResult::Lsp),
-            "dap" => return Ok(ParseArgsResult::Dap),
-            "pkg" => return Ok(ParseArgsResult::Pkg),
-            "bench" => return Ok(ParseArgsResult::Bench),
-            "profile" => return Ok(ParseArgsResult::Profile),
-            "test" => return Ok(ParseArgsResult::Test),
-            "setup" => return Ok(ParseArgsResult::Setup),
-            "explain" => {
-                let code = args.get(i + 1).cloned();
-                return Ok(ParseArgsResult::Explain(code));
+        }
+        Some(Command::Test { file, .. }) => {
+            if file.is_some() {
+                let path = file.unwrap();
+                Ok(ParseArgsResult::Args(CliArgs {
+                    emit: EmitKind::Eval,
+                    path,
+                    output: cli.output,
+                    run_after_build: false,
+                    target: cli.target,
+                    dump_ir_after: cli.dump_ir_after,
+                    max_steps: cli.max_steps,
+                    max_depth: cli.max_depth,
+                    no_cache: cli.no_cache,
+                    sandbox: cli.sandbox,
+                }))
+            } else {
+                Ok(ParseArgsResult::Test)
             }
-            "upgrade" => {
-                let mut check = false;
-                let mut yes = false;
-                let mut force = false;
-                i += 1;
-                while i < args.len() {
-                    match args[i].as_str() {
-                        "--check" | "-c" => check = true,
-                        "--yes" | "-y" => yes = true,
-                        "--force" | "-f" => force = true,
-                        "--help" | "-h" => return Ok(ParseArgsResult::Help),
-                        other => return Err(format!("unknown upgrade option: '{}'", other)),
-                    }
-                    i += 1;
-                }
-                return Ok(ParseArgsResult::Upgrade { check, yes, force });
-            }
-            _ => {}
+        }
+        Some(Command::Explain { code }) => Ok(ParseArgsResult::Explain(code)),
+        Some(Command::Upgrade { check, yes, force }) => {
+            Ok(ParseArgsResult::Upgrade { check, yes, force })
+        }
+        Some(Command::Setup) => Ok(ParseArgsResult::Setup),
+        None => {
+            // No subcommand — treat as direct compilation request
+            let path = cli.file.ok_or_else(|| "no input file specified".to_owned())?;
+            Ok(ParseArgsResult::Args(CliArgs {
+                path,
+                emit: cli.emit.into(),
+                output: cli.output,
+                run_after_build: false,
+                target: cli.target,
+                dump_ir_after: cli.dump_ir_after,
+                max_steps: cli.max_steps,
+                max_depth: cli.max_depth,
+                no_cache: cli.no_cache,
+                sandbox: cli.sandbox,
+            }))
         }
     }
-
-    while i < args.len() {
-        match args[i].as_str() {
-            "--help" | "-h" => return Ok(ParseArgsResult::Help),
-            "--version" | "-V" => return Ok(ParseArgsResult::Version),
-            "--emit" => {
-                i += 1;
-                let kind = args
-                    .get(i)
-                    .ok_or_else(|| "--emit requires an argument".to_owned())?;
-                emit = match kind.as_str() {
-                    "ir" => EmitKind::Ir,
-                    "llvm" => EmitKind::Llvm,
-                    "llvm-complete" => EmitKind::LlvmComplete,
-                    "cuda" => EmitKind::Cuda,
-                    "cuda-ptx" => EmitKind::CudaPtx,
-                    "simd" => EmitKind::Simd,
-                    "jit" => EmitKind::Jit,
-                    "pgo-instrument" => EmitKind::PgoInstrument,
-                    "pgo-optimize" => EmitKind::PgoOptimize,
-                    "graph" => EmitKind::Graph,
-                    "onnx" => EmitKind::Onnx,
-                    "onnx-binary" => EmitKind::OnnxBinary,
-                    "eval" => EmitKind::Eval,
-                    "binary" => EmitKind::Binary,
-                    "tensorrt" => EmitKind::TensorRt,
-                    other => {
-                        return Err(format!(
-                            "unknown emit kind: '{}' (valid: ir, llvm, llvm-complete, cuda, cuda-ptx, simd, jit, pgo-instrument, pgo-optimize, graph, onnx, onnx-binary, eval, binary, tensorrt)",
-                            other
-                        ))
-                    }
-                };
-            }
-            "-o" => {
-                i += 1;
-                let file = args
-                    .get(i)
-                    .ok_or_else(|| "-o requires an argument".to_owned())?;
-                output = Some(PathBuf::from(file));
-            }
-            "--target" => {
-                i += 1;
-                let triple = args
-                    .get(i)
-                    .ok_or_else(|| "--target requires an argument".to_owned())?;
-                target = Some(triple.clone());
-            }
-            "--dump-ir-after" => {
-                i += 1;
-                let name = args
-                    .get(i)
-                    .ok_or_else(|| "--dump-ir-after requires an argument".to_owned())?;
-                dump_ir_after = Some(name.clone());
-            }
-            "--max-steps" => {
-                i += 1;
-                let n = args
-                    .get(i)
-                    .ok_or_else(|| "--max-steps requires an argument".to_owned())?;
-                max_steps = n
-                    .parse::<usize>()
-                    .map_err(|_| format!("--max-steps: '{}' is not a valid positive integer", n))?;
-            }
-            "--max-depth" => {
-                i += 1;
-                let n = args
-                    .get(i)
-                    .ok_or_else(|| "--max-depth requires an argument".to_owned())?;
-                max_depth = n
-                    .parse::<usize>()
-                    .map_err(|_| format!("--max-depth: '{}' is not a valid positive integer", n))?;
-            }
-            "--no-cache" => {
-                no_cache = true;
-            }
-            "--sandbox" => {
-                sandbox = true;
-            }
-            arg if !arg.starts_with('-') => {
-                path = Some(PathBuf::from(arg));
-            }
-            other => return Err(format!("unknown argument: '{}'", other)),
-        }
-        i += 1;
-    }
-
-    let path = path.ok_or_else(|| "no input file specified".to_owned())?;
-    Ok(ParseArgsResult::Args(CliArgs {
-        path,
-        emit,
-        output,
-        run_after_build,
-        target,
-        dump_ir_after,
-        max_steps,
-        max_depth,
-        no_cache,
-        sandbox,
-    }))
 }
 
 /// Returns the version string for the CLI (GCC-style verbose output).

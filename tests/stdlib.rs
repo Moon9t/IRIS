@@ -1525,3 +1525,332 @@ fn rl_softmax_entropy_calc() {
         "1"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 40. std.adaptive — Online learning, risk awareness, self-training
+// ---------------------------------------------------------------------------
+
+#[test]
+fn adaptive_basic_lifecycle() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.adaptive
+        def main() -> i64 {
+            val h = adaptive_new("test", 2, 0.01, 2.0);
+            val n = adaptive_n_params(h);
+            val lr = adaptive_learning_rate(h);
+            val thr = adaptive_current_threshold(h);
+            val name = adaptive_name(h);
+            adaptive_free(h);
+            if n == 2 && lr > 0.009 && lr < 0.011 && thr > 1.9 && thr < 2.1 && name == "test" {
+                1
+            } else { 0 }
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn adaptive_online_learning() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.adaptive
+        def main() -> i64 {
+            val h = adaptive_new("learn", 2, 0.01, 2.0);
+            for i in 0 .. 500 {
+                val x = (i to f64) / 100.0;
+                val y = 3.0 * x + 2.0;
+                val inputs : list<f64> = list();
+                list_push(inputs, x);
+                list_push(inputs, 1.0);
+                adaptive_observe(h, inputs, y);
+            }
+            val test_in : list<f64> = list();
+            list_push(test_in, 1.0);
+            list_push(test_in, 1.0);
+            val pred = adaptive_predict(h, test_in);
+            adaptive_free(h);
+            if pred > 4.0 && pred < 7.0 { 1 } else { 0 }
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn adaptive_risk_monitoring() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.adaptive
+        bring std.math
+        def main() -> i64 {
+            val h = adaptive_new("risk", 1, 0.01, 0.5);
+            for i in 0 .. 10 {
+                val ins : list<f64> = list();
+                list_push(ins, 1.0);
+                adaptive_observe(h, ins, 1.0);
+            }
+            val err1 = abs(adaptive_mean_error(h));
+            for i in 0 .. 10 {
+                val ins2 : list<f64> = list();
+                list_push(ins2, 1.0);
+                adaptive_observe(h, ins2, 100.0);
+            }
+            val err2 = abs(adaptive_mean_error(h));
+            adaptive_free(h);
+            if err2 > err1 { 1 } else { 0 }
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn adaptive_prediction() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.adaptive
+        def main() -> i64 {
+            val h = adaptive_new("pred", 1, 0.02, 2.0);
+            adaptive_set_param(h, 0, 2.0);
+            val ins : list<f64> = list();
+            list_push(ins, 5.0);
+            val pred = adaptive_predict(h, ins);
+            adaptive_free(h);
+            if pred > 9.9 && pred < 10.1 { 1 } else { 0 }
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn adaptive_self_training() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.adaptive
+        def main() -> i64 {
+            val h = adaptive_new("self", 1, 0.01, 2.0);
+            adaptive_set_retrain_threshold(h, 0.1);
+            adaptive_set_min_observations_for_retrain(h, 3);
+            for i in 0 .. 10 {
+                val ins : list<f64> = list();
+                list_push(ins, 1.0);
+                adaptive_observe(h, ins, 100.0);
+            }
+            val retrain = adaptive_should_retrain(h);
+            adaptive_free(h);
+            if retrain { 1 } else { 0 }
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn adaptive_threshold_adaptation() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.adaptive
+        def main() -> i64 {
+            val h = adaptive_new("adapt", 1, 0.01, 2.0);
+            val before = adaptive_current_threshold(h);
+            adaptive_adapt_threshold(h, 10.0);
+            val after = adaptive_current_threshold(h);
+            adaptive_free(h);
+            if after > before { 1 } else { 0 }
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn adaptive_stats() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.adaptive
+        def main() -> i64 {
+            val h = adaptive_new("stats", 1, 0.01, 2.0);
+            adaptive_record_error(h, 1.0);
+            adaptive_record_error(h, 2.0);
+            adaptive_record_error(h, 3.0);
+            val n = adaptive_observation_count(h);
+            val mean = adaptive_mean_error(h);
+            adaptive_reset_stats(h);
+            val n2 = adaptive_observation_count(h);
+            adaptive_free(h);
+            if n == 3 && mean > 1.9 && mean < 2.1 && n2 == 0 { 1 } else { 0 }
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn adaptive_batch_training() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.adaptive
+        def main() -> i64 {
+            val h = adaptive_new("batch", 2, 0.01, 2.0);
+            val n_samples = 50;
+            val n_features = 2;
+            val inputs : list<f64> = list();
+            val targets : list<f64> = list();
+            for i in 0 .. n_samples {
+                val x = (i to f64) / 25.0;
+                list_push(inputs, x);
+                list_push(inputs, 1.0);
+                list_push(targets, 2.0 * x + 1.0);
+            }
+            val loss = adaptive_train_batch(h, inputs, n_samples, n_features, targets);
+            val w0 = adaptive_get_param(h, 0);
+            val w1 = adaptive_get_param(h, 1);
+            adaptive_free(h);
+            if loss >= 0.0 && w0 > 1.0 && w0 < 3.0 && w1 > 0.0 && w1 < 2.0 { 1 } else { 0 }
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 41. std.uncertainty — Bayesian updating, entropy, confidence
+// ---------------------------------------------------------------------------
+
+#[test]
+fn uncertainty_nig_lifecycle() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.uncertainty
+        def main() -> i64 {
+            val prior = nig_default()
+            val mu = nig_mean(prior)
+            val dof = nig_dof(prior)
+            if mu == 0.0 && dof == 1.0 { 1 } else { 0 }
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn uncertainty_nig_update() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.uncertainty
+        def main() -> i64 {
+            val post0 = nig_prior(0.0, 1.0, 1.0, 1.0);
+            val post1 = nig_update(post0, 2.0);
+            val post = nig_update(post1, 3.0);
+            val mean = nig_mean(post);
+            val pv = nig_predictive_variance(post);
+            val (lo, hi) = nig_credible_interval(post);
+            if mean > 1.0 && mean < 2.5 && pv > 0.0 && lo < hi { 1 } else { 0 }
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn uncertainty_entropy() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.uncertainty
+        def main() -> i64 {
+            val h = bernoulli_entropy(0.5)
+            if h > 0.69 && h < 0.70 { 1 } else { 0 }
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn uncertainty_confidence() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.uncertainty
+        def main() -> i64 {
+            val c1 = variance_confidence(0.0)
+            val c2 = variance_confidence(1.0)
+            val c3 = error_confidence(0.0, 1.0)
+            if c1 == 1.0 && c2 == 0.5 && c3 == 1.0 { 1 } else { 0 }
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn uncertainty_softmax() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.uncertainty
+        def main() -> i64 {
+            val vals : list<f64> = list();
+            list_push(vals, 1.0);
+            list_push(vals, 2.0);
+            list_push(vals, 3.0);
+            val probs = softmax(vals)
+            val n = list_len(probs)
+            val first = list_get(probs, 0)
+            val last = list_get(probs, 2)
+            if n == 3 && first > 0.0 && first < last { 1 } else { 0 }
+        }
+    "#
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn uncertainty_variance() {
+    assert_eq!(
+        eval(
+            r#"
+        bring std.uncertainty
+        def main() -> i64 {
+            val vals : list<f64> = list();
+            list_push(vals, 1.0);
+            list_push(vals, 2.0);
+            list_push(vals, 3.0);
+            list_push(vals, 4.0);
+            list_push(vals, 5.0);
+            val v = sample_variance(vals)
+            val m = mle_variance(vals)
+            if v > 2.0 && v < 3.0 && m > 1.9 && m < 2.1 { 1 } else { 0 }
+        }
+    "#
+        ),
+        "1"
+    );
+}

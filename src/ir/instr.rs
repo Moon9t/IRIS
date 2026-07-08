@@ -333,11 +333,14 @@ pub enum IrInstr {
         result_ty: IrType,
     },
     /// Call a closure value with the given arguments.
+    /// If pass_env is true (default for lambdas), ptr %closure is passed
+    /// as the first argument so the lambda can extract captures from %env.
     CallClosure {
         result: Option<ValueId>,
         closure: ValueId,
         args: Vec<ValueId>,
         result_ty: IrType,
+        pass_env: bool,
     },
 
     // ---- Array operations ----
@@ -422,6 +425,7 @@ pub enum IrInstr {
     ChanNew {
         result: ValueId,
         elem_ty: IrType,
+        capacity: ValueId,
     },
     /// Send a value on a channel (side-effecting, no result).
     ChanSend {
@@ -445,6 +449,7 @@ pub enum IrInstr {
         var: ValueId, // loop variable (result placeholder)
         start: ValueId,
         end: ValueId,
+        inclusive: bool,
         body_fn: String,
         /// Captured outer-scope values passed as extra params to body_fn.
         args: Vec<ValueId>,
@@ -1092,6 +1097,7 @@ impl IrInstr {
                 | IrInstr::CondBr { .. }
                 | IrInstr::Return { .. }
                 | IrInstr::SwitchVariant { .. }
+                | IrInstr::Panic { .. }
         )
     }
 
@@ -1162,7 +1168,7 @@ impl IrInstr {
                 ops.extend_from_slice(args);
                 ops
             }
-            IrInstr::ChanNew { .. } => vec![],
+            IrInstr::ChanNew { capacity, .. } => vec![*capacity],
             IrInstr::ChanSend { chan, value } => vec![*chan, *value],
             IrInstr::ChanRecv { chan, .. } => vec![*chan],
             IrInstr::Spawn { args, .. } => args.clone(),
@@ -1570,6 +1576,7 @@ mod tests {
             closure: ValueId(0),
             args: vec![ValueId(1), ValueId(2)],
             result_ty: IrType::Scalar(crate::ir::types::DType::I64),
+            pass_env: true,
         };
         assert_eq!(i.operands(), vec![ValueId(0), ValueId(1), ValueId(2)]);
     }

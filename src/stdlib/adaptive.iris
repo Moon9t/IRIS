@@ -1,0 +1,235 @@
+/// std.adaptive — Adaptive AI runtime primitives
+/// Online learning, risk awareness, self-training, and adaptive behavior
+/// for functions annotated with @adaptive, @online_learning, @risk_aware,
+/// @self_training, @uncertainty_aware.
+///
+/// Note: All extern C functions use only scalar types (i64, f64, bool, str).
+/// List/tuple operations are implemented in pure IRIS to avoid IrisList/double*
+/// marshalling issues with the JIT codegen.
+
+bring std.math
+
+// ---------------------------------------------------------------------------
+// C runtime extern declarations (scalar types only)
+// ---------------------------------------------------------------------------
+
+extern def iris_adaptive_new(name : str, n_params : i64, learning_rate : f64, risk_threshold : f64) -> i64
+extern def iris_adaptive_free(handle : i64) -> i64
+extern def iris_adaptive_name(handle : i64) -> str
+extern def iris_adaptive_get_param(handle : i64, idx : i64) -> f64
+extern def iris_adaptive_set_param(handle : i64, idx : i64, value : f64) -> i64
+extern def iris_adaptive_n_params(handle : i64) -> i64
+extern def iris_adaptive_learning_rate(handle : i64) -> f64
+extern def iris_adaptive_set_learning_rate(handle : i64, lr : f64) -> i64
+extern def iris_adaptive_record_error(handle : i64, error : f64) -> i64
+extern def iris_adaptive_is_unsafe(handle : i64) -> bool
+extern def iris_adaptive_set_risk_threshold(handle : i64, threshold : f64) -> i64
+extern def iris_adaptive_should_retrain(handle : i64) -> bool
+extern def iris_adaptive_set_retrain_threshold(handle : i64, threshold : f64) -> i64
+extern def iris_adaptive_set_min_observations_for_retrain(handle : i64, n : i64) -> i64
+extern def iris_adaptive_adapt_threshold(handle : i64, observed_error : f64) -> i64
+extern def iris_adaptive_current_threshold(handle : i64) -> f64
+extern def iris_adaptive_observation_count(handle : i64) -> i64
+extern def iris_adaptive_mean_error(handle : i64) -> f64
+extern def iris_adaptive_reset_stats(handle : i64) -> i64
+extern def iris_adaptive_uncertainty_bayes_update(handle : i64, prior_mean : f64, prior_var : f64, observation : f64, obs_var : f64) -> f64
+
+// ---------------------------------------------------------------------------
+// Risk metrics record
+// ---------------------------------------------------------------------------
+
+pub type RiskMetrics = (f64, f64, i64, i64, f64, f64)
+
+pub def risk_mean_error(m : RiskMetrics) -> f64 { m.0 }
+pub def risk_max_error(m : RiskMetrics) -> f64 { m.1 }
+pub def risk_observations(m : RiskMetrics) -> i64 { m.2 }
+pub def risk_errors(m : RiskMetrics) -> i64 { m.3 }
+pub def risk_last_risk(m : RiskMetrics) -> f64 { m.4 }
+pub def risk_confidence(m : RiskMetrics) -> f64 { m.5 }
+
+// ---------------------------------------------------------------------------
+// Uncertainty estimate record
+// ---------------------------------------------------------------------------
+
+pub type Uncertainty = (f64, f64, f64, f64, f64)
+
+pub def unc_mean(u : Uncertainty) -> f64 { u.0 }
+pub def unc_variance(u : Uncertainty) -> f64 { u.1 }
+pub def unc_lower_95(u : Uncertainty) -> f64 { u.2 }
+pub def unc_upper_95(u : Uncertainty) -> f64 { u.3 }
+pub def unc_confidence(u : Uncertainty) -> f64 { u.4 }
+
+// ---------------------------------------------------------------------------
+// Adaptive state lifecycle
+// ---------------------------------------------------------------------------
+
+pub def adaptive_new(name : str, n_params : i64, learning_rate : f64, risk_threshold : f64) -> i64 {
+    iris_adaptive_new(name, n_params, learning_rate, risk_threshold)
+}
+
+pub def adaptive_free(handle : i64) -> i64 {
+    iris_adaptive_free(handle)
+}
+
+pub def adaptive_name(handle : i64) -> str {
+    iris_adaptive_name(handle)
+}
+
+// ---------------------------------------------------------------------------
+// Parameter management
+// ---------------------------------------------------------------------------
+
+pub def adaptive_get_param(handle : i64, idx : i64) -> f64 {
+    iris_adaptive_get_param(handle, idx)
+}
+
+pub def adaptive_set_param(handle : i64, idx : i64, value : f64) -> i64 {
+    iris_adaptive_set_param(handle, idx, value)
+}
+
+pub def adaptive_n_params(handle : i64) -> i64 {
+    iris_adaptive_n_params(handle)
+}
+
+pub def adaptive_learning_rate(handle : i64) -> f64 {
+    iris_adaptive_learning_rate(handle)
+}
+
+pub def adaptive_set_learning_rate(handle : i64, lr : f64) -> i64 {
+    iris_adaptive_set_learning_rate(handle, lr)
+}
+
+// ---------------------------------------------------------------------------
+// Online learning (pure IRIS implementations)
+// ---------------------------------------------------------------------------
+
+/// Predict output for given inputs using current weights.
+pub def adaptive_predict(handle : i64, inputs : list<f64>) -> f64 {
+    val n = list_len(inputs)
+    var pred = 0.0
+    for i in 0 .. n {
+        pred = pred + adaptive_get_param(handle, i) * list_get(inputs, i)
+    }
+    pred
+}
+
+/// Observe an (input, target) pair and update weights via SGD.
+pub def adaptive_observe(handle : i64, inputs : list<f64>, target : f64) -> i64 {
+    val pred = adaptive_predict(handle, inputs)
+    val error = pred - target
+    val lr = adaptive_learning_rate(handle)
+    val n = list_len(inputs)
+    for i in 0 .. n {
+        val p = adaptive_get_param(handle, i)
+        val _ = adaptive_set_param(handle, i, p - lr * error * list_get(inputs, i))
+    }
+    val _ = iris_adaptive_record_error(handle, error)
+    0
+}
+
+/// Train on a batch of (inputs, target) pairs.
+/// `inputs` is a flat list of shape (n_samples * n_features).
+pub def adaptive_train_batch(handle : i64, inputs : list<f64>, n_samples : i64, n_features : i64, targets : list<f64>) -> f64 {
+    var total_loss = 0.0
+    for s in 0 .. n_samples {
+        val row_start = s * n_features
+        var pred = 0.0
+        for f in 0 .. n_features {
+            pred = pred + adaptive_get_param(handle, f) * list_get(inputs, row_start + f)
+        }
+        val target = list_get(targets, s)
+        val error = pred - target
+        total_loss = total_loss + error * error
+        val lr = adaptive_learning_rate(handle)
+        for f in 0 .. n_features {
+            val p = adaptive_get_param(handle, f)
+            val _ = adaptive_set_param(handle, f, p - lr * error * list_get(inputs, row_start + f))
+        }
+        val _ = iris_adaptive_record_error(handle, error)
+    }
+    total_loss / (n_samples to f64)
+}
+
+// ---------------------------------------------------------------------------
+// Risk monitoring (pure IRIS)
+// ---------------------------------------------------------------------------
+
+pub def adaptive_record_error(handle : i64, error : f64) -> i64 {
+    iris_adaptive_record_error(handle, error)
+}
+
+/// Get current risk metrics for this adaptive state.
+pub def adaptive_get_risk(handle : i64) -> RiskMetrics {
+    val obs = iris_adaptive_observation_count(handle)
+    val err = iris_adaptive_mean_error(handle)
+    val unsafe_flag = if iris_adaptive_is_unsafe(handle) { 1 } else { 0 }
+    (err, err, obs, obs, err, 1.0 - 1.0 / (1.0 + abs(err)))
+}
+
+pub def adaptive_is_unsafe(handle : i64) -> bool {
+    iris_adaptive_is_unsafe(handle)
+}
+
+pub def adaptive_set_risk_threshold(handle : i64, threshold : f64) -> i64 {
+    iris_adaptive_set_risk_threshold(handle, threshold)
+}
+
+// ---------------------------------------------------------------------------
+// Uncertainty estimation (pure IRIS)
+// ---------------------------------------------------------------------------
+
+/// Predict with uncertainty: returns (mean, variance, lower_95, upper_95, confidence)
+pub def adaptive_predict_with_uncertainty(handle : i64, inputs : list<f64>) -> Uncertainty {
+    val mean = adaptive_predict(handle, inputs)
+    val variance = abs(mean) * 0.1 + 0.01
+    val std_dev = sqrt(variance)
+    (mean, variance, mean - 1.96 * std_dev, mean + 1.96 * std_dev, 1.0 / (1.0 + variance))
+}
+
+pub def adaptive_uncertainty_bayes_update(handle : i64, prior_mean : f64, prior_var : f64, observation : f64, obs_var : f64) -> f64 {
+    iris_adaptive_uncertainty_bayes_update(handle, prior_mean, prior_var, observation, obs_var)
+}
+
+// ---------------------------------------------------------------------------
+// Self-training
+// ---------------------------------------------------------------------------
+
+pub def adaptive_should_retrain(handle : i64) -> bool {
+    iris_adaptive_should_retrain(handle)
+}
+
+pub def adaptive_set_retrain_threshold(handle : i64, threshold : f64) -> i64 {
+    iris_adaptive_set_retrain_threshold(handle, threshold)
+}
+
+pub def adaptive_set_min_observations_for_retrain(handle : i64, n : i64) -> i64 {
+    iris_adaptive_set_min_observations_for_retrain(handle, n)
+}
+
+// ---------------------------------------------------------------------------
+// Adaptive behavior
+// ---------------------------------------------------------------------------
+
+pub def adaptive_adapt_threshold(handle : i64, observed_error : f64) -> i64 {
+    iris_adaptive_adapt_threshold(handle, observed_error)
+}
+
+pub def adaptive_current_threshold(handle : i64) -> f64 {
+    iris_adaptive_current_threshold(handle)
+}
+
+// ---------------------------------------------------------------------------
+// Statistics
+// ---------------------------------------------------------------------------
+
+pub def adaptive_observation_count(handle : i64) -> i64 {
+    iris_adaptive_observation_count(handle)
+}
+
+pub def adaptive_mean_error(handle : i64) -> f64 {
+    iris_adaptive_mean_error(handle)
+}
+
+pub def adaptive_reset_stats(handle : i64) -> i64 {
+    iris_adaptive_reset_stats(handle)
+}

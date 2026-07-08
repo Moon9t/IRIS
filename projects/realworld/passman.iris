@@ -1,0 +1,108 @@
+// ============================================================================
+// IRIS Password Manager — v2 (simplified, compiler-safe patterns)
+// ============================================================================
+bring std.crypto
+bring std.fs
+
+def hash_pw(pw: str) -> str {
+    var h = sha256(concat(pw, ":iris-passman"));
+    var i = 0;
+    while i < 100 {
+        h = sha256(concat(h, pw));
+        i = i + 1
+    };
+    h
+}
+
+def main() -> i64 {
+    val a = args();
+    if list_len(a) < 2 { print("Usage: passman <cmd> [args]"); return 1 };
+
+    val cmd = list_get(a, 1);
+
+    if cmd == "init" {
+        if list_len(a) < 3 { print("Usage: passman init <master-pw>"); return 1 };
+        file_write_all("vault.key", hash_pw(list_get(a, 2)));
+        file_write_all("vault.dat", "");
+        print("Vault initialized");
+        return 0
+    };
+
+    if cmd == "gen" {
+        val len = if list_len(a) >= 3 { parse_i64(list_get(a, 2)) } else { some(16) };
+        val n = if is_some(len) { unwrap(len) } else { 16 };
+        val cs = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+        var r = "";
+        var i = 0;
+        while i < n {
+            r = concat(r, char_at(cs, random_range(0, len(cs) - 1)));
+            i = i + 1
+        };
+        print(r);
+        return 0
+    };
+
+    if list_len(a) < 3 { print("Auth required"); return 1 };
+    val master = list_get(a, 2);
+    val key_file = file_read_all("vault.key");
+    if is_err(key_file) { print("Not initialized. Use 'init' first."); return 1 };
+    if trim(unwrap(key_file)) != hash_pw(master) { print("Wrong master password"); return 1 };
+
+    if cmd == "set" {
+        if list_len(a) < 5 { print("Usage: passman set <master> <name> <pw>"); return 1 };
+        val name = list_get(a, 3);
+        val pw = list_get(a, 4);
+        val enc_name = sha256(concat("n:", name));
+        val enc_pw = sha256(concat("p:", pw));
+        val entry = concat(enc_name, concat(":", enc_pw));
+        val existing = if file_exists("vault.dat") {
+            val f = file_read_all("vault.dat");
+            if is_ok(f) { unwrap(f) } else { "" }
+        } else { "" };
+        file_write_all("vault.dat", concat(existing, concat(entry, "\n")));
+        print(concat("Saved: ", name));
+        return 0
+    };
+
+    if cmd == "get" {
+        if list_len(a) < 4 { print("Usage: vault get <master> <name>"); return 1 };
+        val search = sha256(concat("n:", list_get(a, 3)));
+        val f = file_read_all("vault.dat");
+        if is_err(f) { print("Empty vault"); return 1 };
+        val lines = split(unwrap(f), "\n");
+        var found = 0;
+        var i = 0;
+        while i < list_len(lines) {
+            val line = list_get(lines, i);
+            if starts_with(line, concat(search, ":")) {
+                val parts = split(line, ":");
+                if list_len(parts) >= 2 {
+                    print(concat("Password hash: ", list_get(parts, 1)));
+                    found = 1
+                }
+            };
+            i = i + 1
+        };
+        if found == 0 { print("Not found") };
+        return 0
+    };
+
+    if cmd == "list" {
+        val f = file_read_all("vault.dat");
+        if is_err(f) { print("Empty vault"); return 0 };
+        val lines = split(unwrap(f), "\n");
+        print(concat("Entries: ", to_str(list_len(lines))));
+        var i = 0;
+        while i < list_len(lines) {
+            val line = list_get(lines, i);
+            if line != "" {
+                print(concat(concat("  [", to_str(i + 1)), concat("] ", line)))
+            };
+            i = i + 1
+        };
+        return 0
+    };
+
+    print(concat("Unknown command: ", cmd));
+    1
+}

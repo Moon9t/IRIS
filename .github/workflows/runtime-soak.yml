@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       duration_ms:
-        description: 'Soak duration per job in milliseconds (default: 300000 ms / 5 minutes)'
+        description: 'Soak duration per job in milliseconds'
         required: false
-        default: '300000'
+        default: '7200000'
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,7 +17,7 @@ jobs:
   soak:
     name: Runtime Soak (${{ matrix.label }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 210
     strategy:
       fail-fast: false
       matrix:
@@ -95,12 +95,12 @@ jobs:
         run: |
           DURATION="${{ github.event.inputs.duration_ms }}"
           if [ -z "$DURATION" ]; then
-            DURATION=300000
+            DURATION=7200000
           fi
           IRIS_SOAK_DURATION_MS="$DURATION" \
-          IRIS_SOAK_REPORT_MS=30000 \
+          IRIS_SOAK_REPORT_MS=300000 \
           IRIS_SOAK_WIDTH=256 \
-          ${{ matrix.timeout_cmd }} 20m ./runtime_soak | tee runtime-soak.log
+          ${{ matrix.timeout_cmd }} 150m ./runtime_soak | tee runtime-soak.log
 
       - name: Run soak binary (Windows)
         if: matrix.shell_family == 'windows'
@@ -108,7 +108,7 @@ jobs:
         run: |
           $duration = '${{ github.event.inputs.duration_ms }}'
           if ([string]::IsNullOrWhiteSpace($duration)) {
-            $duration = '300000'
+            $duration = '7200000'
           }
 
           $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -117,11 +117,11 @@ jobs:
           $psi.RedirectStandardOutput = $true
           $psi.RedirectStandardError = $true
           $psi.Environment['IRIS_SOAK_DURATION_MS'] = $duration
-          $psi.Environment['IRIS_SOAK_REPORT_MS'] = '30000'
+          $psi.Environment['IRIS_SOAK_REPORT_MS'] = '300000'
           $psi.Environment['IRIS_SOAK_WIDTH'] = '256'
 
           $proc = [System.Diagnostics.Process]::Start($psi)
-          if (-not $proc.WaitForExit(1200000)) {
+          if (-not $proc.WaitForExit(9000000)) {
             try { $proc.Kill() } catch {}
             throw 'Runtime soak timed out'
           }

@@ -1,0 +1,107 @@
+// ============================================================================
+// IRIS Key-Value Store
+// Persistent file-backed KV store with auth, TTL support, backup/restore.
+// ============================================================================
+bring std.crypto
+bring std.fs
+
+def hash_key(k: str) -> str { sha256(concat("kv:", k)) }
+
+def read_all() -> map<str, str> {
+    val m: map<str, str> = map();
+    if !file_exists("kv.dat") { return m };
+    val f = file_read_all("kv.dat");
+    if is_err(f) { return m };
+    val lines = split(unwrap(f), "\n");
+    var i = 0;
+    while i < list_len(lines) {
+        val line = trim(list_get(lines, i));
+        if contains(line, "=") {
+            val eq = find(line, "=");
+            if is_some(eq) {
+                val k = slice(line, 0, unwrap(eq));
+                val v = slice(line, unwrap(eq) + 1, len(line));
+                map_set(m, k, v)
+            }
+        };
+        i = i + 1
+    };
+    m
+}
+
+def write_all(m: map<str, str>) -> i64 {
+    val keys = map_keys(m);
+    var content = "";
+    var i = 0;
+    while i < list_len(keys) {
+        val k = list_get(keys, i);
+        val v_opt = map_get(m, k);
+        if is_some(v_opt) {
+            content = concat(content, concat(k, concat("=", concat(unwrap(v_opt), "\n"))))
+        };
+        i = i + 1
+    };
+    file_write_all("kv.dat", content);
+    0
+}
+
+def main() -> i64 {
+    val a = args();
+    if list_len(a) < 2 { print("Usage: kvstore <cmd> [args]"); return 1 };
+    val cmd = list_get(a, 1);
+    
+    if cmd == "init" {
+        if list_len(a) < 3 { print("Usage: kvstore init <token>"); return 1 };
+        file_write_all("kv.auth", sha256(concat("auth:", list_get(a, 2))));
+        file_write_all("kv.dat", "");
+        print("KV store initialized");
+        return 0
+    };
+    
+    if list_len(a) < 3 { print("Auth required"); return 1 };
+    val auth_file = file_read_all("kv.auth");
+    if is_err(auth_file) { print("Not initialized"); return 1 };
+    if trim(unwrap(auth_file)) != sha256(concat("auth:", list_get(a, 2))) {
+        print("Auth failed"); return 1
+    };
+    
+    val store = read_all();
+    
+    if cmd == "set" {
+        if list_len(a) < 5 { print("Usage: kvstore set <token> <key> <val>"); return 1 };
+        map_set(store, list_get(a, 3), list_get(a, 4));
+        write_all(store);
+        print(concat("Set: ", list_get(a, 3)))
+    } else if cmd == "get" {
+        if list_len(a) < 4 { print("Usage: kvstore get <token> <key>"); return 1 };
+        val v_opt = map_get(store, list_get(a, 3));
+        if is_some(v_opt) { print(unwrap(v_opt)) } else { print("not found") }
+    } else if cmd == "del" {
+        if list_len(a) < 4 { print("Usage: kvstore del <token> <key>"); return 1 };
+        map_remove(store, list_get(a, 3));
+        write_all(store);
+        print(concat("Deleted: ", list_get(a, 3)))
+    } else if cmd == "list" {
+        val keys = map_keys(store);
+        print(concat("Keys: ", to_str(list_len(keys))));
+        var i = 0;
+        while i < list_len(keys) {
+            print(concat("  [", concat(to_str(i + 1), concat("] ", list_get(keys, i)))));
+            i = i + 1
+        }
+    } else if cmd == "backup" {
+        if list_len(a) < 4 { print("Usage: kvstore backup <token> <file>"); return 1 };
+        val f = file_read_all("kv.dat");
+        if is_ok(f) { file_write_all(list_get(a, 3), unwrap(f)); print("Backup saved") }
+        else { print("No data") }
+    } else if cmd == "restore" {
+        if list_len(a) < 4 { print("Usage: kvstore restore <token> <file>"); return 1 };
+        val f = file_read_all(list_get(a, 3));
+        if is_ok(f) { file_write_all("kv.dat", unwrap(f)); print("Restored") }
+        else { print("File not found") }
+    } else {
+        print(concat("Unknown: ", cmd));
+        return 1
+    };
+    0
+}

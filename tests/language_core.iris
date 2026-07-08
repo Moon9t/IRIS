@@ -1,4 +1,4 @@
-def ok(b: bool) -> i64 { if b { 0 } else { 1 } }
+def check(b: bool) -> i64 { if b { 0 } else { 1 } }
 
 record Point { x: i64, y: i64 }
 choice Color { Red, Green, Blue }
@@ -13,35 +13,35 @@ def id[T](x: T) -> T { x }
 def first[T, U](a: T, b: U) -> T { a }
 def make_point(x: i64) -> Point { Point { x: x, y: x + 1 } }
 
-def test_add_1() -> i64 { ok(1 + 2 == 3) }
-def test_add_2() -> i64 { ok(10 + 5 == 15) }
-def test_sub_1() -> i64 { ok(9 - 4 == 5) }
-def test_sub_2() -> i64 { ok(3 - 8 == -5) }
-def test_mul_1() -> i64 { ok(3 * 4 == 12) }
-def test_mul_2() -> i64 { ok(7 * 0 == 0) }
-def test_div_1() -> i64 { ok(9 / 3 == 3) }
-def test_div_2() -> i64 { ok(20 / 4 == 5) }
-def test_mod_1() -> i64 { ok(10 % 3 == 1) }
-def test_mod_2() -> i64 { ok(14 % 5 == 4) }
-def test_precedence_1() -> i64 { ok(1 + 2 * 3 == 7) }
-def test_precedence_2() -> i64 { ok((1 + 2) * 3 == 9) }
-def test_negation_1() -> i64 { ok(0 - 5 == -5) }
-def test_negation_2() -> i64 { ok(-7 == -7) }
-def test_cmp_lt() -> i64 { ok(2 < 3) }
-def test_cmp_le() -> i64 { ok(3 <= 3) }
-def test_cmp_gt() -> i64 { ok(5 > 2) }
-def test_cmp_ge() -> i64 { ok(5 >= 5) }
-def test_cmp_eq() -> i64 { ok(4 == 4) }
-def test_cmp_ne() -> i64 { ok(4 != 5) }
+def test_add_1() -> i64 { check(1 + 2 == 3) }
+def test_add_2() -> i64 { check(10 + 5 == 15) }
+def test_sub_1() -> i64 { check(9 - 4 == 5) }
+def test_sub_2() -> i64 { check(3 - 8 == -5) }
+def test_mul_1() -> i64 { check(3 * 4 == 12) }
+def test_mul_2() -> i64 { check(7 * 0 == 0) }
+def test_div_1() -> i64 { check(9 / 3 == 3) }
+def test_div_2() -> i64 { check(20 / 4 == 5) }
+def test_mod_1() -> i64 { check(10 % 3 == 1) }
+def test_mod_2() -> i64 { check(14 % 5 == 4) }
+def test_precedence_1() -> i64 { check(1 + 2 * 3 == 7) }
+def test_precedence_2() -> i64 { check((1 + 2) * 3 == 9) }
+def test_negation_1() -> i64 { check(0 - 5 == -5) }
+def test_negation_2() -> i64 { check(-7 == -7) }
+def test_cmp_lt() -> i64 { check(2 < 3) }
+def test_cmp_le() -> i64 { check(3 <= 3) }
+def test_cmp_gt() -> i64 { check(5 > 2) }
+def test_cmp_ge() -> i64 { check(5 >= 5) }
+def test_cmp_eq() -> i64 { check(4 == 4) }
+def test_cmp_ne() -> i64 { check(4 != 5) }
 
 def test_if_else() -> i64 {
     val x = if 1 < 2 { 3 } else { 4 }
-    ok(x == 3)
+    check(x == 3)
 }
 
 def test_if_else_nested() -> i64 {
     val x = if 1 > 2 { 0 } else { if 2 > 1 { 5 } else { 6 } }
-    ok(x == 5)
+    check(x == 5)
 }
 
 def test_while_sum() -> i64 {
@@ -51,7 +51,7 @@ def test_while_sum() -> i64 {
         sum = sum + i
         i = i + 1
     }
-    ok(sum == 10)
+    check(sum == 10)
 }
 
 def test_while_break() -> i64 {
@@ -60,7 +60,7 @@ def test_while_break() -> i64 {
         if i == 3 { break }
         i = i + 1
     }
-    ok(i == 3)
+    check(i == 3)
 }
 
 def test_while_continue() -> i64 {
@@ -71,7 +71,7 @@ def test_while_continue() -> i64 {
         if i == 3 { continue }
         sum = sum + i
     }
-    ok(sum == 12)
+    check(sum == 12)
 }
 
 def test_for_sum() -> i64 {
@@ -79,7 +79,7 @@ def test_for_sum() -> i64 {
     for i in 0..5 {
         sum = sum + i
     }
-    ok(sum == 10)
+    check(sum == 10)
 }
 
 def test_for_zero() -> i64 {
@@ -87,7 +87,7 @@ def test_for_zero() -> i64 {
     for i in 0..0 {
         sum = 0
     }
-    ok(sum == 1)
+    check(sum == 1)
 }
 
 def test_loop_break() -> i64 {
@@ -96,47 +96,47 @@ def test_loop_break() -> i64 {
         x = 7
         break
     }
-    ok(x == 7)
+    check(x == 7)
 }
 
-def test_short_circuit_and() -> i64 { ok((true && false) == false) }
-def test_short_circuit_or() -> i64 { ok((false || true) == true) }
+def test_short_circuit_and() -> i64 { check((true && false) == false) }
+def test_short_circuit_or() -> i64 { check((false || true) == true) }
 
 def test_tuple_literal() -> i64 {
     val t = (1, 2)
-    ok(t.0 == 1)
+    check(t.0 == 1)
 }
 
 def test_tuple_index() -> i64 {
     val t = (1, 2, 3)
-    ok(t.2 == 3)
+    check(t.2 == 3)
 }
 
 def test_tuple_destructure() -> i64 {
     val (a, b) = (3, 4)
-    ok(a + b == 7)
+    check(a + b == 7)
 }
 
 def test_tuple_nested() -> i64 {
     val t = ((1, 2), 3)
     val a = t.0
-    ok(a.1 == 2)
+    check(a.1 == 2)
 }
 
 def test_array_literal() -> i64 {
     val a = [1, 2, 3]
-    ok(a[0] == 1)
+    check(a[0] == 1)
 }
 
 def test_array_index() -> i64 {
     val a = [5, 6, 7]
-    ok(a[2] == 7)
+    check(a[2] == 7)
 }
 
 def test_array_store() -> i64 {
     var a = [1, 2, 3]
     a[1] = 9
-    ok(a[1] == 9)
+    check(a[1] == 9)
 }
 
 def test_array_sum_loop() -> i64 {
@@ -147,7 +147,7 @@ def test_array_sum_loop() -> i64 {
         sum = sum + a[i]
         i = i + 1
     }
-    ok(sum == 10)
+    check(sum == 10)
 }
 
 def test_array_sum_for() -> i64 {
@@ -156,28 +156,28 @@ def test_array_sum_for() -> i64 {
     for i in 0..3 {
         sum = sum + a[i]
     }
-    ok(sum == 6)
+    check(sum == 6)
 }
 
 def test_array_reassign() -> i64 {
     var a = [1, 2, 3]
     a = [4, 5, 6]
-    ok(a[0] == 4)
+    check(a[0] == 4)
 }
 
 def test_record_literal() -> i64 {
     val p = Point { x: 1, y: 2 }
-    ok(p.x + p.y == 3)
+    check(p.x + p.y == 3)
 }
 
 def test_record_field() -> i64 {
     val p = Point { x: 5, y: 7 }
-    ok(p.x == 5)
+    check(p.x == 5)
 }
 
 def test_record_return() -> i64 {
     val p = make_point(4)
-    ok(p.y == 5)
+    check(p.y == 5)
 }
 
 def test_choice_variant() -> i64 {
@@ -186,7 +186,7 @@ def test_choice_variant() -> i64 {
         Color.Red => 1,
         _ => 0,
     }
-    ok(v == 1)
+    check(v == 1)
 }
 
 def test_choice_when() -> i64 {
@@ -196,7 +196,7 @@ def test_choice_when() -> i64 {
         Color.Green => 2,
         Color.Blue => 3,
     }
-    ok(v == 2)
+    check(v == 2)
 }
 
 def test_choice_with_data() -> i64 {
@@ -205,7 +205,7 @@ def test_choice_with_data() -> i64 {
         Shape.Circle(r) => r,
         Shape.Square(x) => x,
     }
-    ok(v == 3)
+    check(v == 3)
 }
 
 def test_choice_payload_sum() -> i64 {
@@ -214,7 +214,7 @@ def test_choice_payload_sum() -> i64 {
         Shape.Circle(r) => r,
         Shape.Square(x) => x + 1,
     }
-    ok(v == 5)
+    check(v == 5)
 }
 
 def test_option_when() -> i64 {
@@ -223,7 +223,7 @@ def test_option_when() -> i64 {
         some(x) => x,
         none => 0,
     }
-    ok(v == 4)
+    check(v == 4)
 }
 
 def test_result_when() -> i64 {
@@ -232,42 +232,42 @@ def test_result_when() -> i64 {
         ok(x) => x,
         err(e) => 0,
     }
-    ok(v == 7)
+    check(v == 7)
 }
 
 def test_option_unwrap() -> i64 {
     val o = some(9)
-    ok(unwrap(o) == 9)
+    check(unwrap(o) == 9)
 }
 
-def test_function_call() -> i64 { ok(add(2, 3) == 5) }
-def test_default_param() -> i64 { ok(greet() == "hello iris") }
-def test_generic_identity() -> i64 { ok(id(3) == 3) }
-def test_generic_first() -> i64 { ok(first(9, "x") == 9) }
-def test_trait_double() -> i64 { ok(double(21) == 42) }
+def test_function_call() -> i64 { check(add(2, 3) == 5) }
+def test_default_param() -> i64 { check(greet() == "hello iris") }
+def test_generic_identity() -> i64 { check(id(3) == 3) }
+def test_generic_first() -> i64 { check(first(9, "x") == 9) }
+def test_trait_double() -> i64 { check(double(21) == 42) }
 
 def test_closure_basic() -> i64 {
     val f = |x: i64| x + 1
-    ok(f(4) == 5)
+    check(f(4) == 5)
 }
 
 def test_closure_capture() -> i64 {
     val n = 5
     val f = |x: i64| x + n
-    ok(f(7) == 12)
+    check(f(7) == 12)
 }
 
 def test_closure_two_params() -> i64 {
     val f = |a: i64, b: i64| a * b
-    ok(f(3, 4) == 12)
+    check(f(3, 4) == 12)
 }
 
 def test_string_len() -> i64 {
     val s = "hello"
-    ok(len(s) == 5)
+    check(len(s) == 5)
 }
 
 def test_string_concat() -> i64 {
     val s = concat("a", "bc")
-    ok(len(s) == 3)
+    check(len(s) == 3)
 }

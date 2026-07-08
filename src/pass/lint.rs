@@ -14,6 +14,25 @@ pub struct IrWarning {
     pub span: Option<Span>,
 }
 
+use crate::error::PassError;
+use crate::ir::module::IrModule;
+use crate::pass::Pass;
+
+/// IR-level Lint Pass for static analysis (e.g., unused variables).
+pub struct IrLintPass;
+
+impl Pass for IrLintPass {
+    fn name(&self) -> &'static str {
+        "lint"
+    }
+
+    fn run(&mut self, _module: &mut IrModule) -> Result<(), PassError> {
+        // IR-level linting logic can be added here.
+        // Currently, AST-level linting is primarily used.
+        Ok(())
+    }
+}
+
 /// Analyze an AST module and return dead variable warnings.
 pub fn find_unused_vars(module: &AstModule) -> Vec<IrWarning> {
     let mut warnings = Vec::new();

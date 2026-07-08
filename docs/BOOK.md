@@ -7,6 +7,12 @@ toc: true
 toc-depth: 2
 number-sections: true
 geometry: margin=1in
+header-includes:
+    - "\\PassOptionsToPackage{draft}{hyperref}"
+    - "\\usepackage{fontspec}"
+    - "\\setmonofont{Consolas}"
+    - "\\usepackage{graphicx}"
+    - "\\AtBeginDocument{\\begin{center}\\includegraphics[width=0.35\\textwidth]{../logo/iris-logo.png}\\end{center}}"
 ---
 
 # The IRIS Programming Language

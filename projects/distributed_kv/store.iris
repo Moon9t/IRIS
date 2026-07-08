@@ -1,0 +1,58 @@
+// store.iris — Thread-safe in-memory key-value store
+
+bring std.fs
+
+pub record KVStore {
+    mu: mutex<map<str, str>>
+}
+
+pub def store_new() -> KVStore {
+    val data: map<str, str> = map();
+    val mu = mutex_new(data);
+    val s = KVStore { mu: mu };
+    s
+}
+
+pub def store_get(store: KVStore, key: str) -> option<str> {
+    val data = mutex_lock(store.mu);
+    val res = map_get(data, key);
+    mutex_unlock(store.mu);
+    res
+}
+
+pub def store_set(store: KVStore, key: str, value: str) -> i64 {
+    val data = mutex_lock(store.mu);
+    map_set(data, key, value);
+    mutex_unlock(store.mu);
+    0
+}
+
+pub def store_delete(store: KVStore, key: str) -> bool {
+    val data = mutex_lock(store.mu);
+    val has_key = map_contains(data, key);
+    if has_key {
+        map_remove(data, key);
+    } else {
+        val _ = 0;
+    };
+    mutex_unlock(store.mu);
+    has_key
+}
+
+pub def store_list_keys(store: KVStore) -> list<str> {
+    val data = mutex_lock(store.mu);
+    val keys = map_keys(data);
+    mutex_unlock(store.mu);
+    keys
+}
+
+pub def store_save(store: KVStore, path: str) -> bool {
+    val data = mutex_lock(store.mu);
+    val json_repr = json_stringify(data);
+    mutex_unlock(store.mu);
+    val res = write_text(path, json_repr);
+    when res {
+        ok(b) => b,
+        err(e) => false
+    }
+}

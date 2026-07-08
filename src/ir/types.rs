@@ -31,6 +31,32 @@ impl std::fmt::Display for DType {
     }
 }
 
+impl DType {
+    /// Returns true if this is an integer type (signed or unsigned).
+    pub fn is_integer(&self) -> bool {
+        matches!(self, DType::I8 | DType::U8 | DType::I32 | DType::U32 | DType::I64 | DType::U64 | DType::USize)
+    }
+
+    /// Returns true if this is a signed integer type.
+    pub fn is_signed(&self) -> bool {
+        matches!(self, DType::I8 | DType::I32 | DType::I64)
+    }
+
+    /// Returns true if this is a floating-point type.
+    pub fn is_float(&self) -> bool {
+        matches!(self, DType::F32 | DType::F64)
+    }
+
+    /// Returns the bit width of this type.
+    pub fn bit_width(&self) -> u32 {
+        match self {
+            DType::Bool | DType::I8 | DType::U8 => 8,
+            DType::I32 | DType::U32 | DType::F32 => 32,
+            DType::I64 | DType::U64 | DType::USize | DType::F64 => 64,
+        }
+    }
+}
+
 /// A single dimension of a tensor shape.
 /// Symbolic dims allow shapes like [M, K] to be tracked at compile time
 /// without requiring concrete values.

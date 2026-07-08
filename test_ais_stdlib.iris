@@ -1,0 +1,102 @@
+bring std.ais
+
+def main() -> i64 {
+    print("=== AIS Stdlib Test ===");
+
+    print("--- Homeostatic Regulation ---");
+    var h = homeostat_new();
+    h = homeostat_add_var(h, homeovar_new(37.0, 1.0, 0.5));
+    h = homeostat_add_var(h, homeovar_new(7.4, 0.2, 0.3));
+    val sv: list<f64> = list();
+    list_push(sv, 38.5);
+    list_push(sv, 7.1);
+    val hr = homeostat_update(h, sv, 0.1);
+    h = hr.0;
+    print(concat("  Homeostat health: ", to_str(h.health)));
+
+    print("--- Active Inference ---");
+    val gm = genmodel_new(3, 4, 2);
+    val unif: list<f64> = list();
+    for i in 0 .. 3 { list_push(unif, 1.0 / 3.0) }
+    val bf = BeliefState { probs: unif, entropy: 1.1, confidence: 0.33 };
+    val (nb, act) = active_inference_step(gm, bf, 1, 0.1);
+    print(concat("  Action: ", to_str(act)));
+
+    print("--- Neuroevolution ---");
+    val pop = population_new(10, 3, 0.2);
+    print(concat("  Pop size: ", to_str(pop.pop_size)));
+
+    print("--- Continual Learning ---");
+    val ew = ewc_new(5, 1.0);
+    val pms: list<f64> = list();
+    for i in 0 .. 5 { list_push(pms, 1.0) }
+    print(concat("  EWC penalty: ", to_str(ewc_penalty(ew, pms))));
+
+    print("--- Decision Strategies ---");
+    val qv: list<f64> = list();
+    list_push(qv, 1.0); list_push(qv, 3.0); list_push(qv, 2.0);
+    print(concat("  Argmax: ", to_str(argmax(qv))));
+
+    print("--- Reward Processing ---");
+    val rw: list<f64> = list();
+    list_push(rw, 0.0); list_push(rw, 0.0); list_push(rw, 0.0); list_push(rw, 1.0);
+    val rets = discount_rewards(rw, 0.99);
+    print(concat("  Discounted[0]: ", to_str(list_get(rets, 0))));
+
+    print("--- Perception ---");
+    val dt: list<f64> = list();
+    list_push(dt, 0.0); list_push(dt, 5.0); list_push(dt, 10.0);
+    val nm = normalize_input(dt);
+    print(concat("  Normalized[0]: ", to_str(list_get(nm, 0))));
+
+    print("--- World Model ---");
+    val wm = world_model_new(2, 2);
+    val st: list<f64> = list(); list_push(st, 1.0); list_push(st, 0.0);
+    val ac2: list<f64> = list(); list_push(ac2, 0.0); list_push(ac2, 1.0);
+    val pd = world_model_predict_state(wm, st, ac2);
+    print(concat("  Predicted[0]: ", to_str(list_get(pd, 0))));
+
+    print("--- Running Stats ---");
+    var rs = running_stats_new();
+    rs = running_stats_update(rs, 10.0);
+    rs = running_stats_update(rs, 20.0);
+    rs = running_stats_update(rs, 30.0);
+    print(concat("  Mean: ", to_str(rs.mean)));
+    print(concat("  Std: ", to_str(running_stats_std(rs))));
+
+    print("--- Meta-Cognition ---");
+    var mc = metacog_new();
+    mc = meta_record(mc, 0.5); mc = meta_record(mc, 0.6); mc = meta_record(mc, 0.7);
+    val tr = meta_performance_trend(mc.performance_history, 10);
+    print(concat("  Trend: ", to_str(tr)));
+
+    print("--- Utilities ---");
+    print(concat("  One-hot(1,3)[1]: ", to_str(list_get(one_hot(1, 3), 1))));
+    print(concat("  Clamp: ", to_str(clamp(15.0, 0.0, 10.0))));
+
+    print("--- Constitution ---");
+    var cn = constitution_new(1);
+    cn = constitution_add(cn, "no_negative_reward", 2);
+    val ok = constitution_check(cn, "no_negative_reward");
+    print(concat("  Check: ", to_str(ok)));
+
+    print("--- Epistemic Drive ---");
+    val mem: list<list<f64>> = list();
+    val mem1: list<f64> = list(); list_push(mem1, 0.5); list_push(mem1, 0.3);
+    list_push(mem, mem1);
+    val ns = novelty_score(st, mem);
+    print(concat("  Novelty: ", to_str(ns)));
+
+    print("--- Multi-Agent (consensus only) ---");
+    var mas2 = mas_new(3, 0.6);
+    val assign: list<i64> = list();
+    list_push(assign, 0); list_push(assign, 1); list_push(assign, 2);
+    mas2 = mas_assign(mas2, assign);
+    val votes: list<i64> = list();
+    list_push(votes, 1); list_push(votes, 1); list_push(votes, 0);
+    val (cons, frac) = mas_consensus(mas2, votes);
+    print(concat("  Consensus: ", to_str(cons)));
+
+    print("All AIS stdlib tests passed!");
+    0
+}

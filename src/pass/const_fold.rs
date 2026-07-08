@@ -765,7 +765,9 @@ fn apply_reps(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
                 replace(v);
             }
         }
-        IrInstr::ChanNew { .. } => {}
+        IrInstr::ChanNew { capacity, .. } => {
+            replace(capacity);
+        }
         IrInstr::ChanSend { chan, value } => {
             replace(chan);
             replace(value);

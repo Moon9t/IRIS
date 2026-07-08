@@ -1,52 +1,60 @@
 // src/stdlib/os.iris -- IRIS standard OS/system library
+//
+// Provides basic operating system interaction: environment variables, process
+// management, filesystem queries, and shell execution.
 
-// Get an environment variable value (empty string if not set).
+/// Get an environment variable value.
+/// Returns empty string if the variable is not set.
 pub def getenv(key: str) -> str {
     env_get(key)
 }
 
-// Set an environment variable.
+/// Set an environment variable.
+/// Returns `true` on success.
 pub def setenv(key: str, value: str) -> bool {
     env_set(key, value)
 }
 
-// Get the current process ID.
+/// Get the current process ID.
 pub def get_pid() -> i64 {
     pid()
 }
 
-// Execute a shell command and return its stdout.
+/// Execute a shell command and return its stdout as a string.
 pub def shell(cmd: str) -> str {
     exec_cmd(cmd)
 }
 
-// Exit the process with a given code.
+/// Exit the process with the given exit code.
+/// The returned value is never actually reached (process terminates).
 pub def exit(code: i64) -> i64 {
     exit_code(code);
     0
 }
 
-// Get the current working directory.
+/// Get the current working directory.
 pub def getcwd() -> str {
     cwd()
 }
 
-// List files in a directory.
+/// List files in a directory.
+/// Returns a `list<str>` of filenames (empty list if directory doesn't exist).
 pub def readdir(path: str) -> list<str> {
     list_dir(path)
 }
 
-// Check if a path exists.
+/// Check if a path (file or directory) exists.
 pub def exists(path: str) -> bool {
     file_exists(path)
 }
 
-// Create a directory.
+/// Create a directory (including parent directories if needed).
+/// Returns `true` on success.
 pub def make_dir(path: str) -> bool {
     mkdir(path)
 }
 
-// Get the number of available CPU threads.
+/// Get the number of available CPU threads (hardware concurrency).
 pub def cpu_count() -> i64 {
     thread_count()
 }

@@ -4,40 +4,57 @@
 // `db_query`, `db_close`) and adds small helpers for turning query rows into
 // numeric training vectors.
 
+/// Open a SQLite database file.
+/// Returns a database handle (i64), or 0 on failure.
 pub def sql_open(path : str) -> i64 {
     db_open(path)
 }
 
+/// Execute a SQL statement (INSERT, UPDATE, DELETE, CREATE, etc.).
+/// Returns the number of affected rows, or -1 on error.
 pub def sql_exec(db : i64, sql : str) -> i64 {
     db_exec(db, sql)
 }
 
+/// Execute a SQL query (SELECT) and return all rows.
+/// Each row is a `list<str>` of column values.
+/// Returns empty list on error or no rows.
 pub def sql_query(db : i64, sql : str) -> list<list<str>> {
     db_query(db, sql)
 }
 
+/// Execute a parameterized SQL query (SELECT) and return all rows.
+/// `params` are bound to `?` placeholders in the SQL string.
 pub def sql_query_params(db : i64, sql : str, params : list<str>) -> list<list<str>> {
     db_query_params(db, sql, params)
 }
 
+/// Close a database handle.
 pub def sql_close(db : i64) -> i64 {
     db_close(db)
 }
 
+/// Execute a parameterized SQL statement (INSERT, UPDATE, DELETE, etc.).
+/// Returns the number of affected rows, or -1 on error.
 pub def sql_exec_params(db : i64, sql : str, params : list<str>) -> i64 {
     db_exec_params(db, sql, params)
 }
 
+/// Execute a parameterized query and extract X/Y columns as float vectors.
+/// Returns `(x_values, y_values)` for supervised learning.
 pub def sql_query_xy_params(db : i64, sql : str, params : list<str>, x_idx : i64, y_idx : i64) -> (list<f64>, list<f64>) {
     val rows = sql_query_params(db, sql, params);
     sql_rows_to_xy(rows, x_idx, y_idx)
 }
 
+/// Parse a string as f64, returning 0.0 on failure.
 pub def sql_parse_f64_or_zero(s : str) -> f64 {
     val parsed = parse_f64(s);
     if is_some(parsed) { unwrap(parsed) } else { 0.0 }
 }
 
+/// Extract a numeric column from query result rows.
+/// Returns a `list<f64>` of the specified column, non-numeric values become 0.0.
 pub def sql_rows_to_f64_column(rows : list<list<str>>, col_idx : i64) -> list<f64> {
     val out : list<f64> = list();
     for i in 0 .. list_len(rows) {
@@ -48,10 +65,13 @@ pub def sql_rows_to_f64_column(rows : list<list<str>>, col_idx : i64) -> list<f6
     out
 }
 
+/// Execute a query and extract a numeric column directly.
 pub def sql_query_f64_column(db : i64, sql : str, col_idx : i64) -> list<f64> {
     sql_rows_to_f64_column(sql_query(db, sql), col_idx)
 }
 
+/// Extract X and Y columns from query result rows as float vectors.
+/// Returns `(x_values, y_values)` for supervised learning.
 pub def sql_rows_to_xy(rows : list<list<str>>, x_idx : i64, y_idx : i64) -> (list<f64>, list<f64>) {
     val xs : list<f64> = list();
     val ys : list<f64> = list();
@@ -65,6 +85,7 @@ pub def sql_rows_to_xy(rows : list<list<str>>, x_idx : i64, y_idx : i64) -> (lis
     (xs, ys)
 }
 
+/// Execute a query and extract X/Y columns directly for supervised learning.
 pub def sql_query_xy(db : i64, sql : str, x_idx : i64, y_idx : i64) -> (list<f64>, list<f64>) {
     val rows = sql_query(db, sql);
     sql_rows_to_xy(rows, x_idx, y_idx)

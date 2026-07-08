@@ -1,6 +1,9 @@
 // src/stdlib/iter.iris -- IRIS standard iteration / functional list utilities
+//
+// Provides higher-order functions and utilities for working with lists of i64.
 
-// Sum all elements of a list.
+/// Sum all elements of a list.
+/// Returns 0 for empty lists.
 pub def sum(xs: list<i64>) -> i64 {
     var acc = 0
     var i = 0
@@ -12,7 +15,8 @@ pub def sum(xs: list<i64>) -> i64 {
     acc
 }
 
-// Product of all elements.
+/// Product of all elements.
+/// Returns 1 for empty lists.
 pub def product(xs: list<i64>) -> i64 {
     var acc = 1
     var i = 0
@@ -24,7 +28,8 @@ pub def product(xs: list<i64>) -> i64 {
     acc
 }
 
-// Minimum element.
+/// Minimum element.
+/// Panics if the list is empty.
 pub def min(xs: list<i64>) -> i64 {
     var m = list_get(xs, 0)
     var i = 1
@@ -37,7 +42,8 @@ pub def min(xs: list<i64>) -> i64 {
     m
 }
 
-// Maximum element.
+/// Maximum element.
+/// Panics if the list is empty.
 pub def max(xs: list<i64>) -> i64 {
     var m = list_get(xs, 0)
     var i = 1
@@ -50,7 +56,7 @@ pub def max(xs: list<i64>) -> i64 {
     m
 }
 
-// Reverse a list (returns new list).
+/// Reverse a list (returns new list).
 pub def reverse(xs: list<i64>) -> list<i64> {
     var result: list<i64> = list()
     var i = list_len(xs) - 1
@@ -61,7 +67,8 @@ pub def reverse(xs: list<i64>) -> list<i64> {
     result
 }
 
-// Take first n elements.
+/// Take first `n` elements.
+/// Returns all elements if `n` exceeds list length.
 pub def take(xs: list<i64>, n: i64) -> list<i64> {
     var result: list<i64> = list()
     var i = 0
@@ -74,7 +81,8 @@ pub def take(xs: list<i64>, n: i64) -> list<i64> {
     result
 }
 
-// Drop first n elements.
+/// Drop first `n` elements.
+/// Returns empty list if `n` exceeds list length.
 pub def drop(xs: list<i64>, n: i64) -> list<i64> {
     var result: list<i64> = list()
     val len = list_len(xs)
@@ -86,7 +94,8 @@ pub def drop(xs: list<i64>, n: i64) -> list<i64> {
     result
 }
 
-// Range: generate list from lo to hi-1.
+/// Range: generate list from `lo` to `hi-1`.
+/// Returns empty list if `lo >= hi`.
 pub def range(lo: i64, hi: i64) -> list<i64> {
     var result: list<i64> = list()
     var i = lo
@@ -97,7 +106,7 @@ pub def range(lo: i64, hi: i64) -> list<i64> {
     result
 }
 
-// Check if any element equals target.
+/// Check if any element equals `target`.
 pub def contains(xs: list<i64>, target: i64) -> bool {
     var found = false
     var i = 0
@@ -109,7 +118,7 @@ pub def contains(xs: list<i64>, target: i64) -> bool {
     found
 }
 
-// Count occurrences of target.
+/// Count occurrences of `target`.
 pub def count(xs: list<i64>, target: i64) -> i64 {
     var c = 0
     var i = 0
@@ -121,7 +130,7 @@ pub def count(xs: list<i64>, target: i64) -> i64 {
     c
 }
 
-// Index of first occurrence of target, or -1.
+/// Index of first occurrence of `target`, or -1 if not found.
 pub def index_of(xs: list<i64>, target: i64) -> i64 {
     var i = 0
     val n = list_len(xs)
@@ -134,7 +143,7 @@ pub def index_of(xs: list<i64>, target: i64) -> i64 {
     0 - 1
 }
 
-// Flatten a list of lists into a single list.
+/// Flatten a list of lists into a single list.
 pub def flatten_i64(xss: list<list<i64>>) -> list<i64> {
     var result: list<i64> = list()
     var i = 0

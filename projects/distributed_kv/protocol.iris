@@ -1,0 +1,17 @@
+// protocol.iris — Simple text protocol for key-value store
+
+pub const STATUS_OK: str = "OK"
+pub const STATUS_ERR: str = "ERR"
+pub const STATUS_NOT_FOUND: str = "NOT_FOUND"
+pub const STATUS_PONG: str = "PONG"
+
+// Parse raw client input line into a list of words
+pub def parse_command(raw_line: str) -> list<str> {
+    val trimmed = trim(raw_line);
+    split(trimmed, " ")
+}
+
+// Format server response
+pub def make_response(status: str, body: str) -> str {
+    concat(status, concat(":", concat(body, "\n")))
+}

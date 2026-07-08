@@ -177,6 +177,10 @@ impl IrFunctionBuilder {
         }
     }
 
+    pub fn func_name(&self) -> &str {
+        &self.func.name
+    }
+
     /// Records the source byte offset of the statement currently being lowered.
     ///
     /// Call this before `push_instr` so that the instruction is associated with

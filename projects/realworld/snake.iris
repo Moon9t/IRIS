@@ -1,0 +1,356 @@
+// ============================================================================
+// IRIS Terminal Snake Game
+// A real-time terminal-based Snake game with keyboard controls, score tracking,
+// speed levels, growing snake, food spawning, and collision detection.
+// ============================================================================
+// Usage:
+//   iris build projects/realworld/snake.iris
+//   snake
+//   snake [width] [height] [speed]
+//   snake 40 20 3
+// ============================================================================
+// Controls:
+//   W/↑  = Move up
+//   S/↓  = Move down
+//   A/←  = Move left
+//   D/→  = Move right
+//   Q    = Quit
+//   P    = Pause
+// ============================================================================
+
+bring std.fmt
+bring std.math
+
+// ---------------------------------------------------------------------------
+// Game state
+// ---------------------------------------------------------------------------
+
+def TILE_EMPTY() -> i64 { 0 }
+def TILE_SNAKE() -> i64 { 1 }
+def TILE_FOOD() -> i64 { 2 }
+def TILE_WALL() -> i64 { 3 }
+
+def DIR_UP() -> i64 { 0 }
+def DIR_DOWN() -> i64 { 1 }
+def DIR_LEFT() -> i64 { 2 }
+def DIR_RIGHT() -> i64 { 3 }
+
+// ---------------------------------------------------------------------------
+// Terminal helpers
+// ---------------------------------------------------------------------------
+
+def clear_screen() -> i64 {
+    exec_cmd("cls"); // Windows
+    0
+}
+
+def set_cursor_pos(row: i64, col: i64) -> i64 {
+    val pos_str = concat(concat(concat(to_str(col), ", "), to_str(row)), ")");
+    exec_cmd(concat("powershell -Command \"[Console]::SetCursorPosition(", pos_str));
+    sleep_ms(1);
+    0
+}
+
+def hide_cursor() -> i64 {
+    exec_cmd("powershell -Command \"[Console]::CursorVisible = $false\"");
+    0
+}
+
+def show_cursor() -> i64 {
+    exec_cmd("powershell -Command \"[Console]::CursorVisible = $true\"");
+    0
+}
+
+// ---------------------------------------------------------------------------
+// Game board
+// ---------------------------------------------------------------------------
+
+def create_board(width: i64, height: i64) -> list<i64> {
+    val board = list();
+    var y = 0;
+    while y < height {
+        var x = 0;
+        while x < width {
+            if x == 0 || x == width - 1 || y == 0 || y == height - 1 {
+                list_push(board, TILE_WALL())
+            } else {
+                list_push(board, TILE_EMPTY())
+            };
+            x = x + 1
+        };
+        y = y + 1
+    };
+    board
+}
+
+def board_get(board: list<i64>, x: i64, y: i64, width: i64, height: i64) -> i64 {
+    if x < 0 || x >= width || y < 0 || y >= height { TILE_WALL() }
+    else { list_get(board, y * width + x) }
+}
+
+def board_set(board: list<i64>, x: i64, y: i64, width: i64, v: i64) -> list<i64> {
+    list_set(board, y * width + x, v);
+    board
+}
+
+// ---------------------------------------------------------------------------
+// Food spawning
+// ---------------------------------------------------------------------------
+
+def spawn_food(board: list<i64>, width: i64, height: i64) -> (i64, i64) {
+    var fx = -1;
+    var fy = -1;
+    var attempts = 0;
+    while attempts < 100 {
+        val rx = random_range(1, width - 2);
+        val ry = random_range(1, height - 2);
+        if board_get(board, rx, ry, width, height) == TILE_EMPTY() {
+            fx = rx;
+            fy = ry;
+            break
+        };
+        attempts = attempts + 1
+    };
+    (fx, fy)
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+def render(board: list<i64>, width: i64, height: i64, score: i64, high_score: i64, level: i64, paused: bool) -> i64 {
+    // Build frame
+    var frame = concat("Score: ", concat(to_str(score), concat("  High: ", concat(to_str(high_score), concat("  Level: ", to_str(level))))));
+    if paused { frame = concat(frame, "  PAUSED") };
+    frame = concat(frame, "\n");
+    
+    var y = 0;
+    while y < height {
+        var x = 0;
+        while x < width {
+            val tile = board_get(board, x, y, width, height);
+            if tile == TILE_WALL() {
+                frame = concat(frame, "#")
+            } else if tile == TILE_SNAKE() {
+                frame = concat(frame, "O")
+            } else if tile == TILE_FOOD() {
+                frame = concat(frame, "@")
+            } else {
+                frame = concat(frame, " ")
+            };
+            x = x + 1
+        };
+        frame = concat(frame, "\n");
+        y = y + 1
+    };
+    frame = concat(frame, "W/A/S/D=Move  P=Pause  Q=Quit\n");
+    
+    // Print frame
+    exec_cmd("cls");
+    print(frame);
+    0
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard input
+// ---------------------------------------------------------------------------
+
+def read_input() -> i64 {
+    val key = read_key();
+    // Map key codes to direction
+    // W=119, A=97, S=115, D=100
+    // UP=72, DOWN=80, LEFT=75, RIGHT=77 (extended keys via read_key)
+    // Q=113, P=112
+    key
+}
+
+// ---------------------------------------------------------------------------
+// Main game loop
+// ---------------------------------------------------------------------------
+
+def main() -> i64 {
+    val a = args();
+    val argc = list_len(a);
+    
+    val width = if argc >= 2 { val w = parse_i64(list_get(a, 1)); if is_some(w) { unwrap(w) } else { 30 } } else { 30 };
+    val height = if argc >= 3 { val h = parse_i64(list_get(a, 2)); if is_some(h) { unwrap(h) } else { 16 } } else { 16 };
+    val base_speed = if argc >= 4 { val s = parse_i64(list_get(a, 3)); if is_some(s) { unwrap(s) } else { 3 } } else { 3 };
+    
+    if width < 10 || height < 10 {
+        print("Minimum board size is 10x10");
+        return 1
+    };
+    
+    var board = create_board(width, height);
+    
+    // Snake starts in the middle, moving right
+    val start_x = width / 2;
+    val start_y = height / 2;
+    val snake: list<i64> = list();
+    list_push(snake, start_x);
+    list_push(snake, start_y);
+    list_push(snake, start_x - 1);
+    list_push(snake, start_y);
+    list_push(snake, start_x - 2);
+    list_push(snake, start_y);
+    
+    var dir = DIR_RIGHT();
+    var next_dir = DIR_RIGHT();
+    var score = 0;
+    var high_score = 0;
+    var level = 1;
+    var paused = false;
+    var game_over = false;
+    var growing = false;
+    
+    // Place snake on board
+    var i = 0;
+    while i < list_len(snake) - 1 {
+        board = board_set(board, list_get(snake, i), list_get(snake, i + 1), width, 1);
+        i = i + 2
+    };
+    
+    // Spawn first food
+    val (fx, fy) = spawn_food(board, width, height);
+    var food_x = fx;
+    var food_y = fy;
+    if food_x >= 0 {
+        board = board_set(board, food_x, food_y, width, TILE_FOOD())
+    };
+    
+    hide_cursor();
+    
+    var running = true;
+    while running {
+        render(board, width, height, score, high_score, level, paused);
+        
+        // Check for input (non-blocking)
+        var start_idx = 0;
+        var input_dir = -1;
+        val key = read_input();
+        
+        if key == 119 || key == 72 { input_dir = DIR_UP() };     // W or UP
+        if key == 115 || key == 80 { input_dir = DIR_DOWN() };   // S or DOWN
+        if key == 97  || key == 75 { input_dir = DIR_LEFT() };   // A or LEFT
+        if key == 100 || key == 77 { input_dir = DIR_RIGHT() };  // D or RIGHT
+        if key == 113 { running = false };                      // Q
+        if key == 112 { paused = !paused };                     // P
+        
+        if !paused && !game_over {
+            // Update direction (no 180-degree reversal)
+            if input_dir >= 0 {
+            if (dir == DIR_UP() && input_dir != DIR_DOWN()) ||
+               (dir == DIR_DOWN() && input_dir != DIR_UP()) ||
+               (dir == DIR_LEFT() && input_dir != DIR_RIGHT()) ||
+               (dir == DIR_RIGHT() && input_dir != DIR_LEFT()) {
+                    next_dir = input_dir
+                }
+            };
+            dir = next_dir;
+            
+            // Calculate new head position
+            val head_x = list_get(snake, 0);
+            val head_y = list_get(snake, 1);
+            var new_x = head_x;
+            var new_y = head_y;
+            val d0: i64 = 0; val d1: i64 = 1; val d2: i64 = 2; val d3: i64 = 3;
+            if dir == d0 { new_y = head_y - 1 };
+            if dir == d1 { new_y = head_y + 1 };
+            if dir == d2 { new_x = head_x - 1 };
+            if dir == d3 { new_x = head_x + 1 };
+            
+            // Check collision
+            val tile = board_get(board, new_x, new_y, width, height);
+            if tile == TILE_WALL() || tile == TILE_SNAKE() {
+                game_over = true;
+                render(board, width, height, score, high_score, level, false);
+                print(concat("Game Over! Score: ", to_str(score)));
+                if score > high_score { high_score = score };
+                show_cursor();
+                
+                // Ask to play again
+                print("Play again? (y/n): ");
+                val again = read_line();
+                if contains(again, "y") || contains(again, "Y") {
+                    // Reset game
+                    board = create_board(width, height);
+                    var k = 0;
+                    while k < list_len(snake) { list_pop(snake); k = k + 1 };
+                    list_push(snake, start_x); list_push(snake, start_y);
+                    list_push(snake, start_x - 1); list_push(snake, start_y);
+                    list_push(snake, start_x - 2); list_push(snake, start_y);
+                    dir = DIR_RIGHT();
+                    next_dir = DIR_RIGHT();
+                    score = 0;
+                    level = 1;
+                    game_over = false;
+                    growing = false;
+                    var j = 0;
+                    while j < list_len(snake) - 1 {
+                        board = board_set(board, list_get(snake, j), list_get(snake, j + 1), width, 1);
+                        j = j + 2
+                    };
+                    val (nfx, nfy) = spawn_food(board, width, height);
+                    food_x = nfx; food_y = nfy;
+                    if food_x >= 0 { board = board_set(board, food_x, food_y, width, TILE_FOOD()) };
+                    hide_cursor();
+                    continue
+                } else {
+                    running = false;
+                    continue
+                }
+            };
+            
+            // Move snake
+            // Insert new head
+            list_push(snake, 0); // placeholder
+            i = list_len(snake) - 1;
+            while i > 1 {
+                list_set(snake, i, list_get(snake, i - 2));
+                list_set(snake, i + 1, list_get(snake, i - 1));
+                i = i - 2
+            };
+            list_set(snake, 0, new_x);
+            list_set(snake, 1, new_y);
+            
+            // Check if eating food
+            if new_x == food_x && new_y == food_y {
+                growing = true;
+                score = score + 10;
+                // Level up every 5 food
+                if score % 50 == 0 { level = level + 1 };
+                if score > high_score { high_score = score };
+                val (nfx, nfy) = spawn_food(board, width, height);
+                food_x = nfx; food_y = nfy;
+                if food_x >= 0 { board = board_set(board, food_x, food_y, width, TILE_FOOD()) }
+            };
+            
+            // Remove tail if not growing
+            if !growing {
+                val tail_x = list_get(snake, list_len(snake) - 2);
+                val tail_y = list_get(snake, list_len(snake) - 1);
+                board = board_set(board, tail_x, tail_y, width, TILE_EMPTY());
+                list_pop(snake);
+                list_pop(snake)
+            } else {
+                growing = false
+            };
+            
+            // Redraw snake on board
+            board = board_set(board, new_x, new_y, width, TILE_SNAKE());
+            if food_x >= 0 { board = board_set(board, food_x, food_y, width, TILE_FOOD()) }
+        };
+        
+        // Speed control
+        val speed_ms = 300 - (level - 1) * 20;
+        val delay = if speed_ms < 80 { 80 } else { speed_ms };
+        sleep_ms(delay)
+    };
+    
+    show_cursor();
+    clear_screen();
+    print(concat("Final Score: ", to_str(score)));
+    print(concat("High Score:  ", to_str(high_score)));
+    print("Thanks for playing!");
+    0
+}

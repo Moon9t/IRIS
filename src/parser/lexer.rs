@@ -88,6 +88,11 @@ pub enum Token {
     F64,
     I32,
     I64,
+    I8,
+    U8,
+    U32,
+    U64,
+    Usize,
     Bool,
     Tensor,
     /// `str` type keyword
@@ -118,6 +123,14 @@ pub enum Token {
     NotEq,    // !=
     LtEq,     // <=
     GtEq,     // >=
+    LtGt,     // <>
+
+    // Compound assignment operators
+    PlusEq,   // +=
+    MinusEq,  // -=
+    StarEq,   // *=
+    SlashEq,  // /=
+    PercentEq, // %=
 
     // Arithmetic operators
     Plus,
@@ -202,6 +215,11 @@ impl std::fmt::Display for Token {
             Token::F64 => write!(f, "f64"),
             Token::I32 => write!(f, "i32"),
             Token::I64 => write!(f, "i64"),
+            Token::I8 => write!(f, "i8"),
+            Token::U8 => write!(f, "u8"),
+            Token::U32 => write!(f, "u32"),
+            Token::U64 => write!(f, "u64"),
+            Token::Usize => write!(f, "usize"),
             Token::Bool => write!(f, "bool"),
             Token::Tensor => write!(f, "tensor"),
             Token::Str => write!(f, "str"),
@@ -227,6 +245,12 @@ impl std::fmt::Display for Token {
             Token::NotEq => write!(f, "!="),
             Token::LtEq => write!(f, "<="),
             Token::GtEq => write!(f, ">="),
+            Token::LtGt => write!(f, "<>"),
+            Token::PlusEq => write!(f, "+="),
+            Token::MinusEq => write!(f, "-="),
+            Token::StarEq => write!(f, "*="),
+            Token::SlashEq => write!(f, "/="),
+            Token::PercentEq => write!(f, "%="),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),
@@ -391,6 +415,13 @@ impl<'src> Lexer<'src> {
                 span: Span::new(start, self.pos as u32),
             });
         }
+        if ch == b'<' && self.peek2() == Some(b'>') {
+            self.pos += 2;
+            return Ok(Spanned {
+                node: Token::LtGt,
+                span: Span::new(start, self.pos as u32),
+            });
+        }
 
         // `&&` logical AND
         if ch == b'&' && self.peek2() == Some(b'&') {
@@ -405,6 +436,43 @@ impl<'src> Lexer<'src> {
             self.pos += 2;
             return Ok(Spanned {
                 node: Token::PipePipe,
+                span: Span::new(start, self.pos as u32),
+            });
+        }
+
+        // Compound assignment operators: +=, -=, *=, /=, %=
+        if ch == b'+' && self.peek2() == Some(b'=') {
+            self.pos += 2;
+            return Ok(Spanned {
+                node: Token::PlusEq,
+                span: Span::new(start, self.pos as u32),
+            });
+        }
+        if ch == b'-' && self.peek2() == Some(b'=') {
+            self.pos += 2;
+            return Ok(Spanned {
+                node: Token::MinusEq,
+                span: Span::new(start, self.pos as u32),
+            });
+        }
+        if ch == b'*' && self.peek2() == Some(b'=') {
+            self.pos += 2;
+            return Ok(Spanned {
+                node: Token::StarEq,
+                span: Span::new(start, self.pos as u32),
+            });
+        }
+        if ch == b'/' && self.peek2() == Some(b'=') {
+            self.pos += 2;
+            return Ok(Spanned {
+                node: Token::SlashEq,
+                span: Span::new(start, self.pos as u32),
+            });
+        }
+        if ch == b'%' && self.peek2() == Some(b'=') {
+            self.pos += 2;
+            return Ok(Spanned {
+                node: Token::PercentEq,
                 span: Span::new(start, self.pos as u32),
             });
         }
@@ -681,6 +749,11 @@ impl<'src> Lexer<'src> {
             "f64" => Token::F64,
             "i32" => Token::I32,
             "i64" => Token::I64,
+            "i8" => Token::I8,
+            "u8" => Token::U8,
+            "u32" => Token::U32,
+            "u64" => Token::U64,
+            "usize" => Token::Usize,
             "bool" => Token::Bool,
             "tensor" => Token::Tensor,
             "str" => Token::Str,

@@ -1,46 +1,55 @@
 // src/stdlib/deque.iris -- IRIS standard double-ended queue library
+//
+// Provides a double-ended queue (deque) implementation using the `list<i64>` backend.
+// All operations are O(1) amortized.
 
-// Create a new deque (uses builtin deque_new).
+/// Create a new empty deque.
 pub def deque_create() -> list<i64> {
     deque_new()
 }
 
-// Push to front.
+/// Push a value to the front of the deque.
+/// Returns the modified deque for chaining.
 pub def push_front(dq: list<i64>, value: i64) -> list<i64> {
     deque_push_front(dq, value)
 }
 
-// Push to back.
+/// Push a value to the back of the deque.
+/// Returns the modified deque for chaining.
 pub def push_back(dq: list<i64>, value: i64) -> list<i64> {
     deque_push_back(dq, value)
 }
 
-// Pop from front.
+/// Pop and return the value from the front of the deque.
+/// Panics if the deque is empty.
 pub def pop_front(dq: list<i64>) -> i64 {
     deque_pop_front(dq)
 }
 
-// Pop from back.
+/// Pop and return the value from the back of the deque.
+/// Panics if the deque is empty.
 pub def pop_back(dq: list<i64>) -> i64 {
     deque_pop_back(dq)
 }
 
-// Length.
+/// Return the number of elements in the deque.
 pub def len(dq: list<i64>) -> i64 {
     deque_len(dq)
 }
 
-// Peek front without removing.
+/// Peek at the front value without removing it.
+/// Panics if the deque is empty.
 pub def peek_front(dq: list<i64>) -> i64 {
     deque_front(dq)
 }
 
-// Peek back without removing.
+/// Peek at the back value without removing it.
+/// Panics if the deque is empty.
 pub def peek_back(dq: list<i64>) -> i64 {
     deque_back(dq)
 }
 
-// Check if empty.
+/// Check if the deque is empty.
 pub def is_empty(dq: list<i64>) -> bool {
     deque_len(dq) == 0
 }

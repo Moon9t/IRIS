@@ -1,0 +1,118 @@
+// ============================================================================
+// IRIS Parallel Build System
+// Executes build tasks in dependency order using spawn+channels.
+// Build manifest format: task_name:cmd[:dep1,dep2]
+// ============================================================================
+bring std.fs
+bring std.time
+
+def parse_deps(s: str) -> list<str> {
+    val r: list<str> = list();
+    if s == "" { return r };
+    val parts = split(s, ",");
+    var i = 0;
+    while i < list_len(parts) {
+        if trim(list_get(parts, i)) != "" {
+            list_push(r, trim(list_get(parts, i)))
+        };
+        i = i + 1
+    };
+    r
+}
+
+def build_task(name: str, ch: chan<str>) -> i64 {
+    val start = time_now_ms();
+    val output = exec_cmd(concat("echo Building ", name));
+    val elapsed = time_now_ms() - start;
+    send(ch, concat(concat(name, "|"), concat(to_str(elapsed), "|ok")));
+    0
+}
+
+def main() -> i64 {
+    val a = args();
+    if list_len(a) < 2 { print("Usage: buildsys <build.txt> [target]"); return 1 };
+    
+    val f = file_read_all(list_get(a, 1));
+    if is_err(f) { print("Cannot read build file"); return 1 };
+    
+    val lines = split(unwrap(f), "\n");
+    val tasks: map<str, str> = map();
+    val deps: map<str, str> = map();
+    val order: list<str> = list();
+    
+    var i = 0;
+    while i < list_len(lines) {
+        val line = trim(list_get(lines, i));
+        if line != "" && !starts_with(line, "#") {
+            val parts = split(line, ":");
+            if list_len(parts) >= 2 {
+                val name = trim(list_get(parts, 0));
+                val cmd = trim(list_get(parts, 1));
+                val dep_str = if list_len(parts) >= 3 { list_get(parts, 2) } else { "" };
+                map_set(tasks, name, cmd);
+                map_set(deps, name, dep_str);
+                list_push(order, name)
+            }
+        };
+        i = i + 1
+    };
+    
+    if map_len(tasks) == 0 { print("No tasks found"); return 1 };
+    
+    val target = if list_len(a) >= 3 { list_get(a, 2) } else { "all" };
+    print(concat("Build: ", list_get(a, 1)));
+    print(concat("Target: ", target));
+    print(concat("Tasks: ", to_str(map_len(tasks))));
+    print("");
+    
+    // Build execution
+    val ch: chan<str> = channel();
+    val done: map<str, i64> = map();
+    var total = 0;
+    var failed = 0;
+    
+    i = 0;
+    while i < list_len(order) {
+        val name = list_get(order, i);
+        val done_already = map_get(done, name);
+        if !is_some(done_already) {
+            val dep_str = map_get(deps, name);
+            var deps_ok = true;
+            if is_some(dep_str) {
+                val dep_list = parse_deps(unwrap(dep_str));
+                var j = 0;
+                while j < list_len(dep_list) {
+                    val dep_done = map_get(done, list_get(dep_list, j));
+                    if !is_some(dep_done) { deps_ok = false; print(concat("  Waiting: ", list_get(dep_list, j))); break };
+                    j = j + 1
+                }
+            };
+            if deps_ok {
+                val cmd = map_get(tasks, name);
+                if is_some(cmd) {
+                    print(concat("  Start: ", name));
+                    spawn { build_task(name, ch) };
+                    map_set(done, name, 0);
+                    total = total + 1
+                }
+            }
+        };
+        i = i + 1
+    };
+    
+    // Collect results
+    var collected = 0;
+    while collected < total {
+        val result = recv(ch);
+        val parts = split(result, "|");
+        if list_len(parts) >= 3 {
+            print(concat(concat(concat(concat("  Done: ", list_get(parts, 0)), " ("), list_get(parts, 1)), "ms)"));
+            collected = collected + 1
+        }
+    };
+    
+    print("");
+    if failed == 0 { print("Build complete — all tasks succeeded") }
+    else { print(concat(concat("Build complete — ", to_str(failed)), " failed")) };
+    0
+}

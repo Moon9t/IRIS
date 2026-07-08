@@ -1,0 +1,24 @@
+pub record Monitor {
+    name: str,
+    check: (i64) -> bool
+}
+
+pub def my_monitor(x: i64) -> bool {
+    x > 5
+}
+
+pub def main() -> i64 {
+    val c = my_monitor;
+    val r10 = c(10);
+    val r3 = c(3);
+    val r0 = c(0);
+    print(concat("c(10) = ", to_str(r10)));
+    print(concat("c(3) = ", to_str(r3)));
+    print(concat("c(0) = ", to_str(r0)));
+    val m = Monitor { name: "test", check: my_monitor };
+    val m10 = m.check(10);
+    val m3 = m.check(3);
+    print(concat("m.check(10) = ", to_str(m10)));
+    print(concat("m.check(3) = ", to_str(m3)));
+    0
+}

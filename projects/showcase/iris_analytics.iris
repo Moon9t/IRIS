@@ -1,0 +1,251 @@
+bring std.math
+bring std.stochastic
+bring std.svg
+bring std.fs
+bring std.fmt
+bring std.iter
+
+record DataPoint { t: f64, value: f64 }
+record ModelParams { slope: f64, intercept: f64 }
+
+def generate_data(points: i64, true_slope: f64, noise_sigma: f64) -> list<DataPoint> {
+    val data : list<DataPoint> = list();
+    var i = 0;
+    while i < points {
+        val t = (i to f64);
+        val noise = stochastic.normal_mu_sigma(0.0, noise_sigma);
+        val v = true_slope * t + 25.0 + noise;
+        val _ = list_push(data, DataPoint { t: t, value: v });
+        i = i + 1
+    }
+    data
+}
+
+def list_mean(xs: list<f64>) -> f64 {
+    val n = len(xs);
+    if n == 0 { 0.0 } else {
+        var s = 0.0; var i = 0;
+        while i < n { s = s + list_get(xs, i); i = i + 1 };
+        s / (n to f64)
+    }
+}
+
+def list_variance(xs: list<f64>, mu: f64) -> f64 {
+    val n = len(xs);
+    if n <= 1 { 0.0 } else {
+        var s = 0.0; var i = 0;
+        while i < n {
+            val d = list_get(xs, i) - mu;
+            s = s + d * d; i = i + 1
+        };
+        s / ((n - 1) to f64)
+    }
+}
+
+def fit_linear(data: list<DataPoint>) -> ModelParams {
+    val n = len(data);
+    val xs : list<f64> = list(); val ys : list<f64> = list();
+    var i = 0;
+    while i < n {
+        val pt = list_get(data, i);
+        val _ = list_push(xs, pt.t); val _ = list_push(ys, pt.value);
+        i = i + 1
+    }
+    val mx = list_mean(xs); val my = list_mean(ys);
+    var num = 0.0; var den = 0.0; i = 0;
+    while i < n {
+        val dx = list_get(xs, i) - mx; val dy = list_get(ys, i) - my;
+        num = num + dx * dy; den = den + dx * dx;
+        i = i + 1
+    }
+    val slope = if den < 0.0001 { 0.0 } else { num / den };
+    ModelParams { slope: slope, intercept: my - slope * mx }
+}
+
+def predict(params: ModelParams, t: f64) -> f64 { params.slope * t + params.intercept }
+
+def detect_anomalies(data: list<DataPoint>, params: ModelParams, threshold: f64) -> list<i64> {
+    val errors : list<f64> = list();
+    var i = 0; val n = len(data);
+    while i < n {
+        val pt = list_get(data, i);
+        val _ = list_push(errors, pt.value - predict(params, pt.t));
+        i = i + 1
+    }
+    val mu_err = list_mean(errors);
+    val var_err = list_variance(errors, mu_err);
+    val sigma_err = sqrt(var_err);
+    val anomalies : list<i64> = list();
+    i = 0;
+    while i < n {
+        val pt = list_get(data, i);
+        val resid = abs(pt.value - predict(params, pt.t));
+        val normalized = resid / (if sigma_err < 0.0001 { 1.0 } else { sigma_err });
+        if normalized > threshold { val _ = list_push(anomalies, i) } else { 0 };
+        i = i + 1
+    }
+    anomalies
+}
+
+def parallel_compute_stats(data: list<DataPoint>, chunk_count: i64) -> (f64, f64) {
+    val n = len(data);
+    val chunk_size = (n + chunk_count - 1) / chunk_count;
+    val results : list<chan<(f64, f64)> > = list();
+    var i = 0;
+    while i < chunk_count {
+        val ch = channel();
+        val _ = list_push(results, ch);
+        val start = i * chunk_size;
+        val end = if start + chunk_size < n { start + chunk_size } else { n };
+        spawn {
+            var s = 0.0; var ss = 0.0; var j = start;
+            while j < end {
+                val pt = list_get(data, j);
+                s = s + pt.value; ss = ss + pt.value * pt.value;
+                j = j + 1
+            };
+            send(ch, (s, ss))
+        };
+        i = i + 1
+    }
+    var total_sum = 0.0; var total_sq = 0.0; i = 0;
+    while i < chunk_count {
+        val (chunk_sum, chunk_sq) = recv(list_get(results, i));
+        total_sum = total_sum + chunk_sum; total_sq = total_sq + chunk_sq;
+        i = i + 1
+    }
+    val global_mean = total_sum / (n to f64);
+    val global_var = (total_sq / (n to f64)) - (global_mean * global_mean);
+    (global_mean, if global_var < 0.0 { 0.0 } else { global_var })
+}
+
+def list_str(a0: str, a1: str, a2: str, a3: str, a4: str) -> list<str> {
+    val l: list<str> = list(); val _ = list_push(l, a0); val _ = list_push(l, a1); val _ = list_push(l, a2); val _ = list_push(l, a3); val _ = list_push(l, a4); l
+}
+
+def list_str6(a0: str, a1: str, a2: str, a3: str, a4: str, a5: str) -> list<str> {
+    val l: list<str> = list(); val _ = list_push(l, a0); val _ = list_push(l, a1); val _ = list_push(l, a2); val _ = list_push(l, a3); val _ = list_push(l, a4); val _ = list_push(l, a5); l
+}
+
+def render_svg(data: list<DataPoint>, params: ModelParams, anomalies: list<i64>, path: str) -> i64 {
+    val margin = 50.0;
+    val w = 700.0; val h = 400.0;
+    val n = len(data);
+    var min_v = list_get(data, 0).value; var max_v = min_v;
+    var min_t = list_get(data, 0).t; var max_t = list_get(data, n - 1).t;
+    var i = 0;
+    while i < n {
+        val v = list_get(data, i).value;
+        if v < min_v { min_v = v } else { 0 };
+        if v > max_v { max_v = v } else { 0 };
+        i = i + 1
+    }
+    val data_range = if max_v - min_v < 0.1 { 1.0 } else { max_v - min_v };
+    val time_range = if max_t - min_t < 0.1 { 1.0 } else { max_t - min_t };
+    var svg_out = concat("<svg width=\"", to_str((w + 2.0 * margin) to i64));
+    svg_out = concat(svg_out, concat("\" height=\"", to_str((h + 2.0 * margin) to i64)));
+    svg_out = concat(svg_out, "\" xmlns=\"http://www.w3.org/2000/svg\">\n");
+    svg_out = concat(svg_out, fmt.sprintf("  <rect x=\"%.2f\" y=\"%.2f\" width=\"%.2f\" height=\"%.2f\" fill=\"%s\" />\n", list_str("0.00", "0.00", to_str(w + 2.0 * margin), to_str(h + 2.0 * margin), "#f8f9fa")));
+    svg_out = concat(svg_out, fmt.sprintf("  <rect x=\"%.2f\" y=\"%.2f\" width=\"%.2f\" height=\"%.2f\" fill=\"%s\" />\n", list_str(to_str(margin), to_str(margin), to_str(w), to_str(h), "#ffffff")));
+    i = 0;
+    while i < n {
+        val pt = list_get(data, i);
+        val cx = margin + ((pt.t - min_t) / time_range) * w;
+        val cy = margin + h - ((pt.value - min_v) / data_range) * h;
+        svg_out = concat(svg_out, fmt.sprintf("  <circle cx=\"%.2f\" cy=\"%.2f\" r=\"2.00\" fill=\"#4a90d9\" />\n", list_str(to_str(cx), to_str(cy), "2.0", "#4a90d9", "")));
+        i = i + 1
+    }
+    val steps = 100;
+    var prev_x = 0.0; var prev_y = 0.0;
+    i = 0;
+    while i <= steps {
+        val tf = (i to f64) / (steps to f64);
+        val t = min_t + tf * time_range;
+        val pred = predict(params, t);
+        val lx = margin + ((t - min_t) / time_range) * w;
+        val ly = margin + h - ((pred - min_v) / data_range) * h;
+        if i > 0 {
+            svg_out = concat(svg_out, fmt.sprintf("  <line x1=\"%.2f\" y1=\"%.2f\" x2=\"%.2f\" y2=\"%.2f\" stroke=\"#e67e22\" stroke-width=\"2.00\" />\n", list_str6(to_str(prev_x), to_str(prev_y), to_str(lx), to_str(ly), "#e67e22", "2.0")))
+        } else { 0 };
+        prev_x = lx; prev_y = ly;
+        i = i + 1
+    }
+    svg_out = concat(svg_out, "  <text x=\"5.00\" y=\"60.00\" fill=\"#333\" font-size=\"11\">Data | Trend | Anomalies</text>\n");
+    i = 0;
+    while i < len(anomalies) {
+        val idx = list_get(anomalies, i);
+        val pt = list_get(data, idx);
+        val ax = margin + ((pt.t - min_t) / time_range) * w;
+        val ay = margin + h - ((pt.value - min_v) / data_range) * h;
+        svg_out = concat(svg_out, fmt.sprintf("  <circle cx=\"%.2f\" cy=\"%.2f\" r=\"5.00\" fill=\"#e74c3c\" />\n", list_str(to_str(ax), to_str(ay), "5.0", "#e74c3c", "")));
+        i = i + 1
+    }
+    svg_out = concat(svg_out, "</svg>\n");
+    fs.write_text(path, svg_out);
+    0
+}
+
+def main() -> i64 {
+    print("============================================");
+    print("  IRIS Intelligence Analytics Showcase");
+    print("============================================");
+    val n_points = 500;
+    val true_slope = 0.15;
+    val noise_sigma = 2.5;
+    print(concat("Generating ", concat(to_str(n_points), " data points")));
+    print(concat("  true_slope = ", to_str(true_slope)));
+    print(concat("  noise_sigma = ", to_str(noise_sigma)));
+    val data = generate_data(n_points, true_slope, noise_sigma);
+    print(concat("Generated ", concat(to_str(len(data)), " points")));
+    print("");
+    print("--- Parallel Statistics (4 workers) ---");
+    val (gmean, gvar) = parallel_compute_stats(data, 4);
+    val gstd = sqrt(gvar);
+    print(concat("  mean = ", fmt.fmt_float_prec(to_str(gmean), 4)));
+    print(concat("  variance = ", fmt.fmt_float_prec(to_str(gvar), 4)));
+    print(concat("  std_dev = ", fmt.fmt_float_prec(to_str(gstd), 4)));
+    print("");
+    print("--- Linear Regression (closed-form OLS) ---");
+    val params = fit_linear(data);
+    print(concat("  slope = ", fmt.fmt_float_prec(to_str(params.slope), 4)));
+    print(concat("  intercept = ", fmt.fmt_float_prec(to_str(params.intercept), 4)));
+    print(concat("  predict(t=100) = ", fmt.fmt_float_prec(to_str(predict(params, 100.0)), 4)));
+    print(concat("  predict(t=400) = ", fmt.fmt_float_prec(to_str(predict(params, 400.0)), 4)));
+    print("");
+    print("--- Anomaly Detection (z > 2.0) ---");
+    val anomalies = detect_anomalies(data, params, 2.0);
+    print(concat("  found ", concat(to_str(len(anomalies)), " anomalies")));
+    if len(anomalies) > 0 {
+        val max_show = if len(anomalies) < 5 { len(anomalies) } else { 5 };
+        var i = 0;
+        while i < max_show {
+            val idx = list_get(anomalies, i);
+            val pt = list_get(data, idx);
+            print(concat(concat("  [", to_str(idx)), concat("] t=", concat(fmt.fmt_float_prec(to_str(pt.t), 1), concat(" val=", fmt.fmt_float_prec(to_str(pt.value), 2))))));
+            i = i + 1
+        }
+    } else { 0 };
+    print("");
+    print("--- SVG Chart Generation ---");
+    val chart_path = "iris_analytics_chart.svg";
+    val _ = render_svg(data, params, anomalies, chart_path);
+    print(concat("  Saved ", chart_path));
+    print("");
+    print("--- Iterator Demo (list<i64>) ---");
+    val indices : list<i64> = list();
+    var i = 0;
+    while i < 20 {
+        val _ = list_push(indices, i);
+        i = i + 1
+    }
+    print(concat("  range sum = ", to_str(iter.sum(indices))));
+    print(concat("  range product = ", to_str(iter.product(indices))));
+    print(concat("  range take(5) = ", to_str(len(iter.take(indices, 5)))));
+    val rev = iter.reverse(indices);
+    print(concat("  reverse first = ", to_str(list_get(rev, 0))));
+    print("");
+    print("============================================");
+    print("  Showcase Complete!");
+    print("============================================");
+    0
+}

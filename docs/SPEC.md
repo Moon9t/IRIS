@@ -70,7 +70,7 @@ Line comments begin with `//` and extend to the end of the line:
 def main() -> i64 { 0 }  // inline comment
 ```
 
-Block comments are not supported in version 0.2.0.
+Block comments `/* ... */` are supported and may be nested.
 
 ### 2.3 Keywords
 
@@ -86,7 +86,7 @@ pub    extern  model  layer  input  output  to
 ### 2.4 Type Keywords
 
 ```
-f32  f64  i32  i64  bool  tensor  str
+f32  f64  i32  i64  i8  u8  u32  u64  usize  bool  tensor  str
 ```
 
 ### 2.5 Literals

@@ -655,6 +655,7 @@ IrisResult* iris_make_ok(IrisVal* val) {
     IrisResult* r = xmalloc(sizeof(IrisResult));
     r->is_ok = 1;
     r->value = val;
+    fprintf(stderr, "DEBUG: iris_make_ok(val=%p) -> created res=%p (is_ok=%d)\n", (void*)val, (void*)r, (int)r->is_ok);
     if (val) iris_retain(val);
     return r;
 }
@@ -662,15 +663,22 @@ IrisResult* iris_make_err(IrisVal* val) {
     IrisResult* r = xmalloc(sizeof(IrisResult));
     r->is_ok = 0;
     r->value = val;
+    fprintf(stderr, "DEBUG: iris_make_err(val=%p) -> created res=%p (is_ok=%d)\n", (void*)val, (void*)r, (int)r->is_ok);
     if (val) iris_retain(val);
     return r;
 }
-int      iris_is_ok(IrisResult* res)            { return res ? res->is_ok : 0; }
+int      iris_is_ok(IrisResult* res) {
+    int ret = res ? res->is_ok : 0;
+    fprintf(stderr, "DEBUG: iris_is_ok(res=%p) -> is_ok=%d, returning %d\n", (void*)res, res ? (int)res->is_ok : -1, ret);
+    return ret;
+}
 IrisVal* iris_result_unwrap(IrisResult* res) {
+    fprintf(stderr, "DEBUG: iris_result_unwrap(res=%p) -> is_ok=%d\n", (void*)res, res ? (int)res->is_ok : -1);
     if (!res || !res->is_ok) { fprintf(stderr, "iris: unwrap called on err\n"); abort(); }
     return res->value;
 }
 IrisVal* iris_result_unwrap_err(IrisResult* res) {
+    fprintf(stderr, "DEBUG: iris_result_unwrap_err(res=%p) -> is_ok=%d\n", (void*)res, res ? (int)res->is_ok : -1);
     if (!res || res->is_ok) { fprintf(stderr, "iris: unwrap_err called on ok\n"); abort(); }
     return res->value;
 }
@@ -920,28 +928,49 @@ IrisList* iris_map_values(IrisMap* m) {
 // File I/O
 // ---------------------------------------------------------------------------
 
-char* iris_file_read_all(const char* path) {
+IrisResult* iris_file_read_all(const char* path) {
     FILE* f = fopen(path, "rb");
-    if (!f) return NULL;
-    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    if (!f) {
+        return iris_make_err(iris_box_str("Failed to open file for reading"));
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return iris_make_err(iris_box_str("Fseek end error"));
+    }
     long sz = ftell(f);
-    if (sz < 0) { fclose(f); return NULL; }
-    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    if (sz < 0) {
+        fclose(f);
+        return iris_make_err(iris_box_str("Ftell error"));
+    }
+    if (fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return iris_make_err(iris_box_str("Fseek set error"));
+    }
     size_t size = (size_t)sz;
     char* buf = xmalloc(size + 1);
     size_t n = fread(buf, 1, size, f);
     buf[n] = '\0';
     fclose(f);
-    return buf;
+    IrisVal* contents = iris_box_str(buf);
+    free(buf);
+    IrisResult* r = iris_make_ok(contents);
+    return r;
 }
 
-char* iris_file_write_all(const char* path, const char* contents) {
+IrisResult* iris_file_write_all(const char* path, const char* contents) {
     FILE* f = fopen(path, "wb");
-    if (!f) return NULL;
+    if (!f) {
+        return iris_make_err(iris_box_str("Failed to open file for writing"));
+    }
     size_t len = strlen(contents);
-    int ok = (fwrite(contents, 1, len, f) == len);
+    size_t written = fwrite(contents, 1, len, f);
     fclose(f);
-    return ok ? (char*)path : NULL;
+    if (written != len) {
+        return iris_make_err(iris_box_str("Incomplete write"));
+    }
+    IrisVal* b = iris_box_i64((int64_t)written);
+    IrisResult* r = iris_make_ok(b);
+    return r;
 }
 
 int iris_file_exists(const char* path) {
@@ -964,6 +993,41 @@ IrisList* iris_file_lines(const char* path) {
     fclose(f);
     return r;
 }
+
+/* Streaming File I/O */
+int64_t iris_file_open(const char* path, const char* mode) {
+    if (!path || !mode) return 0;
+    FILE* f = fopen(path, mode);
+    return (int64_t)f;
+}
+
+int iris_file_close(int64_t handle) {
+    FILE* f = (FILE*)handle;
+    if (!f) return 0;
+    return fclose(f) == 0 ? 1 : 0;
+}
+
+char* iris_file_read(int64_t handle, int64_t bytes) {
+    FILE* f = (FILE*)handle;
+    if (!f || bytes <= 0) {
+        char* empty = xmalloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
+    char* buf = xmalloc(bytes + 1);
+    size_t n = fread(buf, 1, (size_t)bytes, f);
+    buf[n] = '\0';
+    return buf;
+}
+
+int iris_file_write(int64_t handle, const char* data) {
+    FILE* f = (FILE*)handle;
+    if (!f || !data) return 0;
+    size_t len = strlen(data);
+    size_t written = fwrite(data, 1, len, f);
+    return written == len ? 1 : 0;
+}
+
 
 // ---------------------------------------------------------------------------
 // Database operations (SQLite via dynamic loading)
@@ -1195,11 +1259,25 @@ IrisOption* iris_env_var(const char* key) {
 
 #define CHAN_INIT_CAP 64u
 
-IrisChannel* iris_chan_new(void) {
+static void chan_grow(IrisChannel* c) {
+    size_t new_cap = c->cap * 2;
+    IrisVal** new_buf = xmalloc(sizeof(IrisVal*) * new_cap);
+    for (size_t i = 0; i < c->count; i++) {
+        new_buf[i] = c->buf[(c->head + i) % c->cap];
+    }
+    free(c->buf);
+    c->buf = new_buf;
+    c->cap = new_cap;
+    c->head = 0;
+    c->tail = c->count;
+}
+
+IrisChannel* iris_chan_new(int64_t capacity) {
     IrisChannel* c = xmalloc(sizeof(IrisChannel));
-    c->cap   = CHAN_INIT_CAP;
+    c->cap   = capacity > 0 ? capacity : CHAN_INIT_CAP;
     c->buf   = xmalloc(sizeof(IrisVal*) * c->cap);
     c->head  = c->tail = c->count = 0;
+    c->max_cap = capacity; // Store intended capacity, -1 if unbounded
     pthread_mutex_init(&c->mu,        NULL);
     pthread_cond_init (&c->not_empty, NULL);
     pthread_cond_init (&c->not_full,  NULL);
@@ -1207,7 +1285,13 @@ IrisChannel* iris_chan_new(void) {
 }
 void iris_chan_send(IrisChannel* c, IrisVal* val) {
     pthread_mutex_lock(&c->mu);
-    while (c->count == c->cap) pthread_cond_wait(&c->not_full, &c->mu);
+    if (c->max_cap >= 0) {
+        while (c->count >= c->max_cap) {
+            pthread_cond_wait(&c->not_full, &c->mu);
+        }
+    } else {
+        if (c->count == c->cap) chan_grow(c);
+    }
     if (val) iris_retain(val);
     c->buf[c->tail] = val;
     c->tail = (c->tail + 1) % c->cap;
@@ -1221,9 +1305,44 @@ IrisVal* iris_chan_recv(IrisChannel* c) {
     IrisVal* val = c->buf[c->head];
     c->head = (c->head + 1) % c->cap;
     c->count--;
-    pthread_cond_signal(&c->not_full);
+    if (c->max_cap >= 0) pthread_cond_signal(&c->not_full);
     pthread_mutex_unlock(&c->mu);
     return val;
+}
+
+int64_t iris_chan_len(IrisChannel* c) {
+    if (!c) return 0;
+    pthread_mutex_lock(&c->mu);
+    int64_t len = (int64_t)c->count;
+    pthread_mutex_unlock(&c->mu);
+    return len;
+}
+
+IrisOption* iris_chan_try_recv(IrisChannel* c) {
+    if (!c) return iris_make_none();
+    pthread_mutex_lock(&c->mu);
+    if (c->count == 0) {
+        pthread_mutex_unlock(&c->mu);
+        return iris_make_none();
+    }
+    IrisVal* val = c->buf[c->head];
+    c->head = (c->head + 1) % c->cap;
+    c->count--;
+    if (c->max_cap >= 0) {
+        pthread_cond_signal(&c->not_full);
+    }
+    pthread_mutex_unlock(&c->mu);
+    
+    IrisOption* opt = iris_make_some(val);
+    if (val) {
+        iris_release(val); // Transfer reference from channel buffer to Option
+    }
+    return opt;
+}
+
+int iris_timeout(int64_t ms) {
+    iris_sleep_ms(ms);
+    return 1;
 }
 void iris_spawn_fn(void* fn, void* arg) {
     pthread_t t;
@@ -3460,7 +3579,22 @@ char* iris_type_of(IrisVal* val) {
 
 static int rand_seeded = 0;
 static void ensure_rand(void) {
-    if (!rand_seeded) { srand((unsigned int)time(NULL)); rand_seeded = 1; }
+    if (!rand_seeded) {
+        unsigned seed = (unsigned)time(NULL);
+#ifdef _WIN32
+        seed ^= (unsigned)(GetCurrentProcessId() << 16);
+        seed ^= (unsigned)(GetTickCount() & 0xFFFF);
+#else
+        seed ^= (unsigned)(getpid() << 16);
+        {
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            seed ^= (unsigned)(ts.tv_nsec & 0xFFFF);
+        }
+#endif
+        srand(seed);
+        rand_seeded = 1;
+    }
 }
 
 double iris_random(void) {
@@ -4955,6 +5089,338 @@ IrisVal* iris_extract_variant_field(IrisVal* v, int64_t field_idx) {
     return e->fields[field_idx];
 }
 
+
+// ── Adaptive AI runtime (std.adaptive) ────────────────────────────────────
+
+struct IrisAdaptiveState {
+    char*     name;
+    double*   params;
+    int64_t   n_params;
+    double    learning_rate;
+    double    risk_threshold;
+    double    retrain_threshold;
+    int64_t   min_obs_retrain;
+    int64_t   obs_count;
+    double    mean_err;
+    double    m2;
+    double    last_prediction;
+    int       initialized;
+};
+
+// ── Internal implementations (IrisAdaptiveState*) ──────────────────────────
+
+IrisAdaptiveState* iris_adaptive_new_impl(const char* name,
+                                           int64_t n_params,
+                                           double learning_rate,
+                                           double risk_threshold) {
+    IrisAdaptiveState* s = (IrisAdaptiveState*)xmalloc(sizeof(IrisAdaptiveState));
+    s->name = name ? xstrdup(name) : xstrdup("adaptive");
+    s->n_params = n_params;
+    s->params = (double*)xcalloc((size_t)(n_params > 0 ? n_params : 1), sizeof(double));
+    s->learning_rate = learning_rate > 0.0 ? learning_rate : 0.01;
+    s->risk_threshold = risk_threshold > 0.0 ? risk_threshold : 2.0;
+    s->retrain_threshold = 0.05;
+    s->min_obs_retrain = 10;
+    s->obs_count = 0;
+    s->mean_err = 0.0;
+    s->m2 = 0.0;
+    s->last_prediction = 0.0;
+    s->initialized = 1;
+    return s;
+}
+
+void iris_adaptive_free_impl(IrisAdaptiveState* state) {
+    if (!state) return;
+    if (state->name) free(state->name);
+    if (state->params) free(state->params);
+    free(state);
+}
+
+const char* iris_adaptive_name_impl(IrisAdaptiveState* state) {
+    return state ? state->name : "";
+}
+
+double iris_adaptive_get_param_impl(IrisAdaptiveState* state, int64_t idx) {
+    if (!state || idx < 0 || idx >= state->n_params) return 0.0;
+    return state->params[idx];
+}
+
+void iris_adaptive_set_param_impl(IrisAdaptiveState* state, int64_t idx, double value) {
+    if (!state || idx < 0 || idx >= state->n_params) return;
+    state->params[idx] = value;
+}
+
+int64_t iris_adaptive_n_params_impl(IrisAdaptiveState* state) {
+    return state ? state->n_params : 0;
+}
+
+double iris_adaptive_learning_rate_impl(IrisAdaptiveState* state) {
+    return state ? state->learning_rate : 0.0;
+}
+
+void iris_adaptive_set_learning_rate_impl(IrisAdaptiveState* state, double lr) {
+    if (state) state->learning_rate = lr > 0.0 ? lr : 0.001;
+}
+
+void iris_adaptive_observe_impl(IrisAdaptiveState* state,
+                                 const double* inputs, int64_t n_inputs,
+                                 double target) {
+    if (!state || !inputs || n_inputs <= 0) return;
+    double pred = iris_adaptive_predict_impl(state, inputs, n_inputs);
+    double error = pred - target;
+    state->last_prediction = pred;
+    iris_adaptive_record_error_impl(state, error);
+    double lr = state->learning_rate;
+    for (int64_t i = 0; i < n_inputs && i < state->n_params; i++) {
+        state->params[i] -= lr * error * inputs[i];
+    }
+}
+
+double iris_adaptive_predict_impl(IrisAdaptiveState* state,
+                                  const double* inputs, int64_t n_inputs) {
+    if (!state || !inputs) return 0.0;
+    double pred = 0.0;
+    for (int64_t i = 0; i < n_inputs && i < state->n_params; i++) {
+        pred += state->params[i] * inputs[i];
+    }
+    return pred;
+}
+
+double iris_adaptive_train_batch_impl(IrisAdaptiveState* state,
+                                       const double* inputs, int64_t n_samples,
+                                       int64_t n_features, const double* targets) {
+    if (!state || !inputs || !targets || n_samples <= 0) return 0.0;
+    double total_loss = 0.0;
+    for (int64_t b = 0; b < n_samples; b++) {
+        const double* row = inputs + b * n_features;
+        double pred = iris_adaptive_predict_impl(state, row, n_features);
+        double error = pred - targets[b];
+        total_loss += error * error;
+        double lr = state->learning_rate;
+        for (int64_t i = 0; i < n_features && i < state->n_params; i++) {
+            state->params[i] -= lr * error * row[i];
+        }
+    }
+    state->last_prediction = total_loss / (double)n_samples;
+    return state->last_prediction;
+}
+
+void iris_adaptive_record_error_impl(IrisAdaptiveState* state, double error) {
+    if (!state) return;
+    state->obs_count++;
+    double delta = error - state->mean_err;
+    state->mean_err += delta / (double)state->obs_count;
+    double delta2 = error - state->mean_err;
+    state->m2 += delta * delta2;
+}
+
+IrisRiskMetrics iris_adaptive_get_risk_impl(IrisAdaptiveState* state) {
+    IrisRiskMetrics m;
+    m.mean_error = state ? state->mean_err : 0.0;
+    m.max_error = 0.0;
+    m.observations = state ? state->obs_count : 0;
+    m.errors = 0;
+    m.last_risk = 0.0;
+    m.confidence = 1.0;
+    if (state && state->obs_count > 1) {
+        double variance = state->m2 / (double)(state->obs_count - 1);
+        double std_dev = sqrt(variance);
+        double risk_score = std_dev + fabs(state->mean_err);
+        m.last_risk = risk_score > 1.0 ? 1.0 : risk_score;
+        m.confidence = std_dev > 0.0 ? exp(-fabs(state->mean_err) / std_dev) : 1.0;
+        if (m.confidence > 1.0) m.confidence = 1.0;
+        if (m.last_risk > 0.5) m.errors = 1;
+    }
+    return m;
+}
+
+int iris_adaptive_is_unsafe_impl(IrisAdaptiveState* state) {
+    if (!state) return 0;
+    IrisRiskMetrics m = iris_adaptive_get_risk_impl(state);
+    return m.last_risk > 0.5 || m.confidence < 0.3;
+}
+
+void iris_adaptive_set_risk_threshold_impl(IrisAdaptiveState* state, double threshold) {
+    if (state) state->risk_threshold = threshold > 0.0 ? threshold : 1.0;
+}
+
+IrisUncertainty iris_adaptive_predict_with_uncertainty_impl(IrisAdaptiveState* state,
+                                                             const double* inputs,
+                                                             int64_t n_inputs) {
+    IrisUncertainty u;
+    u.mean = iris_adaptive_predict_impl(state, inputs, n_inputs);
+    u.variance = 1.0;
+    u.lower_95 = u.mean - 1.96;
+    u.upper_95 = u.mean + 1.96;
+    u.confidence = 0.5;
+    if (state && state->obs_count > 1) {
+        u.variance = state->m2 / (double)(state->obs_count - 1);
+        double std_dev = sqrt(u.variance);
+        u.lower_95 = u.mean - 1.96 * std_dev;
+        u.upper_95 = u.mean + 1.96 * std_dev;
+        u.confidence = std_dev > 0.0 ? exp(-fabs(u.mean) / std_dev) : 0.5;
+        if (u.confidence > 1.0) u.confidence = 1.0;
+    }
+    return u;
+}
+
+double iris_adaptive_uncertainty_bayes_update_impl(IrisAdaptiveState* state,
+                                                    double prior_mean, double prior_var,
+                                                    double observation, double obs_var) {
+    if (!state) return 0.0;
+    if (prior_var <= 0.0) prior_var = 1.0;
+    if (obs_var <= 0.0) obs_var = 1.0;
+    double posterior_precision = 1.0 / prior_var + (double)state->obs_count / obs_var;
+    if (posterior_precision <= 0.0) posterior_precision = 1.0;
+    double posterior_mean = (prior_mean / prior_var + (double)state->obs_count * state->mean_err / obs_var)
+        / posterior_precision;
+    return posterior_mean + observation;
+}
+
+int iris_adaptive_should_retrain_impl(IrisAdaptiveState* state) {
+    if (!state) return 0;
+    if (state->obs_count < state->min_obs_retrain) return 0;
+    return fabs(state->mean_err) > state->retrain_threshold;
+}
+
+double iris_adaptive_auto_retrain_impl(IrisAdaptiveState* state,
+                                       const double* inputs, int64_t n_samples,
+                                       int64_t n_features, const double* targets) {
+    if (!state) return 0.0;
+    if (!iris_adaptive_should_retrain_impl(state)) {
+        return state->mean_err;
+    }
+    double loss = iris_adaptive_train_batch_impl(state, inputs, n_samples, n_features, targets);
+    iris_adaptive_reset_stats_impl(state);
+    return loss;
+}
+
+void iris_adaptive_set_retrain_threshold_impl(IrisAdaptiveState* state, double threshold) {
+    if (state) state->retrain_threshold = threshold > 0.0 ? threshold : 0.01;
+}
+
+void iris_adaptive_set_min_observations_for_retrain_impl(IrisAdaptiveState* state, int64_t n) {
+    if (state) state->min_obs_retrain = n > 0 ? n : 1;
+}
+
+void iris_adaptive_adapt_threshold_impl(IrisAdaptiveState* state, double observed_error) {
+    if (!state) return;
+    double current = state->risk_threshold;
+    double alpha = 0.1;
+    double abs_err = fabs(observed_error);
+    if (abs_err > current) {
+        state->risk_threshold = current + alpha * (abs_err - current);
+    } else {
+        state->risk_threshold = current - alpha * (current - abs_err) * 0.5;
+    }
+    if (state->risk_threshold < 0.1) state->risk_threshold = 0.1;
+    double error_rate = fabs(state->mean_err);
+    if (state->obs_count > 0 && error_rate > 0.05) {
+        state->learning_rate *= 1.01;
+        if (state->learning_rate > 1.0) state->learning_rate = 1.0;
+    } else if (state->obs_count > 10 && error_rate < 0.001) {
+        state->learning_rate *= 0.99;
+        if (state->learning_rate < 0.0001) state->learning_rate = 0.0001;
+    }
+}
+
+double iris_adaptive_current_threshold_impl(IrisAdaptiveState* state) {
+    return state ? state->risk_threshold : 0.0;
+}
+
+int64_t iris_adaptive_observation_count_impl(IrisAdaptiveState* state) {
+    return state ? state->obs_count : 0;
+}
+
+double iris_adaptive_mean_error_impl(IrisAdaptiveState* state) {
+    return state ? state->mean_err : 0.0;
+}
+
+void iris_adaptive_reset_stats_impl(IrisAdaptiveState* state) {
+    if (!state) return;
+    state->obs_count = 0;
+    state->mean_err = 0.0;
+    state->m2 = 0.0;
+}
+
+// ── Extern-compatible wrappers (int64_t handle) ───────────────────────────
+static IrisAdaptiveState* ad_h(int64_t h) { return (IrisAdaptiveState*)(intptr_t)h; }
+
+int64_t iris_adaptive_new(const char* name, int64_t n_params,
+                           double learning_rate, double risk_threshold) {
+    return (int64_t)(intptr_t)iris_adaptive_new_impl(name, n_params, learning_rate, risk_threshold);
+}
+int64_t iris_adaptive_free(int64_t handle) {
+    iris_adaptive_free_impl(ad_h(handle));
+    return 0;
+}
+const char* iris_adaptive_name(int64_t handle) {
+    IrisAdaptiveState* state = ad_h(handle);
+    if (state && state->name) return xstrdup(state->name);
+    return xstrdup("");
+}
+double iris_adaptive_get_param(int64_t handle, int64_t idx) {
+    return iris_adaptive_get_param_impl(ad_h(handle), idx);
+}
+int64_t iris_adaptive_set_param(int64_t handle, int64_t idx, double value) {
+    iris_adaptive_set_param_impl(ad_h(handle), idx, value);
+    return 0;
+}
+int64_t iris_adaptive_n_params(int64_t handle) {
+    return iris_adaptive_n_params_impl(ad_h(handle));
+}
+double iris_adaptive_learning_rate(int64_t handle) {
+    return iris_adaptive_learning_rate_impl(ad_h(handle));
+}
+int64_t iris_adaptive_set_learning_rate(int64_t handle, double lr) {
+    iris_adaptive_set_learning_rate_impl(ad_h(handle), lr);
+    return 0;
+}
+int64_t iris_adaptive_record_error(int64_t handle, double error) {
+    iris_adaptive_record_error_impl(ad_h(handle), error);
+    return 0;
+}
+int iris_adaptive_is_unsafe(int64_t handle) {
+    return iris_adaptive_is_unsafe_impl(ad_h(handle));
+}
+int64_t iris_adaptive_set_risk_threshold(int64_t handle, double threshold) {
+    iris_adaptive_set_risk_threshold_impl(ad_h(handle), threshold);
+    return 0;
+}
+int iris_adaptive_should_retrain(int64_t handle) {
+    return iris_adaptive_should_retrain_impl(ad_h(handle));
+}
+int64_t iris_adaptive_set_retrain_threshold(int64_t handle, double threshold) {
+    iris_adaptive_set_retrain_threshold_impl(ad_h(handle), threshold);
+    return 0;
+}
+int64_t iris_adaptive_set_min_observations_for_retrain(int64_t handle, int64_t n) {
+    iris_adaptive_set_min_observations_for_retrain_impl(ad_h(handle), n);
+    return 0;
+}
+int64_t iris_adaptive_adapt_threshold(int64_t handle, double observed_error) {
+    iris_adaptive_adapt_threshold_impl(ad_h(handle), observed_error);
+    return 0;
+}
+double iris_adaptive_current_threshold(int64_t handle) {
+    return iris_adaptive_current_threshold_impl(ad_h(handle));
+}
+int64_t iris_adaptive_observation_count(int64_t handle) {
+    return iris_adaptive_observation_count_impl(ad_h(handle));
+}
+double iris_adaptive_mean_error(int64_t handle) {
+    return iris_adaptive_mean_error_impl(ad_h(handle));
+}
+int64_t iris_adaptive_reset_stats(int64_t handle) {
+    iris_adaptive_reset_stats_impl(ad_h(handle));
+    return 0;
+}
+double iris_adaptive_uncertainty_bayes_update(int64_t handle,
+                                               double prior_mean, double prior_var,
+                                               double observation, double obs_var) {
+    return iris_adaptive_uncertainty_bayes_update_impl(ad_h(handle),
+               prior_mean, prior_var, observation, obs_var);
+}
 
 int iris_sandbox_check_ffi(const char* lib_path) {
     (void)lib_path;

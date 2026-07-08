@@ -1,0 +1,262 @@
+// ============================================================================
+// IRIS Concurrent Web Crawler
+// A real concurrent web crawler using spawn+channels for parallel page fetching,
+// regex for link extraction, and BFS traversal with depth/domain control.
+// ============================================================================
+// Usage:
+//   iris build projects/realworld/crawler.iris
+//   crawler <start-url> [max-pages] [max-depth]
+//   crawler https://example.com 50 2
+// ============================================================================
+
+bring std.crypto
+bring std.fs
+
+// ---------------------------------------------------------------------------
+// URL utilities
+// ---------------------------------------------------------------------------
+
+def normalize_url(base: str, href: str) -> str {
+    if starts_with(href, "http://") || starts_with(href, "https://") { return href };
+    if starts_with(href, "//") {
+        val col = find(base, ":");
+        return concat(concat(if is_some(col) { slice(base, 0, unwrap(col)) } else { "http" }, ":"), href)
+    };
+    if starts_with(href, "/") {
+        val col = find(base, ":");
+        if is_some(col) {
+            val after_col = slice(base, unwrap(col) + 3, len(base));
+            val slash = find(after_col, "/");
+            val root = concat(slice(base, 0, unwrap(col) + 3), if is_some(slash) { slice(after_col, 0, unwrap(slash)) } else { after_col });
+            return concat(root, href)
+        };
+        return href
+    };
+    concat(concat(base, "/"), href)
+}
+
+def extract_domain(url: str) -> str {
+    val s = find(url, "://");
+    if is_some(s) {
+        val rest = slice(url, unwrap(s) + 3, len(url));
+        val slash = find(rest, "/");
+        if is_some(slash) { slice(rest, 0, unwrap(slash)) } else { rest }
+    } else { url }
+}
+
+def extract_links(html: str, base_url: str) -> list<str> {
+    val links = list();
+    val pattern_href = "href=\"";
+    val pattern_href2 = "href='";
+    var pos = 0;
+    while pos < len(html) - 6 {
+        val ch = str_index(html, pos);
+        // Look for <a href="...
+        if ch == 104 { // 'h'
+            val tag = slice(html, pos, if pos + 9 <= len(html) { pos + 9 } else { len(html) });
+            if contains(tag, "href=") {
+                val after_href = find(slice(html, pos, len(html)), "href=");
+                if is_some(after_href) {
+                    val href_start = unwrap(after_href) + 6; // after href="
+                    val quote_char = str_index(html, pos + href_start - 1);
+                    var end_pos = pos + href_start;
+                    while end_pos < len(html) {
+                        if str_index(html, end_pos) == quote_char { break };
+                        end_pos = end_pos + 1
+                    };
+                    if end_pos > pos + href_start {
+                        val raw_url = slice(html, pos + href_start, end_pos);
+                        // Skip empty, javascript:, mailto:, #
+                        if contains(raw_url, "javascript:") || contains(raw_url, "mailto:") || contains(raw_url, "#") || raw_url == "" {
+                            // skip
+                        } else {
+                            val normal = normalize_url(base_url, raw_url);
+                            if starts_with(normal, "http://") || starts_with(normal, "https://") {
+                                list_push(links, normal)
+                            }
+                        };
+                        pos = end_pos
+                    } else { pos = pos + 1 }
+                } else { pos = pos + 1 }
+            } else { pos = pos + 1 }
+        } else { pos = pos + 1 }
+    };
+    links
+}
+
+def url_to_filename(url: str) -> str {
+    var safe = str_replace(url, "https://", "");
+    safe = str_replace(safe, "http://", "");
+    safe = str_replace(safe, "/", "_");
+    safe = str_replace(safe, "?", "_");
+    safe = str_replace(safe, "&", "_");
+    safe = str_replace(safe, "=", "_");
+    concat(safe, ".html")
+}
+
+// ---------------------------------------------------------------------------
+// Worker: fetch a page and extract links
+// ---------------------------------------------------------------------------
+
+def fetch_and_extract(url: str, depth: i64, output_ch: chan<str>, link_ch: chan<str>) -> i64 {
+    print(concat("  [depth=", concat(to_str(depth), concat("] Fetching: ", url))));
+    val html = http_get(url);
+    val body = if html == "" { "" } else { html };
+    
+    // Save page content
+    val filename = concat("crawl_", url_to_filename(url));
+    file_write_all(filename, body);
+    
+    // Send content to output channel for reporting
+    send(output_ch, concat(concat(concat(url, "|"), to_str(len(body))), concat("|", filename)));
+    
+    // Extract and send links
+    val links = extract_links(body, url);
+    var i = 0;
+    while i < list_len(links) {
+        send(link_ch, list_get(links, i));
+        i = i + 1
+    };
+    0
+}
+
+// ---------------------------------------------------------------------------
+// Main crawler
+// ---------------------------------------------------------------------------
+
+def main() -> i64 {
+    val a = args();
+    val argc = list_len(a);
+    
+    if argc < 2 {
+        print("IRIS Concurrent Web Crawler");
+        print("Usage: crawler <start-url> [max-pages] [max-depth]");
+        print("");
+        print("Examples:");
+        print("  crawler http://example.com 50 2");
+        print("  crawler http://books.toscrape.com 100 3");
+        return 1
+    };
+    
+    val start_url = list_get(a, 1);
+    val max_pages = if argc >= 3 { parse_i64(list_get(a, 2)) } else { some(50) };
+    val max_pages_n = if is_some(max_pages) { unwrap(max_pages) } else { 50 };
+    val max_depth = if argc >= 4 { parse_i64(list_get(a, 3)) } else { some(2) };
+    val max_depth_n = if is_some(max_depth) { unwrap(max_depth) } else { 2 };
+    val start_domain = extract_domain(start_url);
+    
+    print("========================================");
+    print("IRIS Concurrent Web Crawler");
+    print("========================================");
+    print(concat("  Start URL: ", start_url));
+    print(concat("  Max pages: ", to_str(max_pages_n)));
+    print(concat("  Max depth: ", to_str(max_depth_n)));
+    print(concat("  Domain:    ", start_domain));
+    print("");
+    
+    // Data structures
+    val visited = map();
+    val url_queue = list(); // BFS queue: list of (url, depth)
+    
+    // Channels for worker communication
+    val output_ch: chan<str> = channel();
+    val link_ch: chan<str> = channel();
+    
+    // Initialize with start URL
+    var queued = 0;
+    var fetched = 0;
+    var total_bytes = 0;
+    
+    // BFS crawler state
+    val pending = list();
+    list_push(pending, start_url);
+    val depth_map = map();
+    map_set(depth_map, start_url, 0);
+    map_set(visited, start_url, 1);
+    
+    while fetched < max_pages_n && list_len(pending) > 0 {
+        // Take next URL from queue
+        val current_url = list_get(pending, 0);
+        list_pop(pending);
+        
+        val cur_depth = map_get(depth_map, current_url);
+        val d = if is_some(cur_depth) { unwrap(cur_depth) } else { 0 };
+        
+        // Check depth
+        if d < max_depth_n {
+            // Spawn fetch worker
+            spawn {
+                fetch_and_extract(current_url, d, output_ch, link_ch)
+            };
+            queued = queued + 1;
+            
+            // Process outputs (non-blocking)
+            var more = true;
+            while more {
+                val msg_opt = chan_try_recv(output_ch);
+                if is_some(msg_opt) {
+                    val msg = unwrap(msg_opt);
+                    fetched = fetched + 1;
+                    val parts = split(msg, "|");
+                    if list_len(parts) >= 3 {
+                        val url = list_get(parts, 0);
+                        val size = parse_i64(list_get(parts, 1));
+                        val sz = if is_some(size) { unwrap(size) } else { 0 };
+                        val fname = list_get(parts, 2);
+                        total_bytes = total_bytes + sz;
+                        print(concat("    Saved ", concat(to_str(sz), concat(" bytes to ", fname))))
+                    }
+                };
+                more = false // process one at a time for now
+            };
+            
+            // Process discovered links (add to BFS queue)
+            var more_links = true;
+            while more_links {
+                val link_opt = chan_try_recv(link_ch);
+                if is_some(link_opt) {
+                    val link_msg = unwrap(link_opt);
+                    val exists = map_get(visited, link_msg);
+                    if !is_some(exists) {
+                        val link_domain = extract_domain(link_msg);
+                        // Stay within same domain
+                        if link_domain == start_domain {
+                            if list_len(pending) + fetched < max_pages_n {
+                                list_push(pending, link_msg);
+                                map_set(visited, link_msg, 1);
+                                map_set(depth_map, link_msg, d + 1);
+                                print(concat("    Discovered: ", link_msg))
+                            }
+                        }
+                    }
+                };
+                more_links = false
+            }
+        }
+    };
+    
+    // Wait for remaining workers by sleeping
+    while queued > fetched {
+        val msg_opt = chan_try_recv(output_ch);
+        if is_some(msg_opt) {
+            val msg = unwrap(msg_opt);
+            fetched = fetched + 1;
+            val parts = split(msg, "|");
+            if list_len(parts) >= 3 {
+                val sz = parse_i64(list_get(parts, 1));
+                total_bytes = total_bytes + (if is_some(sz) { unwrap(sz) } else { 0 })
+            }
+        } else {
+            sleep_ms(100)
+        }
+    };
+    
+    print("");
+    print("========================================");
+    print("Crawl Complete");
+    print(concat("  URLs fetched:  ", to_str(fetched)));
+    print(concat("  Total bytes:   ", to_str(total_bytes)));
+    print(concat("  Pages saved:   ", to_str(fetched)));
+    print("========================================");
+    0
+}

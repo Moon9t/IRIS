@@ -1,0 +1,6 @@
+bring std.ml
+bring std.fs
+
+def main() -> i64 {
+    42
+}

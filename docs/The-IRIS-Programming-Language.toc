@@ -1,0 +1,255 @@
+\babel@toc {english}{}\relax 
+\contentsline {chapter}{\numberline {1}The IRIS Programming Language}{1}{chapter.1}%
+\contentsline {section}{\numberline {1.1}A Complete Guide}{1}{section.1.1}%
+\contentsline {section}{\numberline {1.2}Copyright \& License}{2}{section.1.2}%
+\contentsline {section}{\numberline {1.3}Table of Contents}{3}{section.1.3}%
+\contentsline {section}{\numberline {1.4}Foreword}{7}{section.1.4}%
+\contentsline {subsection}{\numberline {1.4.1}How to read this book}{7}{subsection.1.4.1}%
+\contentsline {section}{\numberline {1.5}Chapter 1: Getting Started}{7}{section.1.5}%
+\contentsline {subsection}{\numberline {1.5.1}1.1 What Is IRIS?}{7}{subsection.1.5.1}%
+\contentsline {subsection}{\numberline {1.5.2}1.2 Installation}{7}{subsection.1.5.2}%
+\contentsline {subsubsection}{\numberline {1.5.2.1}Linux}{8}{subsubsection.1.5.2.1}%
+\contentsline {subsubsection}{\numberline {1.5.2.2}macOS}{8}{subsubsection.1.5.2.2}%
+\contentsline {subsubsection}{\numberline {1.5.2.3}Windows}{8}{subsubsection.1.5.2.3}%
+\contentsline {subsubsection}{\numberline {1.5.2.4}Verify the installation}{8}{subsubsection.1.5.2.4}%
+\contentsline {subsubsection}{\numberline {1.5.2.5}Native compilation dependencies}{9}{subsubsection.1.5.2.5}%
+\contentsline {subsection}{\numberline {1.5.3}1.3 Hello, World}{9}{subsection.1.5.3}%
+\contentsline {subsection}{\numberline {1.5.4}1.4 The REPL}{10}{subsection.1.5.4}%
+\contentsline {subsection}{\numberline {1.5.5}1.5 IDE Setup}{10}{subsection.1.5.5}%
+\contentsline {subsection}{\numberline {1.5.6}1.6 Project Setup and Testing}{11}{subsection.1.5.6}%
+\contentsline {subsection}{\numberline {1.5.7}1.6 Project Setup and Testing}{11}{subsection.1.5.7}%
+\contentsline {subsection}{\numberline {1.5.8}Try It Yourself}{11}{subsection.1.5.8}%
+\contentsline {section}{\numberline {1.6}Chapter 2: Values and Types}{11}{section.1.6}%
+\contentsline {subsection}{\numberline {1.6.1}2.1 Primitive Types}{11}{subsection.1.6.1}%
+\contentsline {subsection}{\numberline {1.6.2}2.2 Bindings: \texttt {val} and \texttt {var}}{12}{subsection.1.6.2}%
+\contentsline {subsection}{\numberline {1.6.3}2.3 Type Inference}{12}{subsection.1.6.3}%
+\contentsline {subsection}{\numberline {1.6.4}2.4 Literals and Casts}{12}{subsection.1.6.4}%
+\contentsline {subsection}{\numberline {1.6.5}2.5 Constants}{13}{subsection.1.6.5}%
+\contentsline {subsection}{\numberline {1.6.6}2.6 Type Aliases}{13}{subsection.1.6.6}%
+\contentsline {subsection}{\numberline {1.6.7}2.7 The Type System Overview}{13}{subsection.1.6.7}%
+\contentsline {subsection}{\numberline {1.6.8}Try It Yourself}{14}{subsection.1.6.8}%
+\contentsline {section}{\numberline {1.7}Chapter 3: Functions}{14}{section.1.7}%
+\contentsline {subsection}{\numberline {1.7.1}3.1 Defining Functions}{14}{subsection.1.7.1}%
+\contentsline {subsection}{\numberline {1.7.2}3.2 Tail Expressions (No \texttt {return} Needed)}{14}{subsection.1.7.2}%
+\contentsline {subsection}{\numberline {1.7.3}3.3 Early Return}{15}{subsection.1.7.3}%
+\contentsline {subsection}{\numberline {1.7.4}3.4 Recursive Functions}{15}{subsection.1.7.4}%
+\contentsline {subsection}{\numberline {1.7.5}3.5 Public Functions}{16}{subsection.1.7.5}%
+\contentsline {subsection}{\numberline {1.7.6}3.6 Default Parameters}{16}{subsection.1.7.6}%
+\contentsline {subsection}{\numberline {1.7.7}3.7 Functions as First-Class Values}{16}{subsection.1.7.7}%
+\contentsline {subsection}{\numberline {1.7.8}Try It Yourself}{17}{subsection.1.7.8}%
+\contentsline {section}{\numberline {1.8}Chapter 4: Control Flow}{17}{section.1.8}%
+\contentsline {subsection}{\numberline {1.8.1}4.1 \texttt {if\ /\ else}}{17}{subsection.1.8.1}%
+\contentsline {subsection}{\numberline {1.8.2}4.2 \texttt {while} Loops}{18}{subsection.1.8.2}%
+\contentsline {subsection}{\numberline {1.8.3}4.3 \texttt {for} Range Loops}{18}{subsection.1.8.3}%
+\contentsline {subsection}{\numberline {1.8.4}4.4 \texttt {loop} with \texttt {break}}{18}{subsection.1.8.4}%
+\contentsline {subsection}{\numberline {1.8.5}4.5 \texttt {break} and \texttt {continue}}{19}{subsection.1.8.5}%
+\contentsline {subsection}{\numberline {1.8.6}4.6 Nested Loops}{19}{subsection.1.8.6}%
+\contentsline {subsection}{\numberline {1.8.7}4.7 Logical Operators}{19}{subsection.1.8.7}%
+\contentsline {subsection}{\numberline {1.8.8}4.8 For-Each Loops}{20}{subsection.1.8.8}%
+\contentsline {subsection}{\numberline {1.8.9}4.9 Tuple Destructuring}{20}{subsection.1.8.9}%
+\contentsline {subsection}{\numberline {1.8.10}4.10 Keyword Operators (\texttt {and}, \texttt {or}, \texttt {not})}{20}{subsection.1.8.10}%
+\contentsline {subsection}{\numberline {1.8.11}4.8 For-Each Loops}{20}{subsection.1.8.11}%
+\contentsline {subsection}{\numberline {1.8.12}4.9 Tuple Destructuring}{21}{subsection.1.8.12}%
+\contentsline {subsection}{\numberline {1.8.13}4.10 Keyword Operators (\texttt {and}, \texttt {or}, \texttt {not})}{21}{subsection.1.8.13}%
+\contentsline {subsection}{\numberline {1.8.14}Try It Yourself}{21}{subsection.1.8.14}%
+\contentsline {section}{\numberline {1.9}Chapter 5: Data Structures}{22}{section.1.9}%
+\contentsline {subsection}{\numberline {1.9.1}5.1 Records}{22}{subsection.1.9.1}%
+\contentsline {subsection}{\numberline {1.9.2}5.2 Enums (\texttt {choice})}{22}{subsection.1.9.2}%
+\contentsline {subsection}{\numberline {1.9.3}5.3 Pattern Matching with \texttt {when}}{23}{subsection.1.9.3}%
+\contentsline {subsection}{\numberline {1.9.4}5.4 Tuples}{23}{subsection.1.9.4}%
+\contentsline {subsection}{\numberline {1.9.5}5.5 Fixed Arrays}{24}{subsection.1.9.5}%
+\contentsline {subsection}{\numberline {1.9.6}5.6 Dynamic Lists}{24}{subsection.1.9.6}%
+\contentsline {subsection}{\numberline {1.9.7}5.7 Maps}{25}{subsection.1.9.7}%
+\contentsline {subsection}{\numberline {1.9.8}5.8 Options}{26}{subsection.1.9.8}%
+\contentsline {subsection}{\numberline {1.9.9}5.9 Results}{26}{subsection.1.9.9}%
+\contentsline {subsection}{\numberline {1.9.10}5.10 Deques}{27}{subsection.1.9.10}%
+\contentsline {subsection}{\numberline {1.9.11}5.11 BitSets}{27}{subsection.1.9.11}%
+\contentsline {subsection}{\numberline {1.9.12}5.12 Mutexes}{27}{subsection.1.9.12}%
+\contentsline {subsection}{\numberline {1.9.13}5.10 Deques}{28}{subsection.1.9.13}%
+\contentsline {subsection}{\numberline {1.9.14}5.11 BitSets}{28}{subsection.1.9.14}%
+\contentsline {subsection}{\numberline {1.9.15}5.12 Mutexes}{28}{subsection.1.9.15}%
+\contentsline {subsection}{\numberline {1.9.16}Try It Yourself}{28}{subsection.1.9.16}%
+\contentsline {section}{\numberline {1.10}Chapter 6: Traits and Generics}{29}{section.1.10}%
+\contentsline {subsection}{\numberline {1.10.1}6.1 Trait Declarations}{29}{subsection.1.10.1}%
+\contentsline {subsection}{\numberline {1.10.2}6.2 Implementing Traits}{29}{subsection.1.10.2}%
+\contentsline {subsection}{\numberline {1.10.3}6.3 Generic Functions}{30}{subsection.1.10.3}%
+\contentsline {subsection}{\numberline {1.10.4}6.4 Trait Constraints (\texttt {where})}{30}{subsection.1.10.4}%
+\contentsline {subsection}{\numberline {1.10.5}Try It Yourself}{30}{subsection.1.10.5}%
+\contentsline {section}{\numberline {1.11}Chapter 7: Traits and Generics}{30}{section.1.11}%
+\contentsline {subsection}{\numberline {1.11.1}7.1 Trait Declarations}{30}{subsection.1.11.1}%
+\contentsline {subsection}{\numberline {1.11.2}7.2 Implementing Traits}{31}{subsection.1.11.2}%
+\contentsline {subsection}{\numberline {1.11.3}7.3 Generic Functions}{31}{subsection.1.11.3}%
+\contentsline {subsection}{\numberline {1.11.4}7.4 Trait Constraints (\texttt {where})}{31}{subsection.1.11.4}%
+\contentsline {subsection}{\numberline {1.11.5}Try It Yourself}{31}{subsection.1.11.5}%
+\contentsline {section}{\numberline {1.12}Chapter 8: Closures and Higher-Order Functions}{32}{section.1.12}%
+\contentsline {subsection}{\numberline {1.12.1}8.1 Closure Syntax}{32}{subsection.1.12.1}%
+\contentsline {subsection}{\numberline {1.12.2}8.2 Passing Closures as Arguments}{32}{subsection.1.12.2}%
+\contentsline {subsection}{\numberline {1.12.3}8.3 Implementing Map}{32}{subsection.1.12.3}%
+\contentsline {subsection}{\numberline {1.12.4}8.4 Implementing Filter}{33}{subsection.1.12.4}%
+\contentsline {subsection}{\numberline {1.12.5}8.5 Implementing Reduce / Fold}{34}{subsection.1.12.5}%
+\contentsline {subsection}{\numberline {1.12.6}8.6 Capture by Value}{34}{subsection.1.12.6}%
+\contentsline {subsection}{\numberline {1.12.7}8.7 Regular Expressions}{34}{subsection.1.12.7}%
+\contentsline {subsection}{\numberline {1.12.8}8.8 Date and Time}{35}{subsection.1.12.8}%
+\contentsline {subsection}{\numberline {1.12.9}8.9 Hexadecimal Literals}{35}{subsection.1.12.9}%
+\contentsline {subsection}{\numberline {1.12.10}Try It Yourself}{35}{subsection.1.12.10}%
+\contentsline {section}{\numberline {1.13}Chapter 9: String Processing}{35}{section.1.13}%
+\contentsline {subsection}{\numberline {1.13.1}9.1 String Literals and Escapes}{35}{subsection.1.13.1}%
+\contentsline {subsection}{\numberline {1.13.2}9.2 F-Strings (String Interpolation)}{36}{subsection.1.13.2}%
+\contentsline {subsection}{\numberline {1.13.3}9.3 Built-in String Functions}{36}{subsection.1.13.3}%
+\contentsline {subsection}{\numberline {1.13.4}9.4 String Building Patterns}{37}{subsection.1.13.4}%
+\contentsline {subsection}{\numberline {1.13.5}9.5 Working with Split and Join}{37}{subsection.1.13.5}%
+\contentsline {subsection}{\numberline {1.13.6}9.6 String Searching}{38}{subsection.1.13.6}%
+\contentsline {subsection}{\numberline {1.13.7}9.7 Regular Expressions}{38}{subsection.1.13.7}%
+\contentsline {subsection}{\numberline {1.13.8}9.8 Date and Time}{39}{subsection.1.13.8}%
+\contentsline {subsection}{\numberline {1.13.9}9.9 Hexadecimal Literals}{39}{subsection.1.13.9}%
+\contentsline {subsection}{\numberline {1.13.10}Try It Yourself}{39}{subsection.1.13.10}%
+\contentsline {section}{\numberline {1.14}Chapter 10: Error Handling}{39}{section.1.14}%
+\contentsline {subsection}{\numberline {1.14.1}10.1 The \texttt {result\textless {}T,\ E\textgreater {}} Type}{39}{subsection.1.14.1}%
+\contentsline {subsection}{\numberline {1.14.2}10.2 Creating and Checking Results}{40}{subsection.1.14.2}%
+\contentsline {subsection}{\numberline {1.14.3}10.3 The \texttt {?} Operator}{40}{subsection.1.14.3}%
+\contentsline {subsection}{\numberline {1.14.4}10.4 Pattern Matching Results with \texttt {when}}{41}{subsection.1.14.4}%
+\contentsline {subsection}{\numberline {1.14.5}10.5 Chaining Operations}{41}{subsection.1.14.5}%
+\contentsline {subsection}{\numberline {1.14.6}10.6 Combining Options and Results}{42}{subsection.1.14.6}%
+\contentsline {subsection}{\numberline {1.14.7}10.7 Panicking with \texttt {panic} and \texttt {assert}}{42}{subsection.1.14.7}%
+\contentsline {subsection}{\numberline {1.14.8}10.7 Async/Await}{42}{subsection.1.14.8}%
+\contentsline {subsection}{\numberline {1.14.9}Try It Yourself}{43}{subsection.1.14.9}%
+\contentsline {section}{\numberline {1.15}Chapter 11: Concurrency}{43}{section.1.15}%
+\contentsline {subsection}{\numberline {1.15.1}11.1 Channels}{43}{subsection.1.15.1}%
+\contentsline {subsection}{\numberline {1.15.2}11.2 Spawning Tasks with \texttt {spawn}}{43}{subsection.1.15.2}%
+\contentsline {subsection}{\numberline {1.15.3}11.3 Parallel For Loops}{43}{subsection.1.15.3}%
+\contentsline {subsection}{\numberline {1.15.4}11.4 Atomics: Thread-Safe Counters}{44}{subsection.1.15.4}%
+\contentsline {subsection}{\numberline {1.15.5}11.5 Producer-Consumer Pattern}{44}{subsection.1.15.5}%
+\contentsline {subsection}{\numberline {1.15.6}11.6 Time Functions}{45}{subsection.1.15.6}%
+\contentsline {subsection}{\numberline {1.15.7}11.7 Async/Await}{45}{subsection.1.15.7}%
+\contentsline {subsection}{\numberline {1.15.8}11.5 Reverse-Mode Automatic Differentiation}{45}{subsection.1.15.8}%
+\contentsline {subsection}{\numberline {1.15.9}Try It Yourself}{46}{subsection.1.15.9}%
+\contentsline {section}{\numberline {1.16}Chapter 12: Automatic Differentiation}{46}{section.1.16}%
+\contentsline {subsection}{\numberline {1.16.1}12.1 Dual Numbers with \texttt {grad}}{46}{subsection.1.16.1}%
+\contentsline {subsection}{\numberline {1.16.2}12.2 Computing Gradients}{46}{subsection.1.16.2}%
+\contentsline {subsection}{\numberline {1.16.3}12.3 Simple Gradient Descent}{47}{subsection.1.16.3}%
+\contentsline {subsection}{\numberline {1.16.4}12.4 Neural Network Gradient Descent}{47}{subsection.1.16.4}%
+\contentsline {subsection}{\numberline {1.16.5}12.5 Reverse-Mode Automatic Differentiation}{48}{subsection.1.16.5}%
+\contentsline {subsection}{\numberline {1.16.6}12.9 Model DSL (Neural Network Architectures)}{49}{subsection.1.16.6}%
+\contentsline {subsection}{\numberline {1.16.7}12.10 Machine Learning Stdlib Modules (\texttt {std.ml}, \texttt {std.rl}, \texttt {std.nn})}{49}{subsection.1.16.7}%
+\contentsline {subsection}{\numberline {1.16.8}Try It Yourself}{49}{subsection.1.16.8}%
+\contentsline {section}{\numberline {1.17}Chapter 13: Tensors and ML}{50}{section.1.17}%
+\contentsline {subsection}{\numberline {1.17.1}13.1 Tensor Types}{50}{subsection.1.17.1}%
+\contentsline {subsection}{\numberline {1.17.2}13.2 The \texttt {einsum} Intrinsic}{50}{subsection.1.17.2}%
+\contentsline {subsection}{\numberline {1.17.3}13.3 Building a Neural Network Layer}{50}{subsection.1.17.3}%
+\contentsline {subsection}{\numberline {1.17.4}13.4 Activation Functions}{51}{subsection.1.17.4}%
+\contentsline {subsection}{\numberline {1.17.5}13.5 A Simple Training Loop}{51}{subsection.1.17.5}%
+\contentsline {subsection}{\numberline {1.17.6}13.6 Sparse Tensors}{52}{subsection.1.17.6}%
+\contentsline {subsection}{\numberline {1.17.7}13.9 Model DSL (Neural Network Architectures)}{52}{subsection.1.17.7}%
+\contentsline {subsection}{\numberline {1.17.8}13.10 Machine Learning Stdlib Modules (\texttt {std.ml}, \texttt {std.rl}, \texttt {std.nn})}{52}{subsection.1.17.8}%
+\contentsline {subsection}{\numberline {1.17.9}Try It Yourself}{52}{subsection.1.17.9}%
+\contentsline {subsection}{\numberline {1.17.10}13.7 Native Neural Networks (\texttt {std.nn})}{52}{subsection.1.17.10}%
+\contentsline {subsection}{\numberline {1.17.11}13.8 External Model Inference (ONNX)}{53}{subsection.1.17.11}%
+\contentsline {section}{\numberline {1.18}Chapter 14: Native Compilation}{53}{section.1.18}%
+\contentsline {subsection}{\numberline {1.18.1}14.1 Building a Native Binary}{53}{subsection.1.18.1}%
+\contentsline {subsection}{\numberline {1.18.2}14.2 How the Compiler Pipeline Works}{53}{subsection.1.18.2}%
+\contentsline {subsection}{\numberline {1.18.3}14.3 Inspecting LLVM IR}{53}{subsection.1.18.3}%
+\contentsline {subsection}{\numberline {1.18.4}14.4 Calling C Libraries with \texttt {extern}}{54}{subsection.1.18.4}%
+\contentsline {subsection}{\numberline {1.18.5}14.5 The C Runtime}{54}{subsection.1.18.5}%
+\contentsline {subsection}{\numberline {1.18.6}14.6 Performance Tips}{54}{subsection.1.18.6}%
+\contentsline {subsection}{\numberline {1.18.7}Try It Yourself}{55}{subsection.1.18.7}%
+\contentsline {section}{\numberline {1.19}Chapter 15: The Standard Library}{55}{section.1.19}%
+\contentsline {subsection}{\numberline {1.19.1}15.1 \texttt {std.math} --- Extended Math Functions}{55}{subsection.1.19.1}%
+\contentsline {subsection}{\numberline {1.19.2}15.2 \texttt {std.string} --- String Utilities}{56}{subsection.1.19.2}%
+\contentsline {subsection}{\numberline {1.19.3}15.3 \texttt {std.fmt} --- Formatting}{56}{subsection.1.19.3}%
+\contentsline {subsection}{\numberline {1.19.4}15.4 \texttt {std.fs} --- File System}{57}{subsection.1.19.4}%
+\contentsline {subsection}{\numberline {1.19.5}15.5 \texttt {std.json} --- JSON}{58}{subsection.1.19.5}%
+\contentsline {subsection}{\numberline {1.19.6}15.6 \texttt {std.csv} --- CSV}{58}{subsection.1.19.6}%
+\contentsline {subsection}{\numberline {1.19.7}15.7 \texttt {std.crypto} --- Cryptography \& Hashing}{58}{subsection.1.19.7}%
+\contentsline {subsection}{\numberline {1.19.8}15.8 \texttt {std.ffi} --- Foreign Function Interface (C, Python, Rust)}{58}{subsection.1.19.8}%
+\contentsline {subsection}{\numberline {1.19.9}15.9 \texttt {std.os} --- Operating System}{59}{subsection.1.19.9}%
+\contentsline {subsection}{\numberline {1.19.10}15.10 \texttt {std.testing} --- Testing}{59}{subsection.1.19.10}%
+\contentsline {subsection}{\numberline {1.19.11}15.11 \texttt {std.log} --- Logging}{59}{subsection.1.19.11}%
+\contentsline {subsection}{\numberline {1.19.12}15.12 Remaining Standard Library Modules}{59}{subsection.1.19.12}%
+\contentsline {subsection}{\numberline {1.19.13}15.13 \texttt {std.svg} \& \texttt {std.termplot} --- Visualizations}{60}{subsection.1.19.13}%
+\contentsline {subsection}{\numberline {1.19.14}15.14 Using \texttt {bring} in the REPL}{60}{subsection.1.19.14}%
+\contentsline {subsection}{\numberline {1.19.15}15.7 Subcommands \& Tooling Suite}{61}{subsection.1.19.15}%
+\contentsline {subsection}{\numberline {1.19.16}Try It Yourself}{61}{subsection.1.19.16}%
+\contentsline {section}{\numberline {1.20}Chapter 16: Tooling}{61}{section.1.20}%
+\contentsline {subsection}{\numberline {1.20.1}16.1 The REPL in Depth}{61}{subsection.1.20.1}%
+\contentsline {subsection}{\numberline {1.20.2}16.2 LSP Features}{63}{subsection.1.20.2}%
+\contentsline {subsubsection}{\numberline {1.20.2.1}Core Features}{63}{subsubsection.1.20.2.1}%
+\contentsline {subsubsection}{\numberline {1.20.2.2}Code Actions (Quick Fixes)}{63}{subsubsection.1.20.2.2}%
+\contentsline {subsubsection}{\numberline {1.20.2.3}Inlay Hints}{64}{subsubsection.1.20.2.3}%
+\contentsline {subsubsection}{\numberline {1.20.2.4}Find All References}{64}{subsubsection.1.20.2.4}%
+\contentsline {subsubsection}{\numberline {1.20.2.5}Rename Symbol}{64}{subsubsection.1.20.2.5}%
+\contentsline {subsubsection}{\numberline {1.20.2.6}Diagnostic Codes}{64}{subsubsection.1.20.2.6}%
+\contentsline {subsection}{\numberline {1.20.3}16.3 The Step Debugger (DAP)}{64}{subsection.1.20.3}%
+\contentsline {subsubsection}{\numberline {1.20.3.1}Core Debugging}{64}{subsubsection.1.20.3.1}%
+\contentsline {subsubsection}{\numberline {1.20.3.2}Advanced Features}{65}{subsubsection.1.20.3.2}%
+\contentsline {subsection}{\numberline {1.20.4}16.4 The VS Code Extension}{65}{subsection.1.20.4}%
+\contentsline {subsubsection}{\numberline {1.20.4.1}Installation}{65}{subsubsection.1.20.4.1}%
+\contentsline {subsubsection}{\numberline {1.20.4.2}Features}{65}{subsubsection.1.20.4.2}%
+\contentsline {subsubsection}{\numberline {1.20.4.3}Extension Settings}{65}{subsubsection.1.20.4.3}%
+\contentsline {subsection}{\numberline {1.20.5}16.6 IR Inspection}{65}{subsection.1.20.5}%
+\contentsline {subsection}{\numberline {1.20.6}16.5 Optimization Passes}{66}{subsection.1.20.6}%
+\contentsline {subsection}{\numberline {1.20.7}16.7 Subcommands \& Tooling Suite}{66}{subsection.1.20.7}%
+\contentsline {subsection}{\numberline {1.20.8}Try It Yourself}{67}{subsection.1.20.8}%
+\contentsline {section}{\numberline {1.21}Chapter 17: Package Manager}{67}{section.1.21}%
+\contentsline {subsection}{\numberline {1.21.1}17.1 Initializing a Project}{67}{subsection.1.21.1}%
+\contentsline {subsection}{\numberline {1.21.2}17.2 The \texttt {iris.toml} Manifest}{67}{subsection.1.21.2}%
+\contentsline {subsection}{\numberline {1.21.3}17.3 Managing Dependencies}{67}{subsection.1.21.3}%
+\contentsline {subsection}{\numberline {1.21.4}17.4 Package Subcommands}{67}{subsection.1.21.4}%
+\contentsline {subsection}{\numberline {1.21.5}Try It Yourself}{68}{subsection.1.21.5}%
+\contentsline {section}{\numberline {1.22}Chapter 18: Building Real Programs}{68}{section.1.22}%
+\contentsline {subsection}{\numberline {1.22.1}18.1 Project Layout}{68}{subsection.1.22.1}%
+\contentsline {subsection}{\numberline {1.22.2}18.2 Multi-File Programs with \texttt {bring}}{68}{subsection.1.22.2}%
+\contentsline {subsection}{\numberline {1.22.3}18.3 Writing a Command-Line Tool}{68}{subsection.1.22.3}%
+\contentsline {subsection}{\numberline {1.22.4}18.4 Writing a Word-Count Tool}{69}{subsection.1.22.4}%
+\contentsline {subsection}{\numberline {1.22.5}18.5 A Simple TCP Echo Server}{70}{subsection.1.22.5}%
+\contentsline {subsection}{\numberline {1.22.6}18.6 Performance Profiling}{70}{subsection.1.22.6}%
+\contentsline {subsection}{\numberline {1.22.7}18.7 A Key-Value Store Server}{71}{subsection.1.22.7}%
+\contentsline {subsection}{\numberline {1.22.8}Try It Yourself}{73}{subsection.1.22.8}%
+\contentsline {section}{\numberline {1.23}Chapter 19: Package Manager}{73}{section.1.23}%
+\contentsline {subsection}{\numberline {1.23.1}19.1 Initializing a Project}{73}{subsection.1.23.1}%
+\contentsline {subsection}{\numberline {1.23.2}19.2 The \texttt {iris.toml} Manifest}{73}{subsection.1.23.2}%
+\contentsline {subsection}{\numberline {1.23.3}19.3 Managing Dependencies}{73}{subsection.1.23.3}%
+\contentsline {subsection}{\numberline {1.23.4}19.4 Package Subcommands}{73}{subsection.1.23.4}%
+\contentsline {subsection}{\numberline {1.23.5}Try It Yourself}{74}{subsection.1.23.5}%
+\contentsline {section}{\numberline {1.24}Chapter 20: Working with Databases}{74}{section.1.24}%
+\contentsline {subsection}{\numberline {1.24.1}20.1 The Database API}{74}{subsection.1.24.1}%
+\contentsline {subsection}{\numberline {1.24.2}20.2 Creating a Database and Table}{74}{subsection.1.24.2}%
+\contentsline {subsection}{\numberline {1.24.3}20.3 Inserting Data}{74}{subsection.1.24.3}%
+\contentsline {subsection}{\numberline {1.24.4}20.4 Querying Data}{75}{subsection.1.24.4}%
+\contentsline {subsection}{\numberline {1.24.5}20.5 Parameterized Queries}{75}{subsection.1.24.5}%
+\contentsline {subsection}{\numberline {1.24.6}20.6 Updating and Deleting}{75}{subsection.1.24.6}%
+\contentsline {subsection}{\numberline {1.24.7}20.7 Error Handling}{76}{subsection.1.24.7}%
+\contentsline {subsection}{\numberline {1.24.8}20.8 A Complete Example: Task Manager}{76}{subsection.1.24.8}%
+\contentsline {subsection}{\numberline {1.24.9}20.8 Best Practices}{76}{subsection.1.24.9}%
+\contentsline {subsection}{\numberline {1.24.10}20.11 UDP Networking}{76}{subsection.1.24.10}%
+\contentsline {subsection}{\numberline {1.24.11}Try It Yourself}{77}{subsection.1.24.11}%
+\contentsline {section}{\numberline {1.25}Chapter 21: Security \& Sandboxing}{77}{section.1.25}%
+\contentsline {subsection}{\numberline {1.25.1}21.1 The Sandbox Flag}{77}{subsection.1.25.1}%
+\contentsline {subsection}{\numberline {1.25.2}21.2 Restricted Operations}{77}{subsection.1.25.2}%
+\contentsline {subsection}{\numberline {1.25.3}21.3 Customizing Whitelists}{77}{subsection.1.25.3}%
+\contentsline {subsection}{\numberline {1.25.4}Try It Yourself}{78}{subsection.1.25.4}%
+\contentsline {section}{\numberline {1.26}Appendix A: Language Grammar (BNF)}{78}{section.1.26}%
+\contentsline {section}{\numberline {1.27}Appendix B: Built-in Functions Reference}{80}{section.1.27}%
+\contentsline {subsection}{\numberline {1.27.1}Math}{80}{subsection.1.27.1}%
+\contentsline {subsection}{\numberline {1.27.2}String}{81}{subsection.1.27.2}%
+\contentsline {subsection}{\numberline {1.27.3}Bitwise}{81}{subsection.1.27.3}%
+\contentsline {subsection}{\numberline {1.27.4}I/O}{81}{subsection.1.27.4}%
+\contentsline {subsection}{\numberline {1.27.5}Collections}{81}{subsection.1.27.5}%
+\contentsline {subsection}{\numberline {1.27.6}Reference Cells}{81}{subsection.1.27.6}%
+\contentsline {subsection}{\numberline {1.27.7}Option \& Result}{81}{subsection.1.27.7}%
+\contentsline {subsection}{\numberline {1.27.8}Parsing \& Regex}{81}{subsection.1.27.8}%
+\contentsline {subsection}{\numberline {1.27.9}Concurrency}{81}{subsection.1.27.9}%
+\contentsline {subsection}{\numberline {1.27.10}Date \& Time}{81}{subsection.1.27.10}%
+\contentsline {subsection}{\numberline {1.27.11}OS \& System}{81}{subsection.1.27.11}%
+\contentsline {subsection}{\numberline {1.27.12}Random \& Cryptography}{81}{subsection.1.27.12}%
+\contentsline {subsection}{\numberline {1.27.13}TCP \& UDP Networking}{82}{subsection.1.27.13}%
+\contentsline {subsection}{\numberline {1.27.14}Terminal Controls}{82}{subsection.1.27.14}%
+\contentsline {section}{\numberline {1.28}Appendix C: Type System Reference}{82}{section.1.28}%
+\contentsline {subsection}{\numberline {1.28.1}Scalar Types}{82}{subsection.1.28.1}%
+\contentsline {subsection}{\numberline {1.28.2}Composite Types}{82}{subsection.1.28.2}%
+\contentsline {subsection}{\numberline {1.28.3}Operator Precedence (highest to lowest)}{82}{subsection.1.28.3}%
+\contentsline {section}{\numberline {1.29}Appendix D: CLI Reference}{82}{section.1.29}%
+\contentsline {subsection}{\numberline {1.29.1}10 Subcommands}{82}{subsection.1.29.1}%
+\contentsline {subsection}{\numberline {1.29.2}14 Emit Kinds (\texttt {-\/-emit\ \textless {}kind\textgreater {}})}{83}{subsection.1.29.2}%
+\contentsline {subsection}{\numberline {1.29.3}Global Flags}{83}{subsection.1.29.3}%
+\contentsline {section}{\numberline {1.30}Appendix E: Compiler Error Reference}{83}{section.1.30}%
+\contentsline {subsection}{\numberline {1.30.1}Diagnostic Code Catalog}{83}{subsection.1.30.1}%

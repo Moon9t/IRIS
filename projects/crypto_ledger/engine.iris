@@ -1,0 +1,131 @@
+// engine.iris — Ledger operations (create, mine, verify, summary)
+
+pub def validate_block(item: Block) -> bool {
+    val h = item.compute_hash();
+    len(h) == 64
+}
+
+pub def validate_transaction(item: Transaction) -> bool {
+    val h = item.compute_hash();
+    len(h) == 64
+}
+
+pub def create_transaction(sender: str, receiver: str, amount: f64) -> Transaction {
+    val tx_id = uuid();
+    val ts = now_ms();
+    
+    // Compute transaction hash
+    val s = concat(tx_id, concat(sender, concat(receiver, concat(to_str(amount), to_str(ts)))));
+    val tx_hash = sha256(s);
+    
+    val tx = new_transaction(tx_id, sender, receiver, amount, ts, tx_hash);
+    tx
+}
+
+pub def mine_block(ledger: Ledger, index: i64, prev_hash: str) -> Block {
+    val txs: list<Transaction> = list();
+    val n_pending = list_len(ledger.pending);
+    var i = 0;
+    while i < n_pending {
+        list_push(txs, list_get(ledger.pending, i));
+        i = i + 1;
+    };
+    
+    val ts = now_ms();
+    
+    // Mine block by searching for a nonce that produces a hash starting with "0"
+    var nonce = 0;
+    var hash_val = "";
+    var found = false;
+    while !found {
+        var tx_hashes = "";
+        var j = 0;
+        while j < list_len(txs) {
+            val tx = list_get(txs, j);
+            tx_hashes = concat(tx_hashes, tx.hash);
+            j = j + 1;
+        };
+        val s = concat(to_str(index), concat(prev_hash, concat(to_str(ts), concat(to_str(nonce), tx_hashes))));
+        hash_val = sha256(s);
+        
+        if starts_with(hash_val, "0") {
+            found = true;
+        } else {
+            nonce = nonce + 1;
+        };
+    };
+    
+    val b = Block {
+        index: index,
+        transactions: txs,
+        prev_hash: prev_hash,
+        hash: hash_val,
+        timestamp: ts,
+        nonce: nonce
+    };
+    b
+}
+
+pub def add_block(ledger: Ledger, block: Block) -> i64 {
+    list_push(ledger.blocks, block);
+    // Clear pending list
+    val n = list_len(ledger.pending);
+    var i = 0;
+    while i < n {
+        val _ = list_pop(ledger.pending);
+        i = i + 1;
+    };
+    0
+}
+
+pub def verify_chain(ledger: Ledger) -> bool {
+    val n = list_len(ledger.blocks);
+    if n == 0 {
+        return true;
+    };
+    
+    val first_block = list_get(ledger.blocks, 0);
+    if !validate_block(first_block) {
+        return false;
+    };
+    
+    var prev_hash = first_block.hash;
+    var i = 1;
+    while i < n {
+        val current = list_get(ledger.blocks, i);
+        if !validate_block(current) {
+            return false;
+        };
+        if current.prev_hash != prev_hash {
+            return false;
+        };
+        prev_hash = current.hash;
+        i = i + 1;
+    };
+    true
+}
+
+pub def ledger_summary(ledger: Ledger) -> str {
+    val n_blocks = list_len(ledger.blocks);
+    var total_txs = 0;
+    var total_amount = 0.0;
+    
+    var i = 0;
+    while i < n_blocks {
+        val block = list_get(ledger.blocks, i);
+        total_txs = total_txs + list_len(block.transactions);
+        
+        var j = 0;
+        while j < list_len(block.transactions) {
+            val tx = list_get(block.transactions, j);
+            total_amount = total_amount + tx.amount;
+            j = j + 1;
+        };
+        i = i + 1;
+    };
+    
+    val s1 = concat("Blocks: ", to_str(n_blocks));
+    val s2 = concat(s1, concat(" | Transactions: ", to_str(total_txs)));
+    val s3 = concat(s2, concat(" | Total Value: ", to_str(total_amount)));
+    s3
+}

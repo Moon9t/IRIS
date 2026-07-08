@@ -1,0 +1,133 @@
+bring std.fs
+bring std.async
+
+// 1. Generate a dummy log file
+def generate_log_file(path: str, lines: i64) -> bool {
+    val f_res = fs.file_open_stream(path, "w");
+    when f_res {
+        ok(f) => {
+            var i = 0;
+            while i < lines {
+                val line = concat("LOG ENTRY ", to_str(i));
+                val line2 = concat(line, " - Data payload generated for streaming test.\n");
+                fs.file_write_stream(f, line2);
+                i = i + 1;
+            };
+            fs.file_close_stream(f);
+            true
+        },
+        err(e) => {
+            print(concat("Failed to generate log: ", e));
+            false
+        }
+    }
+}
+
+// 2. Reader thread: reads file in chunks and sends to channel
+def reader_task(path: str, out_chan: chan<str>) -> i64 {
+    val f_res = fs.file_open_stream(path, "r");
+    when f_res {
+        ok(f) => {
+            var running = true;
+            while running {
+                val read_res = fs.file_read_stream(f, 256);
+                when read_res {
+                    ok(data) => {
+                        if data == "" {
+                            running = false;
+                            0
+                        } else {
+                            send(out_chan, data);
+                            0
+                        };
+                        0
+                    },
+                    err(e) => {
+                        print(concat("Read error: ", e));
+                        running = false;
+                        0
+                    }
+                };
+                0
+            };
+            fs.file_close_stream(f);
+            0
+        },
+        err(e) => {
+            print(concat("Reader failed to open: ", e));
+            0
+        }
+    };
+    send(out_chan, "EOF");
+    0
+}
+
+def processor_task(in_chan: chan<str>, out_chan: chan<str>) -> i64 {
+    var running = true;
+    var total_chunks = 0;
+    while running {
+        val chunk = recv(in_chan);
+        if chunk == "EOF" {
+            running = false;
+            0
+        } else {
+            total_chunks = total_chunks + 1;
+            val prefix = concat("[CHUNK ", to_str(total_chunks));
+            val prefix2 = concat(prefix, "] ");
+            val processed = concat(prefix2, chunk);
+            send(out_chan, processed);
+            0
+        };
+        0
+    };
+    send(out_chan, "EOF");
+    0
+}
+
+def main() -> i64 {
+    print("=== IRIS Concurrent File Processor ===");
+    val input_file = "test_input.log";
+    val output_file = "test_output.log";
+
+    print(concat("Generating dummy data to ", input_file));
+    generate_log_file(input_file, 100);
+
+    print("Setting up channels...");
+    val raw_chan: chan<str> = channel(10);
+    val processed_chan: chan<str> = channel(10);
+
+    print("Spawning worker threads...");
+    
+    spawn { reader_task(input_file, raw_chan); };
+    spawn { processor_task(raw_chan, processed_chan); };
+    
+    print(concat("Writing processed data to ", output_file));
+    val f_res = fs.file_open_stream(output_file, "w");
+    when f_res {
+        ok(f) => {
+            var running = true;
+            var bytes_written = 0;
+            while running {
+                val chunk = recv(processed_chan);
+                if chunk == "EOF" {
+                    running = false;
+                    0
+                } else {
+                    fs.file_write_stream(f, chunk);
+                    bytes_written = bytes_written + 1;
+                    0
+                };
+                0
+            };
+            fs.file_close_stream(f);
+            print(concat("Processing complete! Total chunks written: ", to_str(bytes_written)));
+            0
+        },
+        err(e) => {
+            print(concat("Writer failed to open: ", e));
+            0
+        }
+    };
+
+    0
+}

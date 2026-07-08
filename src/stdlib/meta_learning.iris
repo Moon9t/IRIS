@@ -1,0 +1,221 @@
+/// std.meta_learning — Adaptive meta-learning primitives
+/// Provides MAML (Model-Agnostic Meta-Learning) style inner-loop
+/// updates, task sampling, and learning-to-learn utilities for
+/// building adaptive AI systems that improve their own learning.
+
+bring std.math
+bring std.adaptive
+
+// ---------------------------------------------------------------------------
+// Task descriptor
+// ---------------------------------------------------------------------------
+
+/// A few-shot learning task: support set and query set.
+pub type FewShotTask = (list<f64>, list<f64>, list<f64>, list<f64>)
+// (support_inputs, support_targets, query_inputs, query_targets)
+
+/// Create a few-shot task from support and query sets.
+pub def few_shot_task(support_inputs : list<f64>, support_targets : list<f64>,
+                      query_inputs : list<f64>, query_targets : list<f64>) -> FewShotTask {
+    (support_inputs, support_targets, query_inputs, query_targets)
+}
+
+// ---------------------------------------------------------------------------
+// MAML-style inner-loop update
+// ---------------------------------------------------------------------------
+
+/// Perform one inner-loop MAML update on an adaptive state using
+/// support set data. This is a simplified version for linear models:
+///   theta' = theta - alpha * grad(L_support(theta))
+///
+/// `handle` — adaptive state handle
+/// `support_inputs` — flat list of support inputs (n_support * n_features)
+/// `support_targets` — target values for support set
+/// `n_support` — number of support examples
+/// `n_features` — number of features per example
+/// `inner_lr` — inner loop learning rate (default: 0.01)
+pub def maml_inner_update(handle : i64, support_inputs : list<f64>, support_targets : list<f64>,
+                           n_support : i64, n_features : i64, inner_lr : f64) -> i64 {
+    val lr = adaptive_learning_rate(handle)
+    val effective_lr = if inner_lr > 0.0 { inner_lr } else { 0.01 }
+    adaptive_set_learning_rate(handle, effective_lr);
+    val _ = adaptive_train_batch(handle, support_inputs, n_support, n_features, support_targets)
+    adaptive_set_learning_rate(handle, lr);
+    0
+}
+
+/// Evaluate a MAML-adapted model on a query set, returning mean squared error.
+pub def maml_eval(handle : i64, query_inputs : list<f64>, query_targets : list<f64>,
+                  n_query : i64, n_features : i64) -> f64 {
+    var total_loss : f64 = 0.0
+    var count : i64 = 0
+
+    for i in 0 .. n_query {
+        val row_start = i * n_features
+        var inputs : list<f64> = list()
+        for j in 0 .. n_features {
+            list_push(inputs, list_get(query_inputs, row_start + j));
+        }
+        val pred = adaptive_predict(handle, inputs)
+        val target = list_get(query_targets, i)
+        val err = pred - target
+        total_loss = total_loss + err * err
+        count = count + 1
+    }
+
+    if count <= 0 { 0.0 } else { total_loss / (count to f64) }
+}
+
+// ---------------------------------------------------------------------------
+// Task sampling utilities
+// ---------------------------------------------------------------------------
+
+/// Sample a random subset of indices from a dataset.
+pub def sample_indices(total : i64, n : i64) -> list<i64> {
+    val indices : list<i64> = list()
+    for i in 0 .. n {
+        list_push(indices, random_range(0, total - 1));
+    }
+    indices
+}
+
+/// Extract a batch of inputs and targets at given indices from flat arrays.
+pub def gather_batch(all_inputs : list<f64>, all_targets : list<f64>,
+                     indices : list<i64>, n_features : i64) -> (list<f64>, list<f64>) {
+    val batch_inputs : list<f64> = list()
+    val batch_targets : list<f64> = list()
+
+    val n_indices = list_len(indices)
+    for ii in 0 .. n_indices {
+        val idx = list_get(indices, ii)
+        val target = list_get(all_targets, idx)
+        list_push(batch_targets, target);
+
+        val row_start = idx * n_features
+        val nf = n_features
+        for j in 0 .. nf {
+            list_push(batch_inputs, list_get(all_inputs, row_start + j));
+        }
+    }
+
+    (batch_inputs, batch_targets)
+}
+
+/// Split indices into two non-overlapping subsets (support and query).
+pub def split_indices(indices : list<i64>, support_ratio : f64) -> (list<i64>, list<i64>) {
+    val n = list_len(indices)
+    val n_support = if support_ratio <= 0.0 { 0 } else { n / 2 }
+    val n_query = n - n_support
+
+    val support : list<i64> = list()
+    val query : list<i64> = list()
+
+    for i in 0 .. n_support {
+        list_push(support, list_get(indices, i));
+    }
+    for i in 0 .. n_query {
+        list_push(query, list_get(indices, n_support + i));
+    }
+
+    (support, query)
+}
+
+/// Create a few-shot task by sampling support and query sets from full data.
+pub def sample_few_shot_task(all_inputs : list<f64>, all_targets : list<f64>,
+                              total_examples : i64, n_features : i64,
+                              support_ratio : f64) -> FewShotTask {
+    val all_indices = sample_indices(total_examples, total_examples)
+    val (support_idx, query_idx) = split_indices(all_indices, support_ratio)
+
+    val (support_inputs, support_targets) = gather_batch(all_inputs, all_targets, support_idx, n_features)
+    val (query_inputs, query_targets) = gather_batch(all_inputs, all_targets, query_idx, n_features)
+
+    (support_inputs, support_targets, query_inputs, query_targets)
+}
+
+// ---------------------------------------------------------------------------
+// Meta-training loop
+// ---------------------------------------------------------------------------
+
+/// Perform one step of meta-training:
+/// 1. Sample a task (support + query)
+/// 2. Inner loop: adapt on support
+/// 3. Outer loop: compute meta-gradient on query
+/// Returns the query loss after inner-loop adaptation.
+pub def meta_train_step(handle : i64, all_inputs : list<f64>, all_targets : list<f64>,
+                         total_examples : i64, n_features : i64,
+                         support_ratio : f64, inner_lr : f64) -> f64 {
+    val task = sample_few_shot_task(all_inputs, all_targets, total_examples, n_features, support_ratio)
+    val support_inputs = task.0
+    val support_targets = task.1
+    val query_inputs = task.2
+    val query_targets = task.3
+
+    val n_support = list_len(support_targets) / n_features
+    val n_query = list_len(query_targets) / n_features
+
+    val saved_params : list<f64> = list()
+    val np = adaptive_n_params(handle)
+    for i in 0 .. np {
+        list_push(saved_params, adaptive_get_param(handle, i));
+    }
+
+    maml_inner_update(handle, support_inputs, support_targets, n_support, n_features, inner_lr);
+    val query_loss = maml_eval(handle, query_inputs, query_targets, n_query, n_features)
+
+    for i in 0 .. np {
+        adaptive_set_param(handle, i, list_get(saved_params, i));
+    }
+
+    query_loss
+}
+
+// ---------------------------------------------------------------------------
+// Reptile (simplified meta-learning)
+// ---------------------------------------------------------------------------
+
+/// Perform one Reptile-style meta-learning step.
+/// Reptile: theta = theta + eps * (theta_adapted - theta)
+pub def reptile_step(handle : i64, all_inputs : list<f64>, all_targets : list<f64>,
+                      total_examples : i64, n_features : i64,
+                      n_inner_steps : i64, inner_lr : f64, meta_lr : f64) -> f64 {
+    val task = sample_few_shot_task(all_inputs, all_targets, total_examples, n_features, 0.5)
+    val support_inputs = task.0
+    val support_targets = task.1
+
+    val n_support = list_len(support_targets) / n_features
+    val lr = adaptive_learning_rate(handle)
+    val effective_lr2 = if inner_lr > 0.0 { inner_lr } else { 0.01 }
+    adaptive_set_learning_rate(handle, effective_lr2);
+
+    for step in 0 .. n_inner_steps {
+        val _ = adaptive_train_batch(handle, support_inputs, n_support, n_features, support_targets)
+    }
+
+    adaptive_set_learning_rate(handle, lr);
+    0.0
+}
+
+// ---------------------------------------------------------------------------
+// Learning rate adaptation (hyperparameter meta-learning)
+// ---------------------------------------------------------------------------
+
+/// Adapt the learning rate based on recent loss trend.
+/// If loss increased, decrease LR; if decreased, increase LR.
+pub def adapt_learning_rate(handle : i64, prev_loss : f64, current_loss : f64,
+                             lr_min : f64, lr_max : f64, factor : f64) -> f64 {
+    val current_lr = adaptive_learning_rate(handle)
+    var new_lr = current_lr
+
+    if current_loss > prev_loss * 1.05 {
+        new_lr = current_lr / factor
+    } else if current_loss < prev_loss * 0.95 {
+        new_lr = current_lr * factor
+    }
+
+    if new_lr < lr_min { new_lr = lr_min }
+    if new_lr > lr_max { new_lr = lr_max }
+
+    adaptive_set_learning_rate(handle, new_lr);
+    new_lr
+}

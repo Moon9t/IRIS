@@ -1,14 +1,14 @@
 // options_results.iris -- safe optional values
 //
-// Run: cargo run -- --emit eval examples/options_results.iris
+// Run: iris run examples/options_results.iris
 
 // Safe integer division: returns none on divide-by-zero.
 def safe_div(a: i64, b: i64) -> option<i64> {
     if b == 0 { none } else { some(a / b) }
 }
 
-// Safe square root: returns none for negative input.
-def safe_sqrt(x: i64) -> option<i64> {
+// Safe square: returns none for negative input.
+def safe_square(x: i64) -> option<i64> {
     if x < 0 { none } else { some(x * x) }
 }
 
@@ -21,12 +21,12 @@ def main() -> i64 {
     val v2 = if is_some(r2) { unwrap(r2) } else { -1 }
     print(concat("10 / 0 = ", to_str(v2)));
 
-    val r3 = safe_sqrt(9)
+    val r3 = safe_square(9)
     val v3 = if is_some(r3) { unwrap(r3) } else { -1 }
-    print(concat("safe_sqrt(9) = ", to_str(v3)));
+    print(concat("safe_square(9) = ", to_str(v3)));
 
-    val r4 = safe_sqrt(-4)
+    val r4 = safe_square(-4)
     val v4 = if is_some(r4) { unwrap(r4) } else { -1 }
-    print(concat("safe_sqrt(-4) = ", to_str(v4)));
+    print(concat("safe_square(-4) = ", to_str(v4)));
     0
 }

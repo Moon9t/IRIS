@@ -35,7 +35,7 @@ def fib(n : i64) -> i64 {
     
 }
 def prime_count(limit : i64) -> i64 {
-    val flags = list();
+    val flags: list<i64> = list();
     var i = 0;
     while i <= limit {
         push(flags, 1);

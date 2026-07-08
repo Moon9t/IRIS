@@ -1,0 +1,54 @@
+// main.iris — Key-Value Store Orchestrator
+
+bring std.fs
+
+bring "store.iris"
+bring "server.iris"
+bring "client.iris"
+
+def main() -> i64 {
+    print("");
+    print("  ╔══════════════════════════════════════════════════════════╗");
+    print("  ║        IRIS Distributed Key-Value Store Demo             ║");
+    print("  ║        Thread-Safe · Mutexed · TCP Networking            ║");
+    print("  ╚══════════════════════════════════════════════════════════╝");
+    print("");
+    
+    // 1. Initialize store
+    val store = store_new();
+    
+    // 2. Start TCP server in background thread
+    val port = 9090;
+    
+    print("  Starting TCP Server in background thread...");
+    spawn {
+        val _ = start_server(port, store);
+    };
+    
+    // Sleep to allow server to bind and start listening
+    sleep_ms(100);
+    
+    // 3. Run client test sequence
+    val passes = run_test_sequence(port);
+    
+    // 4. Save store to disk
+    print("");
+    print("  Saving key-value store to store.json...");
+    val saved = store_save(store, "store.json");
+    if saved {
+        print("  Store successfully written to store.json");
+    } else {
+        print("  Failed to save store to file");
+    };
+    
+    // 5. Print summary report
+    print("");
+    print("  ┌─ Summary Report ───────────────────────────");
+    print(concat("  │ Port:               ", to_str(port)));
+    print(concat("  │ Tests Passed:       ", concat(to_str(passes), " / 9")));
+    print(concat("  │ Persistence Status: ", if saved { "Saved" } else { "Failed" }));
+    print("  └────────────────────────────────────────────");
+    print("");
+    
+    0
+}

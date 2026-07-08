@@ -1,0 +1,520 @@
+// IRIS module: concurrent_file_processor
+
+def generate_log_file(path: str, lines: i64) -> bool {
+  entry0(%0 path, %1 lines):
+    %2 = const.str "w"
+    retain %2
+    %3 = call @fs__file_open_stream(%0, %2)
+    retain %3
+    %4 = is_ok %3
+    %5 = const.i 0 : i64
+    condbr %4, bb1(), bb2()
+  result_ok1():
+    %6 = result_unwrap %3 : %fs__File
+    %11 = const.str "LOG ENTRY "
+    retain %11
+    %14 = const.str " - Data payload generated for streaming test.
+"
+    retain %14
+    %17 = const.i 1 : i64
+    br bb4(%5)
+  result_err2():
+    %21 = result_unwrap_err %3 : str
+    retain %21
+    %22 = const.str "Failed to generate log: "
+    retain %22
+    %23 = str_concat %22, %21
+    retain %23
+    print %23
+    %25 = const.bool false
+    br bb3(%25)
+  result_merge3(%26 result_result):
+    release %2, Str
+    release %3, ResultType(Struct { name: "fs__File", fields: [("handle", Scalar(I64))] }, Str)
+    return %26
+  while_header4(%8 i):
+    %10 = cmplt %8, %1
+    condbr %10, bb5(), bb6(%8)
+  while_body5():
+    %12 = to_str %8
+    retain %12
+    %13 = str_concat %11, %12
+    retain %13
+    %15 = str_concat %13, %14
+    retain %15
+    %16 = call @fs__file_write_stream(%6, %15)
+    retain %16
+    %18 = add %8, %17
+    br bb4(%18)
+  while_merge6(%9 i):
+    %19 = call @fs__file_close_stream(%6)
+    retain %19
+    %20 = const.bool true
+    br bb3(%20)
+}
+
+def reader_task(path: str, out_chan: chan<str>) -> i64 {
+  entry0(%0 path, %1 out_chan):
+    %2 = const.str "r"
+    retain %2
+    %3 = call @fs__file_open_stream(%0, %2)
+    retain %3
+    %4 = is_ok %3
+    %5 = const.i 0 : i64
+    condbr %4, bb1(), bb2()
+  result_ok1():
+    %6 = result_unwrap %3 : %fs__File
+    %7 = const.bool true
+    %10 = const.i 256 : i64
+    %45 = get_field %6[0] : i64
+    %15 = const.str ""
+    retain %15
+    %26 = const.str "Read error: "
+    retain %26
+    %29 = const.bool false
+    br bb4(%7)
+  result_err2():
+    %36 = result_unwrap_err %3 : str
+    retain %36
+    %37 = const.str "Reader failed to open: "
+    retain %37
+    %38 = str_concat %37, %36
+    retain %38
+    print %38
+    br bb3(%5)
+  result_merge3(%41 result_result):
+    %42 = const.str "EOF"
+    retain %42
+    chan_send %1, %42
+    release %2, Str
+    release %3, ResultType(Struct { name: "fs__File", fields: [("handle", Scalar(I64))] }, Str)
+    release %42, Str
+    return %5
+  while_header4(%8 running):
+    condbr %8, bb5(), bb6(%8)
+  while_body5():
+    %46 = builtin_call @file_read(%45, %10) -> Str
+    retain %46
+    %47 = make_ok %46 : result<str,str>
+    retain %47
+    %12 = is_ok %47
+    condbr %12, bb7(), bb8()
+  while_merge6(%9 running):
+    %34 = call @fs__file_close_stream(%6)
+    retain %34
+    br bb3(%5)
+  result_ok7():
+    %14 = result_unwrap %47 : str
+    retain %14
+    %16 = cmpeq %14, %15
+    condbr %16, bb10(), bb11()
+  result_err8():
+    %25 = result_unwrap_err %47 : str
+    retain %25
+    %27 = str_concat %26, %25
+    retain %27
+    print %27
+    br bb9(%5, %29)
+  result_merge9(%31 result_result, %32 running):
+    br bb4(%32)
+  then10():
+    br bb12(%5, %29)
+  else11():
+    chan_send %1, %14
+    br bb12(%5, %8)
+  merge12(%22 if_result, %23 running):
+    br bb9(%5, %23)
+}
+
+def processor_task(in_chan: chan<str>, out_chan: chan<str>) -> i64 {
+  entry0(%0 in_chan, %1 out_chan):
+    %2 = const.bool true
+    %3 = const.i 0 : i64
+    %9 = const.str "EOF"
+    retain %9
+    %12 = const.bool false
+    %14 = const.i 1 : i64
+    %16 = const.str "[CHUNK "
+    retain %16
+    %19 = const.str "] "
+    retain %19
+    br bb1(%2, %3)
+  while_header1(%4 running, %5 total_chunks):
+    condbr %4, bb2(), bb3(%4, %5)
+  while_body2():
+    %8 = chan_recv %0 : str
+    retain %8
+    %10 = cmpeq %8, %9
+    condbr %10, bb4(), bb5()
+  while_merge3(%6 running, %7 total_chunks):
+    %28 = const.str "EOF"
+    retain %28
+    chan_send %1, %28
+    release %9, Str
+    release %16, Str
+    release %19, Str
+    release %28, Str
+    return %3
+  then4():
+    br bb6(%3, %12, %5)
+  else5():
+    %15 = add %5, %14
+    %17 = to_str %15
+    retain %17
+    %18 = str_concat %16, %17
+    retain %18
+    %20 = str_concat %18, %19
+    retain %20
+    %21 = str_concat %20, %8
+    retain %21
+    chan_send %1, %21
+    br bb6(%3, %4, %15)
+  merge6(%24 if_result, %25 running, %26 total_chunks):
+    br bb1(%25, %26)
+}
+
+def main() -> i64 {
+  entry0():
+    %0 = const.str "=== IRIS Concurrent File Processor ==="
+    retain %0
+    print %0
+    %1 = const.i 0 : i64
+    %2 = const.str "test_input.log"
+    retain %2
+    %3 = const.str "test_output.log"
+    retain %3
+    %4 = const.str "Generating dummy data to "
+    retain %4
+    %5 = str_concat %4, %2
+    retain %5
+    print %5
+    %7 = const.i 100 : i64
+    %8 = call @generate_log_file(%2, %7)
+    %9 = const.str "Setting up channels..."
+    retain %9
+    print %9
+    %11 = const.i 10 : i64
+    %12 = chan_new(cap: %11) : chan<str>
+    retain %12
+    %14 = chan_new(cap: %11) : chan<str>
+    retain %14
+    %15 = const.str "Spawning worker threads..."
+    retain %15
+    print %15
+    spawn @__spawn_0(%14, %2, %3, %12)
+    spawn @__spawn_1(%14, %2, %3, %12)
+    %17 = const.str "Writing processed data to "
+    retain %17
+    %18 = str_concat %17, %3
+    retain %18
+    print %18
+    %20 = const.str "w"
+    retain %20
+    %21 = call @fs__file_open_stream(%3, %20)
+    retain %21
+    %22 = is_ok %21
+    condbr %22, bb1(), bb2()
+  result_ok1():
+    %24 = result_unwrap %21 : %fs__File
+    %25 = const.bool true
+    %32 = const.str "EOF"
+    retain %32
+    %35 = const.bool false
+    %38 = const.i 1 : i64
+    br bb4(%25, %1)
+  result_err2():
+    %51 = result_unwrap_err %21 : str
+    retain %51
+    %52 = const.str "Writer failed to open: "
+    retain %52
+    %53 = str_concat %52, %51
+    retain %53
+    print %53
+    br bb3(%1)
+  result_merge3(%56 result_result):
+    release %0, Str
+    release %2, Str
+    release %3, Str
+    release %4, Str
+    release %5, Str
+    release %9, Str
+    release %12, Chan(Str)
+    release %14, Chan(Str)
+    release %15, Str
+    release %17, Str
+    release %18, Str
+    release %20, Str
+    release %21, ResultType(Struct { name: "fs__File", fields: [("handle", Scalar(I64))] }, Str)
+    return %1
+  while_header4(%27 running, %28 bytes_written):
+    condbr %27, bb5(), bb6(%27, %28)
+  while_body5():
+    %31 = chan_recv %14 : str
+    retain %31
+    %33 = cmpeq %31, %32
+    condbr %33, bb7(), bb8()
+  while_merge6(%29 running, %30 bytes_written):
+    %45 = call @fs__file_close_stream(%24)
+    retain %45
+    %46 = const.str "Processing complete! Total chunks written: "
+    retain %46
+    %47 = to_str %30
+    retain %47
+    %48 = str_concat %46, %47
+    retain %48
+    print %48
+    br bb3(%1)
+  then7():
+    br bb9(%1, %35, %28)
+  else8():
+    %37 = call @fs__file_write_stream(%24, %31)
+    retain %37
+    %39 = add %28, %38
+    br bb9(%1, %27, %39)
+  merge9(%41 if_result, %42 running, %43 bytes_written):
+    br bb4(%42, %43)
+}
+
+def fs__file_open_stream(path: str, mode: str) -> result<%fs__File,str> {
+  entry0(%0 path, %1 mode):
+    %2 = builtin_call @file_open(%0, %1) -> Scalar(I64)
+    %3 = const.i 0 : i64
+    %4 = cmpeq %2, %3
+    condbr %4, bb1(), bb2()
+  then1():
+    %6 = const.str "Failed to open file: "
+    retain %6
+    %7 = str_concat %6, %0
+    retain %7
+    %8 = make_err %7 : result<%fs__File,str>
+    retain %8
+    br bb3(%8)
+  else2():
+    %9 = make_struct {%2} : %fs__File
+    %10 = make_ok %9 : result<%fs__File,str>
+    retain %10
+    br bb3(%10)
+  merge3(%11 if_result):
+    return %11
+}
+
+def fs__file_close_stream(f: %fs__File) -> result<bool,str> {
+  entry0(%0 f):
+    %1 = get_field %0[0] : i64
+    %2 = builtin_call @file_close(%1) -> Scalar(Bool)
+    condbr %2, bb1(), bb2()
+  then1():
+    %4 = const.bool true
+    %5 = make_ok %4 : result<bool,str>
+    retain %5
+    br bb3(%5)
+  else2():
+    %6 = const.str "Failed to close file"
+    retain %6
+    %7 = make_err %6 : result<bool,str>
+    retain %7
+    br bb3(%7)
+  merge3(%8 if_result):
+    return %8
+}
+
+def fs__file_read_stream(f: %fs__File, bytes: i64) -> result<str,str> {
+  entry0(%0 f, %1 bytes):
+    %2 = get_field %0[0] : i64
+    %3 = builtin_call @file_read(%2, %1) -> Str
+    retain %3
+    %4 = make_ok %3 : result<str,str>
+    retain %4
+    return %4
+}
+
+def fs__file_write_stream(f: %fs__File, data: str) -> result<bool,str> {
+  entry0(%0 f, %1 data):
+    %2 = get_field %0[0] : i64
+    %3 = builtin_call @file_write(%2, %1) -> Scalar(Bool)
+    condbr %3, bb1(), bb2()
+  then1():
+    %5 = const.bool true
+    %6 = make_ok %5 : result<bool,str>
+    retain %6
+    br bb3(%6)
+  else2():
+    %7 = const.str "Failed to write to file"
+    retain %7
+    %8 = make_err %7 : result<bool,str>
+    retain %8
+    br bb3(%8)
+  merge3(%9 if_result):
+    return %9
+}
+
+def fs__read_text(path: str) -> result<str,str> {
+  entry0(%0 path):
+    %1 = file_read_all %0
+    retain %1
+    return %1
+}
+
+def fs__write_text(path: str, content: str) -> result<bool,str> {
+  entry0(%0 path, %1 content):
+    %2 = file_write_all %0, %1
+    retain %2
+    %3 = is_ok %2
+    condbr %3, bb1(), bb2()
+  result_ok1():
+    %6 = const.bool true
+    %7 = make_ok %6 : result<bool,str>
+    retain %7
+    br bb3(%7)
+  result_err2():
+    %8 = result_unwrap_err %2 : str
+    retain %8
+    %9 = make_err %8 : result<bool,str>
+    retain %9
+    br bb3(%9)
+  result_merge3(%10 result_result):
+    return %10
+}
+
+def fs__append_text(path: str, content: str) -> result<bool,str> {
+  entry0(%0 path, %1 content):
+    %2 = const.str "a"
+    retain %2
+    %3 = call @fs__file_open_stream(%0, %2)
+    retain %3
+    %4 = is_ok %3
+    condbr %4, bb1(), bb2()
+  result_ok1():
+    %6 = result_unwrap %3 : %fs__File
+    %7 = call @fs__file_write_stream(%6, %1)
+    retain %7
+    %8 = call @fs__file_close_stream(%6)
+    retain %8
+    br bb3(%7)
+  result_err2():
+    %9 = result_unwrap_err %3 : str
+    retain %9
+    %10 = make_err %9 : result<bool,str>
+    retain %10
+    br bb3(%10)
+  result_merge3(%11 result_result):
+    release %2, Str
+    return %11
+}
+
+def fs__path_exists(path: str) -> bool {
+  entry0(%0 path):
+    %1 = file_exists %0
+    return %1
+}
+
+def fs__read_lines(path: str) -> result<list<str>,str> {
+  entry0(%0 path):
+    %9 = file_exists %0
+    %2 = not %9
+    %3 = const.i 0 : i64
+    condbr %2, bb1(), bb2(%3)
+  then1():
+    %4 = const.str "File not found"
+    retain %4
+    %5 = make_err %4 : result<list<str>,str>
+    retain %5
+    return %5
+  merge2(%6 if_result):
+    %7 = file_lines %0
+    retain %7
+    %8 = make_ok %7 : result<list<str>,str>
+    retain %8
+    return %8
+  post_return3():
+    br bb2(%3)
+}
+
+def fs__copy_file(src: str, dst: str) -> result<bool,str> {
+  entry0(%0 src, %1 dst):
+    %10 = file_read_all %0
+    retain %10
+    %3 = is_ok %10
+    condbr %3, bb1(), bb2()
+  result_ok1():
+    %5 = result_unwrap %10 : str
+    retain %5
+    %6 = call @fs__write_text(%1, %5)
+    retain %6
+    br bb3(%6)
+  result_err2():
+    %7 = result_unwrap_err %10 : str
+    retain %7
+    %8 = make_err %7 : result<bool,str>
+    retain %8
+    br bb3(%8)
+  result_merge3(%9 result_result):
+    return %9
+}
+
+def async__try_recv(ch: chan<i64>) -> option<i64> {
+  entry0(%0 ch):
+    %1 = builtin_call @chan_try_recv(%0) -> Option(Scalar(I64))
+    retain %1
+    return %1
+}
+
+def async__channel_bounded(capacity: i64) -> chan<i64> {
+  entry0(%0 capacity):
+    %1 = chan_new(cap: %0) : chan<_>
+    retain %1
+    return %1
+}
+
+def async__channel_unbounded() -> chan<i64> {
+  entry0():
+    %1 = const.i -1 : i64
+    %2 = chan_new(cap: %1) : chan<_>
+    retain %2
+    return %2
+}
+
+def async__channel_len(ch: chan<i64>) -> i64 {
+  entry0(%0 ch):
+    %1 = builtin_call @chan_len(%0) -> Scalar(I64)
+    return %1
+}
+
+def async__sleep(ms: i64) -> bool {
+  entry0(%0 ms):
+    %1 = builtin_call @timeout(%0) -> Scalar(Bool)
+    return %1
+}
+
+def async__num_threads() -> i64 {
+  entry0():
+    %0 = builtin_call @thread_count() -> Scalar(I64)
+    return %0
+}
+
+def async__now() -> i64 {
+  entry0():
+    %0 = now_ms
+    return %0
+}
+
+def async__delay(ms: i64) -> bool {
+  entry0(%0 ms):
+    %1 = sleep_ms %0
+    %2 = const.bool true
+    return %2
+}
+
+def __spawn_0(processed_chan: chan<str>, input_file: str, output_file: str, raw_chan: chan<str>) -> i64 {
+  entry0(%0 processed_chan, %1 input_file, %2 output_file, %3 raw_chan):
+    %4 = call @reader_task(%1, %3)
+    %5 = const.i 0 : i64
+    return %5
+}
+
+def __spawn_1(processed_chan: chan<str>, input_file: str, output_file: str, raw_chan: chan<str>) -> i64 {
+  entry0(%0 processed_chan, %1 input_file, %2 output_file, %3 raw_chan):
+    %4 = call @processor_task(%3, %0)
+    %5 = const.i 0 : i64
+    return %5
+}

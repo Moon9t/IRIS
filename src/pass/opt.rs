@@ -17,6 +17,27 @@ use crate::ir::module::IrModule;
 use crate::ir::value::ValueId;
 use crate::pass::Pass;
 
+/// Combined Optimization Pass that runs CSE, DCE, and OpExpand.
+/// This fulfills the formal 15-pass pipeline architecture.
+pub struct OptPass;
+
+impl Pass for OptPass {
+    fn name(&self) -> &'static str {
+        "opt"
+    }
+
+    fn run(&mut self, module: &mut IrModule) -> Result<(), PassError> {
+        let mut dce = DcePass;
+        let mut cse = CsePass;
+        let mut op_expand = OpExpandPass;
+        
+        cse.run(module)?;
+        dce.run(module)?;
+        op_expand.run(module)?;
+        Ok(())
+    }
+}
+
 // ===========================================================================
 // DcePass
 // ===========================================================================
@@ -168,6 +189,22 @@ impl Pass for CsePass {
                 let mut known: HashMap<CseKey, ValueId> = HashMap::new();
                 cse_block(block, &mut known, &mut replacements);
             }
+
+            // --- Cross-block replacement sweep (critical correctness fix) ---
+            // Per-block CSE eliminates values and accumulates replacements but
+            // only applies them to instructions *within* the current block.
+            // After processing all blocks, Br/CondBr arguments in blocks that
+            // were processed *before* a replacement was created may still
+            // reference eliminated value IDs. A second full sweep is needed to
+            // guarantee all uses are updated before stale entries are removed.
+            if !replacements.is_empty() {
+                for block in &mut func.blocks {
+                    for instr in &mut block.instrs {
+                        apply_replacements(instr, &replacements);
+                    }
+                }
+            }
+
             // Remove stale type/def entries for eliminated values.
             for old in replacements.keys() {
                 func.value_types.remove(old);
@@ -412,7 +449,9 @@ pub(crate) fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, Va
                 replace(v);
             }
         }
-        IrInstr::ChanNew { .. } => {}
+        IrInstr::ChanNew { capacity, .. } => {
+            replace(capacity);
+        }
         IrInstr::ChanSend { chan, value } => {
             replace(chan);
             replace(value);

@@ -1,4 +1,13 @@
 use crate::parser::lexer::Span;
+use crate::ir::instr::BinOp;
+
+/// An attribute annotation with optional arguments, e.g. `@adaptive(learning_rate=0.01)`.
+#[derive(Debug, Clone)]
+pub struct AstAttribute {
+    pub name: String,
+    pub args: Vec<AstExpr>,  // Positional and named arguments
+    pub span: Span,
+}
 
 /// An identifier with its source location.
 #[derive(Debug, Clone)]
@@ -120,8 +129,8 @@ pub struct AstFunction {
     pub body: AstBlock,
     pub span: Span,
     pub is_async: bool,
-    /// Attribute annotations, e.g. `["differentiable"]` for `@differentiable def f(...)`
-    pub attrs: Vec<String>,
+    /// Attribute annotations, e.g. `@adaptive(learning_rate=0.01)` for `@adaptive def f(...)`
+    pub attrs: Vec<AstAttribute>,
 }
 
 /// A block of statements with an optional tail expression (the block's value).
@@ -160,17 +169,19 @@ pub enum AstStmt {
     Continue {
         span: Span,
     },
-    /// `for <var> in <start>..<end> { <body> }` range loop (sugar over while).
+    /// `for <var> in <start>..<end> { <body> }` or `for <var> in <start>..=<end> { <body> }` range loop (sugar over while).
     ForRange {
         var: Ident,
         start: Box<AstExpr>,
         end: Box<AstExpr>,
+        inclusive: bool,
         body: AstBlock,
         span: Span,
     },
-    /// `lvalue = expr` tensor store assignment.
+    /// `lvalue = expr` or compound assignment `lvalue += expr`, etc.
     Assign {
         target: Box<AstExpr>,
+        op: Option<BinOp>,
         value: Box<AstExpr>,
         span: Span,
     },
@@ -191,11 +202,12 @@ pub enum AstStmt {
         body: Vec<AstStmt>,
         span: Span,
     },
-    /// `par for <var> in <start>..<end> { body }` — parallel range iteration.
+    /// `par for <var> in <start>..<end> { body }` or `par for <var> in <start>..=<end> { body }` — parallel range iteration.
     ParFor {
         var: Ident,
         start: Box<AstExpr>,
         end: Box<AstExpr>,
+        inclusive: bool,
         body: AstBlock,
         span: Span,
     },

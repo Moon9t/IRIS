@@ -255,13 +255,7 @@ pub fn compile_ast_to_module(
 ) -> Result<IrModule, Error> {
     use crate::lower::{lower, lower_graph_to_ir, lower_model};
     use crate::pass::infer_shapes;
-    use crate::pass::type_infer::TypeInferPass;
-    use crate::pass::validate::ValidatePass;
-    use crate::pass::{
-        ConstFoldPass, CopyPropPass, CsePass, DcePass, ExhaustivePass, GcAnnotatePass,
-        HmTypeInferPass, InlinePass, LicmPass, LoopUnrollPass, OpExpandPass, PassManager,
-        ShapeCheckPass, StrengthReducePass,
-    };
+
 
     let mut ir_module = lower(ast_module, module_name)?;
     for model in &ast_module.models {
@@ -275,22 +269,7 @@ pub fn compile_ast_to_module(
                 span: model.name.span,
             })?;
     }
-    let mut pm = PassManager::new();
-    pm.add_pass(HmTypeInferPass);
-    pm.add_pass(ValidatePass);
-    pm.add_pass(TypeInferPass);
-    pm.add_pass(ConstFoldPass);
-    pm.add_pass(StrengthReducePass);
-    pm.add_pass(CopyPropPass);
-    pm.add_pass(OpExpandPass);
-    pm.add_pass(LicmPass);
-    pm.add_pass(InlinePass::default());
-    pm.add_pass(LoopUnrollPass::default());
-    pm.add_pass(ExhaustivePass);
-    pm.add_pass(DcePass);
-    pm.add_pass(CsePass);
-    pm.add_pass(ShapeCheckPass);
-    pm.add_pass(GcAnnotatePass);
+    let mut pm = crate::pass::build_standard_pipeline();
     if let Some(pass_name) = dump_ir_after {
         pm.set_dump_after(pass_name);
     }
@@ -318,13 +297,7 @@ fn compile_ast(
     use crate::codegen::simd::emit_simd;
     use crate::lower::{lower, lower_graph_to_ir, lower_model};
     use crate::pass::infer_shapes;
-    use crate::pass::type_infer::TypeInferPass;
-    use crate::pass::validate::ValidatePass;
-    use crate::pass::{
-        ConstFoldPass, CopyPropPass, CsePass, DcePass, DeadNodePass, ExhaustivePass,
-        GcAnnotatePass, GraphPassManager, HmTypeInferPass, InlinePass, LicmPass, LoopUnrollPass,
-        OpExpandPass, PassManager, ShapeCheckPass, StrengthReducePass,
-    };
+    use crate::pass::{DeadNodePass, GraphPassManager};
 
     if emit == EmitKind::Graph {
         let mut out = String::new();
@@ -368,22 +341,7 @@ fn compile_ast(
             })?;
     }
 
-    let mut pm = PassManager::new();
-    pm.add_pass(HmTypeInferPass);
-    pm.add_pass(ValidatePass);
-    pm.add_pass(TypeInferPass);
-    pm.add_pass(ConstFoldPass);
-    pm.add_pass(StrengthReducePass);
-    pm.add_pass(CopyPropPass);
-    pm.add_pass(OpExpandPass);
-    pm.add_pass(LicmPass);
-    pm.add_pass(InlinePass::default());
-    pm.add_pass(LoopUnrollPass::default());
-    pm.add_pass(ExhaustivePass);
-    pm.add_pass(DcePass);
-    pm.add_pass(CsePass);
-    pm.add_pass(ShapeCheckPass);
-    pm.add_pass(GcAnnotatePass);
+    let mut pm = crate::pass::build_standard_pipeline();
     if let Some(pass_name) = dump_ir_after {
         pm.set_dump_after(pass_name);
     }
@@ -411,30 +369,8 @@ fn compile_ast(
 pub fn compile_to_module(source: &str, module_name: &str) -> Result<IrModule, Error> {
     let ast_module = parse_recovering(source)?;
     let ir = crate::lower::lower(&ast_module, module_name)?;
-    // Run passes identical to compile_ast.
-    use crate::pass::type_infer::TypeInferPass;
-    use crate::pass::validate::ValidatePass;
-    use crate::pass::{
-        ConstFoldPass, CopyPropPass, CsePass, DcePass, ExhaustivePass, GcAnnotatePass,
-        HmTypeInferPass, InlinePass, LicmPass, LoopUnrollPass, OpExpandPass, PassManager,
-        ShapeCheckPass, StrengthReducePass,
-    };
-    let mut pm = PassManager::new();
-    pm.add_pass(HmTypeInferPass);
-    pm.add_pass(ValidatePass);
-    pm.add_pass(TypeInferPass);
-    pm.add_pass(ConstFoldPass);
-    pm.add_pass(StrengthReducePass);
-    pm.add_pass(CopyPropPass);
-    pm.add_pass(OpExpandPass);
-    pm.add_pass(LicmPass);
-    pm.add_pass(InlinePass::default());
-    pm.add_pass(LoopUnrollPass::default());
-    pm.add_pass(ExhaustivePass);
-    pm.add_pass(DcePass);
-    pm.add_pass(CsePass);
-    pm.add_pass(ShapeCheckPass);
-    pm.add_pass(GcAnnotatePass);
+
+    let mut pm = crate::pass::build_standard_pipeline();
     let mut ir = ir;
     pm.run(&mut ir).map_err(|(_, e)| Error::Pass(e))?;
     Ok(ir)

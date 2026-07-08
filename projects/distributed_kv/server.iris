@@ -1,0 +1,118 @@
+// server.iris — Concurrent TCP KV server
+
+bring std.net
+
+bring "protocol.iris"
+bring "store.iris"
+
+pub def start_server(port: i64, store: KVStore) -> i64 {
+    val server_opt = tcp_listen_on(port);
+    val res = when server_opt {
+        some(server) => {
+            print(concat("[Server] Listening on port ", to_str(port)));
+            
+            var conn_count = 0;
+            var running = true;
+            
+            // Copy protocol constants to local variables to bypass closure scope compiler bug
+            val err_const = STATUS_ERR;
+            val ok_const = STATUS_OK;
+            val pong_const = STATUS_PONG;
+            val nf_const = STATUS_NOT_FOUND;
+            
+            while running && conn_count < 9 {
+                val conn_opt = tcp_accept_conn(server);
+                if is_none(conn_opt) {
+                    running = false;
+                };
+                if is_some(conn_opt) {
+                    val conn = unwrap(conn_opt);
+                    conn_count = conn_count + 1;
+                    
+                    spawn {
+                        val raw_req = tcp_read_conn(conn);
+                        val parts = parse_command(raw_req);
+                        val n_parts = list_len(parts);
+                        
+                        var resp_status = err_const;
+                        var resp_body = "Empty command";
+                        
+                        if n_parts > 0 {
+                            val verb = list_get(parts, 0);
+                            
+                            if verb == "PING" {
+                                resp_status = pong_const;
+                                resp_body = "PONG";
+                            } else {
+                                if verb == "GET" && n_parts >= 2 {
+                                    val key = list_get(parts, 1);
+                                    val val_opt = store_get(store, key);
+                                    if is_some(val_opt) {
+                                        resp_status = ok_const;
+                                        resp_body = unwrap(val_opt);
+                                    } else {
+                                        resp_status = nf_const;
+                                        resp_body = concat("Key not found: ", key);
+                                    };
+                                } else {
+                                    if verb == "SET" && n_parts >= 3 {
+                                        val key = list_get(parts, 1);
+                                        val value = list_get(parts, 2);
+                                        val _ = store_set(store, key, value);
+                                        resp_status = ok_const;
+                                        resp_body = "Key set";
+                                    } else {
+                                        if verb == "DEL" && n_parts >= 2 {
+                                            val key = list_get(parts, 1);
+                                            val deleted = store_delete(store, key);
+                                            if deleted {
+                                                resp_status = ok_const;
+                                                resp_body = "Key deleted";
+                                            } else {
+                                                resp_status = nf_const;
+                                                resp_body = "Key not found";
+                                            };
+                                        } else {
+                                            if verb == "LIST" {
+                                                val keys = store_list_keys(store);
+                                                var keys_str = "";
+                                                var k_idx = 0;
+                                                while k_idx < list_len(keys) {
+                                                    keys_str = concat(keys_str, concat(list_get(keys, k_idx), " "));
+                                                    k_idx = k_idx + 1;
+                                                };
+                                                resp_status = ok_const;
+                                                resp_body = keys_str;
+                                            } else {
+                                                if verb == "QUIT" {
+                                                    resp_status = ok_const;
+                                                    resp_body = "Goodbye";
+                                                } else {
+                                                    resp_status = err_const;
+                                                    resp_body = concat("Unknown command: ", verb);
+                                                }
+                                            }
+                                        }
+                                    }
+                                };
+                            };
+                        };
+                        
+                        val raw_resp = make_response(resp_status, resp_body);
+                        val _ = tcp_write_conn(conn, raw_resp);
+                        val _ = tcp_close_conn(conn);
+                        0
+                    };
+                };
+            };
+            val _ = tcp_close_server(server);
+            print("[Server] Server stopped.");
+            0
+        },
+        none => {
+            print(concat("[Server] Failed to listen on port ", to_str(port)));
+            0
+        }
+    };
+    0
+}

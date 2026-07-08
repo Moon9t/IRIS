@@ -1,26 +1,35 @@
 // src/stdlib/heap.iris -- IRIS standard min-heap (i64, sorted-list implementation)
+//
+// Provides a priority queue / min-heap with O(log n) insertion and O(1) peek/pop
+// using a sorted list backend. Elements are stored in ascending order.
 
+/// A min-heap containing i64 elements.
 record MinHeap { data: list<i64> }
 
+/// Create a new empty min-heap.
 pub def heap_new() -> MinHeap {
     MinHeap { data: list() }
 }
 
+/// Return the number of elements in the heap.
 pub def heap_len(h: MinHeap) -> i64 {
     list_len(h.data)
 }
 
-// Returns the minimum element (front of sorted list).
+/// Return the minimum element (front of sorted list) without removing it.
+/// Panics if the heap is empty.
 pub def heap_peek(h: MinHeap) -> i64 {
     list_get(h.data, 0)
 }
 
-// Returns the minimum element.
+/// Return the minimum element without removing it.
+/// Panics if the heap is empty.
 pub def heap_pop_val(h: MinHeap) -> i64 {
     list_get(h.data, 0)
 }
 
-// Returns a new heap with the minimum element removed.
+/// Return a new heap with the minimum element removed.
+/// Panics if the heap is empty.
 pub def heap_pop_heap(h: MinHeap) -> MinHeap {
     var new_data: list<i64> = list()
     var i = 1
@@ -32,7 +41,8 @@ pub def heap_pop_heap(h: MinHeap) -> MinHeap {
     MinHeap { data: new_data }
 }
 
-// Inserts v into the heap maintaining sorted (ascending) order.
+/// Insert `v` into the heap maintaining sorted (ascending) order.
+/// Returns a new heap with the element inserted.
 pub def heap_push(h: MinHeap, v: i64) -> MinHeap {
     var new_data: list<i64> = list()
     var inserted = 0

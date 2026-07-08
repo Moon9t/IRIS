@@ -32,7 +32,8 @@ The IRIS static type system.
 
 ### `05_systems/`
 Low-level systems programming and FFI.
-- **Concurrency & Networking:** `concurrency.iris`, `networking.iris`, `http_server_smoke.iris`
+- **Concurrency & Networking:** `concurrency.iris`, `networking.iris`, `http_server_smoke.iris`, `network_echo.iris`
+- **Data Parallelism:** `parallel_monte_carlo.iris` (showcases `par for` data-parallelism and atomic primitives)
 - **FFI & State:** `ffi.iris`, `backend.iris`
 - **Persistence:** `database.iris`, `sql_params.iris`
 

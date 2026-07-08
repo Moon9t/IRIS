@@ -36,8 +36,9 @@
 //! ```
 
 use crate::error::ParseError;
+use crate::ir::instr::BinOp;
 use crate::parser::ast::{
-    AstBinOp, AstBlock, AstBring, AstConst, AstDim, AstEnumDef, AstEnumVariant, AstExpr,
+    AstAttribute, AstBinOp, AstBlock, AstBring, AstConst, AstDim, AstEnumDef, AstEnumVariant, AstExpr,
     AstFieldDef, AstFunction, AstImplDef, AstLayer, AstLayerParam, AstModel, AstModelInput,
     AstModelOutput, AstModule, AstParam, AstScalarKind, AstStmt, AstStructDef, AstTraitDef,
     AstTraitMethod, AstType, AstTypeAlias, AstUnaryOp, AstWhenArm, AstWhenPattern, BringPath,
@@ -158,6 +159,58 @@ impl<'t> Parser<'t> {
         }
     }
 
+    fn expect_ident_or_keyword(&mut self) -> Result<Ident, ParseError> {
+        let span = self.current_span();
+        let name = match self.peek_tok() {
+            Token::Ident(s) => s.clone(),
+            // Keywords
+            Token::Def => "def".to_owned(),
+            Token::Val => "val".to_owned(),
+            Token::Var => "var".to_owned(),
+            Token::Return => "return".to_owned(),
+            Token::If => "if".to_owned(),
+            Token::Else => "else".to_owned(),
+            Token::While => "while".to_owned(),
+            Token::Loop => "loop".to_owned(),
+            Token::Break => "break".to_owned(),
+            Token::Continue => "continue".to_owned(),
+            Token::Record => "record".to_owned(),
+            Token::Bring => "bring".to_owned(),
+            Token::When => "when".to_owned(),
+            Token::Choice => "choice".to_owned(),
+            Token::For => "for".to_owned(),
+            Token::In => "in".to_owned(),
+            Token::Spawn => "spawn".to_owned(),
+            Token::Par => "par".to_owned(),
+            Token::Async => "async".to_owned(),
+            Token::Await => "await".to_owned(),
+            Token::Const => "const".to_owned(),
+            Token::Type => "type".to_owned(),
+            Token::Trait => "trait".to_owned(),
+            Token::Impl => "impl".to_owned(),
+            Token::Pub => "pub".to_owned(),
+            Token::Extern => "extern".to_owned(),
+            Token::Mod => "mod".to_owned(),
+            Token::Model => "model".to_owned(),
+            Token::F32 => "f32".to_owned(),
+            Token::F64 => "f64".to_owned(),
+            Token::I32 => "i32".to_owned(),
+            Token::I64 => "i64".to_owned(),
+            Token::Bool => "bool".to_owned(),
+            Token::Tensor => "tensor".to_owned(),
+            Token::Str => "str".to_owned(),
+            _ => {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "identifier or keyword".to_owned(),
+                    found: format!("{}", self.peek_tok()),
+                    span,
+                });
+            }
+        };
+        self.advance();
+        Ok(Ident { name, span })
+    }
+
     fn peek_next_tok(&self) -> &Token {
         self.peek_at(1)
     }
@@ -250,32 +303,35 @@ impl<'t> Parser<'t> {
                                 span: bring_span,
                             })
                         }
-                        // bring std.name  OR  bring module_name (legacy identifier)
-                        Token::Ident(name) => {
-                            self.advance();
-                            if name == "std" && matches!(self.peek_tok(), Token::Dot) {
-                                self.advance(); // consume '.'
-                                match self.expect_ident() {
-                                    Ok(lib) => Ok(AstBring {
-                                        path: BringPath::Stdlib(lib.name),
-                                        span: bring_span,
-                                    }),
-                                    Err(e) => Err(e),
+                        // bring std.name  OR  bring module_name
+                        _ => {
+                            match self.expect_ident_or_keyword() {
+                                Ok(ident) => {
+                                    let name = ident.name;
+                                    if name == "std" && matches!(self.peek_tok(), Token::Dot) {
+                                        self.advance(); // consume '.'
+                                        match self.expect_ident_or_keyword() {
+                                            Ok(lib) => Ok(AstBring {
+                                                path: BringPath::Stdlib(lib.name),
+                                                span: bring_span,
+                                            }),
+                                            Err(e) => Err(e),
+                                        }
+                                    } else {
+                                        // Legacy: bring module_name → treat as File("module_name.iris")
+                                        Ok(AstBring {
+                                            path: BringPath::File(format!("{}.iris", name)),
+                                            span: bring_span,
+                                        })
+                                    }
                                 }
-                            } else {
-                                // Legacy: bring module_name → treat as File("module_name.iris")
-                                Ok(AstBring {
-                                    path: BringPath::File(format!("{}.iris", name)),
-                                    span: bring_span,
-                                })
+                                Err(_) => Err(ParseError::UnexpectedToken {
+                                    expected: "module path (\"file.iris\", std.name, or identifier)".to_owned(),
+                                    found: format!("{}", self.peek_tok()),
+                                    span: self.current_span(),
+                                }),
                             }
                         }
-                        _ => Err(ParseError::UnexpectedToken {
-                            expected: "module path (\"file.iris\", std.name, or identifier)"
-                                .to_owned(),
-                            found: format!("{}", self.peek_tok()),
-                            span: self.current_span(),
-                        }),
                     };
                     match bring {
                         Ok(b) => brings.push(b),
@@ -646,9 +702,34 @@ impl<'t> Parser<'t> {
         // Optional @attr annotations before async/def
         let mut attrs = Vec::new();
         while matches!(self.peek_tok(), Token::At) {
+            let attr_span = self.current_span();
             self.advance(); // consume '@'
             let attr_name = self.expect_ident()?.name;
-            attrs.push(attr_name);
+            // Optional arguments: @attr(arg1, arg2=value, ...)
+            let mut args = Vec::new();
+            if matches!(self.peek_tok(), Token::LParen) {
+                self.advance(); // consume '('
+                if !matches!(self.peek_tok(), Token::RParen) {
+                    loop {
+                        let arg_expr = self.parse_expr()?;
+                        args.push(arg_expr);
+                        if matches!(self.peek_tok(), Token::Comma) {
+                            self.advance();
+                            if matches!(self.peek_tok(), Token::RParen) {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.expect(&Token::RParen)?;
+            }
+            attrs.push(AstAttribute {
+                name: attr_name,
+                args,
+                span: attr_span,
+            });
         }
         // Optional async keyword before def
         let is_async = if matches!(self.peek_tok(), Token::Async) {
@@ -887,6 +968,26 @@ impl<'t> Parser<'t> {
                 self.advance();
                 Ok(AstType::Scalar(AstScalarKind::Bool, span))
             }
+            Token::I8 => {
+                self.advance();
+                Ok(AstType::Scalar(AstScalarKind::I8, span))
+            }
+            Token::U8 => {
+                self.advance();
+                Ok(AstType::Scalar(AstScalarKind::U8, span))
+            }
+            Token::U32 => {
+                self.advance();
+                Ok(AstType::Scalar(AstScalarKind::U32, span))
+            }
+            Token::U64 => {
+                self.advance();
+                Ok(AstType::Scalar(AstScalarKind::U64, span))
+            }
+            Token::Usize => {
+                self.advance();
+                Ok(AstType::Scalar(AstScalarKind::USize, span))
+            }
             Token::Tensor => {
                 self.advance();
                 self.expect(&Token::LAngle)?;
@@ -930,31 +1031,6 @@ impl<'t> Parser<'t> {
                     len,
                     span: span.merge(end),
                 })
-            }
-            Token::Ident(ref name) if name == "u8" => {
-                let _ = name.clone();
-                self.advance();
-                Ok(AstType::Scalar(AstScalarKind::U8, span))
-            }
-            Token::Ident(ref name) if name == "i8" => {
-                let _ = name.clone();
-                self.advance();
-                Ok(AstType::Scalar(AstScalarKind::I8, span))
-            }
-            Token::Ident(ref name) if name == "u32" => {
-                let _ = name.clone();
-                self.advance();
-                Ok(AstType::Scalar(AstScalarKind::U32, span))
-            }
-            Token::Ident(ref name) if name == "u64" => {
-                let _ = name.clone();
-                self.advance();
-                Ok(AstType::Scalar(AstScalarKind::U64, span))
-            }
-            Token::Ident(ref name) if name == "usize" => {
-                let _ = name.clone();
-                self.advance();
-                Ok(AstType::Scalar(AstScalarKind::USize, span))
             }
             Token::Ident(ref name) if name == "chan" => {
                 let _ = name.clone();
@@ -1284,10 +1360,19 @@ impl<'t> Parser<'t> {
 
             // Expression — either a statement (followed by `;`), an assignment, or the tail.
             let expr = self.parse_expr()?;
-            if matches!(self.peek_tok(), Token::Eq) {
-                // Assignment: lvalue = value
+            let assign_op = match self.peek_tok() {
+                Token::Eq => None,
+                Token::PlusEq => Some(BinOp::Add),
+                Token::MinusEq => Some(BinOp::Sub),
+                Token::StarEq => Some(BinOp::Mul),
+                Token::SlashEq => Some(BinOp::Div),
+                Token::PercentEq => Some(BinOp::Mod),
+                _ => None,
+            };
+            if assign_op.is_some() || matches!(self.peek_tok(), Token::Eq) {
+                // Assignment: lvalue = value or lvalue += value, etc.
                 let start_span = expr.span();
-                self.advance(); // consume '='
+                self.advance(); // consume '=' or '+=', etc.
                 let value = self.parse_expr()?;
                 let end_span = value.span();
                 if matches!(self.peek_tok(), Token::Semi) {
@@ -1295,6 +1380,7 @@ impl<'t> Parser<'t> {
                 }
                 stmts.push(AstStmt::Assign {
                     target: Box::new(expr),
+                    op: assign_op,
                     value: Box::new(value),
                     span: start_span.merge(end_span),
                 });
@@ -1497,6 +1583,7 @@ impl<'t> Parser<'t> {
             let op = match self.peek_tok() {
                 Token::EqEq => AstBinOp::CmpEq,
                 Token::NotEq => AstBinOp::CmpNe,
+                Token::LtGt => AstBinOp::CmpNe,  // <> as alias for !=
                 Token::LAngle => AstBinOp::CmpLt,
                 Token::LtEq => AstBinOp::CmpLe,
                 Token::RAngle => AstBinOp::CmpGt,
@@ -2058,9 +2145,14 @@ impl<'t> Parser<'t> {
         let var = self.expect_ident()?;
         self.expect(&Token::In)?;
         let iter_expr = self.parse_expr()?;
-        // If the next token is `..`, it's a range loop; otherwise it's a foreach loop.
-        if matches!(self.peek_tok(), Token::DotDot) {
-            self.expect(&Token::DotDot)?;
+        // If the next token is `..` or `..=`, it's a range loop; otherwise it's a foreach loop.
+        let range_inclusive = matches!(self.peek_tok(), Token::DotDotEq);
+        if matches!(self.peek_tok(), Token::DotDot) || range_inclusive {
+            if range_inclusive {
+                self.expect(&Token::DotDotEq)?;
+            } else {
+                self.expect(&Token::DotDot)?;
+            }
             let range_end = self.parse_expr()?;
             let body = self.parse_block()?;
             let span = start.merge(body.span);
@@ -2068,6 +2160,7 @@ impl<'t> Parser<'t> {
                 var,
                 start: Box::new(iter_expr),
                 end: Box::new(range_end),
+                inclusive: range_inclusive,
                 body,
                 span,
             })
@@ -2111,7 +2204,12 @@ impl<'t> Parser<'t> {
         let var = self.expect_ident()?;
         self.expect(&Token::In)?;
         let range_start = self.parse_expr()?;
-        self.expect(&Token::DotDot)?;
+        let inclusive = matches!(self.peek_tok(), Token::DotDotEq);
+        if inclusive {
+            self.expect(&Token::DotDotEq)?;
+        } else {
+            self.expect(&Token::DotDot)?;
+        }
         let range_end = self.parse_expr()?;
         let body = self.parse_block()?;
         let span = start.merge(body.span);
@@ -2119,6 +2217,7 @@ impl<'t> Parser<'t> {
             var,
             start: Box::new(range_start),
             end: Box::new(range_end),
+            inclusive,
             body,
             span,
         })
@@ -2200,13 +2299,14 @@ impl<'t> Parser<'t> {
     }
 
     /// Desugar `f"Hello {name}! You are {age} years old."` into nested `concat` calls.
-    /// Only simple identifiers (no spaces) are supported inside `{...}`.
-    /// Each placeholder is wrapped with `to_str(ident)` so any type can be interpolated.
+    /// Supports full expressions inside `{...}` with optional type ascription `{expr: Type}`.
+    /// Each placeholder is wrapped with `to_str(expr)` so any type can be interpolated.
     fn desugar_fstring(&self, raw: &str, span: Span) -> AstExpr {
-        // Split raw into alternating text/ident parts.
+        // Split raw into alternating text/expr parts.
+        #[derive(Debug)]
         enum Part {
             Text(String),
-            Ident(String),
+            Expr { expr_str: String, ty_annotation: Option<AstType> },
         }
         let mut parts: Vec<Part> = Vec::new();
         let mut cur = String::new();
@@ -2217,16 +2317,31 @@ impl<'t> Parser<'t> {
                     parts.push(Part::Text(cur.clone()));
                     cur.clear();
                 }
-                let mut ident = String::new();
+                let mut expr_content = String::new();
                 for ic in chars.by_ref() {
                     if ic == '}' {
                         break;
                     }
-                    ident.push(ic);
+                    expr_content.push(ic);
                 }
-                let ident = ident.trim().to_owned();
-                if !ident.is_empty() {
-                    parts.push(Part::Ident(ident));
+                let expr_content = expr_content.trim();
+                if !expr_content.is_empty() {
+                    // Check for type ascription: expr:Type
+                    let (expr_str, ty_annotation) = if let Some(colon_pos) = expr_content.rfind(':') {
+                        // Check if this is a type ascription (not a ternary or similar)
+                        let before_colon = &expr_content[..colon_pos].trim();
+                        let after_colon = &expr_content[colon_pos + 1..].trim();
+                        // Simple heuristic: if after colon looks like a type, treat as annotation
+                        if !after_colon.is_empty() && (after_colon.chars().next().unwrap().is_uppercase() || after_colon.starts_with("list<") || after_colon.starts_with("map<") || after_colon.starts_with("option<") || after_colon.starts_with("result<") || after_colon.starts_with("tensor<") || after_colon.starts_with("chan<") || after_colon.starts_with("atomic<") || after_colon.starts_with("mutex<")) {
+                            let ty = self.parse_type_annotation(after_colon, span);
+                            (before_colon.to_string(), Some(ty))
+                        } else {
+                            (expr_content.to_string(), None)
+                        }
+                    } else {
+                        (expr_content.to_string(), None)
+                    };
+                    parts.push(Part::Expr { expr_str, ty_annotation });
                 }
             } else {
                 cur.push(c);
@@ -2243,17 +2358,35 @@ impl<'t> Parser<'t> {
                     value: s.clone(),
                     span,
                 },
-                Part::Ident(name) => AstExpr::Call {
-                    callee: Ident {
-                        name: "to_str".into(),
+                Part::Expr { expr_str, ty_annotation } => {
+                    // Parse the expression string
+                    let expr_tokens = crate::parser::lexer::Lexer::new(expr_str).tokenize().unwrap_or_default();
+                    let mut expr_parser = Parser::new(&expr_tokens);
+                    let mut expr = expr_parser.parse_expr().unwrap_or_else(|_| {
+                        // Fallback to identifier if parsing fails
+                        AstExpr::Ident(crate::parser::ast::Ident {
+                            name: expr_str.clone(),
+                            span,
+                        })
+                    });
+                    // Apply type annotation if present (via `to` cast)
+                    if let Some(ty) = ty_annotation {
+                        expr = AstExpr::Cast {
+                            expr: Box::new(expr),
+                            ty: ty.clone(),
+                            span,
+                        };
+                    }
+                    // Wrap with to_str for interpolation
+                    AstExpr::Call {
+                        callee: Ident {
+                            name: "to_str".into(),
+                            span,
+                        },
+                        args: vec![expr],
                         span,
-                    },
-                    args: vec![AstExpr::Ident(Ident {
-                        name: name.clone(),
-                        span,
-                    })],
-                    span,
-                },
+                    }
+                }
             }
         };
 
@@ -2278,6 +2411,13 @@ impl<'t> Parser<'t> {
             };
         }
         expr
+    }
+
+    /// Parse a type annotation string (e.g., "i64", "list<f64>") into an AstType.
+    fn parse_type_annotation(&self, type_str: &str, span: Span) -> AstType {
+        let tokens = crate::parser::lexer::Lexer::new(type_str).tokenize().unwrap_or_default();
+        let mut ty_parser = Parser::new(&tokens);
+        ty_parser.parse_type().unwrap_or(AstType::Named(type_str.to_string(), span))
     }
 }
 

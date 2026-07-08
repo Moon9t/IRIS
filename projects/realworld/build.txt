@@ -1,0 +1,3 @@
+build:iris build src/main.iris
+test:iris test.:build
+deploy:copy main.exe dist/:test

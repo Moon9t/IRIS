@@ -75,11 +75,9 @@ async def compute(x: i64) -> i64 { x + 10 }
     );
 }
 
+// 4. multiple awaits in one function
 #[test]
 fn test_async_multiple_awaits() {
-    if std::env::var("CI").is_ok() && cfg!(target_os = "windows") {
-        return;
-    }
     let src = r#"
 def run() -> i64 {
     val a = await double(2)

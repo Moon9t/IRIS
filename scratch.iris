@@ -1,0 +1,1 @@
+﻿def main() -> i64 { val ch: chan<str> = chan(-1); send(ch, "hello"); val x = recv(ch); print(x); 0 }

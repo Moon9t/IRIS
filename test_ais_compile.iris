@@ -1,0 +1,6 @@
+bring std.ais
+
+def main() -> i64 {
+    print("AIS framework loaded successfully");
+    0
+}

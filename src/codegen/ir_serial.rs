@@ -643,12 +643,14 @@ impl Writer {
                 closure,
                 args,
                 result_ty,
+                pass_env,
             } => {
                 self.u8(OP_CALL_CLOSURE);
                 self.opt_vid(*result);
                 self.vid(*closure);
                 self.vids(args);
                 self.ty(result_ty);
+                self.bool(*pass_env);
             }
             IrInstr::AllocArray {
                 result,
@@ -759,10 +761,15 @@ impl Writer {
                 self.vid(*operand);
                 self.ty(result_ty);
             }
-            IrInstr::ChanNew { result, elem_ty } => {
+            IrInstr::ChanNew {
+                result,
+                elem_ty,
+                capacity,
+            } => {
                 self.u8(OP_CHAN_NEW);
                 self.vid(*result);
                 self.ty(elem_ty);
+                self.vid(*capacity);
             }
             IrInstr::ChanSend { chan, value } => {
                 self.u8(OP_CHAN_SEND);
@@ -788,6 +795,7 @@ impl Writer {
                 var,
                 start,
                 end,
+                inclusive,
                 body_fn,
                 args,
             } => {
@@ -795,6 +803,7 @@ impl Writer {
                 self.vid(*var);
                 self.vid(*start);
                 self.vid(*end);
+                self.bool(*inclusive);
                 self.str(body_fn);
                 self.vids(args);
             }
@@ -1928,11 +1937,13 @@ impl<'a> Reader<'a> {
                 let closure = self.vid()?;
                 let args = self.vids()?;
                 let result_ty = self.ty()?;
+                let pass_env = self.bool()?;
                 IrInstr::CallClosure {
                     result,
                     closure,
                     args,
                     result_ty,
+                    pass_env,
                 }
             }
             OP_ALLOC_ARRAY => {
@@ -2047,7 +2058,8 @@ impl<'a> Reader<'a> {
             OP_CHAN_NEW => {
                 let result = self.vid()?;
                 let elem_ty = self.ty()?;
-                IrInstr::ChanNew { result, elem_ty }
+                let capacity = self.vid()?;
+                IrInstr::ChanNew { result, elem_ty, capacity }
             }
             OP_CHAN_SEND => {
                 let chan = self.vid()?;
@@ -2073,12 +2085,14 @@ impl<'a> Reader<'a> {
                 let var = self.vid()?;
                 let start = self.vid()?;
                 let end = self.vid()?;
+                let inclusive = self.bool()?;
                 let body_fn = self.str()?;
                 let args = self.vids()?;
                 IrInstr::ParFor {
                     var,
                     start,
                     end,
+                    inclusive,
                     body_fn,
                     args,
                 }

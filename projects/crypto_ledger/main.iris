@@ -1,0 +1,110 @@
+// main.iris — Cryptographic Ledger Orchestrator
+
+bring std.fs
+bring std.time
+
+bring "types.iris"
+bring "engine.iris"
+bring "worker.iris"
+
+def main() -> i64 {
+    val start_time = now_ms();
+    
+    print("");
+    print("  ╔══════════════════════════════════════════════════════════╗");
+    print("  ║        IRIS Cryptographic Ledger Demo                    ║");
+    print("  ║        Concurrent · Hashed · Verified Chain              ║");
+    print("  ╚══════════════════════════════════════════════════════════╝");
+    print("");
+    
+    // 1. Initialize ledger
+    val ledger = new_ledger();
+    
+    // Create genesis block
+    print("  Creating genesis block...");
+    val genesis_txs: list<Transaction> = list();
+    val genesis_tx = create_transaction("System", "Genesis", 1000.0);
+    list_push(genesis_txs, genesis_tx);
+    
+    val genesis_block = Block {
+        index: 0,
+        transactions: genesis_txs,
+        prev_hash: "0000000000000000000000000000000000000000000000000000000000000000",
+        hash: "",
+        timestamp: now_ms(),
+        nonce: 0
+    };
+    
+    // Mine genesis block
+    list_push(ledger.pending, genesis_tx);
+    val mined_genesis = mine_block(ledger, 0, "0000000000000000000000000000000000000000000000000000000000000000");
+    val _ = add_block(ledger, mined_genesis);
+    print(concat("  Genesis block mined! Hash: ", mined_genesis.hash));
+    
+    // 2. Spawn concurrent workers to generate transactions
+    val n_workers = 3;
+    print(concat("  Spawning ", concat(to_str(n_workers), " concurrent worker threads...")));
+    val txs = spawn_workers(ledger, n_workers);
+    print(concat("  Collected ", concat(to_str(list_len(txs)), " transactions from workers.")));
+    
+    // 3. Process transactions and mine them in batches
+    val block_size = 3;
+    var i = 0;
+    var current_prev_hash = mined_genesis.hash;
+    var block_index = 1;
+    
+    while i < list_len(txs) {
+        // Collect a batch of transactions into ledger.pending
+        var batch_count = 0;
+        while batch_count < block_size && i < list_len(txs) {
+            val tx = list_get(txs, i);
+            list_push(ledger.pending, tx);
+            batch_count = batch_count + 1;
+            i = i + 1;
+        };
+        
+        // Mine the block
+        print(concat("  Mining block ", to_str(block_index)));
+        val b = mine_block(ledger, block_index, current_prev_hash);
+        val _ = add_block(ledger, b);
+        print(concat("    Block mined! Hash: ", concat(b.hash, concat(" Nonce: ", to_str(b.nonce)))));
+        
+        current_prev_hash = b.hash;
+        block_index = block_index + 1;
+    };
+    
+    // 4. Verify chain integrity
+    print("");
+    print("  Verifying ledger chain integrity...");
+    val is_valid = verify_chain(ledger);
+    
+    if is_valid {
+        print("  Chain integrity check: PASSED");
+    } else {
+        print("  Chain integrity check: FAILED");
+    };
+    
+    // 5. Write ledger to JSON file
+    val json_repr = json_stringify(ledger);
+    val write_ok = write_text("ledger.json", json_repr);
+    if write_ok {
+        print("  Ledger exported to ledger.json");
+    } else {
+        print("  Failed to export ledger to JSON");
+    };
+    
+    val end_time = now_ms();
+    val elapsed = end_time - start_time;
+    
+    // 6. Print summary report
+    print("");
+    print("  ┌─ Summary Report ───────────────────────────");
+    print(concat("  │ Status:             ", if is_valid { "Valid" } else { "Invalid" }));
+    print(concat("  │ Total Blocks:       ", to_str(list_len(ledger.blocks))));
+    print(concat("  │ Total Transactions: ", to_str(list_len(txs) + 1)));
+    print(concat("  │ Execution Time:     ", concat(to_str(elapsed), " ms")));
+    print("  └────────────────────────────────────────────");
+    print("");
+    
+    0
+}

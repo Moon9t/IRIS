@@ -1,0 +1,126 @@
+// ============================================================================
+// IRIS Markdown-to-HTML (subset: headings, bold, italic, code, links, lists)
+// ============================================================================
+bring std.fs
+
+def escape(s: str) -> str {
+    var r = "";
+    var i = 0;
+    while i < len(s) {
+        val c = str_index(s, i);
+        if c == 60 { r = concat(r, "&lt;") }
+        else if c == 62 { r = concat(r, "&gt;") }
+        else if c == 38 { r = concat(r, "&amp;") }
+        else { r = concat(r, char_at(s, i)) };
+        i = i + 1
+    };
+    r
+}
+
+def inline(s: str) -> str {
+    var r = "";
+    var i = 0;
+    while i < len(s) {
+        val c = str_index(s, i);
+        // **bold** 
+        if c == 42 && i + 2 < len(s) && str_index(s, i + 1) == 42 {
+            val rest = slice(s, i + 2, len(s));
+            val close = find(rest, "**");
+            if is_some(close) {
+                r = concat(r, "<strong>");
+                r = concat(r, slice(rest, 0, unwrap(close)));
+                r = concat(r, "</strong>");
+                i = i + 2 + unwrap(close) + 2;
+                continue
+            }
+        };
+        // *italic*
+        if c == 42 {
+            val rest = slice(s, i + 1, len(s));
+            val close = find(rest, "*");
+            if is_some(close) {
+                r = concat(r, "<em>");
+                r = concat(r, slice(rest, 0, unwrap(close)));
+                r = concat(r, "</em>");
+                i = i + 1 + unwrap(close) + 1;
+                continue
+            }
+        };
+        // `code`
+        if c == 96 {
+            val rest = slice(s, i + 1, len(s));
+            val close = find(rest, "`");
+            if is_some(close) {
+                r = concat(r, "<code>");
+                r = concat(r, slice(rest, 0, unwrap(close)));
+                r = concat(r, "</code>");
+                i = i + 1 + unwrap(close) + 1;
+                continue
+            }
+        };
+        // [text](url)
+        if c == 91 {
+            val rest = slice(s, i + 1, len(s));
+            val cb = find(rest, "](");
+            if is_some(cb) {
+                val text = slice(rest, 0, unwrap(cb));
+                val after = slice(rest, unwrap(cb) + 2, len(rest));
+                val cp = find(after, ")");
+                if is_some(cp) {
+                    r = concat(r, "<a href=\"");
+                    r = concat(r, slice(after, 0, unwrap(cp)));
+                    r = concat(r, "\">");
+                    r = concat(r, text);
+                    r = concat(r, "</a>");
+                    i = i + 1 + unwrap(cb) + 2 + unwrap(cp) + 1;
+                    continue
+                }
+            }
+        };
+        r = concat(r, char_at(s, i));
+        i = i + 1
+    };
+    r
+}
+
+def main() -> i64 {
+    val a = args();
+    if list_len(a) < 2 { print("Usage: md2html <file.md>"); return 1 };
+    
+    val f = file_read_all(list_get(a, 1));
+    if is_err(f) { print("Cannot read file"); return 1 };
+    
+    val lines = split(unwrap(f), "\n");
+    var body = "";
+    var i = 0;
+    while i < list_len(lines) {
+        val line = trim(list_get(lines, i));
+        if line == "" { body = concat(body, "\n") }
+        else if starts_with(line, "# ") {
+            body = concat(body, concat("<h1>", concat(inline(slice(line, 2, len(line))), "</h1>\n")))
+        }
+        else if starts_with(line, "## ") {
+            body = concat(body, concat("<h2>", concat(inline(slice(line, 3, len(line))), "</h2>\n")))
+        }
+        else if starts_with(line, "### ") {
+            body = concat(body, concat("<h3>", concat(inline(slice(line, 4, len(line))), "</h3>\n")))
+        }
+        else if starts_with(line, "- ") {
+            body = concat(body, concat("<li>", concat(inline(slice(line, 2, len(line))), "</li>\n")))
+        }
+        else if starts_with(line, "> ") {
+            body = concat(body, concat("<blockquote><p>", concat(inline(slice(line, 2, len(line))), "</p></blockquote>\n")))
+        }
+        else if line == "---" { body = concat(body, "<hr>\n") }
+        else { body = concat(body, concat("<p>", concat(inline(line), "</p>\n"))) };
+        i = i + 1
+    };
+    
+    val html = concat("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Markdown</title><style>body{max-width:800px;margin:auto;padding:20px;font-family:sans-serif;line-height:1.6}code{background:#f4f4f4;padding:2px 6px;border-radius:3px}pre{background:#f4f4f4;padding:16px;border-radius:6px}blockquote{border-left:4px solid #ddd;margin:0;padding:0 16px;color:#666}</style></head><body>",
+        concat(body, "</body></html>"));
+    
+    val out = if list_len(a) >= 3 { list_get(a, 2) } else { "output.html" };
+    file_write_all(out, html);
+    print(concat(concat(concat(concat("Wrote: ", out), " ("), to_str(len(html))), " bytes)"));
+    0
+}

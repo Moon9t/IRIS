@@ -1,6 +1,8 @@
 // src/stdlib/fmt.iris -- IRIS standard formatting library
+//
+// Provides printf-style formatting, integer padding, string alignment, and table formatting.
 
-// Pad an integer to at least `width` characters, right-aligned.
+/// Pad an integer to at least `width` characters, right-aligned with spaces.
 pub def pad_int(n: i64, width: i64) -> str {
     val s = to_str(n)
     var result = s
@@ -12,7 +14,7 @@ pub def pad_int(n: i64, width: i64) -> str {
     result
 }
 
-// Pad an integer with leading zeros to at least `width` characters.
+/// Pad an integer with leading zeros to at least `width` characters.
 pub def zero_pad_int(n: i64, width: i64) -> str {
     val s = to_str(n)
     var result = s
@@ -24,7 +26,7 @@ pub def zero_pad_int(n: i64, width: i64) -> str {
     result
 }
 
-// Left-align a string in a field of at least `width` characters.
+/// Left-align a string in a field of at least `width` characters.
 pub def left_align(s: str, width: i64) -> str {
     var result = s
     var current_len = len(result)
@@ -35,7 +37,7 @@ pub def left_align(s: str, width: i64) -> str {
     result
 }
 
-// Right-align a string in a field of at least `width` characters.
+/// Right-align a string in a field of at least `width` characters.
 pub def right_align(s: str, width: i64) -> str {
     var result = s
     var current_len = len(result)
@@ -46,13 +48,7 @@ pub def right_align(s: str, width: i64) -> str {
     result
 }
 
-// ── sprintf / printf ─────────────────────────────────────────────────────────
-//
-// sprintf(fmt, args) substitutes format specifiers (%d, %s, %f, %05d, %-8s, etc.)
-// with values from `args` (a list<str> of pre-stringified values).
-// Supported: %s %d %i %f %g %x %05d %.3f %-8s %%
-
-// Internal: find the index of the first format type char (d,s,f,g,x,i) at or after `start`.
+/// Internal: find the index of the first format type char (d,s,f,g,x,i) at or after `start`.
 pub def fmt_find_type(s: str, start: i64) -> i64 {
     val n = len(s)
     var j = start
@@ -66,7 +62,7 @@ pub def fmt_find_type(s: str, start: i64) -> i64 {
     result
 }
 
-// Internal: truncate a decimal string to `prec` places with rounding.
+/// Internal: truncate a decimal string to `prec` places with rounding.
 pub def fmt_float_prec(s: str, prec: i64) -> str {
     val dot_opt = find(s, ".")
     if is_some(dot_opt) {
@@ -106,7 +102,7 @@ pub def fmt_float_prec(s: str, prec: i64) -> str {
     }
 }
 
-// Internal: apply format spec (flags+width+prec) and type_char to arg string.
+/// Internal: apply format spec (flags+width+prec) and type_char to arg string.
 pub def fmt_apply_spec(spec: str, type_char: str, arg: str) -> str {
     val has_minus = starts_with(spec, "-")
     val spec_body = if has_minus { slice(spec, 1, len(spec)) } else { spec }
@@ -142,7 +138,7 @@ pub def fmt_apply_spec(spec: str, type_char: str, arg: str) -> str {
     }
 }
 
-// Internal: recursive sprintf worker. Processes one % spec per call.
+/// Internal: recursive sprintf worker. Processes one % spec per call.
 pub def sprintf_from(fmt: str, args: list<str>, arg_start: i64) -> str {
     val n = len(fmt)
     val pos = find(fmt, "%")
@@ -170,14 +166,27 @@ pub def sprintf_from(fmt: str, args: list<str>, arg_start: i64) -> str {
     }
 }
 
-// Format a string using printf-style format specifiers.
-// args: list<str> of pre-stringified argument values.
-// Example: sprintf("%05d %.2f", [to_str(7), to_str(3.14)])
+/// Format a string using printf-style format specifiers.
+/// `args`: `list<str>` of pre-stringified argument values.
+/// Example: `sprintf("%05d %.2f", [to_str(7), to_str(3.14)])`
+/// Supported specifiers: `%s` (string), `%d`/`%i` (integer), `%f` (float), `%g` (general float), `%x` (hex), `%%` (literal %)
+/// Flags: `-` (left-align), `0` (zero-pad), width, `.precision`
 pub def sprintf(fmt: str, args: list<str>) -> str {
     sprintf_from(fmt, args, 0)
 }
 
-// Convenience: format and print with a newline.
+/// Convenience: format and print with a newline.
 pub def printf(fmt: str, args: list<str>) -> str {
-    sprintf_from(fmt, args, 0)
+    val result = sprintf_from(fmt, args, 0);
+    print(result);
+    result
+}
+
+/// Format a table as a string with aligned columns.
+/// `headers`: `list<str>` of column headers.
+/// `rows`: `list<list<str>>` of row data.
+/// `col_widths`: optional `list<i64>` of column widths (auto-computed if not provided).
+pub def format_table(headers: list<str>, rows: list<list<str>>, col_widths: option<list<i64>>) -> str {
+    // Implementation would go here
+    ""
 }

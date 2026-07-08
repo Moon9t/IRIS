@@ -1,0 +1,158 @@
+// network_echo.iris -- TCP and UDP loopback client/server example using std.net
+//
+// This example demonstrates how to use the high-level `std.net` library
+// for TCP and UDP communication. It spawns local servers and sends messages
+// to them, validating round-trip network I/O.
+//
+// Run: iris run examples/05_systems/network_echo.iris
+
+bring std.net
+bring std.async
+
+// ── TCP Test ──────────────────────────────────────────────────────────────────
+
+def run_tcp_server(server: TcpServer) -> i64 {
+    print("[TCP Server] Listening for connections...");
+    
+    // Accept one client connection
+    val conn_opt = tcp_accept_conn(server)
+    if is_some(conn_opt) {
+        val conn = unwrap(conn_opt)
+        print("[TCP Server] Client connected!");
+        
+        // Read client request
+        val request = tcp_read_conn(conn)
+        print(concat("[TCP Server] Received request: ", request));
+        
+        // Send response
+        val response = concat("Echo response: ", request)
+        tcp_write_conn(conn, response);
+        print("[TCP Server] Sent response, closing connection.");
+        
+        tcp_close_conn(conn);
+    } else {
+        print("[TCP Server] Failed to accept connection.");
+    };
+    
+    tcp_close_server(server);
+    0
+}
+
+def run_tcp_client(port: i64) -> i64 {
+    print("[TCP Client] Connecting to server...");
+    val conn_opt = tcp_connect_to("127.0.0.1", port)
+    if is_some(conn_opt) {
+        val conn = unwrap(conn_opt)
+        print("[TCP Client] Connected successfully!");
+        
+        // Send a request
+        val msg = "Hello from IRIS TCP client!"
+        tcp_write_conn(conn, msg);
+        print(concat("[TCP Client] Sent message: ", msg));
+        
+        // Read response
+        val resp = tcp_read_conn(conn)
+        print(concat("[TCP Client] Received reply: ", resp));
+        
+        tcp_close_conn(conn);
+    } else {
+        print("[TCP Client] Connection failed!");
+    };
+    0
+}
+
+// ── UDP Test ──────────────────────────────────────────────────────────────────
+
+def run_udp_receiver(socket: UdpSocket) -> i64 {
+    print("[UDP Receiver] Bound to port, waiting for packets...");
+    
+    // Receive one packet
+    val (src_ip, src_port, payload) = udp_recv_from(socket)
+    print(concat("[UDP Receiver] Received packet from ", concat(src_ip, concat(":", to_str(src_port)))));
+    print(concat("[UDP Receiver] Payload: ", payload));
+    
+    // Send back a reply
+    val reply = concat("ACK: ", payload)
+    udp_send_to(socket, src_ip, src_port, reply);
+    print("[UDP Receiver] Sent reply.");
+    
+    udp_close_socket(socket);
+    0
+}
+
+def run_udp_sender(sender_port: i64, receiver_port: i64) -> i64 {
+    // Bind sender socket to any ephemeral port
+    val sender_opt = udp_bind(sender_port)
+    if is_some(sender_opt) {
+        val sender = unwrap(sender_opt)
+        print("[UDP Sender] Bound socket successfully.");
+        
+        // Send data
+        val payload = "Ping UDP message!"
+        udp_send_to(sender, "127.0.0.1", receiver_port, payload);
+        print(concat("[UDP Sender] Sent message: ", payload));
+        
+        // Receive reply
+        val (src_ip, src_port, reply) = udp_recv_from(sender)
+        print(concat("[UDP Sender] Received reply: ", reply));
+        
+        udp_close_socket(sender);
+    } else {
+        print("[UDP Sender] Failed to bind socket.");
+    };
+    0
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
+
+def main() -> i64 {
+    print("=== Starting std.net Networking Showcase ===\n");
+    
+    val tcp_port = 18081
+    val udp_rx_port = 18082
+    val udp_tx_port = 18083
+
+    // 1. TCP Server/Client test
+    val tcp_server_opt = tcp_listen_on(tcp_port)
+    if is_some(tcp_server_opt) {
+        val server = unwrap(tcp_server_opt)
+        
+        // Spawn the server thread
+        spawn {
+            val _ = run_tcp_server(server);
+        };
+        
+        // Brief sleep to ensure server is listening
+        sleep(200);
+        
+        // Run the client in main thread
+        val _ = run_tcp_client(tcp_port);
+    } else {
+        print("Failed to start TCP server!");
+    };
+
+    sleep(500);
+    print("\n------------------------------------------------\n");
+
+    // 2. UDP Receiver/Sender test
+    val udp_rx_opt = udp_bind(udp_rx_port)
+    if is_some(udp_rx_opt) {
+        val rx_socket = unwrap(udp_rx_opt)
+        
+        // Spawn the receiver thread
+        spawn {
+            val _ = run_udp_receiver(rx_socket);
+        };
+        
+        sleep(200);
+        
+        // Run the sender in main thread
+        val _ = run_udp_sender(udp_tx_port, udp_rx_port);
+    } else {
+        print("Failed to start UDP receiver!");
+    };
+    
+    sleep(500);
+    print("\n=== Networking Showcase Complete ===");
+    0
+}

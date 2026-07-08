@@ -1,0 +1,201 @@
+// adaptive_ai.iris — Adaptive AI Example
+// Demonstrates online learning, risk awareness, uncertainty estimation,
+// self-training, and meta-learning primitives.
+
+bring std.adaptive
+bring std.uncertainty
+bring std.math
+
+// ---------------------------------------------------------------------------
+// Online Learning Demo
+// ---------------------------------------------------------------------------
+
+/// Learn a simple linear relationship y = 2*x + 1 from streaming data.
+pub def demo_online_learning() {
+    val handle = adaptive_new("linear_demo", 2, 0.01, 2.0)
+
+    // Train on 100 samples one at a time
+    for i in 0 .. 100 {
+        val x = i64_to_f64(i) / 50.0  // x in [0, 2)
+        val y = 2.0 * x + 1.0 + random_range(-10, 10) / 100.0  // y = 2x + 1 + noise
+        adaptive_observe(handle, list(x, 1.0), y)  // features = [x, bias=1]
+    }
+
+    val w0 = adaptive_get_param(handle, 0)  // should be ~2.0
+    val w1 = adaptive_get_param(handle, 1)  // should be ~1.0
+    val n = adaptive_observation_count(handle)
+    val mean_err = adaptive_mean_error(handle)
+
+    print("Online learning complete: observations=" + to_str(n))
+    print("  Learned: y = " + to_str(w0) + " * x + " + to_str(w1))
+    print("  Mean error: " + to_str(mean_err))
+
+    adaptive_free(handle)
+}
+
+// ---------------------------------------------------------------------------
+// Risk-Aware Prediction Demo
+// ---------------------------------------------------------------------------
+
+/// Monitor prediction risk and demonstrate adaptive threshold behavior.
+pub def demo_risk_awareness() {
+    val handle = adaptive_new("risk_demo", 2, 0.01, 1.5)
+
+    // Phase 1: normal operation
+    for i in 0 .. 50 {
+        val x = i64_to_f64(i) / 25.0
+        val y = 0.5 * x + 3.0
+        adaptive_observe(handle, list(x, 1.0), y)
+    }
+
+    val risk1 = adaptive_get_risk(handle)
+    print("Phase 1 risk: score=" + to_str(risk_last_risk(risk1))
+          + ", confidence=" + to_str(risk_confidence(risk1))
+          + ", unsafe=" + to_str(adaptive_is_unsafe(handle)))
+
+    // Phase 2: sudden distribution shift (simulate anomaly)
+    for i in 0 .. 20 {
+        val x = i64_to_f64(i) / 10.0
+        val y = 10.0 * x + 50.0  // completely different relationship
+        adaptive_observe(handle, list(x, 1.0), y)
+    }
+
+    val risk2 = adaptive_get_risk(handle)
+    print("Phase 2 risk (after anomaly): score=" + to_str(risk_last_risk(risk2))
+          + ", confidence=" + to_str(risk_confidence(risk2))
+          + ", unsafe=" + to_str(adaptive_is_unsafe(handle)))
+
+    // Adapt threshold based on observed error
+    adaptive_adapt_threshold(handle, abs(adaptive_mean_error(handle)))
+    print("Adjusted threshold: " + to_str(adaptive_current_threshold(handle)))
+
+    adaptive_free(handle)
+}
+
+// ---------------------------------------------------------------------------
+// Uncertainty Estimation Demo
+// ---------------------------------------------------------------------------
+
+/// Demonstrate prediction with confidence intervals.
+pub def demo_uncertainty() {
+    val handle = adaptive_new("uncertainty_demo", 2, 0.01, 2.0)
+
+    // Train with limited data
+    for i in 0 .. 10 {
+        val x = i64_to_f64(i) / 5.0
+        val y = 3.0 * x - 2.0
+        adaptive_observe(handle, list(x, 1.0), y)
+    }
+
+    val unc = adaptive_predict_with_uncertainty(handle, list(1.0, 1.0))
+    print("Prediction at x=1.0: mean=" + to_str(unc_mean(unc))
+          + ", var=" + to_str(unc_variance(unc))
+          + ", 95% CI=[" + to_str(unc_lower_95(unc)) + ", " + to_str(unc_upper_95(unc)) + "]"
+          + ", confidence=" + to_str(unc_confidence(unc)))
+
+    // Add more data and see uncertainty shrink
+    for i in 0 .. 90 {
+        val x = i64_to_f64(i + 10) / 50.0
+        val y = 3.0 * x - 2.0
+        adaptive_observe(handle, list(x, 1.0), y)
+    }
+
+    val unc2 = adaptive_predict_with_uncertainty(handle, list(1.0, 1.0))
+    print("After 100 samples at x=1.0: mean=" + to_str(unc_mean(unc2))
+          + ", var=" + to_str(unc_variance(unc2))
+          + ", 95% CI=[" + to_str(unc_lower_95(unc2)) + ", " + to_str(unc_upper_95(unc2)) + "]"
+          + ", confidence=" + to_str(unc_confidence(unc2)))
+
+    adaptive_free(handle)
+}
+
+// ---------------------------------------------------------------------------
+// Self-Training Demo
+// ---------------------------------------------------------------------------
+
+/// Demonstrate auto-retraining when performance degrades.
+pub def demo_self_training() {
+    val handle = adaptive_new("self_train_demo", 2, 0.01, 2.0)
+    adaptive_set_retrain_threshold(handle, 1.0)
+    adaptive_set_min_observations_for_retrain(handle, 10)
+
+    // Train on initial distribution
+    for i in 0 .. 20 {
+        val x = i64_to_f64(i) / 10.0
+        val y = x + 5.0
+        adaptive_observe(handle, list(x, 1.0), y)
+    }
+
+    // Degrade: feed bad data, then check if retrain is needed
+    for i in 0 .. 10 {
+        val x = i64_to_f64(i) / 5.0
+        val y = x + 5.0 + 10.0  // shifted
+        adaptive_observe(handle, list(x, 1.0), y)
+    }
+
+    val should_retrain = adaptive_should_retrain(handle)
+    print("Should retrain: " + to_str(should_retrain))
+
+    adaptive_free(handle)
+}
+
+// ---------------------------------------------------------------------------
+// Batch Training Demo
+// ----------------------------------------------------------------------------
+
+/// Train on a batch of data in one call.
+pub def demo_batch_training() {
+    val handle = adaptive_new("batch_demo", 2, 0.05, 2.0)
+
+    val n_samples = 50
+    val n_features = 2
+    var inputs : list<f64> = list()
+    var targets : list<f64> = list()
+
+    for i in 0 .. n_samples {
+        val x = i64_to_f64(i) / 25.0
+        list_push(inputs, x)
+        list_push(inputs, 1.0)
+        list_push(targets, -1.0 * x + 4.0)
+    }
+
+    val loss = adaptive_train_batch(handle, inputs, n_samples, n_features, targets)
+    print("Batch training loss: " + to_str(loss))
+
+    val w0 = adaptive_get_param(handle, 0)
+    val w1 = adaptive_get_param(handle, 1)
+    print("  Learned: y = " + to_str(w0) + " * x + " + to_str(w1))
+
+    adaptive_free(handle)
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+pub def main() {
+    print("=== IRIS Adaptive AI Demo ===")
+    print("")
+
+    print("-- Online Learning --")
+    demo_online_learning()
+    print("")
+
+    print("-- Risk Awareness --")
+    demo_risk_awareness()
+    print("")
+
+    print("-- Uncertainty Estimation --")
+    demo_uncertainty()
+    print("")
+
+    print("-- Self-Training --")
+    demo_self_training()
+    print("")
+
+    print("-- Batch Training --")
+    demo_batch_training()
+    print("")
+
+    print("Demo complete.")
+}

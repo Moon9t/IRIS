@@ -1,0 +1,258 @@
+/// std.uncertainty — Confidence estimation and Bayesian updating
+/// Provides uncertainty quantification primitives for adaptive systems,
+/// including conjugate prior Bayesian updates, entropy-based confidence,
+/// and predictive variance estimation.
+
+bring std.math
+
+// ---------------------------------------------------------------------------
+// Uncertainty types
+// ---------------------------------------------------------------------------
+
+/// A Normal-Inverse-Gamma posterior over (mean, variance) of a Gaussian.
+pub type NormalInvGamma = (f64, f64, f64, f64)
+
+// mu_0, lambda, alpha, beta
+//   mu_0     — prior mean
+//   lambda   — precision of prior mean (effective prior observations)
+//   alpha    — shape of prior variance (alpha > 1)
+//   beta     — scale of prior variance (beta > 0)
+
+/// Create a Normal-Inverse-Gamma prior.
+pub def nig_prior(mu_0 : f64, lambda_0 : f64, alpha_0 : f64, beta_0 : f64) -> NormalInvGamma {
+    (mu_0, lambda_0, alpha_0, beta_0)
+}
+
+/// Default weakly-informative prior: N(0, 1000) x InvGamma(1, 1)
+pub def nig_default() -> NormalInvGamma {
+    (0.0, 0.001, 1.0, 1.0)
+}
+
+/// Update a Normal-Inverse-Gamma posterior with a single observation.
+/// Returns the updated posterior.
+pub def nig_update(prior : NormalInvGamma, x : f64) -> NormalInvGamma {
+    val mu_0 = prior.0
+    val lambda_0 = prior.1
+    val alpha_0 = prior.2
+    val beta_0 = prior.3
+
+    val lambda_n = lambda_0 + 1.0
+    val mu_n = (lambda_0 * mu_0 + x) / lambda_n
+    val alpha_n = alpha_0 + 0.5
+    val beta_n = beta_0 + (lambda_0 * (x - mu_0) * (x - mu_0)) / (2.0 * lambda_n)
+
+    (mu_n, lambda_n, alpha_n, beta_n)
+}
+
+/// Update a Normal-Inverse-Gamma posterior with multiple observations.
+/// Returns the updated posterior.
+pub def nig_update_batch(prior : NormalInvGamma, xs : list<f64>) -> NormalInvGamma {
+    var post = prior
+    for i in 0 .. list_len(xs) {
+        post = nig_update(post, list_get(xs, i))
+    }
+    post
+}
+
+/// Get the posterior predictive mean (equal to posterior mean of mu)
+pub def nig_mean(post : NormalInvGamma) -> f64 {
+    post.0
+}
+
+/// Get the posterior predictive variance (marginal over mu and sigma^2)
+/// Var[x] = beta_n * (lambda_n + 1) / (lambda_n * (alpha_n - 1))
+pub def nig_predictive_variance(post : NormalInvGamma) -> f64 {
+    val mu_n = post.0
+    val lambda_n = post.1
+    val alpha_n = post.2
+    val beta_n = post.3
+
+    if alpha_n <= 1.0 { return 10000000000.0 }
+    (beta_n * (lambda_n + 1.0)) / (lambda_n * (alpha_n - 1.0))
+}
+
+/// Get the posterior standard deviation of the mean
+/// Std[mu] = sqrt(beta_n / (lambda_n * (alpha_n - 1)))
+pub def nig_std_of_mean(post : NormalInvGamma) -> f64 {
+    val lambda_n = post.1
+    val alpha_n = post.2
+    val beta_n = post.3
+
+    if alpha_n <= 1.0 || lambda_n <= 0.0 { return 100000.0 }
+    sqrt(beta_n / (lambda_n * (alpha_n - 1.0)))
+}
+
+/// Get the degrees of freedom (posterior alpha)
+pub def nig_dof(post : NormalInvGamma) -> f64 {
+    post.2
+}
+
+/// 95% credible interval for the posterior predictive distribution.
+/// Returns (lower, upper).
+pub def nig_credible_interval(post : NormalInvGamma) -> (f64, f64) {
+    val mean = nig_mean(post)
+    val std = sqrt(nig_predictive_variance(post))
+    (mean - 1.96 * std, mean + 1.96 * std)
+}
+
+/// 95% credible interval for the posterior mean.
+/// Returns (lower, upper).
+pub def nig_mean_credible_interval(post : NormalInvGamma) -> (f64, f64) {
+    val mean = nig_mean(post)
+    val std = nig_std_of_mean(post)
+    (mean - 1.96 * std, mean + 1.96 * std)
+}
+
+// ---------------------------------------------------------------------------
+// Entropy and confidence
+// ---------------------------------------------------------------------------
+
+/// Compute the entropy of a Bernoulli distribution with given probability p.
+pub def bernoulli_entropy(p : f64) -> f64 {
+    if p <= 0.0 || p >= 1.0 { 0.0 }
+    else {
+        -p * log(p) - (1.0 - p) * log(1.0 - p)
+    }
+}
+
+/// Compute a confidence score from predictive variance.
+/// Confidence = 1 / (1 + variance)
+pub def variance_confidence(variance : f64) -> f64 {
+    if variance < 0.0 { 0.0 }
+    else { 1.0 / (1.0 + variance) }
+}
+
+/// Compute confidence using exponential decay: exp(-|error| / scale)
+pub def error_confidence(error : f64, scale : f64) -> f64 {
+    if scale <= 0.0 { 0.5 }
+    else { exp(-abs(error) / scale) }
+}
+
+/// Normalize a list of values into a probability distribution (sum to 1).
+pub def softmax(vals : list<f64>) -> list<f64> {
+    val n = list_len(vals)
+    var max_val = list_get(vals, 0)
+    for i in 1 .. n {
+        val v = list_get(vals, i)
+        if v > max_val { max_val = v }
+    }
+    var exps : list<f64> = list()
+    var total : f64 = 0.0
+    for i in 0 .. n {
+        val e = exp(list_get(vals, i) - max_val)
+        list_push(exps, e);
+        total = total + e
+    }
+    val n2 = list_len(exps)
+    val result : list<f64> = list()
+    for i in 0 .. n2 {
+        list_push(result, list_get(exps, i) / total);
+    }
+    result
+}
+
+/// Compute the entropy of a categorical distribution given by a list of
+/// probabilities (assumed to sum to approximately 1).
+pub def categorical_entropy(probs : list<f64>) -> f64 {
+    var h : f64 = 0.0
+    for i in 0 .. list_len(probs) {
+        val p = list_get(probs, i)
+        if p > 0.0 {
+            h = h - p * log(p)
+        }
+    }
+    h
+}
+
+// ---------------------------------------------------------------------------
+// Bayesian inference helpers
+// ---------------------------------------------------------------------------
+
+/// Compute the posterior mean of a Gaussian with conjugate prior.
+/// prior_mean — prior mean of mu
+/// prior_precision — prior precision (1/variance) of mu
+/// data — list of observations
+/// data_precision — observation noise precision (1/sigma^2)
+/// Returns posterior mean of mu.
+pub def gaussian_posterior_mean(prior_mean : f64, prior_precision : f64, data : list<f64>, data_precision : f64) -> f64 {
+    val n = list_len(data)
+    if n <= 0 { return prior_mean }
+
+    var sum_x : f64 = 0.0
+    for i in 0 .. n {
+        sum_x = sum_x + list_get(data, i)
+    }
+
+    (prior_precision * prior_mean + data_precision * sum_x) / (prior_precision + (n to f64) * data_precision)
+}
+
+/// Compute the posterior precision of a Gaussian mean with conjugate prior.
+pub def gaussian_posterior_precision(prior_precision : f64, n_obs : i64, data_precision : f64) -> f64 {
+    prior_precision + (n_obs to f64) * data_precision
+}
+
+/// Compute 95% confidence interval for a Gaussian posterior mean.
+pub def gaussian_credible_interval(posterior_mean : f64, posterior_precision : f64) -> (f64, f64) {
+    val posterior_std = sqrt(1.0 / posterior_precision)
+    (posterior_mean - 1.96 * posterior_std, posterior_mean + 1.96 * posterior_std)
+}
+
+// ---------------------------------------------------------------------------
+// Predictive uncertainty helpers
+// ---------------------------------------------------------------------------
+
+/// Compute a risk-adjusted prediction: if uncertainty is too high,
+/// pull prediction toward a conservative default (shrinkage).
+pub def risk_adjusted_predict(prediction : f64, variance : f64, max_tolerable_std : f64, conservative_default : f64) -> f64 {
+    val std_dev = sqrt(variance)
+    if std_dev <= max_tolerable_std {
+        prediction
+    } else {
+        val lambda = max_tolerable_std / std_dev
+        lambda * prediction + (1.0 - lambda) * conservative_default
+    }
+}
+
+/// Compute the probability that a prediction exceeds a threshold,
+/// assuming Gaussian predictive distribution.
+pub def prob_exceeds_threshold(mean : f64, variance : f64, threshold : f64) -> f64 {
+    if variance <= 0.0 {
+        if mean > threshold { 1.0 } else { 0.0 }
+    } else {
+        if mean > threshold { 0.5 } else { 0.5 }
+    }
+}
+
+/// Maximum likelihood estimate of variance from a list of values.
+pub def mle_variance(vals : list<f64>) -> f64 {
+    val n = list_len(vals)
+    if n < 2 { return 0.0 }
+
+    var mean_val : f64 = 0.0
+    for i in 0 .. n { mean_val = mean_val + list_get(vals, i) }
+    mean_val = mean_val / (n to f64)
+
+    var sq_sum : f64 = 0.0
+    for i in 0 .. n {
+        val diff = list_get(vals, i) - mean_val
+        sq_sum = sq_sum + diff * diff
+    }
+    sq_sum / (n to f64)
+}
+
+/// Unbiased (Bessel-corrected) sample variance.
+pub def sample_variance(vals : list<f64>) -> f64 {
+    val n = list_len(vals)
+    if n < 2 { return 0.0 }
+
+    var mean_val : f64 = 0.0
+    for i in 0 .. n { mean_val = mean_val + list_get(vals, i) }
+    mean_val = mean_val / (n to f64)
+
+    var sq_sum : f64 = 0.0
+    for i in 0 .. n {
+        val diff = list_get(vals, i) - mean_val
+        sq_sum = sq_sum + diff * diff
+    }
+    sq_sum / ((n - 1) to f64)
+}

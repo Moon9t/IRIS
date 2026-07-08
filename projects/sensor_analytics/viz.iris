@@ -1,0 +1,222 @@
+// viz.iris — SVG visualization for sensor data
+// Uses a custom SVG context similar to the stochastic_calculus project.
+
+bring std.fs
+bring std.fmt
+
+// Internal SVG context record
+pub record SVGContext {
+    width: i64,
+    height: i64,
+    content: str
+}
+
+// Create a new SVG canvas
+pub def svg_new(width: i64, height: i64) -> SVGContext {
+    val header = concat(concat("<svg width=\"", to_str(width)),
+                        concat("\" height=\"", to_str(height)));
+    val ctx = SVGContext {
+        width: width,
+        height: height,
+        content: concat(header, "\" xmlns=\"http://www.w3.org/2000/svg\">\n")
+    };
+    ctx
+}
+
+// Draw a filled rectangle
+pub def svg_rect(ctx: SVGContext, x: f64, y: f64, w: f64, h: f64, color: str) -> SVGContext {
+    val args = list();
+    list_push(args, to_str(x));
+    list_push(args, to_str(y));
+    list_push(args, to_str(w));
+    list_push(args, to_str(h));
+    list_push(args, color);
+    val rect = fmt.sprintf("  <rect x=\"%.2f\" y=\"%.2f\" width=\"%.2f\" height=\"%.2f\" fill=\"%s\" />\n", args);
+    SVGContext { width: ctx.width, height: ctx.height, content: concat(ctx.content, rect) }
+}
+
+// Draw a line segment
+pub def svg_line(ctx: SVGContext, x1: f64, y1: f64, x2: f64, y2: f64, color: str, stroke_width: f64) -> SVGContext {
+    val args = list();
+    list_push(args, to_str(x1));
+    list_push(args, to_str(y1));
+    list_push(args, to_str(x2));
+    list_push(args, to_str(y2));
+    list_push(args, color);
+    list_push(args, to_str(stroke_width));
+    val line = fmt.sprintf("  <line x1=\"%.2f\" y1=\"%.2f\" x2=\"%.2f\" y2=\"%.2f\" stroke=\"%s\" stroke-width=\"%.2f\" />\n", args);
+    SVGContext { width: ctx.width, height: ctx.height, content: concat(ctx.content, line) }
+}
+
+// Draw text
+pub def svg_text(ctx: SVGContext, x: f64, y: f64, text: str, color: str, size: i64) -> SVGContext {
+    val args = list();
+    list_push(args, to_str(x));
+    list_push(args, to_str(y));
+    list_push(args, color);
+    list_push(args, to_str(size));
+    list_push(args, text);
+    val text_tag = fmt.sprintf("  <text x=\"%.2f\" y=\"%.2f\" fill=\"%s\" font-size=\"%d\" font-family=\"sans-serif\">%s</text>\n", args);
+    SVGContext { width: ctx.width, height: ctx.height, content: concat(ctx.content, text_tag) }
+}
+
+// Save SVG to file
+pub def svg_save(ctx: SVGContext, path: str) -> i64 {
+    val final_content = concat(ctx.content, "</svg>\n");
+    fs.write_text(path, final_content);
+    return 0;
+}
+
+// ─── Line Chart ────────────────────────────────────────────────────────────────
+
+// Create a line chart SVG from a list of values
+pub def create_line_chart(values: list<f64>, title: str, filename: str, color: str) -> i64 {
+    val chart_w = 800;
+    val chart_h = 400;
+    val margin = 60;
+
+    var ctx = svg_new(chart_w, chart_h);
+
+    // Background
+    ctx = svg_rect(ctx, 0.0, 0.0, to_f64(chart_w), to_f64(chart_h), "#fafafa");
+
+    // Plot area background
+    val plot_w = to_f64(chart_w - 2 * margin);
+    val plot_h = to_f64(chart_h - 2 * margin);
+    ctx = svg_rect(ctx, to_f64(margin), to_f64(margin), plot_w, plot_h, "#ffffff");
+
+    // Find data range
+    val n = list_len(values);
+    if n < 2 {
+        ctx = svg_text(ctx, 100.0, 200.0, "Not enough data", "#cc0000", 16);
+        svg_save(ctx, filename);
+        return 0;
+    };
+
+    var mn = list_get(values, 0);
+    var mx = list_get(values, 0);
+    var i = 1;
+    while i < n {
+        val v = list_get(values, i);
+        if v < mn { mn = v; };
+        if v > mx { mx = v; };
+        i = i + 1;
+    };
+    val range_y = mx - mn;
+    val safe_range = if range_y < 0.001 { 1.0 } else { range_y };
+
+    // Title
+    ctx = svg_text(ctx, to_f64(margin), 30.0, title, "#333333", 18);
+
+    // Y-axis labels
+    ctx = svg_text(ctx, 5.0, to_f64(margin + 10), to_str(mx), "#666666", 11);
+    ctx = svg_text(ctx, 5.0, to_f64(chart_h - margin), to_str(mn), "#666666", 11);
+
+    // Axes lines
+    ctx = svg_line(ctx, to_f64(margin), to_f64(margin), to_f64(margin), to_f64(chart_h - margin), "#999999", 1.0);
+    ctx = svg_line(ctx, to_f64(margin), to_f64(chart_h - margin), to_f64(chart_w - margin), to_f64(chart_h - margin), "#999999", 1.0);
+
+    // Grid lines (5 horizontal)
+    var g = 1;
+    while g < 5 {
+        val gy = to_f64(margin) + (to_f64(g) / 5.0) * plot_h;
+        ctx = svg_line(ctx, to_f64(margin), gy, to_f64(chart_w - margin), gy, "#eeeeee", 0.5);
+        g = g + 1;
+    };
+
+    // Data line
+    i = 0;
+    while i < n - 1 {
+        val x1 = to_f64(margin) + (to_f64(i) / to_f64(n - 1)) * plot_w;
+        val y1 = to_f64(chart_h - margin) - ((list_get(values, i) - mn) / safe_range) * plot_h;
+        val x2 = to_f64(margin) + (to_f64(i + 1) / to_f64(n - 1)) * plot_w;
+        val y2 = to_f64(chart_h - margin) - ((list_get(values, i + 1) - mn) / safe_range) * plot_h;
+        ctx = svg_line(ctx, x1, y1, x2, y2, color, 2.0);
+        i = i + 1;
+    };
+
+    // X-axis labels
+    ctx = svg_text(ctx, to_f64(margin), to_f64(chart_h - 10), "0", "#666666", 11);
+    ctx = svg_text(ctx, to_f64(chart_w - margin - 20), to_f64(chart_h - 10), to_str(n - 1), "#666666", 11);
+
+    svg_save(ctx, filename);
+    return 0;
+}
+
+// ─── Bar Chart ─────────────────────────────────────────────────────────────────
+
+// Create a bar chart SVG for anomaly counts per sensor
+pub def create_bar_chart(labels: list<str>, values: list<f64>, title: str, filename: str) -> i64 {
+    val chart_w = 600;
+    val chart_h = 400;
+    val margin = 60;
+
+    var ctx = svg_new(chart_w, chart_h);
+
+    // Background
+    ctx = svg_rect(ctx, 0.0, 0.0, to_f64(chart_w), to_f64(chart_h), "#fafafa");
+
+    val n = list_len(values);
+    if n == 0 {
+        ctx = svg_text(ctx, 100.0, 200.0, "No data", "#cc0000", 16);
+        svg_save(ctx, filename);
+        return 0;
+    };
+
+    // Find max value for scaling
+    var mx = 0.0;
+    var i = 0;
+    while i < n {
+        val v = list_get(values, i);
+        if v > mx { mx = v; };
+        i = i + 1;
+    };
+    if mx < 1.0 { mx = 1.0; };
+
+    // Title
+    ctx = svg_text(ctx, to_f64(margin), 30.0, title, "#333333", 18);
+
+    val plot_w = to_f64(chart_w - 2 * margin);
+    val plot_h = to_f64(chart_h - 2 * margin);
+
+    // Axes
+    ctx = svg_line(ctx, to_f64(margin), to_f64(margin), to_f64(margin), to_f64(chart_h - margin), "#999999", 1.0);
+    ctx = svg_line(ctx, to_f64(margin), to_f64(chart_h - margin), to_f64(chart_w - margin), to_f64(chart_h - margin), "#999999", 1.0);
+
+    // Bars
+    val bar_width = plot_w / to_f64(n) * 0.7;
+    val gap = plot_w / to_f64(n) * 0.3;
+    val colors = list();
+    list_push(colors, "#4285f4");
+    list_push(colors, "#ea4335");
+    list_push(colors, "#fbbc04");
+    list_push(colors, "#34a853");
+    list_push(colors, "#ff6d01");
+    list_push(colors, "#46bdc6");
+
+    i = 0;
+    while i < n {
+        val v = list_get(values, i);
+        val bar_h = (v / mx) * plot_h;
+        val x = to_f64(margin) + to_f64(i) * (bar_width + gap) + gap / 2.0;
+        val y = to_f64(chart_h - margin) - bar_h;
+
+        // Pick color (cycle through palette)
+        val color_idx = i % list_len(colors);
+        val c = list_get(colors, color_idx);
+
+        ctx = svg_rect(ctx, x, y, bar_width, bar_h, c);
+
+        // Label below bar
+        val label = list_get(labels, i);
+        ctx = svg_text(ctx, x, to_f64(chart_h - margin + 20), label, "#333333", 12);
+
+        // Value above bar
+        ctx = svg_text(ctx, x, y - 5.0, to_str(v), "#333333", 11);
+
+        i = i + 1;
+    };
+
+    svg_save(ctx, filename);
+    return 0;
+}

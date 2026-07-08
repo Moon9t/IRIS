@@ -1,0 +1,11 @@
+bring std.ml
+
+def main() -> i64 {
+    print("Testing ONNX load...");
+    val h = onnx_load("nonexistent.onnx");
+    print(f"onnx_load returned: {h}");
+    val inp = list(); push(inp, 1.0); push(inp, 2.0);
+    val out = onnx_run(h, inp);
+    print(f"onnx_run returned: {list_len(out)}");
+    0
+}

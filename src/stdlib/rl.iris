@@ -50,25 +50,38 @@ pub def replay_buffer_new(capacity: i64) -> ReplayBuffer {
 pub def replay_buffer_push(buf: ReplayBuffer, exp: Experience) -> ReplayBuffer {
     if buf.capacity <= 0 { return buf }
 
+    // Mutate lists in-place (reference types)
     if buf.size < buf.capacity {
         list_push(buf.states, exp.state);
         list_push(buf.actions, exp.action);
         list_push(buf.rewards, exp.reward);
         list_push(buf.next_states, exp.next_state);
-        list_push(buf.dones, exp.done);
-        buf.size = buf.size + 1
+        list_push(buf.dones, exp.done)
     } else {
-        val idx = buf.next_idx
+        val idx = buf.next_idx;
         if idx >= 0 && idx < list_len(buf.states) {
             list_set(buf.states, idx, exp.state);
             list_set(buf.actions, idx, exp.action);
             list_set(buf.rewards, idx, exp.reward);
             list_set(buf.next_states, idx, exp.next_state);
-            list_set(buf.dones, idx, exp.done);
+            list_set(buf.dones, idx, exp.done)
         }
+    };
+
+    // Update size and next_idx (value semantics — build new record)
+    val new_size = if buf.size < buf.capacity { buf.size + 1 } else { buf.size };
+    val new_next_idx = (buf.next_idx + 1) % buf.capacity;
+
+    ReplayBuffer {
+        states: buf.states,
+        actions: buf.actions,
+        rewards: buf.rewards,
+        next_states: buf.next_states,
+        dones: buf.dones,
+        capacity: buf.capacity,
+        size: new_size,
+        next_idx: new_next_idx
     }
-    buf.next_idx = (buf.next_idx + 1) % buf.capacity
-    buf
 }
 
 /// Sample a random batch of indices from the buffer.

@@ -144,7 +144,8 @@ def main() -> i64 {
     print(concat("teen_or_senior(70) = ", to_str(is_teen_or_senior(70))));
     print("
 === For-each over list ===");
-    val nums = list()push(nums, - 3);
+    val nums = list();
+    push(nums, -3);
     push(nums, 5);
     push(nums, - 1);
     push(nums, 7);
@@ -161,7 +162,8 @@ def main() -> i64 {
     print(concat("Sum 1..10: ", to_str(total)));
     print("
 === Grading ===");
-    val scores = list()push(scores, 95);
+    val scores = list();
+    push(scores, 95);
     push(scores, 85);
     push(scores, 75);
     push(scores, 65);

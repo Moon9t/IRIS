@@ -4,6 +4,7 @@ pub mod graph_printer;
 pub mod ir_serial;
 pub mod jit;
 pub mod llvm_ir;
+pub mod llvm_native;
 pub mod llvm_stub;
 pub mod onnx;
 pub mod onnx_binary;

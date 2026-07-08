@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::ir::block::{BlockId, IrBlock};
+use crate::ir::instr::IrInstr;
 use crate::ir::types::IrType;
 use crate::ir::value::{ValueDef, ValueId};
 
@@ -41,6 +42,31 @@ pub struct Param {
     pub ty: IrType,
 }
 
+/// An attribute annotation with arguments, e.g. `@adaptive(learning_rate=0.01)`.
+#[derive(Debug, Clone)]
+pub struct IrAttribute {
+    pub name: String,
+    pub args: Vec<IrInstr>,  // Arguments as IR instructions (constants, etc.)
+}
+
+impl PartialEq<str> for IrAttribute {
+    fn eq(&self, other: &str) -> bool {
+        self.name == other
+    }
+}
+
+impl PartialEq<String> for IrAttribute {
+    fn eq(&self, other: &String) -> bool {
+        self.name == *other
+    }
+}
+
+impl PartialEq for IrAttribute {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
 /// A compiled function in SSA form.
 ///
 /// Internal representation uses flat `Vec`s indexed by `BlockId`. The entry
@@ -62,8 +88,8 @@ pub struct IrFunction {
     pub(crate) value_types: HashMap<ValueId, IrType>,
     /// Counter for allocating fresh `ValueId`s.
     pub(crate) next_value: u32,
-    /// Function attributes, e.g. "kernel", "differentiable".
-    pub attrs: Vec<String>,
+    /// Function attributes, e.g. `@adaptive(learning_rate=0.01)`.
+    pub attrs: Vec<IrAttribute>,
     /// Source position table for the debugger: maps `(block_id, instr_idx)` to
     /// the byte offset of the statement that produced the instruction.
     pub span_table: SpanTable,

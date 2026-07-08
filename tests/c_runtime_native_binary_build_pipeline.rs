@@ -55,8 +55,8 @@ fn test_typed_to_str_declares() {
         ir
     );
     assert!(
-        ir.contains("declare ptr @iris_bool_to_str(i1)"),
-        "expected 'declare ptr @iris_bool_to_str(i1)':\n{}",
+        ir.contains("declare ptr @iris_bool_to_str(i32)"),
+        "expected 'declare ptr @iris_bool_to_str(i32)':\n{}",
         ir
     );
 }

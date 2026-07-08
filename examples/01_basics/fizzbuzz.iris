@@ -1,6 +1,6 @@
 // fizzbuzz.iris -- Classic FizzBuzz 1..=100
 //
-// Run: cargo run -- --emit eval examples/fizzbuzz.iris
+// Run: iris run examples/01_basics/fizzbuzz.iris
 
 def fizzbuzz(n: i64) -> str {
     val by3 = (n % 3) == 0
