@@ -11,7 +11,7 @@ use std::thread::JoinHandle;
 use crate::error::InterpError;
 use crate::ir::block::BlockId;
 use crate::ir::function::IrFunction;
-use crate::ir::instr::{BinOp, IrInstr, ScalarUnaryOp, TensorOp};
+use crate::ir::instr::{BinOp, HandlerArm, IrInstr, ScalarUnaryOp, TensorOp};
 use crate::ir::module::IrModule;
 use crate::ir::types::{DType, IrType};
 use crate::ir::value::ValueId;
@@ -50,6 +50,8 @@ pub enum IrValue {
     ResultVal(std::result::Result<Box<IrValue>, Box<IrValue>>),
     /// A channel value: a shared FIFO queue (thread-safe for Spawn).
     Chan(Arc<SharedChannel>),
+    /// A TaskGroup for structured concurrency.
+    TaskGroup(Arc<Mutex<TaskGroupState>>),
     /// An atomic/mutex value: a shared mutable cell (thread-safe for Spawn).
     Atomic(std::sync::Arc<std::sync::Mutex<IrValue>>),
     /// Unit (void) value for side-effecting calls with no return.
@@ -71,6 +73,22 @@ pub enum IrValue {
     List(std::sync::Arc<std::sync::Mutex<Vec<IrValue>>>),
     /// A hash map (shared mutable). Keys are displayed as strings for comparison.
     Map(std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, IrValue>>>),
+    /// A weak reference pointing to a heap cell.
+    WeakRef(std::sync::Weak<std::sync::Mutex<Option<IrValue>>>),
+    /// A trait object: trait name + boxed concrete value + vtable of impl
+    /// method mangles keyed by method name. Used for `dyn Trait` dispatch.
+    TraitObject {
+        target_trait: String,
+        concrete: String,
+        data: Box<IrValue>,
+        vtable: std::collections::HashMap<String, String>,
+    },
+    /// A delimited continuation captured at an effect perform site.
+    /// When `resume(v)` is called inside the handler, the cell stores `v`
+    /// and the parent interpreter returns `v` from the effect site.
+    Continuation {
+        resume_value: std::sync::Arc<std::sync::Mutex<Option<IrValue>>>,
+    },
 }
 
 impl fmt::Display for IrValue {
@@ -141,6 +159,7 @@ impl fmt::Display for IrValue {
             IrValue::ResultVal(Ok(v)) => write!(f, "ok({})", v),
             IrValue::ResultVal(Err(e)) => write!(f, "err({})", e),
             IrValue::Chan(_) => write!(f, "<channel>"),
+            IrValue::TaskGroup(_) => write!(f, "<task_group>"),
             IrValue::Atomic(cell) => write!(f, "atomic({})", cell.lock().unwrap()),
             IrValue::Unit => write!(f, "()"),
             IrValue::Grad { value, tangent } => write!(f, "grad({}, {})", value, tangent),
@@ -148,6 +167,11 @@ impl fmt::Display for IrValue {
             IrValue::TapeNode { op, .. } => write!(f, "tape_node({})", op),
             IrValue::List(elems) => write!(f, "list({} items)", elems.lock().unwrap().len()),
             IrValue::Map(entries) => write!(f, "map({} entries)", entries.lock().unwrap().len()),
+            IrValue::WeakRef(_) => write!(f, "<weak_ref>"),
+            IrValue::TraitObject { target_trait, concrete, .. } => {
+                write!(f, "<dyn {} as {}>", target_trait, concrete)
+            }
+            IrValue::Continuation { .. } => write!(f, "<continuation>"),
         }
     }
 }
@@ -186,6 +210,11 @@ impl PartialEq for IrValue {
             (IrValue::Sparse(a), IrValue::Sparse(b)) => a.len() == b.len(),
             (IrValue::List(a), IrValue::List(b)) => std::sync::Arc::ptr_eq(a, b),
             (IrValue::Map(a), IrValue::Map(b)) => std::sync::Arc::ptr_eq(a, b),
+            (
+                IrValue::TraitObject { target_trait: t1, concrete: c1, data: d1, .. },
+                IrValue::TraitObject { target_trait: t2, concrete: c2, data: d2, .. },
+            ) => t1 == t2 && c1 == c2 && d1 == d2,
+            (IrValue::Continuation { .. }, IrValue::Continuation { .. }) => true,
             _ => false,
         }
     }
@@ -199,6 +228,12 @@ pub struct SharedChannel {
     pub not_empty: Condvar,
     pub not_full: Condvar,
     pub capacity: usize,
+}
+
+#[derive(Debug)]
+pub struct TaskGroupState {
+    pub handles: Vec<std::thread::JoinHandle<Result<Vec<IrValue>, InterpError>>>,
+    pub cancelled: bool,
 }
 
 /// Interpreter execution options.
@@ -327,6 +362,8 @@ pub(crate) struct Interpreter<'m> {
     pub(crate) profiler: Option<std::rc::Rc<std::cell::RefCell<crate::profiler::Profiler>>>,
     /// Join handles for spawned threads, collected so we can wait for them.
     spawn_handles: Vec<JoinHandle<Result<Vec<IrValue>, InterpError>>>,
+    /// Stack of active effect handler frames.
+    handler_stack: Vec<Vec<HandlerArm>>,
 }
 
 impl<'m> Interpreter<'m> {
@@ -344,6 +381,7 @@ impl<'m> Interpreter<'m> {
             cur_func: String::new(),
             profiler: None,
             spawn_handles: Vec::new(),
+            handler_stack: Vec::new(),
         }
     }
 
@@ -882,6 +920,123 @@ impl<'m> Interpreter<'m> {
                                 return Err(InterpError::TypeError {
                                     detail: format!("GetField on non-struct value: {:?}", sv),
                                 });
+                            }
+                        }
+
+                        // ---- Trait objects: dyn Trait dispatch ----
+                        IrInstr::MakeTraitObject {
+                            result,
+                            value,
+                            target_trait,
+                            concrete_ty,
+                            ..
+                        } => {
+                            let data = self.get(*value)?;
+                            // Build the per-method vtable by looking up each
+                            // trait method's mangled impl function for the
+                            // concrete type, recorded earlier in
+                            // IrModule::trait_impl_methods.
+                            let mut vtable = std::collections::HashMap::new();
+                            if let Some(module) = &self.module {
+                                if let Some(methods) = module.trait_def(target_trait) {
+                                    for m in methods {
+                                        // Find the entry that pairs this
+                                        // (target_trait, concrete_ty) with
+                                        // m.name. Fall back to scanning.
+                                        let mut found: Option<String> = None;
+                                        if let Some(list) =
+                                            module.trait_impl_methods().get(target_trait)
+                                        {
+                                            for (cty, mname, mangled) in list {
+                                                if cty == concrete_ty && mname == &m.name {
+                                                    found = Some(mangled.clone());
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        if let Some(mangled) = found {
+                                            vtable.insert(m.name.clone(), mangled);
+                                        }
+                                    }
+                                }
+                            }
+                            self.values.insert(
+                                *result,
+                                IrValue::TraitObject {
+                                    target_trait: target_trait.clone(),
+                                    concrete: concrete_ty.clone(),
+                                    data: Box::new(data),
+                                    vtable,
+                                },
+                            );
+                        }
+
+                        IrInstr::DynCall {
+                            result,
+                            obj,
+                            method_name,
+                            args,
+                            ..
+                        } => {
+                            // Pull the vtable entry; call the mangled function
+                            // synchronously in the interpreter using the
+                            // boxed data value as the `self` first argument.
+                            let obj_val = self.get(*obj)?;
+                            let method_name = method_name.clone();
+                            let arg_vals: Vec<IrValue> = args
+                                .iter()
+                                .map(|&v| self.get(v))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            let (target_trait, concrete, data, vtable) =
+                                match obj_val {
+                                    IrValue::TraitObject {
+                                        target_trait,
+                                        concrete,
+                                        data,
+                                        vtable,
+                                    } => (target_trait, concrete, data, vtable),
+                                    other => {
+                                        return Err(InterpError::TypeError {
+                                            detail: format!(
+                                                "DynCall on non-trait-object: {:?}",
+                                                other
+                                            ),
+                                        });
+                                    }
+                                };
+                            let mangled = vtable.get(&method_name).cloned().ok_or_else(
+                                || InterpError::Unsupported {
+                                    detail: format!(
+                                "no impl method '{}' in vtable for dyn {} (concrete {})",
+                                method_name, target_trait, concrete
+                            ),
+                                },
+                            )?;
+                            let callee_func = self
+                                .module
+                                .as_ref()
+                                .and_then(|m| m.function_by_name(&mangled).cloned())
+                                .ok_or_else(|| InterpError::Unsupported {
+                                    detail: format!("undefined function '{}'", mangled),
+                                })?;
+                            // Construct the full argument list:
+                            // [data, args...] — the impl method's first param
+                            // is the concrete struct type.
+                            let mut call_args = Vec::with_capacity(arg_vals.len() + 1);
+                            call_args.push(*data);
+                            call_args.extend(arg_vals);
+                            let mut sub = Interpreter::new(
+                                self.module.clone(),
+                                self.opts,
+                                self.depth + 1,
+                            );
+                            let ret_vals = sub.run(&callee_func, &call_args)?;
+                            self.spawn_handles.extend(sub.spawn_handles.drain(..));
+                            if let Some(v) = ret_vals.into_iter().next() {
+                                self.values.insert(*result, v);
+                            } else {
+                                // The impl return is Unit: insert dummy 0.
+                                self.values.insert(*result, IrValue::Unit);
                             }
                         }
 
@@ -1450,6 +1605,87 @@ impl<'m> Interpreter<'m> {
                                 let mut sub = Interpreter::new(module, opts, depth + 1);
                                 sub.run(&callee, &call_args)
                             }));
+                        }
+
+                        IrInstr::TaskGroupNew { result } => {
+                            let tg = Arc::new(Mutex::new(TaskGroupState {
+                                handles: Vec::new(),
+                                cancelled: false,
+                            }));
+                            self.values.insert(*result, IrValue::TaskGroup(tg));
+                        }
+
+                        IrInstr::TaskGroupSpawn { group, body_fn, args } => {
+                            let tg_val = self.get(*group)?;
+                            match tg_val {
+                                IrValue::TaskGroup(tg) => {
+                                    let callee = self
+                                        .module
+                                        .and_then(|m| m.function_by_name(body_fn))
+                                        .ok_or_else(|| InterpError::Unsupported {
+                                            detail: format!("undefined spawn function: {}", body_fn),
+                                        })?
+                                        .clone();
+                                    let mut call_args = Vec::new();
+                                    for a in args {
+                                        call_args.push(self.get(*a)?);
+                                    }
+                                    let module_raw: usize = self
+                                        .module
+                                        .map(|m| m as *const IrModule as usize)
+                                        .unwrap_or(0);
+                                    let opts = self.opts;
+                                    let depth = self.depth;
+                                    let handle = std::thread::spawn(move || {
+                                        let module: Option<&IrModule> = if module_raw == 0 {
+                                            None
+                                        } else {
+                                            Some(unsafe { &*(module_raw as *const IrModule) })
+                                        };
+                                        let mut sub = Interpreter::new(module, opts, depth + 1);
+                                        sub.run(&callee, &call_args)
+                                    });
+                                    tg.lock().unwrap().handles.push(handle);
+                                }
+                                other => {
+                                    return Err(InterpError::TypeError {
+                                        detail: format!("TaskGroupSpawn on non-task-group: {:?}", other),
+                                    })
+                                }
+                            }
+                        }
+
+                        IrInstr::TaskGroupJoin { group } => {
+                            let tg_val = self.get(*group)?;
+                            match tg_val {
+                                IrValue::TaskGroup(tg) => {
+                                    let handles = tg.lock().unwrap().handles.drain(..).collect::<Vec<_>>();
+                                    for h in handles {
+                                        let _ = h.join().map_err(|_| InterpError::Unsupported {
+                                            detail: "task panicked during join".into(),
+                                        })?;
+                                    }
+                                }
+                                other => {
+                                    return Err(InterpError::TypeError {
+                                        detail: format!("TaskGroupJoin on non-task-group: {:?}", other),
+                                    })
+                                }
+                            }
+                        }
+
+                        IrInstr::TaskGroupCancel { group } => {
+                            let tg_val = self.get(*group)?;
+                            match tg_val {
+                                IrValue::TaskGroup(tg) => {
+                                    tg.lock().unwrap().cancelled = true;
+                                }
+                                other => {
+                                    return Err(InterpError::TypeError {
+                                        detail: format!("TaskGroupCancel on non-task-group: {:?}", other),
+                                    })
+                                }
+                            }
                         }
 
                         IrInstr::AtomicNew {
@@ -2931,9 +3167,19 @@ impl<'m> Interpreter<'m> {
                                 .iter()
                                 .map(|a| self.get(*a))
                                 .collect::<Result<Vec<_>, _>>()?;
-                            let ret = self.dispatch_extern(name, &arg_vals, ret_ty)?;
-                            if let Some(r) = result {
-                                self.values.insert(*r, ret);
+
+                            // Check if this extern call is intercepted by an effect handler.
+                            let handler_result = self.dispatch_handler(name, &arg_vals);
+
+                            if let Some(handled_ret) = handler_result {
+                                if let Some(r) = result {
+                                    self.values.insert(*r, handled_ret);
+                                }
+                            } else {
+                                let ret = self.dispatch_extern(name, &arg_vals, ret_ty)?;
+                                if let Some(r) = result {
+                                    self.values.insert(*r, ret);
+                                }
                             }
                         }
                         // Phase 88: TCP network I/O — wire to real TCP via tcp_store
@@ -3079,6 +3325,27 @@ impl<'m> Interpreter<'m> {
                             };
                             std::thread::sleep(std::time::Duration::from_millis(n as u64));
                             self.values.insert(*result, IrValue::I64(0));
+                        }
+                        // Effect handler instructions
+                        IrInstr::PushHandler { arms } => {
+                            self.handler_stack.push(arms.clone());
+                        }
+                        IrInstr::PopHandler => {
+                            self.handler_stack.pop();
+                        }
+                        IrInstr::ResumeCont { cont, value, result } => {
+                            // Look up the continuation value to get its resume cell.
+                            let cell = match self.values.get(cont) {
+                                Some(IrValue::Continuation { resume_value }) => resume_value.clone(),
+                                _ => {
+                                    return Err(InterpError::Unsupported {
+                                        detail: "resume called on non-continuation value".into(),
+                                    });
+                                }
+                            };
+                            let v = self.get(*value)?.clone();
+                            *cell.lock().unwrap() = Some(v.clone());
+                            self.values.insert(*result, v);
                         }
                         // Phase 104: BuiltinCall — unified dispatch for new builtins
                         IrInstr::BuiltinCall {
@@ -3333,6 +3600,63 @@ impl<'m> Interpreter<'m> {
         Ok(acc)
     }
 
+    /// Checks if an extern call is intercepted by an active effect handler.
+    /// Returns `Some(value)` if handled, `None` if no handler matches.
+    fn dispatch_handler(&mut self, name: &str, args: &[IrValue]) -> Option<IrValue> {
+        // Walk the handler stack from innermost to outermost.
+        for frame in self.handler_stack.iter().rev() {
+            for arm in frame {
+                if arm.effect_name == name {
+                    // Found a matching handler arm. Call the handler function.
+                    if let Some(module) = self.module {
+                        if let Some(handler_func) = module.function_by_name(&arm.func_name) {
+                            let mut sub = Interpreter::new(
+                                self.module,
+                                self.opts,
+                                self.depth + 1,
+                            );
+                            sub.handler_stack = self.handler_stack.clone();
+
+                            if arm.has_resume {
+                                // Pass the continuation as the first arg.
+                                let cell: std::sync::Arc<std::sync::Mutex<Option<IrValue>>> =
+                                    std::sync::Arc::new(std::sync::Mutex::new(None));
+                                let cont = IrValue::Continuation {
+                                    resume_value: cell.clone(),
+                                };
+                                let mut call_args = Vec::with_capacity(args.len() + 1);
+                                call_args.push(cont);
+                                for a in args {
+                                    call_args.push(a.clone());
+                                }
+                                if let Ok(ret) = sub.run(handler_func, &call_args) {
+                                    // If the handler called `resume(v)`, the cell
+                                    // is now Some(v). Return that as the effect
+                                    // site's value. Otherwise fall back to the
+                                    // handler's return value.
+                                    if let Some(v) = cell.lock().unwrap().take() {
+                                        return Some(v);
+                                    }
+                                    let val = ret.into_iter().next().unwrap_or(IrValue::I64(0));
+                                    return Some(val);
+                                }
+                            } else {
+                                if let Ok(ret) = sub.run(handler_func, args) {
+                                    let val = ret.into_iter().next().unwrap_or(IrValue::I64(0));
+                                    return Some(val);
+                                }
+                            }
+                        }
+                    }
+                    // If the handler function can't be found, still intercept
+                    // but return a default value to avoid calling the real extern.
+                    return Some(IrValue::I64(0));
+                }
+            }
+        }
+        None
+    }
+
     /// Dispatch an extern call by name to a built-in Rust stub.
     /// Unknown extern names return an Unsupported error.
     fn dispatch_extern(
@@ -3431,6 +3755,7 @@ impl<'m> Interpreter<'m> {
                         }
                     } else {
                         // Dispatch as integer / pointer arguments
+                        let mut temp_cstrings = Vec::new();
                         let int_args: Vec<i64> = args
                             .iter()
                             .map(|a| match a {
@@ -3443,7 +3768,12 @@ impl<'m> Interpreter<'m> {
                                         0
                                     }
                                 }
-                                IrValue::Str(s) => s.as_ptr() as i64,
+                                IrValue::Str(s) => {
+                                    let cs = std::ffi::CString::new(s.as_bytes()).unwrap_or_default();
+                                    let ptr = cs.as_ptr() as i64;
+                                    temp_cstrings.push(cs);
+                                    ptr
+                                }
                                 _ => 0,
                             })
                             .collect();
@@ -4870,6 +5200,14 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
                 .unwrap_or(0.0);
             Ok(IrValue::F64(secs))
         }
+        "time_now_ms" => {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            Ok(IrValue::I64(ms))
+        }
         "datetime_format" => {
             let fmt = str_arg(&args[0]);
             use std::time::{SystemTime, UNIX_EPOCH};
@@ -4948,11 +5286,15 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
                 IrValue::OptionVal(_) => "option",
                 IrValue::ResultVal(_) => "result",
                 IrValue::Chan(_) => "chan",
+                IrValue::TaskGroup(_) => "task_group",
                 IrValue::Atomic(_) => "atomic",
                 IrValue::Unit => "unit",
                 IrValue::Grad { .. } => "grad",
                 IrValue::Sparse(_) => "sparse",
                 IrValue::TapeNode { .. } => "tape_node",
+                IrValue::WeakRef(_) => "weak_ref",
+                IrValue::TraitObject { .. } => "trait_object",
+                IrValue::Continuation { .. } => "continuation",
             };
             Ok(IrValue::Str(t.to_string()))
         }
@@ -5080,6 +5422,78 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
                 .map(|n| n.get() as i64)
                 .unwrap_or(1),
         )),
+        "recv_timeout" => {
+            let ms = if args.len() > 1 { i64_arg(&args[1]) } else { 0 };
+            if let IrValue::Chan(rc) = &args[0] {
+                let start = std::time::Instant::now();
+                loop {
+                    {
+                        let mut q = rc.queue.lock().unwrap();
+                        if let Some(v) = q.pop_front() {
+                            rc.not_full.notify_one();
+                            return Ok(IrValue::OptionVal(Some(Box::new(v))));
+                        }
+                    }
+                    if start.elapsed().as_millis() as i64 >= ms {
+                        return Ok(IrValue::OptionVal(None));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            } else {
+                Ok(IrValue::OptionVal(None))
+            }
+        }
+        "task_group_join_timeout" => {
+            if let IrValue::TaskGroup(tg) = &args[0] {
+                let handles = {
+                    let mut guard = tg.lock().unwrap();
+                    std::mem::take(&mut guard.handles)
+                };
+                let mut joined_all = true;
+                for h in handles {
+                    if h.join().is_err() {
+                        joined_all = false;
+                    }
+                }
+                Ok(IrValue::Bool(joined_all))
+            } else {
+                Ok(IrValue::Bool(true))
+            }
+        }
+        "weak_ref" => {
+            let arc = std::sync::Arc::new(std::sync::Mutex::new(Some(args[0].clone())));
+            let weak = std::sync::Arc::downgrade(&arc);
+            Ok(IrValue::WeakRef(weak))
+        }
+        "weak_upgrade" => {
+            if let IrValue::WeakRef(w) = &args[0] {
+                if let Some(arc) = w.upgrade() {
+                    let guard = arc.lock().unwrap();
+                    if let Some(val) = guard.as_ref() {
+                        return Ok(IrValue::OptionVal(Some(Box::new(val.clone()))));
+                    }
+                }
+            }
+            Ok(IrValue::OptionVal(None))
+        }
+        "weak_alive" => {
+            if let IrValue::WeakRef(w) = &args[0] {
+                if let Some(arc) = w.upgrade() {
+                    let guard = arc.lock().unwrap();
+                    return Ok(IrValue::Bool(guard.is_some()));
+                }
+            }
+            Ok(IrValue::Bool(false))
+        }
+        "gc_collect" => Ok(IrValue::Bool(true)),
+        "gc_stats" => {
+            let mut map = std::collections::HashMap::new();
+            map.insert("allocated".to_string(), IrValue::I64(0));
+            map.insert("freed".to_string(), IrValue::I64(0));
+            map.insert("cycles_collected".to_string(), IrValue::I64(0));
+            map.insert("weak_refs_invalidated".to_string(), IrValue::I64(0));
+            Ok(IrValue::Map(std::sync::Arc::new(std::sync::Mutex::new(map))))
+        }
 
         // ---- Deque (double-ended queue, backed by VecDeque stored as List) ----
         "deque_new" => Ok(IrValue::List(std::sync::Arc::new(std::sync::Mutex::new(
@@ -6250,40 +6664,58 @@ fn json_to_irvalue(v: &serde_json::Value) -> IrValue {
 }
 
 fn irvalue_to_json(v: &IrValue) -> String {
-    match v {
-        IrValue::I64(n) => n.to_string(),
-        IrValue::I32(n) => n.to_string(),
-        IrValue::F64(f) => format!("{}", f),
-        IrValue::F32(f) => format!("{}", f),
-        IrValue::Bool(b) => {
-            if *b {
-                "true".into()
-            } else {
-                "false".into()
+    fn to_json(v: &IrValue) -> String {
+        match v {
+            IrValue::I64(n) => n.to_string(),
+            IrValue::I32(n) => n.to_string(),
+            IrValue::F64(f) => format!("{}", f),
+            IrValue::F32(f) => format!("{}", f),
+            IrValue::Bool(b) => {
+                if *b { "true".into() } else { "false".into() }
             }
+            IrValue::Str(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+            IrValue::List(rc) => {
+                let items: Vec<String> = rc.lock().unwrap().iter().map(to_json).collect();
+                format!("[{}]", items.join(","))
+            }
+            IrValue::Map(rc) => {
+                let pairs: Vec<String> = rc
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| {
+                        format!(
+                            "\"{}\":{}",
+                            k.replace('\\', "\\\\").replace('"', "\\\""),
+                            to_json(v)
+                        )
+                    })
+                    .collect();
+                format!("{{{}}}", pairs.join(","))
+            }
+            IrValue::Struct(fields) => {
+                let items: Vec<String> = fields.iter().enumerate()
+                    .map(|(i, fv)| format!("\"{}\":{}", i, to_json(fv)))
+                    .collect();
+                format!("{{{}}}", items.join(","))
+            }
+            IrValue::Enum(tag, fields) => {
+                let flds: Vec<String> = fields.iter().map(to_json).collect();
+                format!("{{\"tag\":{},\"fields\":[{}]}}", tag, flds.join(","))
+            }
+            IrValue::Tuple(elems) => {
+                let items: Vec<String> = elems.iter().map(to_json).collect();
+                format!("[{}]", items.join(","))
+            }
+            IrValue::OptionVal(Some(v)) => to_json(v),
+            IrValue::OptionVal(None) => "null".into(),
+            IrValue::ResultVal(Ok(v)) => format!("{{\"ok\":{}}}", to_json(v)),
+            IrValue::ResultVal(Err(e)) => format!("{{\"err\":{}}}", to_json(e)),
+            IrValue::Unit => "null".into(),
+            _ => "null".into(),
         }
-        IrValue::Str(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
-        IrValue::List(rc) => {
-            let items: Vec<String> = rc.lock().unwrap().iter().map(irvalue_to_json).collect();
-            format!("[{}]", items.join(","))
-        }
-        IrValue::Map(rc) => {
-            let pairs: Vec<String> = rc
-                .lock()
-                .unwrap()
-                .iter()
-                .map(|(k, v)| {
-                    format!(
-                        "\"{}\":{}",
-                        k.replace('\\', "\\\\").replace('"', "\\\""),
-                        irvalue_to_json(v)
-                    )
-                })
-                .collect();
-            format!("{{{}}}", pairs.join(","))
-        }
-        _ => "null".into(),
     }
+    to_json(v)
 }
 
 fn http_request(method: &str, url: &str, body: &str) -> String {

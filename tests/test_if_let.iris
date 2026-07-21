@@ -1,0 +1,52 @@
+def main() -> i64 {
+    // Test if let with some
+    val x = some(42);
+    if let some(v) = x {
+        println(v)
+    } else {
+        println(-1)
+    };
+
+    // Test if let with none
+    val y: option<i64> = none();
+    if let some(v) = y {
+        println(v)
+    } else {
+        println(-1)
+    };
+
+    // Test if let with ok
+    val a = ok(100);
+    if let ok(v) = a {
+        println(v)
+    } else {
+        println(-1)
+    };
+
+    // Test if let with err
+    val b: result<i64, str> = err("fail");
+    if let err(e) = b {
+        println(e)
+    } else {
+        println("no error")
+    };
+
+    // Test if let without else
+    val z = some(99);
+    if let some(v) = z {
+        println(v)
+    };
+
+    // Test while let with a simple loop
+    var counter = some(3);
+    while let some(v) = counter {
+        println(v);
+        if v == 1 {
+            counter = none()
+        } else {
+            counter = some(v - 1)
+        }
+    };
+
+    0
+}

@@ -53,10 +53,12 @@ pub enum AstType {
     Named(String, Span),
     /// A tuple type, e.g. `(i64, f64, bool)`.
     Tuple(Vec<AstType>, Span),
-    /// A fixed-length array type, e.g. `[i64; 5]`.
+    /// A fixed-length array type, e.g. `[i64; 5]` or `[T; N]` with const generic.
     Array {
         elem: Box<AstType>,
         len: usize,
+        /// Expression for const-generic array length (e.g. `N` from `[T; N]`).
+        len_expr: Option<Box<AstExpr>>,
         span: Span,
     },
     /// `option<T>` optional type.
@@ -77,12 +79,144 @@ pub enum AstType {
     List(Box<AstType>, Span),
     /// `map<K, V>` map type.
     Map(Box<AstType>, Box<AstType>, Span),
+    /// `weak_ref<T>` weak reference type.
+    WeakRef(Box<AstType>, Span),
     /// Function type, e.g. `(i64, bool) -> i64`.
     Fn {
         params: Vec<AstType>,
         ret: Box<AstType>,
         span: Span,
     },
+    /// Generic type application, e.g. `Box<i64>`, `Pair<str, f64>`, `Array<i64, 16>`.
+    Generic {
+        name: String,
+        args: Vec<AstType>,
+        span: Span,
+    },
+    /// Constant integer literal used as a type-level argument (e.g. array length in generics).
+    ConstInt(i64, Span),
+    /// Associated type reference: `Self::Item` or `T::Item`.
+    AssocType {
+        base: String,
+        assoc_name: String,
+        span: Span,
+    },
+    /// `dyn Trait` — trait object type (fat pointer + vtable).
+    DynTrait {
+        trait_name: String,
+        span: Span,
+    },
+    /// `with e1, e2` — effect mask type for first-class masks.
+    MaskEffectType {
+        effects: Vec<String>,
+        span: Span,
+    },
+}
+
+impl PartialEq for AstType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (AstType::Scalar(k1, _), AstType::Scalar(k2, _)) => k1 == k2,
+            (AstType::Tensor { dtype: dt1, dims: d1, .. }, AstType::Tensor { dtype: dt2, dims: d2, .. }) => {
+                if dt1 != dt2 || d1.len() != d2.len() {
+                    return false;
+                }
+                for (x, y) in d1.iter().zip(d2.iter()) {
+                    match (x, y) {
+                        (AstDim::Literal(l1), AstDim::Literal(l2)) => if l1 != l2 { return false; },
+                        (AstDim::Symbol(i1), AstDim::Symbol(i2)) => if i1.name != i2.name { return false; },
+                        _ => return false,
+                    }
+                }
+                true
+            }
+            (AstType::Named(n1, _), AstType::Named(n2, _)) => n1 == n2,
+            (AstType::Tuple(e1, _), AstType::Tuple(e2, _)) => e1 == e2,
+            (AstType::Array { elem: el1, len: l1, .. }, AstType::Array { elem: el2, len: l2, .. }) => el1 == el2 && l1 == l2,
+            (AstType::Option(i1, _), AstType::Option(i2, _)) => i1 == i2,
+            (AstType::Result(ok1, err1, _), AstType::Result(ok2, err2, _)) => ok1 == ok2 && err1 == err2,
+            (AstType::Chan(i1, _), AstType::Chan(i2, _)) => i1 == i2,
+            (AstType::Atomic(i1, _), AstType::Atomic(i2, _)) => i1 == i2,
+            (AstType::Mutex(i1, _), AstType::Mutex(i2, _)) => i1 == i2,
+            (AstType::Grad(i1, _), AstType::Grad(i2, _)) => i1 == i2,
+            (AstType::Sparse(i1, _), AstType::Sparse(i2, _)) => i1 == i2,
+            (AstType::List(i1, _), AstType::List(i2, _)) => i1 == i2,
+            (AstType::Map(k1, v1, _), AstType::Map(k2, v2, _)) => k1 == k2 && v1 == v2,
+            (AstType::WeakRef(i1, _), AstType::WeakRef(i2, _)) => i1 == i2,
+            (AstType::Fn { params: p1, ret: r1, .. }, AstType::Fn { params: p2, ret: r2, .. }) => p1 == p2 && r1 == r2,
+            (AstType::Generic { name: n1, args: a1, .. }, AstType::Generic { name: n2, args: a2, .. }) => n1 == n2 && a1 == a2,
+            (AstType::ConstInt(v1, _), AstType::ConstInt(v2, _)) => v1 == v2,
+            (AstType::AssocType { base: b1, assoc_name: a1, .. }, AstType::AssocType { base: b2, assoc_name: a2, .. }) => b1 == b2 && a1 == a2,
+            (AstType::DynTrait { trait_name: t1, .. }, AstType::DynTrait { trait_name: t2, .. }) => t1 == t2,
+            (AstType::MaskEffectType { effects: e1, .. }, AstType::MaskEffectType { effects: e2, .. }) => e1 == e2,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for AstType {}
+
+impl std::hash::Hash for AstType {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            AstType::Scalar(k, _) => {
+                (*k as u8).hash(state);
+            }
+            AstType::Tensor { dtype, dims, .. } => {
+                (*dtype as u8).hash(state);
+                for d in dims {
+                    match d {
+                        AstDim::Literal(l) => {
+                            0u8.hash(state);
+                            l.hash(state);
+                        }
+                        AstDim::Symbol(i) => {
+                            1u8.hash(state);
+                            i.name.hash(state);
+                        }
+                    }
+                }
+            }
+            AstType::Named(name, _) => name.hash(state),
+            AstType::Tuple(elems, _) => elems.hash(state),
+            AstType::Array { elem, len, .. } => {
+                elem.hash(state);
+                len.hash(state);
+            }
+            AstType::Option(inner, _) => inner.hash(state),
+            AstType::Result(ok, err, _) => {
+                ok.hash(state);
+                err.hash(state);
+            }
+            AstType::Chan(inner, _) => inner.hash(state),
+            AstType::Atomic(inner, _) => inner.hash(state),
+            AstType::Mutex(inner, _) => inner.hash(state),
+            AstType::Grad(inner, _) => inner.hash(state),
+            AstType::Sparse(inner, _) => inner.hash(state),
+            AstType::List(inner, _) => inner.hash(state),
+            AstType::Map(k, v, _) => {
+                k.hash(state);
+                v.hash(state);
+            }
+            AstType::WeakRef(inner, _) => inner.hash(state),
+            AstType::Fn { params, ret, .. } => {
+                params.hash(state);
+                ret.hash(state);
+            }
+            AstType::Generic { name, args, .. } => {
+                name.hash(state);
+                args.hash(state);
+            }
+            AstType::ConstInt(v, _) => v.hash(state),
+            AstType::AssocType { base, assoc_name, .. } => {
+                base.hash(state);
+                assoc_name.hash(state);
+            }
+            AstType::DynTrait { trait_name, .. } => trait_name.hash(state),
+            AstType::MaskEffectType { effects, .. } => effects.hash(state),
+        }
+    }
 }
 
 impl AstType {
@@ -103,6 +237,12 @@ impl AstType {
             AstType::List(_, s) => *s,
             AstType::Map(_, _, s) => *s,
             AstType::Fn { span, .. } => *span,
+            AstType::Generic { span, .. } => *span,
+            AstType::ConstInt(_, s) => *s,
+            AstType::AssocType { span, .. } => *span,
+            AstType::DynTrait { span, .. } => *span,
+            AstType::MaskEffectType { span, .. } => *span,
+            AstType::WeakRef(_, s) => *s,
         }
     }
 }
@@ -116,6 +256,24 @@ pub struct AstParam {
     pub default: Option<AstExpr>,
 }
 
+/// Variance annotation for type parameters: `+T` (covariant), `-T` (contravariant), `T` (invariant).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Variance {
+    Covariant,
+    Contravariant,
+    Invariant,
+}
+
+/// A generic parameter — either a type param `T` or a const param `const N: usize`.
+#[derive(Debug, Clone)]
+pub enum AstGenericParam {
+    /// Type parameter with optional trait bounds (e.g. `T where T: Ord, Sensory`) and variance.
+    Type(String, Vec<String>, Variance),
+    /// Higher-kinded type parameter: name, nested type parameters (e.g. `[T]`), bounds, variance
+    Hkt(String, Vec<AstGenericParam>, Vec<String>, Variance),
+    Const { name: String, kind: Box<AstType> },
+}
+
 /// A function definition.
 #[derive(Debug, Clone)]
 pub struct AstFunction {
@@ -123,9 +281,11 @@ pub struct AstFunction {
     /// Whether this function is publicly exported (`pub def`).
     pub is_pub: bool,
     /// Type parameter names, e.g. `["T", "U"]` for `def f[T, U](...)`.
-    pub type_params: Vec<String>,
+    pub type_params: Vec<AstGenericParam>,
     pub params: Vec<AstParam>,
     pub return_ty: AstType,
+    /// Effect row: `effect io, fs, alloc`. Empty means pure.
+    pub effects: Vec<String>,
     pub body: AstBlock,
     pub span: Span,
     pub is_async: bool,
@@ -197,10 +357,12 @@ pub enum AstStmt {
         value: Option<Box<AstExpr>>,
         span: Span,
     },
-    /// `spawn { body }` — launch a concurrent task (single-threaded simulation).
+    /// `spawn { body }` — launch a concurrent task.
+    /// `spawn(group) { body }` — launch a concurrent task in a TaskGroup.
     Spawn {
         body: Vec<AstStmt>,
         span: Span,
+        group: Option<Box<AstExpr>>,
     },
     /// `par for <var> in <start>..<end> { body }` or `par for <var> in <start>..=<end> { body }` — parallel range iteration.
     ParFor {
@@ -218,6 +380,34 @@ pub enum AstStmt {
         body: AstBlock,
         span: Span,
     },
+    /// `with <effect1, effect2, ...> { <body> }` — restrict the body's effects.
+    /// The body's call-site verification uses ONLY this effect row.
+    MaskStmt {
+        effects: Vec<String>,
+        body: AstBlock,
+        span: Span,
+    },
+    /// `handle <expr> with { <arm1>, <arm2>, ... }` — install algebraic-effect handlers.
+    HandleStmt {
+        expr: Box<AstExpr>,
+        arms: Vec<AstHandlerArm>,
+        return_ty: Box<AstType>,
+        span: Span,
+    },
+}
+
+/// A handler arm: `k1(p1, p2) -> resume(v) => body`.
+#[derive(Debug, Clone)]
+pub struct AstHandlerArm {
+    /// Effect name, e.g. `yield` or `break`.
+    pub effect_name: String,
+    /// Patterns of effect payload, e.g. `k1(p1, p2)`. Stored as identifiers.
+    pub params: Vec<Ident>,
+    /// Optional binding for the resumed value: `k(...) -> resume(v) => body`.
+    pub resume_param: Option<Ident>,
+    /// Handler body. Runs when effect `effect_name` is raised inside `expr`.
+    pub body: Box<AstExpr>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -363,6 +553,19 @@ pub enum AstExpr {
         args: Vec<AstExpr>,
         span: Span,
     },
+    /// `with <effect1, effect2, ...> { <body> }` — restrict the body's effects.
+    Mask {
+        effects: Vec<String>,
+        body: AstBlock,
+        span: Span,
+    },
+    /// `handle <expr> with { ... }` — install algebraic-effect handlers.
+    Handle {
+        expr: Box<AstExpr>,
+        arms: Vec<AstHandlerArm>,
+        return_ty: Box<AstType>,
+        span: Span,
+    },
 }
 
 impl AstExpr {
@@ -390,6 +593,8 @@ impl AstExpr {
             AstExpr::Await { span, .. } => *span,
             AstExpr::Try { span, .. } => *span,
             AstExpr::MethodCall { span, .. } => *span,
+            AstExpr::Mask { span, .. } => *span,
+            AstExpr::Handle { span, .. } => *span,
         }
     }
 }
@@ -405,6 +610,7 @@ pub struct AstFieldDef {
 #[derive(Debug, Clone)]
 pub struct AstStructDef {
     pub name: Ident,
+    pub type_params: Vec<AstGenericParam>,
     pub fields: Vec<AstFieldDef>,
     pub span: Span,
     /// Whether this struct is publicly exported (`pub record`).
@@ -461,6 +667,13 @@ pub enum AstWhenPattern {
     Tuple(Vec<AstWhenPattern>),
     /// Inclusive integer range pattern, e.g. `1..=5`.
     Range { lo: i64, hi: i64 },
+    /// Or-pattern: `pat1 | pat2 | ...` — matches if any sub-pattern matches.
+    Or(Vec<AstWhenPattern>),
+    /// Slice pattern: `[a, b, ..rest]` — matches list/array prefix with optional rest binding.
+    Slice {
+        prefix: Vec<AstWhenPattern>,
+        rest: Option<String>, // None = exact match, Some(name) = bind rest
+    },
 }
 
 /// A single arm in a `when` expression.
@@ -579,38 +792,69 @@ pub struct AstTraitMethod {
     pub span: Span,
 }
 
-/// A trait definition: `trait Name { def method(params) -> type }`.
+/// An associated type declaration inside a trait: `type Name`.
+#[derive(Debug, Clone)]
+pub struct AstAssocTypeDecl {
+    pub name: Ident,
+    pub span: Span,
+}
+
+/// A trait definition: `trait Name { type AssocType; def method(params) -> type }`.
 #[derive(Debug, Clone)]
 pub struct AstTraitDef {
     pub name: Ident,
+    pub assoc_types: Vec<AstAssocTypeDecl>,
     pub methods: Vec<AstTraitMethod>,
     pub span: Span,
 }
 
-/// An impl block: `impl TraitName for TypeName { def method(params) -> type { body } }`.
+/// An impl block: `impl TraitName for TypeName { type AssocType = Type; def method(params) -> type { body } }`.
 #[derive(Debug, Clone)]
 pub struct AstImplDef {
     /// The trait being implemented.
     pub trait_name: String,
     /// The type being implemented for (e.g. "i64", "Point").
     pub type_name: String,
+    /// Associated type bindings: `type AssocType = ConcreteType`.
+    pub assoc_type_bindings: Vec<(String, AstType)>,
     /// Full method bodies.
     pub methods: Vec<AstFunction>,
     pub span: Span,
 }
 
-/// An extern function declaration: `extern def name(params) -> ret_ty`.
+/// An extern function declaration: `extern "C" def name(params) -> ret_ty`.
 /// Declares a C-linkage function callable from IRIS but defined outside.
+/// The `abi` field stores the calling convention (e.g. `"C"`), and `attrs`
+/// may contain `@link(name = "lib")` to specify which library to link against.
 #[derive(Debug, Clone)]
 pub struct AstExternFn {
+    pub name: Ident,
+    pub params: Vec<AstParam>,
+    pub ret_ty: AstType,
+    pub abi: Option<String>,    // e.g. Some("C") or None for default
+    pub link_lib: Option<String>, // e.g. Some("m") for -lm
+    pub span: Span,
+}
+
+/// An operation signature within an algebraic effect: `def name(params) -> ret_ty`.
+#[derive(Debug, Clone)]
+pub struct AstEffectOperation {
     pub name: Ident,
     pub params: Vec<AstParam>,
     pub ret_ty: AstType,
     pub span: Span,
 }
 
+/// An algebraic effect declaration: `effect Name { def op1(...) -> ty; ... }`.
+#[derive(Debug, Clone)]
+pub struct AstEffectDef {
+    pub name: Ident,
+    pub operations: Vec<AstEffectOperation>,
+    pub span: Span,
+}
+
 /// The top-level AST for an IRIS source file.
-/// A file may contain any mix of `def`, `record`, `choice`, `model`, `const`, `type`, `trait`, `impl`, `bring`, and `extern def` definitions.
+/// A file may contain any mix of `def`, `record`, `choice`, `model`, `const`, `type`, `trait`, `impl`, `effect`, `bring`, and `extern def` definitions.
 #[derive(Debug, Clone)]
 pub struct AstModule {
     pub enums: Vec<AstEnumDef>,
@@ -621,6 +865,7 @@ pub struct AstModule {
     pub type_aliases: Vec<AstTypeAlias>,
     pub traits: Vec<AstTraitDef>,
     pub impls: Vec<AstImplDef>,
+    pub effects: Vec<AstEffectDef>,
     /// Bring declarations: `bring "file.iris"`, `bring std.name`, or `bring module_name`.
     pub brings: Vec<AstBring>,
     /// Extern function declarations: `extern def name(params) -> type`.

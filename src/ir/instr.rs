@@ -280,6 +280,33 @@ pub enum IrInstr {
         result_ty: IrType,
     },
 
+    // ---- Trait object operations ----
+    /// Box a concrete value into a `dyn Trait` fat pointer.
+    /// The result is a 2-field struct { data_ptr, vtable_ptr }.
+    MakeTraitObject {
+        result: ValueId,
+        /// Value to box.
+        value: ValueId,
+        /// Trait being abstracted.
+        target_trait: String,
+        /// Concrete type at the impl site (for vtable selection).
+        concrete_ty: String,
+        /// The struct-like type of the trait object (2 fields).
+        result_ty: IrType,
+    },
+    /// Dynamic dispatch through a trait object's vtable.
+    DynCall {
+        result: ValueId,
+        /// Source trait-object value (2-field struct).
+        obj: ValueId,
+        /// Method name (matched against vtable slot names).
+        method_name: String,
+        /// Args (excluding `self`).
+        args: Vec<ValueId>,
+        /// Type of the result.
+        result_ty: IrType,
+    },
+
     // ---- Enum operations ----
     /// Construct an enum variant (tag integer, optional payload fields).
     MakeVariant {
@@ -442,6 +469,24 @@ pub enum IrInstr {
     Spawn {
         body_fn: String,
         args: Vec<ValueId>,
+    },
+    /// Create a new TaskGroup for structured concurrency.
+    TaskGroupNew {
+        result: ValueId,
+    },
+    /// Spawn a task within a TaskGroup.
+    TaskGroupSpawn {
+        group: ValueId,
+        body_fn: String,
+        args: Vec<ValueId>,
+    },
+    /// Wait for all tasks in a TaskGroup to complete.
+    TaskGroupJoin {
+        group: ValueId,
+    },
+    /// Cancel all tasks in a TaskGroup.
+    TaskGroupCancel {
+        group: ValueId,
     },
 
     /// Parallel for-loop over a range (sequential simulation).
@@ -950,6 +995,40 @@ pub enum IrInstr {
         args: Vec<ValueId>,
         result_ty: IrType,
     },
+
+    // ---- Effect handlers ----
+
+    /// Push a handler frame onto the handler stack.
+    /// Intercepts extern calls matching any of the effect names.
+    PushHandler {
+        arms: Vec<HandlerArm>,
+    },
+    /// Pop the top handler frame from the handler stack.
+    PopHandler,
+    /// Resume a captured continuation with `value`.
+    /// Sets the resume cell in the corresponding `Continuation` value,
+    /// then returns from the handler body with `value` as the result.
+    ResumeCont {
+        /// The continuation value (block param) to resume.
+        cont: ValueId,
+        /// The value to pass to the resumed continuation.
+        value: ValueId,
+        /// Where to store the resumed value (the handler's return value).
+        result: ValueId,
+    },
+}
+
+/// A handler arm describing how to handle an effect operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandlerArm {
+    /// Name of the effect operation to intercept (e.g. "write_file", "read_file").
+    pub effect_name: String,
+    /// Name of the IR function to call when this effect is performed.
+    pub func_name: String,
+    /// Number of payload arguments the effect carries.
+    pub num_args: usize,
+    /// Whether this arm accepts a `resume(val)` continuation.
+    pub has_resume: bool,
 }
 
 impl IrInstr {
@@ -972,6 +1051,8 @@ impl IrInstr {
             IrInstr::Call { result, .. } => *result,
             IrInstr::MakeStruct { result, .. } => Some(*result),
             IrInstr::GetField { result, .. } => Some(*result),
+            IrInstr::MakeTraitObject { result, .. } => Some(*result),
+            IrInstr::DynCall { result, .. } => Some(*result),
             IrInstr::MakeVariant { result, .. } => Some(*result),
             IrInstr::SwitchVariant { .. } => None,
             IrInstr::ExtractVariantField { result, .. } => Some(*result),
@@ -987,6 +1068,10 @@ impl IrInstr {
             IrInstr::ChanSend { .. } => None,
             IrInstr::ChanRecv { result, .. } => Some(*result),
             IrInstr::Spawn { .. } => None,
+            IrInstr::TaskGroupNew { result, .. } => Some(*result),
+            IrInstr::TaskGroupSpawn { .. } => None,
+            IrInstr::TaskGroupJoin { .. } => None,
+            IrInstr::TaskGroupCancel { .. } => None,
             IrInstr::AtomicNew { result, .. } => Some(*result),
             IrInstr::AtomicLoad { result, .. } => Some(*result),
             IrInstr::AtomicStore { .. } => None,
@@ -1086,6 +1171,9 @@ impl IrInstr {
             IrInstr::NowMs { result } => Some(*result),
             IrInstr::SleepMs { result, .. } => Some(*result),
             IrInstr::BuiltinCall { result, .. } => Some(*result),
+            IrInstr::PushHandler { .. } => None,
+            IrInstr::PopHandler => None,
+            IrInstr::ResumeCont { result, .. } => Some(*result),
         }
     }
 
@@ -1143,6 +1231,12 @@ impl IrInstr {
             IrInstr::Call { args, .. } => args.clone(),
             IrInstr::MakeStruct { fields, .. } => fields.clone(),
             IrInstr::GetField { base, .. } => vec![*base],
+            IrInstr::MakeTraitObject { value, .. } => vec![*value],
+            IrInstr::DynCall { obj, args, .. } => {
+                let mut ops = vec![*obj];
+                ops.extend_from_slice(args);
+                ops
+            }
             IrInstr::MakeVariant { fields, .. } => fields.clone(),
             IrInstr::SwitchVariant { scrutinee, .. } => vec![*scrutinee],
             IrInstr::ExtractVariantField { operand, .. } => vec![*operand],
@@ -1172,6 +1266,14 @@ impl IrInstr {
             IrInstr::ChanSend { chan, value } => vec![*chan, *value],
             IrInstr::ChanRecv { chan, .. } => vec![*chan],
             IrInstr::Spawn { args, .. } => args.clone(),
+            IrInstr::TaskGroupNew { .. } => vec![],
+            IrInstr::TaskGroupSpawn { group, args, .. } => {
+                let mut ops = vec![*group];
+                ops.extend_from_slice(args);
+                ops
+            }
+            IrInstr::TaskGroupJoin { group, .. } => vec![*group],
+            IrInstr::TaskGroupCancel { group, .. } => vec![*group],
             IrInstr::AtomicNew { value, .. } => vec![*value],
             IrInstr::AtomicLoad { atomic, .. } => vec![*atomic],
             IrInstr::AtomicStore { atomic, value } => vec![*atomic, *value],
@@ -1295,6 +1397,9 @@ impl IrInstr {
             IrInstr::NowMs { .. } => vec![],
             IrInstr::SleepMs { ms, .. } => vec![*ms],
             IrInstr::BuiltinCall { args, .. } => args.clone(),
+            IrInstr::PushHandler { .. } => vec![],
+            IrInstr::PopHandler => vec![],
+            IrInstr::ResumeCont { cont, value, .. } => vec![*cont, *value],
         }
     }
 }

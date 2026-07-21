@@ -1,0 +1,114 @@
+// Structured Concurrency — TaskGroup tests
+// Test 1: Basic spawn-join with task group
+def test_basic_spawn_join() -> i64 {
+    val tg = task_group()
+    val ch = channel()
+    spawn(tg) {
+        send(ch, 42)
+    };
+    task_group_join(tg);
+    val result = recv(ch);
+    if result != 42 {
+        println("FAIL: basic spawn-join expected 42 got " + to_str(result));
+        return 1
+    };
+    println("PASS: basic spawn-join");
+    0
+}
+
+// Test 2: Multiple tasks in a group
+def test_multiple_tasks() -> i64 {
+    val tg = task_group()
+    val ch = channel()
+    spawn(tg) {
+        send(ch, 1)
+    };
+    spawn(tg) {
+        send(ch, 2)
+    };
+    spawn(tg) {
+        send(ch, 3)
+    };
+    task_group_join(tg);
+    val results = list();
+    list_push(results, recv(ch));
+    list_push(results, recv(ch));
+    list_push(results, recv(ch));
+    val s1 = list_get(results, 0);
+    val s2 = list_get(results, 1);
+    val s3 = list_get(results, 2);
+    if s1 + s2 + s3 != 6 {
+        println("FAIL: multiple tasks expected sum 6 got " + to_str(s1 + s2 + s3));
+        return 1
+    };
+    println("PASS: multiple tasks");
+    0
+}
+
+// Test 3: Cancel task group
+def test_cancel_group() -> i64 {
+    val tg = task_group()
+    val ch = channel()
+    spawn(tg) {
+        send(ch, 99)
+    };
+    task_group_cancel(tg);
+    task_group_join(tg);
+    // After cancel + join, all tasks should have completed
+    // (cancel is a signal, not hard kill)
+    println("PASS: cancel group (no crash)");
+    0
+}
+
+// Test 4: Nested task groups
+def test_nested_groups() -> i64 {
+    val outer_tg = task_group()
+    val inner_tg = task_group()
+    val ch = channel()
+    spawn(outer_tg) {
+        spawn(inner_tg) {
+            send(ch, 10)
+        };
+        task_group_join(inner_tg);
+        send(ch, 20)
+    };
+    task_group_join(outer_tg);
+    val r1 = recv(ch);
+    val r2 = recv(ch);
+    if r1 + r2 != 30 {
+        println("FAIL: nested groups expected 30 got " + to_str(r1 + r2));
+        return 1
+    };
+    println("PASS: nested groups");
+    0
+}
+
+// Test 5: Detached spawn still works (backward compatibility)
+def test_detached_spawn() -> i64 {
+    val ch = channel()
+    spawn {
+        send(ch, 77)
+    };
+    val result = recv(ch);
+    if result != 77 {
+        println("FAIL: detached spawn expected 77 got " + to_str(result));
+        return 1
+    };
+    println("PASS: detached spawn");
+    0
+}
+
+def main() -> i64 {
+    var failed = 0;
+    failed = failed + test_basic_spawn_join();
+    failed = failed + test_multiple_tasks();
+    failed = failed + test_cancel_group();
+    failed = failed + test_nested_groups();
+    failed = failed + test_detached_spawn();
+    if failed == 0 {
+        println("All task_group tests PASSED")
+    } else {
+        println("Some task_group tests FAILED: " + to_str(failed) + " failures")
+    };
+    failed
+}

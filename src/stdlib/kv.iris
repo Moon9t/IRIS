@@ -4,19 +4,19 @@
 // Keys must not contain "=" or "\n". Values must not contain "\n".
 
 // Read all text from file, return "" on error.
-pub def kv_read_file(path: str) -> str {
+pub def kv_read_file(path: str) -> str effect fs, io {
     val r = file_read_all(path)
     when r { ok(s) => s, err(_) => "" }
 }
 
 // Write all text to file, return true on success.
-pub def kv_write_file(path: str, content: str) -> bool {
+pub def kv_write_file(path: str, content: str) -> bool effect fs, io {
     val r = file_write_all(path, content)
     is_ok(r)
 }
 
 // Get the value for a key, or "" if not found.
-pub def kv_get(path: str, key: str) -> str {
+pub def kv_get(path: str, key: str) -> str effect fs, io {
     val text = kv_read_file(path)
     val lines = split(text, "\n")
     val n = list_len(lines)
@@ -40,7 +40,7 @@ pub def kv_pair(key: str, value: str) -> str {
 }
 
 // Set a key to a value, overwriting if it exists. Returns true on success.
-pub def kv_set(path: str, key: str, value: str) -> bool {
+pub def kv_set(path: str, key: str, value: str) -> bool effect fs, io {
     val text = kv_read_file(path)
     val lines = split(text, "\n")
     val n = list_len(lines)
@@ -69,7 +69,7 @@ pub def kv_set(path: str, key: str, value: str) -> bool {
 }
 
 // Delete a key. Returns true if key existed and was removed.
-pub def kv_delete(path: str, key: str) -> bool {
+pub def kv_delete(path: str, key: str) -> bool effect fs, io {
     val text = kv_read_file(path)
     val lines = split(text, "\n")
     val n = list_len(lines)
@@ -94,7 +94,7 @@ pub def kv_delete(path: str, key: str) -> bool {
 }
 
 // Return all keys in the store.
-pub def kv_keys(path: str) -> list<str> {
+pub def kv_keys(path: str) -> list<str> effect fs, io {
     val text = kv_read_file(path)
     val lines = split(text, "\n")
     val n = list_len(lines)

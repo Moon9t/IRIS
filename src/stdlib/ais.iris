@@ -54,7 +54,7 @@ pub record WorldModel {
     n_action_dim: i64
 }
 
-pub def world_model_new(n_state_dim: i64, n_action_dim: i64) -> WorldModel {
+pub def world_model_new(n_state_dim: i64, n_action_dim: i64) -> WorldModel effect random {
     val w: list<f64> = list()
     for i in 0 .. ((n_state_dim + n_action_dim) * n_state_dim) { list_push(w, (random() - 0.5) * 0.1) }
     WorldModel { weights: w, n_state_dim: n_state_dim, n_action_dim: n_action_dim }
@@ -89,7 +89,7 @@ pub record Population {
     avg_fitness: f64
 }
 
-pub def genome_random(n_genes: i64, scale: f64) -> Genome {
+pub def genome_random(n_genes: i64, scale: f64) -> Genome effect random {
     val genes: list<f64> = list()
     for i in 0 .. n_genes { list_push(genes, (random() - 0.5) * 2.0 * scale) }
     Genome { genes: genes, fitness: 0.0, age: 0 }
@@ -104,7 +104,7 @@ pub def population_new(pop_size: i64, n_genes: i64, mut_rate: f64) -> Population
     }
 }
 
-pub def genome_mutate(g: Genome, rate: f64, scale: f64) -> Genome {
+pub def genome_mutate(g: Genome, rate: f64, scale: f64) -> Genome effect random {
     val new_genes: list<f64> = list()
     for i in 0 .. list_len(g.genes) {
         val gene = list_get(g.genes, i)
@@ -114,7 +114,7 @@ pub def genome_mutate(g: Genome, rate: f64, scale: f64) -> Genome {
     Genome { genes: new_genes, fitness: g.fitness, age: g.age + 1 }
 }
 
-pub def genome_crossover(a: Genome, b: Genome) -> Genome {
+pub def genome_crossover(a: Genome, b: Genome) -> Genome effect random {
     val na = list_len(a.genes)
     val nb = list_len(b.genes)
     val n = if na < nb { na } else { nb }
@@ -259,7 +259,7 @@ pub def one_hot(action: i64, n_actions: i64) -> list<f64> {
     v
 }
 
-pub def normal_sample() -> f64 {
+pub def normal_sample() -> f64 effect random {
     var u1 = random()
     if u1 < 0.000000000001 { u1 = 0.000000000001 }
     sqrt(0.0 - 2.0 * log(u1)) * cos(2.0 * 3.141592653589793 * random())
@@ -299,14 +299,14 @@ pub def argmax(values: list<f64>) -> i64 {
     best_i
 }
 
-pub def epsilon_greedy(values: list<f64>, epsilon: f64) -> i64 {
+pub def epsilon_greedy(values: list<f64>, epsilon: f64) -> i64 effect random {
     val n = list_len(values)
     if n <= 0 { return -1 }
     val eps = if epsilon < 0.0 { 0.0 } else { if epsilon > 1.0 { 1.0 } else { epsilon } }
     if random() < eps { random_range(0, n - 1) } else { argmax(values) }
 }
 
-pub def softmax_sample(logits: list<f64>) -> i64 {
+pub def softmax_sample(logits: list<f64>) -> i64 effect random {
     val n = list_len(logits)
     if n <= 0 { return -1 }
     var mx = list_get(logits, 0)
@@ -646,9 +646,39 @@ pub def agent_loop_rewards(perceive: () -> list<f64>, decide: (list<f64>) -> i64
     (step, tr)
 }
 
-// Step and run disabled — IRIS compiler cannot call function-typed record fields
-// pub def mapek_step(agent: MAPEKAgent) -> (MAPEKAgent, f64) { ... }
-// pub def mapek_run(agent: MAPEKAgent) -> (MAPEKAgent, i64) { ... }
+pub def mapek_step(agent: MAPEKAgent) -> (MAPEKAgent, f64) {
+    if agent.step >= agent.max_steps {
+        (agent, 0.0)
+    } else {
+        val obs = agent.monitor_fn();
+        val analysis = agent.analyze_fn(obs, agent.kb);
+        val action = agent.plan_fn(analysis, agent.kb);
+        val reward = agent.execute_fn(action);
+        val new_kb = kb_record(agent.kb, obs, action, reward);
+        val new_agent = MAPEKAgent {
+            kb: new_kb,
+            monitor_fn: agent.monitor_fn,
+            analyze_fn: agent.analyze_fn,
+            plan_fn: agent.plan_fn,
+            execute_fn: agent.execute_fn,
+            max_steps: agent.max_steps,
+            step: agent.step + 1,
+            total_reward: agent.total_reward + reward
+        };
+        (new_agent, reward)
+    }
+}
+
+pub def mapek_run(agent: MAPEKAgent) -> (MAPEKAgent, i64) {
+    var cur = agent;
+    var step_count = 0;
+    while cur.step < cur.max_steps {
+        val res = mapek_step(cur);
+        cur = res.0;
+        step_count = step_count + 1
+    };
+    (cur, step_count)
+}
 
 // Model persistence: bring std.fs, then:
 //   model_save(weights, "path.txt") — writes weights to file
@@ -661,5 +691,97 @@ pub def meta_update_efficacy(mc: MetaCognition, success_rate: f64) -> MetaCognit
         self_efficacy: mc.self_efficacy * 0.9 + success_rate * 0.1
     }
 }
+
+// ===== Software Autonomics =====
+
+pub record AutonomicRule {
+    metric_name: str,
+    operator: str,
+    threshold: f64,
+    action_idx: i64,
+    severity: i64
+}
+
+pub record SoftwareGovernor {
+    homeostat: Homeostat,
+    constitution: Constitution,
+    rules: list<AutonomicRule>,
+    metrics_history: list<list<f64>>,
+    action_space: list<str>,
+    last_action: i64
+}
+
+pub def autonomic_rule_new(metric_name: str, operator: str, threshold: f64, action_idx: i64, severity: i64) -> AutonomicRule {
+    AutonomicRule {
+        metric_name: metric_name,
+        operator: operator,
+        threshold: threshold,
+        action_idx: action_idx,
+        severity: severity
+    }
+}
+
+pub def software_governor_new(homeostat: Homeostat, constitution: Constitution, action_space: list<str>) -> SoftwareGovernor {
+    SoftwareGovernor {
+        homeostat: homeostat,
+        constitution: constitution,
+        rules: list(),
+        metrics_history: list(),
+        action_space: action_space,
+        last_action: 0
+    }
+}
+
+pub def software_governor_add_rule(gov: SoftwareGovernor, rule: AutonomicRule) -> SoftwareGovernor {
+    list_push(gov.rules, rule);
+    gov
+}
+
+pub def eval_rule(rule: AutonomicRule, metric_val: f64) -> bool {
+    if rule.operator == ">" {
+        metric_val > rule.threshold
+    } else {
+        if rule.operator == "<" {
+            metric_val < rule.threshold
+        } else {
+            false
+        }
+    }
+}
+
+pub def model_save(weights: list<f64>, path: str) -> bool effect fs, io {
+    var content = "";
+    var i = 0;
+    val len = list_len(weights);
+    while i < len {
+        val w = list_get(weights, i);
+        content = concat(content, concat(to_str(w), "\n"));
+        i = i + 1
+    };
+    val r = file_write_all(path, content);
+    when r {
+        ok(bytes) => true,
+        err(e) => false
+    }
+}
+
+pub def model_load(path: str) -> list<f64> effect fs, io {
+    val weights: list<f64> = list();
+    val lines = file_lines(path);
+    var i = 0;
+    val len = list_len(lines);
+    while i < len {
+        val line = list_get(lines, i);
+        if len(line) > 0 {
+            val parsed = parse_f64(line);
+            if is_some(parsed) {
+                list_push(weights, unwrap(parsed));
+            }
+        }
+        i = i + 1
+    };
+    weights
+}
+
 
 

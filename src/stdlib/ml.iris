@@ -4,76 +4,121 @@ pub type MLTensor = (list<f64>, list<i64>)
 
 extern def iris_mlrt_onnx_load(path : str) -> i64
 extern def iris_mlrt_onnx_run(handle : i64, input : MLTensor) -> MLTensor
+extern def iris_mlrt_onnx_run_multi(handle : i64, inputs : list<MLTensor>) -> list<MLTensor>
 extern def iris_mlrt_onnx_free(handle : i64) -> i64
 extern def iris_mlrt_pytorch_load(path : str) -> i64
 extern def iris_mlrt_pytorch_run(handle : i64, input : MLTensor) -> MLTensor
+extern def iris_mlrt_pytorch_run_multi(handle : i64, inputs : list<MLTensor>) -> list<MLTensor>
+extern def iris_mlrt_pytorch_train_step(handle : i64, inputs : list<MLTensor>, targets : list<MLTensor>, lr : f64) -> f64
 extern def iris_mlrt_pytorch_free(handle : i64) -> i64
 extern def iris_mlrt_tf_load(path : str) -> i64
 extern def iris_mlrt_tf_run(handle : i64, input : MLTensor) -> MLTensor
+extern def iris_mlrt_tf_run_multi(handle : i64, inputs : list<MLTensor>) -> list<MLTensor>
 extern def iris_mlrt_tf_free(handle : i64) -> i64
+
+extern def iris_onnx_get_input_count(handle : i64) -> i64
+extern def iris_onnx_get_output_count(handle : i64) -> i64
+extern def iris_onnx_get_input_name(handle : i64, idx : i64) -> str
+extern def iris_onnx_get_output_name(handle : i64, idx : i64) -> str
 
 pub def tensor_pair(data : list<f64>, shape : list<i64>) -> MLTensor {
     (data, shape)
 }
 
-pub def onnx_load(path : str) -> i64 {
+pub def onnx_load(path : str) -> i64 effect ffi {
     iris_mlrt_onnx_load(path)
 }
 
-pub def onnx_run(handle : i64, input : MLTensor) -> MLTensor {
+pub def onnx_run(handle : i64, input : MLTensor) -> MLTensor effect ffi {
     iris_mlrt_onnx_run(handle, input)
 }
 
-pub def onnx_free(handle : i64) -> i64 {
+pub def onnx_free(handle : i64) -> i64 effect ffi {
     iris_mlrt_onnx_free(handle)
 }
 
-pub def pytorch_load(path : str) -> i64 {
+pub def pytorch_load(path : str) -> i64 effect ffi {
     iris_mlrt_pytorch_load(path)
 }
 
-pub def pytorch_run(handle : i64, input : MLTensor) -> MLTensor {
+pub def pytorch_run(handle : i64, input : MLTensor) -> MLTensor effect ffi {
     iris_mlrt_pytorch_run(handle, input)
 }
 
-pub def pytorch_free(handle : i64) -> i64 {
+pub def pytorch_free(handle : i64) -> i64 effect ffi {
     iris_mlrt_pytorch_free(handle)
 }
 
-pub def torch_load(path : str) -> i64 {
+pub def torch_load(path : str) -> i64 effect ffi {
     pytorch_load(path)
 }
 
-pub def torch_run(handle : i64, input : MLTensor) -> MLTensor {
+pub def torch_run(handle : i64, input : MLTensor) -> MLTensor effect ffi {
     pytorch_run(handle, input)
 }
 
-pub def torch_free(handle : i64) -> i64 {
+pub def torch_free(handle : i64) -> i64 effect ffi {
     pytorch_free(handle)
 }
 
-pub def tensorflow_load(path : str) -> i64 {
+pub def tensorflow_load(path : str) -> i64 effect ffi {
     iris_mlrt_tf_load(path)
 }
 
-pub def tensorflow_run(handle : i64, input : MLTensor) -> MLTensor {
+pub def tensorflow_run(handle : i64, input : MLTensor) -> MLTensor effect ffi {
     iris_mlrt_tf_run(handle, input)
 }
 
-pub def tensorflow_free(handle : i64) -> i64 {
+pub def tensorflow_free(handle : i64) -> i64 effect ffi {
     iris_mlrt_tf_free(handle)
 }
 
-pub def tf_load(path : str) -> i64 {
+pub def tf_load(path : str) -> i64 effect ffi {
     tensorflow_load(path)
 }
 
-pub def tf_run(handle : i64, input : MLTensor) -> MLTensor {
+pub def tf_run(handle : i64, input : MLTensor) -> MLTensor effect ffi {
     tensorflow_run(handle, input)
 }
 
-pub def tf_free(handle : i64) -> i64 {
+pub def tf_free(handle : i64) -> i64 effect ffi {
     tensorflow_free(handle)
+}
+
+pub def onnx_run_multi(handle : i64, inputs : list<MLTensor>) -> list<MLTensor> effect ffi {
+    iris_mlrt_onnx_run_multi(handle, inputs)
+}
+
+pub def pytorch_run_multi(handle : i64, inputs : list<MLTensor>) -> list<MLTensor> effect ffi {
+    iris_mlrt_pytorch_run_multi(handle, inputs)
+}
+
+pub def pytorch_train_step(handle : i64, inputs : list<MLTensor>, targets : list<MLTensor>, lr : f64) -> f64 effect ffi {
+    iris_mlrt_pytorch_train_step(handle, inputs, targets, lr)
+}
+
+pub def tensorflow_run_multi(handle : i64, inputs : list<MLTensor>) -> list<MLTensor> effect ffi {
+    iris_mlrt_tf_run_multi(handle, inputs)
+}
+
+pub def tf_run_multi(handle : i64, inputs : list<MLTensor>) -> list<MLTensor> effect ffi {
+    tensorflow_run_multi(handle, inputs)
+}
+
+pub def onnx_get_input_count(handle : i64) -> i64 effect ffi {
+    iris_onnx_get_input_count(handle)
+}
+
+pub def onnx_get_output_count(handle : i64) -> i64 effect ffi {
+    iris_onnx_get_output_count(handle)
+}
+
+pub def onnx_get_input_name(handle : i64, idx : i64) -> str effect ffi {
+    iris_onnx_get_input_name(handle, idx)
+}
+
+pub def onnx_get_output_name(handle : i64, idx : i64) -> str effect ffi {
+    iris_onnx_get_output_name(handle, idx)
 }
 
 pub def ml_backend_ready(handle : i64) -> bool {
@@ -470,7 +515,7 @@ pub def apply_tanh(v : list<f64>) -> list<f64> {
     out
 }
 
-pub def xavier_init(n_in : i64, n_out : i64) -> list<f64> {
+pub def xavier_init(n_in : i64, n_out : i64) -> list<f64> effect random {
     val limit = sqrt(6.0 / ((n_in + n_out) to f64));
     val w : list<f64> = list();
     for _ in 0 .. (n_in * n_out) {
@@ -597,7 +642,7 @@ pub def train_test_split(n : i64, test_ratio : f64) -> i64 {
     n - (((n to f64) * test_ratio) to i64)
 }
 
-pub def shuffle_indices(n : i64) -> list<i64> {
+pub def shuffle_indices(n : i64) -> list<i64> effect random {
     val idx : list<i64> = list();
     for i in 0 .. n {
         list_push(idx, i);
@@ -787,3 +832,43 @@ pub def knn_predict(X_flat : list<f64>, y_train : list<i64>, n_features : i64, x
 
     if class1 >= class0 { 1 } else { 0 }
 }
+
+// ---------------------------------------------------------------------------
+// Telemetry Drift Forecaster
+// ---------------------------------------------------------------------------
+
+/// Computes a linear projection 1 step into the future using the last N elements of history.
+pub def predict_next_telemetry(history: list<f64>, window: i64) -> f64 {
+    val n = list_len(history)
+    val w = if window > n { n } else { window }
+    if w <= 0 { return 0.0 }
+    if w == 1 { return list_get(history, n - 1) }
+
+    var sum_x = 0.0
+    var sum_y = 0.0
+    var sum_xy = 0.0
+    var sum_xx = 0.0
+
+    val start_idx = n - w
+    for i in 0 .. w {
+        val x = to_f64(i)
+        val y = list_get(history, start_idx + i)
+        sum_x = sum_x + x
+        sum_y = sum_y + y
+        sum_xy = sum_xy + x * y
+        sum_xx = sum_xx + x * x
+    }
+
+    val wf = to_f64(w)
+    val denom = wf * sum_xx - sum_x * sum_x
+    if abs(denom) < 1.0e-10 {
+        return list_get(history, n - 1)
+    }
+
+    val slope = (wf * sum_xy - sum_x * sum_y) / denom
+    val intercept = (sum_y - slope * sum_x) / wf
+
+    // Project 1 step ahead (which corresponds to index w)
+    slope * wf + intercept
+}
+

@@ -1,0 +1,22 @@
+// Test Higher-Kinded Types (HKT) Monomorphization
+
+record Box[T] {
+    item: T
+}
+
+record Wrapper[F[_], A] {
+    value: F<A>
+}
+
+def main() -> i64 {
+    // Construct a Wrapper where F is Box and A is i64
+    // F<A> becomes Box<i64> which is monomorphized to Box__i64.
+    val w: Wrapper<Box, i64> = Wrapper {
+        value: Box { item: 100 }
+    }
+    
+    print("Wrapper[Box, i64].value.item = ");
+    println(to_str(w.value.item));
+    
+    w.value.item
+}

@@ -1,110 +1,76 @@
-// generics.iris -- generic (parameterized) functions
+// generics.iris - Parametric polymorphism, generic records, and Higher-Kinded Types (HKT)
 //
-// Demonstrates generic type parameters [T], monomorphization
-// with multiple concrete types, and generic utility functions.
-//
-// Run: iris run examples/generics.iris
+// Run: iris run examples/04_types_and_traits/generics.iris
 
 // =====================
-//  Basic generics
+//  Basic Generics
 // =====================
 
-def identity[T](x: T) -> T { x }
+def identity[T](v: T) -> T {
+    v
+}
 
 def my_min[T](a: T, b: T) -> T {
-    if a <= b { a } else { b }
+    if a < b { a } else { b }
 }
 
 def my_max[T](a: T, b: T) -> T {
-    if a >= b { a } else { b }
+    if a > b { a } else { b }
 }
 
-def clamp[T](v: T, lo: T, hi: T) -> T {
-    my_max(lo, my_min(v, hi))
+def clamp[T](v: T, low: T, high: T) -> T {
+    my_max(low, my_min(v, high))
 }
-
-// =====================
-//  Swap (concrete i64 — returns tuple)
-// =====================
 
 def swap_i64(a: i64, b: i64) -> (i64, i64) {
     (b, a)
 }
 
 // =====================
-//  Generic pair record
+//  Generic Records
 // =====================
 
-record Pair {
-    first: i64,
-    second: i64,
+record Pair[T, U] {
+    first: T,
+    second: U,
 }
 
-def make_pair(a: i64, b: i64) -> Pair {
-    Pair { first: a, second: b }
-}
-
-def pair_sum(p: Pair) -> i64 {
-    p.first + p.second
+record Box[T] {
+    item: T
 }
 
 // =====================
-//  Generic first/second
+//  Higher-Kinded Types (HKT)
 // =====================
 
-def first[T](a: T, b: T) -> T { a }
-def second[T](a: T, b: T) -> T { b }
-
-// =====================
-//  List search (concrete i64)
-// =====================
-
-def find_index_i64(lst: list<i64>, target: i64) -> i64 {
-    var i = 0
-    while i < list_len(lst) {
-        if list_get(lst, i) == target {
-            return i
-        };
-        i = i + 1
-    }
-    -1
+record Wrapper[F[_], A] {
+    value: F<A>
 }
 
 def main() -> i64 {
-    print("=== Basic Generics ===");
-    // Monomorphized for i64
-    print(concat("identity(42)       = ", to_str(identity(42))));
-    print(concat("min(10, 20)        = ", to_str(my_min(10, 20))));
-    print(concat("max(10, 20)        = ", to_str(my_max(10, 20))));
-    print(concat("clamp(15, 0, 10)   = ", to_str(clamp(15, 0, 10))));
-    print(concat("clamp(-5, 0, 10)   = ", to_str(clamp(-5, 0, 10))));
-    print(concat("clamp(5, 0, 10)    = ", to_str(clamp(5, 0, 10))));
+    println("=== Basic Generics ===");
+    println(concat("identity(42)       = ", to_str(identity(42))));
+    println(concat("min(10, 20)        = ", to_str(my_min(10, 20))));
+    println(concat("max(10, 20)        = ", to_str(my_max(10, 20))));
+    println(concat("clamp(15, 0, 10)   = ", to_str(clamp(15, 0, 10))));
 
-    print("\n=== Monomorphized for str ===");
-    print(concat("identity(\"hello\")  = ", identity("hello")));
-    print(concat("min(\"a\", \"z\")      = ", my_min("a", "z")));
-    print(concat("max(\"a\", \"z\")      = ", my_max("a", "z")));
+    println("\n=== Monomorphized for str ===");
+    println(concat("identity(\"hello\")  = ", identity("hello")));
 
-    print("\n=== Swap ===");
+    println("\n=== Swap ===");
     val (a, b) = swap_i64(1, 2);
-    print(concat("swap(1, 2) = (", concat(to_str(a), concat(", ", concat(to_str(b), ")")))));
+    println(concat("swap(1, 2) = (", concat(to_str(a), concat(", ", concat(to_str(b), ")")))));
 
-    print("\n=== Generic First/Second ===");
-    print(concat("first(10, 20)  = ", to_str(first(10, 20))));
-    print(concat("second(10, 20) = ", to_str(second(10, 20))));
+    println("\n=== Generic Records ===");
+    val p: Pair<i64, str> = Pair { first: 42, second: "hello" }
+    println(concat("Pair.first = ", to_str(p.first)));
+    println(concat("Pair.second = ", p.second));
 
-    print("\n=== Pair Record ===");
-    val p = make_pair(10, 20)
-    print(concat("pair = (", concat(to_str(p.first), concat(", ", concat(to_str(p.second), ")")))));
-    print(concat("sum  = ", to_str(pair_sum(p))));
-
-    print("\n=== List Search (i64) ===");
-    val nums = list()
-    push(nums, 5); push(nums, 10); push(nums, 15);
-    push(nums, 20); push(nums, 25);
-
-    print(concat("index of 15: ", to_str(find_index_i64(nums, 15))));
-    print(concat("index of 99: ", to_str(find_index_i64(nums, 99))));
+    println("\n=== Higher-Kinded Types (HKT) ===");
+    val w: Wrapper<Box, i64> = Wrapper {
+        value: Box { item: 100 }
+    }
+    println(concat("Wrapper[Box, i64].value.item = ", to_str(w.value.item)));
 
     0
 }

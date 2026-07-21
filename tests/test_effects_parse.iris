@@ -1,0 +1,16 @@
+def pure_fn() -> i64 {
+    42
+}
+
+def io_fn() -> i64 effect io {
+    println("hello");
+    0
+}
+
+def multi_fn() -> i64 effect io, alloc, throw {
+    0
+}
+
+def main() -> i64 {
+    0
+}

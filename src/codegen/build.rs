@@ -67,14 +67,18 @@ pub fn build_binary_with_target(
     target: Option<&str>,
 ) -> Result<PathBuf, CodegenError> {
     use crate::codegen::llvm_ir::emit_llvm_ir_for_binary;
+    let link_libs: Vec<String> = module.extern_fns.iter()
+        .filter_map(|e| e.link_lib.clone())
+        .collect();
     if target.is_some() {
         build_binary_impl(
             crate::codegen::llvm_ir::emit_llvm_ir_for_binary_with_target(module, target)?,
             output_path,
             target,
+            link_libs,
         )
     } else {
-        build_binary_impl(emit_llvm_ir_for_binary(module)?, output_path, None)
+        build_binary_impl(emit_llvm_ir_for_binary(module)?, output_path, None, link_libs)
     }
 }
 
@@ -95,14 +99,18 @@ pub fn build_binary_for_eval_with_target(
     target: Option<&str>,
 ) -> Result<PathBuf, CodegenError> {
     use crate::codegen::llvm_ir::emit_llvm_ir_for_eval;
+    let link_libs: Vec<String> = module.extern_fns.iter()
+        .filter_map(|e| e.link_lib.clone())
+        .collect();
     if target.is_some() {
         build_binary_impl(
             crate::codegen::llvm_ir::emit_llvm_ir_for_eval_with_target(module, target)?,
             output_path,
             target,
+            link_libs,
         )
     } else {
-        build_binary_impl(emit_llvm_ir_for_eval(module)?, output_path, None)
+        build_binary_impl(emit_llvm_ir_for_eval(module)?, output_path, None, link_libs)
     }
 }
 
@@ -138,8 +146,11 @@ pub(crate) fn run_binary_for_eval_entry_capture(
     entry_name: Option<&str>,
     target: Option<&str>,
 ) -> Result<std::process::Output, CodegenError> {
+    let link_libs: Vec<String> = module.extern_fns.iter()
+        .filter_map(|e| e.link_lib.clone())
+        .collect();
     let bin_path = if let Some(name) = entry_name {
-        build_binary_from_llvm_ir(
+        build_binary_impl(
             crate::codegen::llvm_ir::emit_llvm_ir_for_named_eval_with_target(
                 module,
                 Some(name),
@@ -147,17 +158,18 @@ pub(crate) fn run_binary_for_eval_entry_capture(
             )?,
             &temp_eval_binary_path(),
             target,
+            link_libs,
         )?
     } else {
         build_binary_for_eval_with_target(module, &temp_eval_binary_path(), target)?
     };
     let run_path = std::fs::canonicalize(&bin_path).unwrap_or(bin_path.clone());
-    // Run the native binary with a 5-second timeout. Programs that use spawn/TCP may
+    // Run the native binary with a 15-second timeout. Programs that use spawn/TCP may
     // hang indefinitely in the native runtime, so we fall back to the interpreter.
-    let output = run_with_timeout(&run_path, std::time::Duration::from_secs(5))
+    let output = run_with_timeout(&run_path, std::time::Duration::from_secs(15))
         .map_err(|_| CodegenError::Unsupported {
             backend: "native".into(),
-            detail: "native binary timed out (5s); try the interpreter instead".into(),
+            detail: "native binary timed out (15s); try the interpreter instead".into(),
         })?;
     let _ = std::fs::remove_file(&run_path);
     Ok(output)
@@ -207,12 +219,16 @@ pub(crate) fn run_native_test_capture(
     entry_name: &str,
     target: Option<&str>,
 ) -> Result<std::process::Output, CodegenError> {
-    let bin_path = build_binary_from_llvm_ir(
+    let link_libs: Vec<String> = module.extern_fns.iter()
+        .filter_map(|e| e.link_lib.clone())
+        .collect();
+    let bin_path = build_binary_impl(
         crate::codegen::llvm_ir::emit_llvm_ir_for_test_entry_with_target(
             module, entry_name, target,
         )?,
         &temp_eval_binary_path(),
         target,
+        link_libs,
     )?;
     let run_path = std::fs::canonicalize(&bin_path).unwrap_or(bin_path.clone());
     let output = Command::new(&run_path).output().map_err(CodegenError::Io)?;
@@ -239,19 +255,27 @@ fn temp_eval_binary_path() -> PathBuf {
     ))
 }
 
-fn build_binary_from_llvm_ir(
+fn _build_binary_from_llvm_ir(
     llvm_ir: String,
     output_path: &Path,
     target: Option<&str>,
 ) -> Result<PathBuf, CodegenError> {
-    build_binary_impl(llvm_ir, output_path, target)
+    build_binary_impl(llvm_ir, output_path, target, vec![])
 }
 
 fn build_binary_impl(
     llvm_ir: String,
     output_path: &Path,
     target: Option<&str>,
+    link_libs: Vec<String>,
 ) -> Result<PathBuf, CodegenError> {
+    let resolved_target = resolve_target_triple(target);
+
+    // WASM compilation path — uses WASI sysroot + wasi-libc + compiler-rt.
+    if resolved_target.contains("wasm32") {
+        return build_wasm_binary_impl(&llvm_ir, output_path, &resolved_target);
+    }
+
     if !llvm_ir.contains("define i32 @main(") {
         return Err(CodegenError::Unsupported {
             backend: "binary".into(),
@@ -345,30 +369,22 @@ fn build_binary_impl(
         })
     }
 
-    let resolved_target = resolve_target_triple(target);
     let target_args = ["-target".to_owned(), resolved_target.clone()];
-    let native_ml_backends = std::env::var("IRIS_NATIVE_ML_BACKENDS")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let use_blas = std::env::var("IRIS_USE_BLAS")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let openblas_dir = if use_blas {
-        std::env::var("OPENBLAS_DIR").ok().map(PathBuf::from)
+    let onnx_sdk = if let Ok(dir) = std::env::var("ONNXRUNTIME_DIR") {
+        Some(PathBuf::from(dir))
+    } else if Path::new("C:\\onnxruntime").exists() {
+        Some(PathBuf::from("C:\\onnxruntime"))
     } else {
         None
     };
-    let onnx_sdk = if native_ml_backends {
-        std::env::var("ONNXRUNTIME_DIR").ok().map(PathBuf::from)
+    let tf_sdk = if let Ok(dir) = std::env::var("TENSORFLOW_DIR") {
+        Some(PathBuf::from(dir))
+    } else if Path::new("C:\\tensorflow").exists() {
+        Some(PathBuf::from("C:\\tensorflow"))
     } else {
         None
     };
-    let tf_sdk = if native_ml_backends {
-        std::env::var("TENSORFLOW_DIR").ok().map(PathBuf::from)
-    } else {
-        None
-    };
-    let libtorch_sdk = if native_ml_backends {
+    let libtorch_sdk = if resolved_target.contains("msvc") {
         if let Ok(dir) = std::env::var("LIBTORCH_DIR") {
             Some(PathBuf::from(dir))
         } else if Path::new("C:\\libtorch").exists() {
@@ -379,6 +395,23 @@ fn build_binary_impl(
     } else {
         None
     };
+    let openblas_dir = if let Ok(dir) = std::env::var("OPENBLAS_DIR") {
+        Some(PathBuf::from(dir))
+    } else if Path::new("C:\\openblas").exists() {
+        Some(PathBuf::from("C:\\openblas"))
+    } else {
+        None
+    };
+    let use_blas = openblas_dir.is_some() || std::env::var("IRIS_USE_BLAS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let native_ml_backends = onnx_sdk.is_some() || tf_sdk.is_some() || libtorch_sdk.is_some() || std::env::var("IRIS_NATIVE_ML_BACKENDS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    println!("iris_codegen: native_ml_backends = {}", native_ml_backends);
+    println!("iris_codegen: onnx_sdk = {:?}", onnx_sdk);
+    println!("iris_codegen: libtorch_sdk = {:?}", libtorch_sdk);
 
     // 5a. Compile iris_runtime.c → iris_runtime.o using clang.
     let rt_obj = tmp_dir.join("iris_runtime.o");
@@ -394,7 +427,16 @@ fn build_binary_impl(
         path_str(&tmp_dir)?,
         "-Wno-pragma-pack",
     ]);
-    if resolved_target.contains("windows") {
+    if onnx_sdk.is_some() {
+        compile_cmd.arg("-DONNX_RUNTIME_ENABLED");
+    }
+    if tf_sdk.is_some() {
+        compile_cmd.arg("-DTENSORFLOW_ENABLED");
+    }
+    if libtorch_sdk.is_some() {
+        compile_cmd.arg("-DLIBTORCH_ENABLED");
+    }
+    if resolved_target.contains("windows") && !resolved_target.contains("msvc") {
         if let Some(ref inc) = msys2_inc {
             compile_cmd.arg("-I").arg(inc);
         }
@@ -429,44 +471,83 @@ fn build_binary_impl(
         (&ml_c_path, "iris_ml_kernels.o", "ML kernels"),
     ] {
         let obj = tmp_dir.join(obj_name);
-        let mut shim_cmd = Command::new(&clang);
-        shim_cmd.args(&target_args);
-        shim_cmd.args([
-            "-O2",
-            "-c",
-            path_str(src)?,
-            "-o",
-            path_str(&obj)?,
-            "-I",
-            path_str(&tmp_dir)?,
-            "-Wno-pragma-pack",
-        ]);
-        if resolved_target.contains("windows") {
-            if let Some(ref inc) = msys2_inc {
-                shim_cmd.arg("-I").arg(inc);
+        let is_msvc = resolved_target.contains("msvc");
+        let use_cl = backend_name == "PyTorch shim" && is_msvc;
+
+        let mut shim_cmd = if use_cl {
+            Command::new("cl.exe")
+        } else {
+            let mut cmd = Command::new(&clang);
+            cmd.args(&target_args);
+            cmd
+        };
+
+        if use_cl {
+            shim_cmd.args([
+                "/O2",
+                "/c",
+                "/EHsc",
+                path_str(src)?,
+                &format!("/Fo:{}", path_str(&obj)?),
+                "/I",
+                path_str(&tmp_dir)?,
+            ]);
+            if backend_name == "PyTorch shim" {
+                if let Some(ref sdk) = libtorch_sdk {
+                    shim_cmd.arg("/DLIBTORCH_ENABLED");
+                    shim_cmd.arg("/std:c++17");
+                    shim_cmd.arg("/I").arg(sdk.join("include"));
+                    shim_cmd
+                        .arg("/I")
+                        .arg(sdk.join("include/torch/csrc/api/include"));
+                }
             }
-        }
-        if backend_name == "ONNX shim" {
-            if let Some(ref sdk) = onnx_sdk {
-                shim_cmd.arg("-DONNX_RUNTIME_ENABLED");
-                shim_cmd.arg("-I").arg(sdk.join("include"));
+        } else {
+            shim_cmd.args([
+                "-O2",
+                "-c",
+                path_str(src)?,
+                "-o",
+                path_str(&obj)?,
+                "-I",
+                path_str(&tmp_dir)?,
+                "-Wno-pragma-pack",
+            ]);
+            if resolved_target.contains("windows") && !resolved_target.contains("msvc") {
+                if let Some(ref inc) = msys2_inc {
+                    shim_cmd.arg("-I").arg(inc);
+                }
             }
-        }
-        if backend_name == "TensorFlow shim" {
-            if let Some(ref sdk) = tf_sdk {
-                shim_cmd.arg("-DTENSORFLOW_ENABLED");
-                shim_cmd.arg("-I").arg(sdk.join("include"));
+            if backend_name == "ONNX shim" {
+                if let Some(ref sdk) = onnx_sdk {
+                    shim_cmd.arg("-DONNX_RUNTIME_ENABLED");
+                    shim_cmd.arg("-I").arg(sdk.join("include"));
+                }
             }
-        }
-        if backend_name == "PyTorch shim" {
-            shim_cmd.arg("-x").arg("c++");
-            if let Some(ref sdk) = libtorch_sdk {
-                shim_cmd.arg("-DLIBTORCH_ENABLED");
-                shim_cmd.arg("-std=c++17");
-                shim_cmd.arg("-I").arg(sdk.join("include"));
-                shim_cmd
-                    .arg("-I")
-                    .arg(sdk.join("include/torch/csrc/api/include"));
+            if backend_name == "TensorFlow shim" {
+                if let Some(ref sdk) = tf_sdk {
+                    shim_cmd.arg("-DTENSORFLOW_ENABLED");
+                    shim_cmd.arg("-I").arg(sdk.join("include"));
+                }
+            }
+            if backend_name == "PyTorch shim" {
+                shim_cmd.arg("-x").arg("c++");
+                if let Some(ref sdk) = libtorch_sdk {
+                    shim_cmd.arg("-DLIBTORCH_ENABLED");
+                    shim_cmd.arg("-std=c++17");
+                    if resolved_target.contains("windows") {
+                        shim_cmd.arg("-fms-extensions");
+                        shim_cmd.arg("-DNDEBUG");
+                        shim_cmd.arg("-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH");
+                        if !resolved_target.contains("msvc") {
+                            shim_cmd.arg("-DC10_USING_CUSTOM_GENERATED_MACROS");
+                        }
+                    }
+                    shim_cmd.arg("-I").arg(sdk.join("include"));
+                    shim_cmd
+                        .arg("-I")
+                        .arg(sdk.join("include/torch/csrc/api/include"));
+                }
             }
         }
         if backend_name == "ML kernels" && use_blas {
@@ -537,12 +618,15 @@ fn build_binary_impl(
     for obj in &support_objs {
         link_cmd.arg(path_str(obj)?);
     }
-    link_cmd.args(["-o", path_str(output_path)?, "-lm", "-lpthread"]);
+    link_cmd.args(["-o", path_str(output_path)?]);
+    if !resolved_target.contains("msvc") {
+        link_cmd.args(["-lm", "-lpthread"]);
+    }
     // Windows: link WinSock2 for TCP/HTTP builtins
     if resolved_target.contains("windows") {
         link_cmd.arg("-lws2_32");
     }
-    if resolved_target.contains("windows") {
+    if resolved_target.contains("windows") && !resolved_target.contains("msvc") {
         if let Some(ref lib) = msys2_lib {
             link_cmd.arg(format!("-L{}", lib));
         }
@@ -563,13 +647,19 @@ fn build_binary_impl(
         link_cmd.arg("-ltorch");
         link_cmd.arg("-ltorch_cpu");
         link_cmd.arg("-lc10");
-        link_cmd.arg("-lstdc++");
+        if !resolved_target.contains("msvc") {
+            link_cmd.arg("-lstdc++");
+        }
     }
     if use_blas {
         if let Some(ref dir) = openblas_dir {
             link_cmd.arg(format!("-L{}", dir.join("lib").display()));
         }
         link_cmd.arg("-lopenblas");
+    }
+    // Link libraries specified by extern "C" declarations with @link(name = "lib")
+    for lib in &link_libs {
+        link_cmd.arg(format!("-l{}", lib));
     }
     if !resolved_target.contains("windows") {
         // Non-Windows targets keep relying on the target toolchain's standard sysroot.
@@ -592,7 +682,318 @@ fn build_binary_impl(
     }
 
     stage_sqlite_dll_next_to(output_path);
+    stage_onnxruntime_dll_next_to(output_path);
     Ok(output_path.to_path_buf())
+}
+
+/// Build a WASM binary using the WASI sysroot (wasi-libc + compiler-rt).
+fn build_wasm_binary_impl(
+    llvm_ir: &str,
+    output_path: &Path,
+    target: &str,
+) -> Result<PathBuf, CodegenError> {
+    // Locate the WASI sysroot.
+    let sysroot = find_wasi_sysroot()?;
+
+    // Determine P1 vs P2 target
+    let is_p2 = target.contains("wasip2");
+    let wasm_target = if is_p2 { "wasm32-wasip2" } else { "wasm32-wasip1" };
+    let wasm_lib_subdir = if is_p2 { "wasm32-wasip2" } else { "wasm32-wasip1" };
+
+    // Set up temp directory for build artifacts.
+    let build_id = output_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| format!("{}_wasm", s))
+        .unwrap_or_else(|| format!("iris_wasm_build_{}", std::process::id()));
+    let tmp_dir = std::env::temp_dir().join(build_id);
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| CodegenError::Unsupported {
+        backend: "wasm".into(),
+        detail: format!("failed to create temp dir '{}': {}", tmp_dir.display(), e),
+    })?;
+
+    let clang = find_clang();
+
+    // Helper: PathBuf → &str with error.
+    fn path_str(p: &Path) -> Result<&str, CodegenError> {
+        p.to_str().ok_or_else(|| CodegenError::Unsupported {
+            backend: "wasm".into(),
+            detail: format!("path contains non-UTF8 characters: {}", p.display()),
+        })
+    }
+
+    // Write LLVM IR to module.ll
+    let ll_path = tmp_dir.join("module.ll");
+    std::fs::write(&ll_path, llvm_ir).map_err(|e| CodegenError::Unsupported {
+        backend: "wasm".into(),
+        detail: format!("failed to write LLVM IR to '{}': {}", ll_path.display(), e),
+    })?;
+
+    // Write embedded runtime sources
+    let h_path = tmp_dir.join("iris_runtime.h");
+    let c_path = tmp_dir.join("iris_runtime.c");
+    std::fs::write(&h_path, RUNTIME_H_SRC).map_err(|e| CodegenError::Unsupported {
+        backend: "wasm".into(),
+        detail: format!("failed to write runtime header: {}", e),
+    })?;
+    std::fs::write(&c_path, RUNTIME_C_SRC).map_err(|e| CodegenError::Unsupported {
+        backend: "wasm".into(),
+        detail: format!("failed to write runtime C source: {}", e),
+    })?;
+
+    // WASM compilation flags
+    let wasi_defines = [
+        "-D_POSIX_C_SOURCE=200809L",
+        "-D_WASI_EMULATED_SIGNAL",
+        "-D_WASI_EMULATED_PROCESS_CLOCKS",
+        "-D_WASI_EMULATED_GETPID",
+    ];
+    let sysroot_opt = format!("--sysroot={}", sysroot.display());
+    let inc_opt = format!("-I{}", tmp_dir.display());
+
+    // Step 1: Compile iris_runtime.c → iris_runtime.o
+    let rt_obj = tmp_dir.join("iris_runtime.o");
+    let mut rt_cmd = std::process::Command::new(&clang);
+    rt_cmd.args([
+        "-target",
+        wasm_target,
+        "-O2",
+        "-c",
+        path_str(&c_path)?,
+        "-o",
+        path_str(&rt_obj)?,
+        &inc_opt,
+        &sysroot_opt,
+    ]);
+    if is_p2 {
+        rt_cmd.arg("-D__wasip2__=1");
+    }
+    for def in &wasi_defines {
+        rt_cmd.arg(def);
+    }
+    let rt_output = rt_cmd.output().map_err(|e| CodegenError::Unsupported {
+        backend: "wasm".into(),
+        detail: format!("'{}' not found: {}", clang, e),
+    })?;
+    if !rt_output.status.success() {
+        let stderr = String::from_utf8_lossy(&rt_output.stderr);
+        return Err(CodegenError::Unsupported {
+            backend: "wasm".into(),
+            detail: format!(
+                "'{}' failed to compile iris_runtime.c for WASM (exit: {:?})\nstderr: {}",
+                clang,
+                rt_output.status.code(),
+                stderr,
+            ),
+        });
+    }
+
+    // Step 3: Link → .wasm (pass LLVM IR directly instead of pre-compiling to .o)
+    let sysroot_lib = sysroot.join("lib").join(wasm_lib_subdir);
+    let p1_lib_dir = sysroot.join("lib").join("wasm32-wasip1");
+    let mut link_cmd = std::process::Command::new(&clang);
+    link_cmd.args([
+        "-target",
+        wasm_target,
+        "-O2",
+        &sysroot_opt,
+        "-nodefaultlibs",
+        path_str(&ll_path)?,       // LLVM IR directly (not pre-compiled)
+        path_str(&rt_obj)?,        // C runtime object
+    ]);
+    // Add library paths
+    link_cmd.arg(format!("-L{}", sysroot_lib.display()));
+    if is_p2 {
+        // P2 needs P1 lib dir for compiler-rt (not bundled in P2 sysroot)
+        link_cmd.arg(format!("-L{}", p1_lib_dir.display()));
+    }
+    link_cmd.args([
+        "-lc",
+        "-lwasi-emulated-signal",
+        "-lwasi-emulated-process-clocks",
+        "-lclang_rt.builtins-wasm32",
+        "-o",
+        path_str(output_path)?,
+    ]);
+    let link_output = link_cmd.output().map_err(|e| CodegenError::Unsupported {
+        backend: "wasm".into(),
+        detail: format!("'{}' link step could not start: {}", clang, e),
+    })?;
+    if !link_output.status.success() {
+        let stderr = String::from_utf8_lossy(&link_output.stderr);
+        return Err(CodegenError::Unsupported {
+            backend: "wasm".into(),
+            detail: format!(
+                "'{}' failed to link WASM binary (exit: {:?})\n{}",
+                clang,
+                link_output.status.code(),
+                stderr,
+            ),
+        });
+    }
+
+    // Step 4 (P2 only): Post-process with wasm-tools → P2 component
+    if is_p2 {
+        let wasm_tools = find_wasm_tools()?;
+        let adapter = find_wasi_p2_adapter()?;
+        let p2_output = tmp_dir.join("output.p2.wasm");
+
+        let mut component_cmd = std::process::Command::new(&wasm_tools);
+        component_cmd.args([
+            "component",
+            "new",
+            path_str(output_path)?,
+            "--adapt",
+            path_str(&adapter)?,
+            "-o",
+            path_str(&p2_output)?,
+        ]);
+        let comp_output = component_cmd.output().map_err(|e| CodegenError::Unsupported {
+            backend: "wasm".into(),
+            detail: format!("'{}' could not start: {}", wasm_tools.display(), e),
+        })?;
+        if !comp_output.status.success() {
+            let stderr = String::from_utf8_lossy(&comp_output.stderr);
+            return Err(CodegenError::Unsupported {
+                backend: "wasm".into(),
+                detail: format!(
+                    "'{}' failed to convert WASM to P2 component (exit: {:?})\n{}",
+                    wasm_tools.display(),
+                    comp_output.status.code(),
+                    stderr,
+                ),
+            });
+        }
+        // Replace the output with the P2 component
+        std::fs::copy(&p2_output, output_path).map_err(|e| CodegenError::Unsupported {
+            backend: "wasm".into(),
+            detail: format!("failed to copy P2 component to output path: {}", e),
+        })?;
+    }
+
+    Ok(output_path.to_path_buf())
+}
+
+/// Locate `wasm-tools` executable by searching PATH.
+fn find_wasm_tools() -> Result<PathBuf, CodegenError> {
+    // Check environment override
+    if let Ok(path) = std::env::var("IRIS_WASM_TOOLS") {
+        let p = PathBuf::from(&path);
+        if p.is_file() { return Ok(p); }
+    }
+    // Search PATH using `where` (Windows) or `which` (Unix)
+    #[cfg(windows)]
+    let search_cmd = "where";
+    #[cfg(not(windows))]
+    let search_cmd = "which";
+    if let Ok(output) = std::process::Command::new(search_cmd)
+        .arg("wasm-tools")
+        .output()
+    {
+        if output.status.success() {
+            let path_str = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !path_str.is_empty() {
+                let p = PathBuf::from(&path_str);
+                if p.is_file() { return Ok(p); }
+            }
+        }
+    }
+    Err(CodegenError::Unsupported {
+        backend: "wasm".into(),
+        detail: "wasm-tools not found. Install with: 'cargo install wasm-tools' or set IRIS_WASM_TOOLS".into(),
+    })
+}
+
+/// Locate the WASI P1→P2 adapter module.
+fn find_wasi_p2_adapter() -> Result<PathBuf, CodegenError> {
+    // Check environment override
+    if let Ok(path) = std::env::var("IRIS_WASI_P2_ADAPTER") {
+        let p = PathBuf::from(&path);
+        if p.is_file() { return Ok(p); }
+    }
+    // Check alongside wasm-tools or in well-known locations
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".into());
+    let candidates = [
+        format!(r"{}\AppData\Local\Temp\wasi_snapshot_preview1.wasm", home),
+        format!(r"{}\~\.iris\toolchain\wasi_snapshot_preview1.wasm", home),
+        "wasi_snapshot_preview1.wasm".to_string(),
+    ];
+    for c in &candidates {
+        let p = Path::new(c);
+        if p.is_file() { return Ok(p.to_path_buf()); }
+    }
+    Err(CodegenError::Unsupported {
+        backend: "wasm".into(),
+        detail: "WASI P1→P2 adapter module not found. Download from https://github.com/bytecodealliance/wasmtime/releases and set IRIS_WASI_P2_ADAPTER".into(),
+    })
+}
+
+/// Locate the WASI sysroot directory (contains wasi-libc, compiler-rt, etc.).
+fn find_wasi_sysroot() -> Result<PathBuf, CodegenError> {
+    let candidates: Vec<PathBuf> = {
+        let mut c = Vec::new();
+        // IRIS_WASI_SYSROOT env var
+        if let Ok(v) = std::env::var("IRIS_WASI_SYSROOT") {
+            if !v.is_empty() {
+                c.push(PathBuf::from(v));
+            }
+        }
+        // Next to the running executable
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                c.push(dir.join("toolchain").join("wasi-sysroot"));
+            }
+        }
+        // Inno Setup default install
+        if let Ok(lad) = std::env::var("LOCALAPPDATA") {
+            c.push(PathBuf::from(lad).join("Programs/IRIS/toolchain/wasi-sysroot"));
+        }
+        // User-local .iris install
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            c.push(PathBuf::from(home).join(".iris/toolchain/wasi-sysroot"));
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            c.push(PathBuf::from(home).join(".iris/toolchain/wasi-sysroot"));
+        }
+        c
+    };
+
+    // Check each candidate for an actual sysroot version directory (e.g., wasi-sysroot-24.0)
+    for base in &candidates {
+        if !base.exists() {
+            continue;
+        }
+        // Look for a versioned subdirectory or use the base itself
+        if let Ok(entries) = std::fs::read_dir(base) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && path.file_name().and_then(|s| s.to_str()).map_or(false, |s| s.starts_with("wasi-sysroot")) {
+                    // Verify it has lib/wasm32-wasip1/libc.a
+                    let libc = path.join("lib/wasm32-wasip1/libc.a");
+                    if libc.exists() {
+                        return Ok(path);
+                    }
+                }
+            }
+            // Also check the base itself
+            let libc = base.join("lib/wasm32-wasip1/libc.a");
+            if libc.exists() {
+                return Ok(base.to_path_buf());
+            }
+        }
+    }
+
+    Err(CodegenError::Unsupported {
+        backend: "wasm".into(),
+        detail: "WASI sysroot not found. Install the WASI SDK (wasi-sysroot) to ~/.iris/toolchain/wasi-sysroot/ or set IRIS_WASI_SYSROOT".into(),
+    })
 }
 
 fn resolve_target_triple(target: Option<&str>) -> String {
@@ -634,6 +1035,25 @@ fn stage_sqlite_dll_next_to(output_path: &Path) {
     if let Some(parent) = output_path.parent() {
         let target = parent.join(source_path.file_name().unwrap_or_default());
         let _ = std::fs::copy(&source_path, target);
+    }
+}
+
+fn stage_onnxruntime_dll_next_to(output_path: &Path) {
+    let candidate = Path::new("C:\\onnxruntime\\lib\\onnxruntime.dll");
+    if !candidate.exists() {
+        return;
+    }
+    if let Some(parent) = output_path.parent() {
+        let target = parent.join("onnxruntime.dll");
+        let _ = std::fs::copy(candidate, target);
+    }
+    // Also stage the providers shared DLL
+    let providers = Path::new("C:\\onnxruntime\\lib\\onnxruntime_providers_shared.dll");
+    if providers.exists() {
+        if let Some(parent) = output_path.parent() {
+            let target = parent.join("onnxruntime_providers_shared.dll");
+            let _ = std::fs::copy(providers, target);
+        }
     }
 }
 

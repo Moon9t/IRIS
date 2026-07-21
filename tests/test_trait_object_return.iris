@@ -1,0 +1,48 @@
+// Phase 91: Trait Objects — function returning dyn Trait (use coerced return)
+
+record Cat {
+    name: str,
+}
+
+record Dog {
+    name: str,
+}
+
+trait Pet {
+    def name(self) -> str
+}
+
+impl Pet for Cat {
+    def name(self) -> str {
+        self.name
+    }
+}
+
+impl Pet for Dog {
+    def name(self) -> str {
+        self.name
+    }
+}
+
+// Wrap a concrete Cat into a Pet via an if-expression that returns one branch.
+def return_cat() -> dyn Pet {
+    val c: Cat = Cat { name: "Whiskers" };
+    return c
+}
+
+def return_dog() -> dyn Pet {
+    val d: Dog = Dog { name: "Rex" };
+    return d
+}
+
+def main() -> i64 {
+    val c: dyn Pet = return_cat();
+    val cn = c.name();
+    if cn == "Whiskers" {
+        val d: dyn Pet = return_dog();
+        val dn = d.name();
+        if dn == "Rex" { 0 } else { 10 }
+    } else {
+        20
+    }
+}

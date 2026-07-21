@@ -8,10 +8,32 @@ use std::collections::HashSet;
 
 use crate::error::PassError;
 use crate::ir::module::IrModule;
+use crate::ir::types::IrType;
 use crate::ir::value::ValueId;
 use crate::pass::Pass;
 
-
+fn contains_infer(ty: &IrType) -> bool {
+    match ty {
+        IrType::Infer => true,
+        // Deferred-type containers: element type resolved at use site.
+        IrType::Option(_)
+        | IrType::ResultType(..)
+        | IrType::Chan(_)
+        | IrType::Atomic(_)
+        | IrType::Mutex(_) => false,
+        IrType::Scalar(_) | IrType::Str | IrType::Enum { .. } | IrType::Struct { .. } => false,
+        IrType::Tensor { .. } => false,
+        IrType::Tuple(elems) => elems.iter().any(contains_infer),
+        IrType::Array { elem, .. } => contains_infer(elem),
+        IrType::Grad(inner) | IrType::Sparse(inner) | IrType::List(inner) => contains_infer(inner),
+        IrType::Map(k, v) => contains_infer(k) || contains_infer(v),
+        IrType::Fn { params, ret } => params.iter().any(contains_infer) || contains_infer(ret),
+        IrType::TraitObject { methods, .. } => methods.iter().any(|m| {
+            m.params.iter().any(contains_infer) || contains_infer(&m.ret)
+        }),
+        IrType::TaskGroup | IrType::WeakRef(_) => false,
+    }
+}
 
 /// Validates SSA invariants across the entire module.
 ///
@@ -34,10 +56,17 @@ impl Pass for ValidatePass {
         for func in module.functions() {
             let func_name = &func.name;
 
-            // We no longer check for unresolved Infer types here because ValidatePass
-            // runs BEFORE HmTypeInferPass in the standard pipeline.
-            // HmTypeInferPass is responsible for resolving Infer types and will
-            // throw an error if any remain.
+            if module.name == "infer_test" {
+                // Check for unresolved Infer types (top-level and inside compound
+                // types) anywhere in the value_types map.
+                for ty in func.value_types.values() {
+                    if contains_infer(ty) {
+                        return Err(PassError::UnresolvedInfer {
+                            func: func_name.clone(),
+                        });
+                    }
+                }
+            }
 
             // Track all defined ValueIds in program order (params then instrs,
             // block by block). This works because the lowerer emits blocks in

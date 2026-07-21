@@ -1,0 +1,130 @@
+// Phase 4: Automatic JSON Serialization Tests
+
+record Point { x: f64, y: f64 }
+choice MaybeStr { Some(str), None }
+
+// Test 1: json_stringify primitive types
+def test_json_primitives() -> i64 {
+    if json_stringify(42) != "42" { print("FAIL: json_stringify(42)"); return 0; }
+    if json_stringify(true) != "true" { print("FAIL: json_stringify(true)"); return 0; }
+    if json_stringify(false) != "false" { print("FAIL: json_stringify(false)"); return 0; }
+    if json_stringify("hello") != "\"hello\"" { print("FAIL: json_stringify(str)"); return 0; }
+    print("PASS: json_stringify primitives");
+    1
+}
+
+// Test 2: json_stringify list
+def test_json_list() -> i64 {
+    val lst = list();
+    list_push(lst, 1);
+    list_push(lst, 2);
+    list_push(lst, 3);
+    val sj = json_stringify(lst);
+    if sj == "[1,2,3]" { print(concat("PASS: json_stringify(list) = ", sj)); 1 }
+    else { print(concat("FAIL: expected '[1,2,3]' got ", sj)); 0 }
+}
+
+// Test 3: json_stringify tuple
+def test_json_tuple() -> i64 {
+    val t = (42, "hello", true);
+    val sj = json_stringify(t);
+    if sj == "[42,\"hello\",true]" { print(concat("PASS: json_stringify(tuple) = ", sj)); 1 }
+    else { print(concat("FAIL: expected '[42,\"hello\",true]' got ", sj)); 0 }
+}
+
+// Test 4: json_stringify option
+def test_json_option() -> i64 {
+    if json_stringify(some(99)) != "99" { print("FAIL: json_stringify(some(99))"); return 0; }
+    if json_stringify(none()) != "null" { print("FAIL: json_stringify(none())"); return 0; }
+    print("PASS: json_stringify option");
+    1
+}
+
+// Test 5: json_stringify result
+def test_json_result() -> i64 {
+    if json_stringify(ok("success")) != "{\"ok\":\"success\"}" { print("FAIL: json_stringify(ok)"); return 0; }
+    if json_stringify(err("fail")) != "{\"err\":\"fail\"}" { print("FAIL: json_stringify(err)"); return 0; }
+    print("PASS: json_stringify result");
+    1
+}
+
+// Test 6: json_stringify record/struct
+def test_json_struct() -> i64 {
+    val p = Point { x: 1.5, y: 2.5 };
+    val sj = json_stringify(p);
+    // Struct fields serialized as numeric indices: {"0":1.5,"1":2.5}
+    if len(sj) > 0 {
+        print(concat("PASS: json_stringify(Point) = ", sj));
+        1
+    } else {
+        print("FAIL: json_stringify(Point) empty");
+        0
+    }
+}
+
+// Test 7: json_stringify nested types
+def test_json_nested() -> i64 {
+    val items = list();
+    list_push(items, ok(1));
+    list_push(items, err("x"));
+    list_push(items, none());
+    val sj = json_stringify(items);
+    val ok_pos = find(sj, "\"ok\":1");
+    val err_pos = find(sj, "\"err\":\"x\"");
+    if is_some(ok_pos) && is_some(err_pos) {
+        print(concat("PASS: json_stringify(nested) = ", sj));
+        1
+    } else {
+        print(concat("FAIL: json_stringify(nested) missing keys, got ", sj));
+        0
+    }
+}
+
+// Test 8: json_stringify enum (choice type)
+def test_json_enum() -> i64 {
+    val ms = MaybeStr.Some("world");
+    val sj = json_stringify(ms);
+    val tag_pos = find(sj, "\"tag\"");
+    val fld_pos = find(sj, "\"fields\"");
+    if is_some(tag_pos) && is_some(fld_pos) {
+        print(concat("PASS: json_stringify(enum) = ", sj));
+        1
+    } else {
+        print(concat("FAIL: json_stringify(enum) expected tag/fields, got ", sj));
+        0
+    }
+}
+
+def main() -> i64 {
+    print("=== Automatic JSON Serialization Tests ===");
+    var passed = 0;
+    var failed = 0;
+
+    val t1 = test_json_primitives();
+    if t1 == 1 { passed = passed + 1; } else { failed = failed + 1; }
+
+    val t2 = test_json_list();
+    if t2 == 1 { passed = passed + 1; } else { failed = failed + 1; }
+
+    val t3 = test_json_tuple();
+    if t3 == 1 { passed = passed + 1; } else { failed = failed + 1; }
+
+    val t4 = test_json_option();
+    if t4 == 1 { passed = passed + 1; } else { failed = failed + 1; }
+
+    val t5 = test_json_result();
+    if t5 == 1 { passed = passed + 1; } else { failed = failed + 1; }
+
+    val t6 = test_json_struct();
+    if t6 == 1 { passed = passed + 1; } else { failed = failed + 1; }
+
+    val t7 = test_json_nested();
+    if t7 == 1 { passed = passed + 1; } else { failed = failed + 1; }
+
+    val t8 = test_json_enum();
+    if t8 == 1 { passed = passed + 1; } else { failed = failed + 1; }
+
+    print(concat("Passed: ", concat(to_str(passed), concat("/", concat(to_str(passed + failed), " tests")))));
+    if failed > 0 { print(concat("FAILED: ", to_str(failed))); }
+    passed
+}

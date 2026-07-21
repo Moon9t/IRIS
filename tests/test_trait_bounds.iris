@@ -1,0 +1,23 @@
+record MyStruct {
+    data: i64
+}
+
+trait Show {
+    def show(self) -> str
+}
+
+impl Show for MyStruct {
+    def show(self) -> str {
+        to_str(self.data)
+    }
+}
+
+def print_one[T where T: Show](a: T) -> str {
+    a.show()
+}
+
+def main() -> i64 {
+    val x = MyStruct { data: 42 };
+    val s = print_one(x);
+    if s == "42" { 0 } else { 1 }
+}

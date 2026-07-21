@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::ir::block::{BlockId, IrBlock};
 use crate::ir::function::{FunctionId, IrFunction, Param, SpanTable};
 use crate::ir::instr::{InstrId, IrInstr};
-use crate::ir::types::IrType;
+use crate::ir::types::{IrType, TraitMethodSig};
 use crate::ir::value::{BlockParam, ValueDef, ValueId};
 
 /// The top-level IR container.
@@ -20,6 +20,8 @@ pub struct IrExternFn {
     pub name: String,
     pub param_types: Vec<IrType>,
     pub ret_ty: IrType,
+    pub abi: Option<String>,       // e.g. Some("C") for C calling convention
+    pub link_lib: Option<String>,  // e.g. Some("m") for -lm
 }
 
 #[derive(Debug, Default, Clone)]
@@ -36,6 +38,13 @@ pub struct IrModule {
     pub(crate) type_aliases: HashMap<String, IrType>,
     /// Extern function declarations: name → signature.
     pub extern_fns: Vec<IrExternFn>,
+    /// Trait definitions: trait_name → list of method signatures (no `self`).
+    /// Used to resolve `dyn Trait` IR types and to lay out vtables at codegen.
+    pub(crate) trait_defs: HashMap<String, Vec<TraitMethodSig>>,
+    /// Impl method mangled names: trait_name → (concrete_struct_name, method_name, mangled_fn).
+    /// Populated when `impl Trait for Type` is processed so codegen can build
+    /// the per-concrete-type vtable global.
+    pub(crate) trait_impl_methods: HashMap<String, Vec<(String, String, String)>>,
 }
 
 impl IrModule {
@@ -48,6 +57,8 @@ impl IrModule {
             enum_defs: HashMap::new(),
             type_aliases: HashMap::new(),
             extern_fns: Vec::new(),
+            trait_defs: HashMap::new(),
+            trait_impl_methods: HashMap::new(),
         }
     }
 
@@ -108,6 +119,44 @@ impl IrModule {
     /// Looks up a type alias by name.
     pub fn type_alias(&self, name: &str) -> Option<&IrType> {
         self.type_aliases.get(name)
+    }
+
+    /// Registers a trait definition (method signatures only — bodies live in impl fns).
+    pub fn add_trait_def(
+        &mut self,
+        name: impl Into<String>,
+        methods: Vec<TraitMethodSig>,
+    ) {
+        self.trait_defs.insert(name.into(), methods);
+    }
+
+    /// Returns the trait definition (ordered method signatures) for `name`.
+    pub fn trait_def(&self, name: &str) -> Option<&Vec<TraitMethodSig>> {
+        self.trait_defs.get(name)
+    }
+
+    /// All trait definitions. Used at codegen to lay out vtables.
+    pub fn trait_defs(&self) -> &HashMap<String, Vec<TraitMethodSig>> {
+        &self.trait_defs
+    }
+
+    /// Records an impl method entry: `(concrete_struct, method_name, mangled_fn)`.
+    pub fn add_trait_impl_method(
+        &mut self,
+        trait_name: impl Into<String>,
+        concrete: impl Into<String>,
+        method: impl Into<String>,
+        mangled: impl Into<String>,
+    ) {
+        self.trait_impl_methods
+            .entry(trait_name.into())
+            .or_default()
+            .push((concrete.into(), method.into(), mangled.into()));
+    }
+
+    /// All impl-method entries vtable-table for codegen consumption.
+    pub fn trait_impl_methods(&self) -> &HashMap<String, Vec<(String, String, String)>> {
+        &self.trait_impl_methods
     }
 
     pub fn function(&self, id: FunctionId) -> Option<&IrFunction> {

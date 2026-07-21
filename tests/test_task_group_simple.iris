@@ -1,0 +1,9 @@
+def main() -> i64 {
+    val tg = task_group();
+    spawn(tg) {
+        println("hello from spawn")
+    };
+    task_group_join(tg);
+    println("done");
+    0
+}

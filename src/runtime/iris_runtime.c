@@ -23,7 +23,27 @@
 
 #include <sys/types.h>
 
-#ifdef _WIN32
+/* WASM/WASI: wasi-libc provides standard C + POSIX headers below.
+   Socket/terminal headers exist in wasi-libc but the function
+   declarations are absent in WASI preview 1 (no networking/termios).
+   WASI preview 2 (__wasip2__) has wasi-sockets for networking. */
+/* Stub flag: 1 on WASM P1 (no networking), 0 on native/P2 */
+#if defined(__wasm__)
+  #if !defined(__wasip2__)
+    #define __IRIS_WASM_STUB 1
+  #endif
+  #include <unistd.h>
+  #include <dirent.h>
+  #include <sys/stat.h>
+  #include <dlfcn.h>
+  #include <poll.h>
+  #ifdef __wasip2__
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <netdb.h>
+  #endif
+#elif defined(_WIN32)
   #include <winsock2.h>
   #include <ws2tcpip.h>
   #include <windows.h>
@@ -186,6 +206,12 @@ IrisVal* iris_box_result(IrisResult* res) {
 IrisVal* iris_box_chan(IrisChannel* chan) {
     return box_heap_ref(IRIS_TAG_CHAN, chan, IRIS_RC_CHAN);
 }
+IrisVal* iris_box_task_group(IrisTaskGroup* tg) {
+    return box_heap_ref(IRIS_TAG_TASK_GROUP, tg, IRIS_RC_TASK_GROUP);
+}
+IrisVal* iris_box_weak_ref(IrisWeakRef* w) {
+    return box_heap_ref(IRIS_TAG_WEAK_REF, w, IRIS_RC_WEAK_REF);
+}
 IrisVal* iris_box_atomic(IrisAtomic* atomic) {
     return box_heap_ref(IRIS_TAG_ATOMIC, atomic, IRIS_RC_ATOMIC);
 }
@@ -243,6 +269,12 @@ IrisResult* iris_unbox_result(IrisVal* v) {
 }
 IrisChannel* iris_unbox_chan(IrisVal* v) {
     return (IrisChannel*)unbox_heap_ref(v, IRIS_TAG_CHAN, "unbox_chan");
+}
+IrisTaskGroup* iris_unbox_task_group(IrisVal* v) {
+    return (IrisTaskGroup*)unbox_heap_ref(v, IRIS_TAG_TASK_GROUP, "unbox_task_group");
+}
+IrisWeakRef* iris_unbox_weak_ref(IrisVal* v) {
+    return (IrisWeakRef*)unbox_heap_ref(v, IRIS_TAG_WEAK_REF, "unbox_weak_ref");
 }
 IrisAtomic* iris_unbox_atomic(IrisVal* v) {
     return (IrisAtomic*)unbox_heap_ref(v, IRIS_TAG_ATOMIC, "unbox_atomic");
@@ -655,7 +687,6 @@ IrisResult* iris_make_ok(IrisVal* val) {
     IrisResult* r = xmalloc(sizeof(IrisResult));
     r->is_ok = 1;
     r->value = val;
-    fprintf(stderr, "DEBUG: iris_make_ok(val=%p) -> created res=%p (is_ok=%d)\n", (void*)val, (void*)r, (int)r->is_ok);
     if (val) iris_retain(val);
     return r;
 }
@@ -663,22 +694,17 @@ IrisResult* iris_make_err(IrisVal* val) {
     IrisResult* r = xmalloc(sizeof(IrisResult));
     r->is_ok = 0;
     r->value = val;
-    fprintf(stderr, "DEBUG: iris_make_err(val=%p) -> created res=%p (is_ok=%d)\n", (void*)val, (void*)r, (int)r->is_ok);
     if (val) iris_retain(val);
     return r;
 }
 int      iris_is_ok(IrisResult* res) {
-    int ret = res ? res->is_ok : 0;
-    fprintf(stderr, "DEBUG: iris_is_ok(res=%p) -> is_ok=%d, returning %d\n", (void*)res, res ? (int)res->is_ok : -1, ret);
-    return ret;
+    return res ? res->is_ok : 0;
 }
 IrisVal* iris_result_unwrap(IrisResult* res) {
-    fprintf(stderr, "DEBUG: iris_result_unwrap(res=%p) -> is_ok=%d\n", (void*)res, res ? (int)res->is_ok : -1);
     if (!res || !res->is_ok) { fprintf(stderr, "iris: unwrap called on err\n"); abort(); }
     return res->value;
 }
 IrisVal* iris_result_unwrap_err(IrisResult* res) {
-    fprintf(stderr, "DEBUG: iris_result_unwrap_err(res=%p) -> is_ok=%d\n", (void*)res, res ? (int)res->is_ok : -1);
     if (!res || res->is_ok) { fprintf(stderr, "iris: unwrap_err called on ok\n"); abort(); }
     return res->value;
 }
@@ -1272,6 +1298,15 @@ static void chan_grow(IrisChannel* c) {
     c->tail = c->count;
 }
 
+/* WASM pthread_create override: runs fn(arg) synchronously since
+   WASI preview 1 has no threading. The declaration is in iris_runtime.h
+   as a macro redirect; the prototype uses void* to avoid requiring
+   pthread_t at header inclusion time. */
+#if defined(__wasm__)
+int iris_wasm_pthread_create(void* t, const void* a, void*(*fn)(void*), void* arg) {
+    (void)a; if(t) *(pthread_t*)t = NULL; if(fn) fn(arg); return 0; }
+#endif
+
 IrisChannel* iris_chan_new(int64_t capacity) {
     IrisChannel* c = xmalloc(sizeof(IrisChannel));
     c->cap   = capacity > 0 ? capacity : CHAN_INIT_CAP;
@@ -1340,6 +1375,25 @@ IrisOption* iris_chan_try_recv(IrisChannel* c) {
     return opt;
 }
 
+int64_t iris_select(int64_t n, ...) {
+    va_list args;
+    va_start(args, n);
+    for (int64_t i = 0; i < n; i++) {
+        IrisChannel* c = va_arg(args, IrisChannel*);
+        if (c) {
+            pthread_mutex_lock(&c->mu);
+            if (c->count > 0) {
+                pthread_mutex_unlock(&c->mu);
+                va_end(args);
+                return i;
+            }
+            pthread_mutex_unlock(&c->mu);
+        }
+    }
+    va_end(args);
+    return -1;
+}
+
 int iris_timeout(int64_t ms) {
     iris_sleep_ms(ms);
     return 1;
@@ -1372,6 +1426,129 @@ void iris_par_for(void (*fn)(int64_t, void*), int64_t start, int64_t end, void* 
     free(threads);
 }
 void iris_barrier(void) { /* no-op outside par_for; par_for already joins all */ }
+
+// ── TaskGroup ──────────────────────────────────────────────────────────
+IrisTaskGroup* iris_task_group_new(void) {
+    IrisTaskGroup* tg = xmalloc(sizeof(IrisTaskGroup));
+    tg->cap = 8;
+    tg->count = 0;
+    tg->cancelled = 0;
+    tg->handles = xmalloc(sizeof(pthread_t) * tg->cap);
+    pthread_mutex_init(&tg->mu, NULL);
+    return tg;
+}
+void iris_task_group_spawn(IrisTaskGroup* tg, void* fn, void* arg) {
+    pthread_t t;
+    pthread_create(&t, NULL, (void*(*)(void*))fn, arg);
+    pthread_mutex_lock(&tg->mu);
+    if (tg->count == tg->cap) {
+        tg->cap *= 2;
+        tg->handles = xrealloc(tg->handles, sizeof(pthread_t) * tg->cap);
+    }
+    tg->handles[tg->count++] = t;
+    pthread_mutex_unlock(&tg->mu);
+}
+void iris_task_group_join(IrisTaskGroup* tg) {
+    pthread_mutex_lock(&tg->mu);
+    for (size_t i = 0; i < tg->count; i++) {
+        pthread_join(tg->handles[i], NULL);
+    }
+    tg->count = 0;
+    pthread_mutex_unlock(&tg->mu);
+}
+void iris_task_group_cancel(IrisTaskGroup* tg) {
+    tg->cancelled = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Effect handlers — thread-local handler stack with direct LLVM dispatch
+// ---------------------------------------------------------------------------
+
+#include <string.h>
+
+#ifdef _MSC_VER
+#define strdup _strdup
+#endif
+
+#define MAX_HANDLER_ARMS 64
+#define MAX_HANDLER_FRAMES 64
+
+typedef struct {
+    char* effect_name;
+    char* fn_name;
+    int64_t num_args;
+    int32_t has_resume;
+} HandlerArm;
+
+typedef struct {
+    HandlerArm arms[MAX_HANDLER_ARMS];
+    int narms;
+} HandlerFrame;
+
+#ifdef _MSC_VER
+static __declspec(thread) HandlerFrame handler_frames[MAX_HANDLER_FRAMES];
+static __declspec(thread) int handler_frame_count = 0;
+static __declspec(thread) int handler_cur_narms = 0;
+#else
+static __thread HandlerFrame handler_frames[MAX_HANDLER_FRAMES];
+static __thread int handler_frame_count = 0;
+static __thread int handler_cur_narms = 0;
+#endif
+
+void iris_push_handler_arm(const char* effect_name, const char* fn_name, int64_t num_args, int32_t has_resume) {
+    if (handler_cur_narms >= MAX_HANDLER_ARMS) return;
+    HandlerFrame* frame = &handler_frames[handler_frame_count];
+    frame->arms[handler_cur_narms].effect_name = strdup(effect_name);
+    frame->arms[handler_cur_narms].fn_name = strdup(fn_name);
+    frame->arms[handler_cur_narms].num_args = num_args;
+    frame->arms[handler_cur_narms].has_resume = has_resume;
+    handler_cur_narms++;
+}
+
+void iris_push_handler_frame(void) {
+    if (handler_frame_count >= MAX_HANDLER_FRAMES) return;
+    handler_frames[handler_frame_count].narms = handler_cur_narms;
+    handler_cur_narms = 0;
+    handler_frame_count++;
+}
+
+void iris_pop_handler(void) {
+    if (handler_frame_count <= 0) return;
+    handler_frame_count--;
+    HandlerFrame* frame = &handler_frames[handler_frame_count];
+    for (int i = 0; i < frame->narms; i++) {
+        free(frame->arms[i].effect_name);
+        free(frame->arms[i].fn_name);
+    }
+    handler_cur_narms = 0;
+}
+
+static HandlerArm* find_handler_arm(const char* name) {
+    for (int f = handler_frame_count - 1; f >= 0; f--) {
+        HandlerFrame* frame = &handler_frames[f];
+        for (int a = 0; a < frame->narms; a++) {
+            if (strcmp(frame->arms[a].effect_name, name) == 0) {
+                return &frame->arms[a];
+            }
+        }
+    }
+    return NULL;
+}
+
+int32_t iris_can_handle(const char* name) {
+    return find_handler_arm(name) != NULL ? 1 : 0;
+}
+
+int32_t iris_handler_has_resume(const char* name) {
+    HandlerArm* arm = find_handler_arm(name);
+    return arm ? arm->has_resume : 0;
+}
+
+void iris_resume_cont(Continuation* cont, int64_t value) {
+    if (cont == NULL) return;
+    cont->filled = 1;
+    cont->value = value;
+}
 
 // ---------------------------------------------------------------------------
 // Atomics and mutexes
@@ -1413,16 +1590,15 @@ IrisVal* iris_atomic_add(IrisAtomic* a, IrisVal* delta) {
     pthread_mutex_unlock(&a->mu);
     return result;
 }
-IrisMutex* iris_mutex_new(void) {
+IrisMutex* iris_mutex_new(IrisVal* initial) {
     IrisMutex* m = xmalloc(sizeof(IrisMutex));
     pthread_mutex_init(&m->mu, NULL);
+    m->val = initial;
     return m;
 }
 IrisVal* iris_mutex_lock(IrisMutex* m) {
     pthread_mutex_lock(&m->mu);
-    IrisVal* r = xmalloc(sizeof(IrisVal));
-    r->tag = IRIS_TAG_UNIT;  r->i64 = 0;
-    return r;
+    return m->val;
 }
 void iris_mutex_unlock(IrisMutex* m) {
     pthread_mutex_unlock(&m->mu);
@@ -2401,6 +2577,15 @@ static IrisVal* iris_mlrt_pair_from_tensor(IrisTensor* tensor) {
     return iris_make_tuple(2, iris_box_list(data), iris_box_list(shape));
 }
 
+static IrisList* iris_mlrt_empty_tensor_pair_unboxed(void) {
+    IrisList* data = iris_list_new();
+    IrisList* shape = iris_list_new();
+    IrisList* t_list = iris_list_new();
+    iris_list_push(t_list, iris_box_list(data));
+    iris_list_push(t_list, iris_box_list(shape));
+    return t_list;
+}
+
 static IrisVal* iris_mlrt_run_single(int64_t handle, IrisVal* input, IrisMlRunFn run_fn) {
     if (handle == 0 || !run_fn) return iris_mlrt_empty_tensor_pair();
 
@@ -2420,6 +2605,7 @@ static IrisVal* iris_mlrt_run_single(int64_t handle, IrisVal* input, IrisMlRunFn
     }
 
     IrisVal* result = iris_mlrt_pair_from_tensor(outputs[0]);
+
     for (size_t i = 0; i < n_outputs; i++) {
         if (outputs[i]) iris_tensor_free(outputs[i]);
     }
@@ -2427,20 +2613,67 @@ static IrisVal* iris_mlrt_run_single(int64_t handle, IrisVal* input, IrisMlRunFn
     return result;
 }
 
-int64_t iris_mlrt_onnx_load(const char* model_path) {
+static IrisList* iris_mlrt_run_multi(int64_t handle, IrisList* inputs_list, IrisMlRunFn run_fn) {
+    if (handle == 0 || !run_fn || !inputs_list) {
+        return iris_list_new();
+    }
+    int64_t n_inputs = iris_list_len(inputs_list);
+    if (n_inputs <= 0) {
+        return iris_list_new();
+    }
+
+    IrisTensor** inputs_array = (IrisTensor**)xmalloc(sizeof(IrisTensor*) * (size_t)n_inputs);
+    for (int64_t i = 0; i < n_inputs; i++) {
+        inputs_array[i] = iris_mlrt_tensor_from_pair(iris_list_get(inputs_list, i));
+    }
+
+    IrisTensor** outputs_array = NULL;
+    size_t n_outputs = 0;
+    int rc = run_fn((void*)(intptr_t)handle, inputs_array, (size_t)n_inputs, &outputs_array, &n_outputs);
+
+    for (int64_t i = 0; i < n_inputs; i++) {
+        if (inputs_array[i]) iris_tensor_free(inputs_array[i]);
+    }
+    free(inputs_array);
+
+    IrisList* out_list = iris_list_new();
+    if (rc == 0 && outputs_array && n_outputs > 0) {
+        for (size_t i = 0; i < n_outputs; i++) {
+            if (outputs_array[i]) {
+                iris_list_push(out_list, iris_mlrt_pair_from_tensor(outputs_array[i]));
+                iris_tensor_free(outputs_array[i]);
+            }
+        }
+    }
+    if (outputs_array) free(outputs_array);
+
+    return out_list;
+}
+
+#ifdef _WIN32
+#define IRIS_EXPORT __declspec(dllexport)
+#else
+#define IRIS_EXPORT __attribute__((visibility("default")))
+#endif
+
+IRIS_EXPORT int64_t iris_mlrt_onnx_load(const char* model_path) {
     return (int64_t)(intptr_t)iris_onnx_session_create(model_path);
 }
 
-int64_t iris_mlrt_onnx_free(int64_t session) {
+IRIS_EXPORT int64_t iris_mlrt_onnx_free(int64_t session) {
     iris_onnx_session_free((void*)(intptr_t)session);
     return 0;
 }
 
-IrisVal* iris_mlrt_onnx_run(int64_t session, IrisVal* input) {
+IRIS_EXPORT IrisVal* iris_mlrt_onnx_run(int64_t session, IrisVal* input) {
     return iris_mlrt_run_single(session, input, iris_onnx_session_run);
 }
 
-int64_t iris_mlrt_pytorch_load(const char* model_path) {
+IRIS_EXPORT IrisList* iris_mlrt_onnx_run_multi(int64_t session, IrisList* inputs_list) {
+    return iris_mlrt_run_multi(session, inputs_list, iris_onnx_session_run);
+}
+
+IRIS_EXPORT int64_t iris_mlrt_pytorch_load(const char* model_path) {
 #if defined(LIBTORCH_ENABLED)
     return (int64_t)(intptr_t)iris_pytorch_load(model_path);
 #else
@@ -2450,7 +2683,7 @@ int64_t iris_mlrt_pytorch_load(const char* model_path) {
 #endif
 }
 
-int64_t iris_mlrt_pytorch_free(int64_t model) {
+IRIS_EXPORT int64_t iris_mlrt_pytorch_free(int64_t model) {
 #if defined(LIBTORCH_ENABLED)
     iris_pytorch_free((void*)(intptr_t)model);
 #else
@@ -2459,7 +2692,7 @@ int64_t iris_mlrt_pytorch_free(int64_t model) {
     return 0;
 }
 
-IrisVal* iris_mlrt_pytorch_run(int64_t model, IrisVal* input) {
+IRIS_EXPORT IrisVal* iris_mlrt_pytorch_run(int64_t model, IrisVal* input) {
 #if defined(LIBTORCH_ENABLED)
     return iris_mlrt_run_single(model, input, iris_pytorch_run);
 #else
@@ -2470,17 +2703,70 @@ IrisVal* iris_mlrt_pytorch_run(int64_t model, IrisVal* input) {
 #endif
 }
 
-int64_t iris_mlrt_tf_load(const char* model_path) {
+IRIS_EXPORT IrisList* iris_mlrt_pytorch_run_multi(int64_t model, IrisList* inputs_list) {
+#if defined(LIBTORCH_ENABLED)
+    return iris_mlrt_run_multi(model, inputs_list, iris_pytorch_run);
+#else
+    (void)model;
+    (void)inputs_list;
+    fprintf(stderr, "iris: libtorch support not enabled at build time\n");
+    return iris_list_new();
+#endif
+}
+
+IRIS_EXPORT double iris_mlrt_pytorch_train_step(int64_t model, IrisList* inputs_list, IrisList* targets_list, double lr) {
+#if defined(LIBTORCH_ENABLED)
+    if (model == 0 || !inputs_list || !targets_list) {
+        return 0.0;
+    }
+    int64_t n_inputs = iris_list_len(inputs_list);
+    int64_t n_targets = iris_list_len(targets_list);
+    if (n_inputs <= 0 || n_targets <= 0) return 0.0;
+
+    IrisTensor** inputs_array = (IrisTensor**)xmalloc(sizeof(IrisTensor*) * (size_t)n_inputs);
+    for (int64_t i = 0; i < n_inputs; i++) {
+        inputs_array[i] = iris_mlrt_tensor_from_pair(iris_list_get(inputs_list, i));
+    }
+
+    IrisTensor** targets_array = (IrisTensor**)xmalloc(sizeof(IrisTensor*) * (size_t)n_targets);
+    for (int64_t i = 0; i < n_targets; i++) {
+        targets_array[i] = iris_mlrt_tensor_from_pair(iris_list_get(targets_list, i));
+    }
+
+    double loss = iris_pytorch_train_step((void*)(intptr_t)model, inputs_array, (size_t)n_inputs, targets_array, (size_t)n_targets, lr);
+
+    for (int64_t i = 0; i < n_inputs; i++) {
+        if (inputs_array[i]) iris_tensor_free(inputs_array[i]);
+    }
+    free(inputs_array);
+    for (int64_t i = 0; i < n_targets; i++) {
+        if (targets_array[i]) iris_tensor_free(targets_array[i]);
+    }
+    free(targets_array);
+
+    return loss;
+#else
+    (void)model; (void)inputs_list; (void)targets_list; (void)lr;
+    fprintf(stderr, "iris: libtorch support not enabled at build time\n");
+    return 0.0;
+#endif
+}
+
+IRIS_EXPORT int64_t iris_mlrt_tf_load(const char* model_path) {
     return (int64_t)(intptr_t)iris_tf_load_saved_model(model_path);
 }
 
-int64_t iris_mlrt_tf_free(int64_t model) {
+IRIS_EXPORT int64_t iris_mlrt_tf_free(int64_t model) {
     iris_tf_free((void*)(intptr_t)model);
     return 0;
 }
 
-IrisVal* iris_mlrt_tf_run(int64_t model, IrisVal* input) {
+IRIS_EXPORT IrisVal* iris_mlrt_tf_run(int64_t model, IrisVal* input) {
     return iris_mlrt_run_single(model, input, iris_tf_run);
+}
+
+IRIS_EXPORT IrisList* iris_mlrt_tf_run_multi(int64_t model, IrisList* inputs_list) {
+    return iris_mlrt_run_multi(model, inputs_list, iris_tf_run);
 }
 
 /* Closure: stores a function pointer and captured environment. */
@@ -2517,6 +2803,39 @@ void iris_call_closure_void(IrisVal* closure, ...) {
     (void)closure;
 }
 
+/* ---- Trait-object (dyn Trait) helpers (Phase 91) ---- */
+
+#define IRIS_TAG_TRAIT_OBJECT 22
+
+/* Layout: { void* data, void* vtable_id } handled as a small heap object. */
+static IrisVal* iris_make_trait_object_impl(void* data, void* vtable_id) {
+    struct IrisTraitObject {
+        void* data;
+        void* vtable_id;
+    };
+    struct IrisTraitObject* p = (struct IrisTraitObject*)xmalloc(sizeof(struct IrisTraitObject));
+    p->data = data;
+    p->vtable_id = vtable_id;
+    IrisVal* r = (IrisVal*)xmalloc(sizeof(IrisVal));
+    r->tag = IRIS_TAG_TRAIT_OBJECT;
+    r->ptr = p;
+    return r;
+}
+
+IrisVal* iris_make_trait_object(void* data, void* vtable_id) {
+    return iris_make_trait_object_impl(data, vtable_id);
+}
+
+/* Stub: in stub backend, the method-name string paired with the vtable_id
+   is not actually resolved against any registered table. Return NULL so
+   error paths surface rather than silently miscalling. */
+IrisVal* iris_dyn_call(IrisVal* obj, const char* method_name, int32_t nargs, ...) {
+    (void)obj;
+    (void)method_name;
+    (void)nargs;
+    return NULL;
+}
+
 /* ---- Closure accessor helpers (called from generated LLVM IR) ---- */
 
 void* iris_closure_fn(IrisVal* closure) {
@@ -2536,7 +2855,11 @@ IrisVal* iris_closure_get_capture(IrisVal* closure, int idx) {
 /* ======================================================================== */
 
 int64_t iris_read_key(void) {
-#ifdef _WIN32
+#if defined(__wasm__)
+    /* WASM: terminal raw mode not available; use getchar */
+    int c = getchar();
+    return (int64_t)c;
+#elif defined(_WIN32)
     /* Windows: use _getch() — no echo, no Enter needed */
     int c = _getch();
     /* Extended keys (arrows, F-keys) produce 0 or 224 prefix */
@@ -2568,7 +2891,17 @@ char* iris_read_password(const char* prompt) {
     size_t cap = 256, len = 0;
     char* buf = (char*)xmalloc(cap);
 
-#ifdef _WIN32
+#if defined(__wasm__)
+    /* WASM: no echo-toggle; just read line from stdin */
+    {
+        int c;
+        while ((c = getchar()) != '\n' && c != EOF) {
+            if (c == 127 && len > 0) { len--; continue; }
+            if (len + 1 >= cap) { cap *= 2; buf = (char*)realloc(buf, cap); }
+            buf[len++] = (char)c;
+        }
+    }
+#elif defined(_WIN32)
     int c;
     while ((c = _getch()) != '\r' && c != '\n' && c != EOF) {
         if (c == '\b' && len > 0) { len--; continue; }
@@ -2646,7 +2979,9 @@ void iris_term_reset(void) {
 }
 
 int64_t iris_term_rows(void) {
-#ifdef _WIN32
+#if defined(__wasm__)
+    return 24; /* fallback */
+#elif defined(_WIN32)
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
     return csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
@@ -2658,7 +2993,9 @@ int64_t iris_term_rows(void) {
 }
 
 int64_t iris_term_cols(void) {
-#ifdef _WIN32
+#if defined(__wasm__)
+    return 80; /* fallback */
+#elif defined(_WIN32)
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
     return csbi.srWindow.Right - csbi.srWindow.Left + 1;
@@ -2679,7 +3016,9 @@ static void ensure_wsa(void);
 #endif
 
 int64_t iris_udp_open(int64_t port) {
-#ifdef _WIN32
+#ifdef __IRIS_WASM_STUB
+    (void)port; return -1; /* no networking on WASM P1 */
+#elif defined(_WIN32)
     ensure_wsa();
     SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s == INVALID_SOCKET) return -1;
@@ -2709,6 +3048,7 @@ int64_t iris_udp_open(int64_t port) {
 #endif
 }
 
+#ifndef __IRIS_WASM_STUB
 void iris_udp_send(int64_t fd, const char* addr_port, int64_t data_len) {
     /* addr_port format: "host:port:data" — data starts after second colon */
     char host[256] = {0}; uint16_t port = 0;
@@ -2723,7 +3063,7 @@ void iris_udp_send(int64_t fd, const char* addr_port, int64_t data_len) {
     struct sockaddr_in dst = {0};
     dst.sin_family = AF_INET;
     dst.sin_port = htons(port);
-    dst.sin_addr.s_addr = inet_addr(host);
+    if (inet_pton(AF_INET, host, &dst.sin_addr) != 1) dst.sin_addr.s_addr = INADDR_NONE;
     size_t dlen = data_len > 0 ? (size_t)data_len : strlen(data);
 #ifdef _WIN32
     sendto((SOCKET)fd, data, (int)dlen, 0, (struct sockaddr*)&dst, sizeof(dst));
@@ -2745,11 +3085,12 @@ char* iris_udp_recv(int64_t fd) {
 #endif
     if (n < 0) { char* e = (char*)xmalloc(1); *e = '\0'; return e; }
     buf[n] = '\0';
-    char* ip = inet_ntoa(src.sin_addr);
+    char ip_buf[64];
+    inet_ntop(AF_INET, &src.sin_addr, ip_buf, sizeof(ip_buf));
     uint16_t port = ntohs(src.sin_port);
-    size_t needed = strlen(ip) + 6 + n + 2;
+    size_t needed = strlen(ip_buf) + 6 + n + 2;
     char* result = (char*)xmalloc(needed);
-    snprintf(result, needed, "%s:%d:%s", ip, port, buf);
+    snprintf(result, needed, "%s:%d:%s", ip_buf, port, buf);
     return result;
 }
 
@@ -2760,6 +3101,12 @@ void iris_udp_close(int64_t fd) {
     close((int)fd);
 #endif
 }
+#else
+/* WASM: networking stubs */
+void iris_udp_send(int64_t fd, const char* addr_port, int64_t data_len) { (void)fd;(void)addr_port;(void)data_len; }
+char* iris_udp_recv(int64_t fd) { (void)fd;char*e=xmalloc(1);*e='\0';return e; }
+void iris_udp_close(int64_t fd) { (void)fd; }
+#endif
 
 /* ======================================================================== */
 /*  HTTP (extended)                                                          */
@@ -2767,16 +3114,22 @@ void iris_udp_close(int64_t fd) {
 
 char* iris_http_request(const char* method, const char* url,
                         const char* body, const char* content_type) {
+#ifdef __IRIS_WASM_STUB
+    (void)method;(void)url;(void)body;(void)content_type;
+    { char* e = (char*)xmalloc(1); *e = '\0'; return e; }
+#else
     /* Delegate to GET or POST based on method */
     if (!method || strcmp(method, "GET") == 0) return iris_http_get(url);
     return iris_http_post(url, body ? body : "",
                          content_type ? content_type : "application/json");
+#endif
 }
 
 /* ======================================================================== */
 /*  TCP Networking                                                          */
 /* ======================================================================== */
 
+#ifndef __IRIS_WASM_STUB
 #ifdef _WIN32
 static int wsa_initialized = 0;
 static void ensure_wsa(void) {
@@ -2892,11 +3245,21 @@ void iris_tcp_close(int64_t conn) {
     close((int)conn);
 #endif
 }
+#else /* __IRIS_WASM_STUB */
+/* WASM P1: no TCP networking */
+int64_t iris_tcp_connect(const char* host, int64_t port) { (void)host;(void)port;return -1; }
+int64_t iris_tcp_listen(int64_t port) { (void)port;return -1; }
+int64_t iris_tcp_accept(int64_t listener) { (void)listener;return -1; }
+char* iris_tcp_read(int64_t conn) { (void)conn;char*e=xmalloc(1);*e='\0';return e; }
+void iris_tcp_write(int64_t conn, const char* data) { (void)conn;(void)data; }
+void iris_tcp_close(int64_t conn) { (void)conn; }
+#endif /* __IRIS_WASM_STUB */
 
 /* ======================================================================== */
 /*  HTTP (simple implementation using TCP sockets)                          */
 /* ======================================================================== */
 
+#ifndef __IRIS_WASM_STUB
 /* Parse a URL into host, port, path.  Returns 0 on success. */
 static int parse_url(const char* url, char* host, int* port, char* path) {
     *port = 80;
@@ -3022,6 +3385,11 @@ char* iris_http_post(const char* url, const char* body, const char* content_type
 char* iris_http_post_json(const char* url, const char* json_body) {
     return iris_http_post(url, json_body, "application/json");
 }
+#else /* __IRIS_WASM_STUB */
+char* iris_http_get(const char* url) { (void)url;char*e=xmalloc(1);*e='\0';return e; }
+char* iris_http_post(const char* url, const char* body, const char* content_type) { (void)url;(void)body;(void)content_type;char*e=xmalloc(1);*e='\0';return e; }
+char* iris_http_post_json(const char* url, const char* json_body) { return iris_http_post(url, json_body, "application/json"); }
+#endif /* __IRIS_WASM_STUB */
 
 /* ======================================================================== */
 /*  JSON (minimal recursive descent parser + serializer)                    */
@@ -3231,6 +3599,65 @@ static void json_stringify_val(IrisVal* v, char** out, size_t* len, size_t* cap)
             else JSON_APPEND("null");
             break;
         }
+        case IRIS_TAG_RESULT: {
+            IrisResult* res = (IrisResult*)v->ptr;
+            if (res && res->is_ok) {
+                JSON_APPEND("{\"ok\":");
+                json_stringify_val(res->value, out, len, cap);
+                JSON_APPEND_CHAR('}');
+            } else {
+                JSON_APPEND("{\"err\":");
+                if (res) json_stringify_val(res->value, out, len, cap);
+                else JSON_APPEND("null");
+                JSON_APPEND_CHAR('}');
+            }
+            break;
+        }
+        case IRIS_TAG_TUPLE: {
+            IrisList* t = (IrisList*)v->ptr;
+            JSON_APPEND_CHAR('[');
+            if (t) {
+                for (size_t i = 0; i < t->len; i++) {
+                    if (i > 0) JSON_APPEND_CHAR(',');
+                    json_stringify_val(t->data[i], out, len, cap);
+                }
+            }
+            JSON_APPEND_CHAR(']');
+            break;
+        }
+        case IRIS_TAG_STRUCT: {
+            // Struct is stored as IrisList of field values.
+            // Field names are not available at runtime; use numeric indices.
+            IrisList* fields = (IrisList*)v->ptr;
+            JSON_APPEND_CHAR('{');
+            if (fields) {
+                for (size_t i = 0; i < fields->len; i++) {
+                    if (i > 0) JSON_APPEND_CHAR(',');
+                    char idx_buf[16]; snprintf(idx_buf, sizeof(idx_buf), "\"%zu\":", i);
+                    JSON_APPEND(idx_buf);
+                    json_stringify_val(fields->data[i], out, len, cap);
+                }
+            }
+            JSON_APPEND_CHAR('}');
+            break;
+        }
+        case IRIS_TAG_ENUM: {
+            IrisEnum* e = (IrisEnum*)v->ptr;
+            if (e) {
+                char buf[64]; snprintf(buf, sizeof(buf), "{\"tag\":%lld,\"fields\":[", (long long)e->tag);
+                JSON_APPEND(buf);
+                for (size_t i = 0; i < e->len; i++) {
+                    if (i > 0) JSON_APPEND_CHAR(',');
+                    json_stringify_val(e->fields[i], out, len, cap);
+                }
+                JSON_APPEND("]}");
+            } else {
+                JSON_APPEND("null");
+            }
+            break;
+        }
+        case IRIS_TAG_UNIT:
+            JSON_APPEND("null"); break;
         default: JSON_APPEND("null"); break;
     }
     #undef JSON_APPEND
@@ -3816,6 +4243,9 @@ void iris_exit_code(int64_t code) {
 }
 
 char* iris_exec_cmd(const char* cmd) {
+#if defined(__wasm__)
+    (void)cmd; { char* e = (char*)xmalloc(1); e[0] = '\0'; return e; }
+#else
     if (!cmd) { char* e = (char*)xmalloc(1); e[0] = '\0'; return e; }
 #ifdef _WIN32
     FILE* fp = _popen(cmd, "r");
@@ -3839,6 +4269,7 @@ char* iris_exec_cmd(const char* cmd) {
     pclose(fp);
 #endif
     return buf;
+#endif
 }
 
 int64_t iris_pid(void) {
@@ -4244,6 +4675,9 @@ static const char* find_python_cmd(void) {
 }
 
 const char* iris_python_eval(const char* code) {
+#if defined(__wasm__)
+    (void)code; snprintf(python_buf, sizeof(python_buf), "error: python not available on WASM"); return python_buf;
+#else
     const char* py = find_python_cmd();
     if (!py || !code) { snprintf(python_buf, sizeof(python_buf), "error: python not found"); return python_buf; }
     char cmd[8192];
@@ -4262,6 +4696,7 @@ const char* iris_python_eval(const char* code) {
     pclose(fp);
 #endif
     return python_buf;
+#endif
 }
 
 int64_t iris_python_exec(const char* code_or_path) {
@@ -4280,6 +4715,9 @@ int64_t iris_python_exec(const char* code_or_path) {
 }
 
 const char* iris_python_call(const char* module, const char* func, const char* args_json) {
+#if defined(__wasm__)
+    (void)module;(void)func;(void)args_json; snprintf(python_buf, sizeof(python_buf), "error: python not available on WASM"); return python_buf;
+#else
     const char* py = find_python_cmd();
     if (!py || !module || !func) { snprintf(python_buf, sizeof(python_buf), "error: python not found"); return python_buf; }
     char cmd[8192];
@@ -4303,9 +4741,13 @@ const char* iris_python_call(const char* module, const char* func, const char* a
     pclose(fp);
 #endif
     return python_buf;
+#endif
 }
 
 const char* iris_python_version(void) {
+#if defined(__wasm__)
+    return "Python not available on WASM";
+#else
     const char* py = find_python_cmd();
     if (!py) return "Python not found";
     char cmd[256];
@@ -4325,6 +4767,7 @@ const char* iris_python_version(void) {
     pclose(fp);
 #endif
     return python_buf;
+#endif
 }
 
 /* -- Rust FFI (aliases for C FFI — Rust cdylibs export extern "C") -- */
@@ -4456,18 +4899,22 @@ int64_t iris_thread_count(void) {
 #define RC_COLOR_WHITE  2   /* unreachable, collect me */
 
 typedef struct RcEntry {
-    void*          ptr;
-    int32_t        kind;
-    int64_t        count;
-    int64_t        scan_count; /* scratch counter used by cycle collector */
-    int            color;
-    int            buffered;   /* 1 if in possible_roots */
-    struct RcEntry* next;
+    void*               ptr;
+    int32_t             kind;
+    int64_t             count;
+    int64_t             scan_count; /* scratch counter used by cycle collector */
+    int                 color;
+    int                 buffered;   /* 1 if in possible_roots */
+    IrisWeakRef*        weak_refs;  /* list of active weak refs pointing to this ptr */
+    struct RcEntry*     next;
 } RcEntry;
 
 static RcEntry* rc_table[RC_TABLE_BUCKETS];
 static int64_t  gc_total_allocated = 0;
 static int64_t  gc_total_freed = 0;
+static int64_t  gc_cycles_collected = 0;
+static int64_t  gc_weak_refs_invalidated = 0;
+static int64_t  gc_auto_threshold = 10000;
 
 /* Global mutex protecting the rc_table from concurrent retain/release calls. */
 static pthread_mutex_t rc_global_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -4476,6 +4923,19 @@ static pthread_mutex_t rc_global_mu = PTHREAD_MUTEX_INITIALIZER;
 #define POSSIBLE_ROOTS_MAX 512
 static void* possible_roots[POSSIBLE_ROOTS_MAX];
 static int   possible_roots_count = 0;
+
+static void iris_gc_cycle_collect_locked(void);
+
+static void invalidate_weak_refs_locked(RcEntry* e) {
+    if (!e) return;
+    IrisWeakRef* w = e->weak_refs;
+    while (w) {
+        w->target = NULL;
+        gc_weak_refs_invalidated++;
+        w = w->next_weak;
+    }
+    e->weak_refs = NULL;
+}
 
 static size_t rc_hash(void* ptr) {
     uintptr_t v = (uintptr_t)ptr;
@@ -4504,9 +4964,13 @@ static RcEntry* rc_insert(void* ptr, int32_t kind) {
     e->scan_count = 0;
     e->color = RC_COLOR_BLACK;
     e->buffered = 0;
+    e->weak_refs = NULL;
     e->next = rc_table[h];
     rc_table[h] = e;
     gc_total_allocated++;
+    if (gc_auto_threshold > 0 && (gc_total_allocated % gc_auto_threshold == 0)) {
+        iris_gc_cycle_collect_locked();
+    }
     return e;
 }
 
@@ -4729,6 +5193,7 @@ void iris_release_kind(void* ptr, int32_t kind) {
         while (*pp) {
             if ((*pp)->ptr == ptr) {
                 RcEntry* tmp = *pp;
+                invalidate_weak_refs_locked(tmp);
                 *pp = tmp->next;
                 free(tmp);
                 break;
@@ -5426,3 +5891,108 @@ int iris_sandbox_check_ffi(const char* lib_path) {
     (void)lib_path;
     return sandbox_allow_ffi ? 0 : 1;
 }
+
+// ---------------------------------------------------------------------------
+// Weak References, GC Stats, and Concurrency Timeouts
+// ---------------------------------------------------------------------------
+
+IrisWeakRef* iris_weak_ref_new(void* target) {
+    IrisWeakRef* w = (IrisWeakRef*)xmalloc(sizeof(IrisWeakRef));
+    w->target = target;
+    w->next_weak = NULL;
+    if (!target) return w;
+    pthread_mutex_lock(&rc_global_mu);
+    RcEntry* e = rc_find(target);
+    if (e) {
+        w->next_weak = e->weak_refs;
+        e->weak_refs = w;
+    } else {
+        w->target = NULL;
+    }
+    pthread_mutex_unlock(&rc_global_mu);
+    return w;
+}
+
+IrisOption* iris_weak_ref_upgrade(IrisWeakRef* w) {
+    if (!w || !w->target) return iris_make_none();
+    pthread_mutex_lock(&rc_global_mu);
+    RcEntry* e = rc_find(w->target);
+    if (e && e->count > 0) {
+        e->count++;
+        e->color = RC_COLOR_BLACK;
+        void* ptr = w->target;
+        pthread_mutex_unlock(&rc_global_mu);
+        return iris_make_some((IrisVal*)ptr);
+    }
+    w->target = NULL;
+    pthread_mutex_unlock(&rc_global_mu);
+    return iris_make_none();
+}
+
+int32_t iris_weak_ref_alive(IrisWeakRef* w) {
+    if (!w || !w->target) return 0;
+    pthread_mutex_lock(&rc_global_mu);
+    RcEntry* e = rc_find(w->target);
+    int32_t alive = (e && e->count > 0) ? 1 : 0;
+    if (!alive) w->target = NULL;
+    pthread_mutex_unlock(&rc_global_mu);
+    return alive;
+}
+
+void iris_gc_stats(int64_t* out_alloc, int64_t* out_freed, int64_t* out_cycles, int64_t* out_weak_inval) {
+    pthread_mutex_lock(&rc_global_mu);
+    if (out_alloc) *out_alloc = gc_total_allocated;
+    if (out_freed) *out_freed = gc_total_freed;
+    if (out_cycles) *out_cycles = gc_cycles_collected;
+    if (out_weak_inval) *out_weak_inval = gc_weak_refs_invalidated;
+    pthread_mutex_unlock(&rc_global_mu);
+}
+
+IrisOption* iris_chan_recv_timeout(IrisChannel* c, int64_t timeout_ms) {
+    if (!c || timeout_ms <= 0) return iris_chan_try_recv(c);
+    pthread_mutex_lock(&c->mu);
+    if (c->count == 0) {
+        struct timespec ts;
+#if defined(_WIN32) || defined(_WIN64)
+        SYSTEMTIME st;
+        GetSystemTime(&st);
+        FILETIME ft;
+        SystemTimeToFileTime(&st, &ft);
+        ULARGE_INTEGER uli;
+        uli.LowPart = ft.dwLowDateTime;
+        uli.HighPart = ft.dwHighDateTime;
+        uint64_t ns_total = uli.QuadPart * 100 + (uint64_t)timeout_ms * 1000000;
+        ts.tv_sec = (time_t)(ns_total / 1000000000);
+        ts.tv_nsec = (long)(ns_total % 1000000000);
+#else
+        clock_gettime(CLOCK_REALTIME, &ts);
+        int64_t ns = ts.tv_nsec + (timeout_ms % 1000) * 1000000;
+        ts.tv_sec += (timeout_ms / 1000) + (ns / 1000000000);
+        ts.tv_nsec = ns % 1000000000;
+#endif
+        while (c->count == 0) {
+            int res = pthread_cond_timedwait(&c->not_empty, &c->mu, &ts);
+            if (res != 0) break;
+        }
+    }
+    if (c->count == 0) {
+        pthread_mutex_unlock(&c->mu);
+        return iris_make_none();
+    }
+    IrisVal* val = c->buf[c->head];
+    c->head = (c->head + 1) % c->cap;
+    c->count--;
+    if (c->max_cap >= 0) pthread_cond_signal(&c->not_full);
+    pthread_mutex_unlock(&c->mu);
+    IrisOption* opt = iris_make_some(val);
+    if (val) iris_release(val);
+    return opt;
+}
+
+int32_t iris_task_group_join_timeout(IrisTaskGroup* tg, int64_t timeout_ms) {
+    (void)timeout_ms;
+    if (!tg) return 1;
+    iris_task_group_join(tg);
+    return 1;
+}
+

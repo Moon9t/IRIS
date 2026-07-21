@@ -6,37 +6,37 @@
 
 /// Open a SQLite database file.
 /// Returns a database handle (i64), or 0 on failure.
-pub def sql_open(path : str) -> i64 {
+pub def sql_open(path : str) -> i64 effect ffi {
     db_open(path)
 }
 
 /// Execute a SQL statement (INSERT, UPDATE, DELETE, CREATE, etc.).
 /// Returns the number of affected rows, or -1 on error.
-pub def sql_exec(db : i64, sql : str) -> i64 {
+pub def sql_exec(db : i64, sql : str) -> i64 effect ffi {
     db_exec(db, sql)
 }
 
 /// Execute a SQL query (SELECT) and return all rows.
 /// Each row is a `list<str>` of column values.
 /// Returns empty list on error or no rows.
-pub def sql_query(db : i64, sql : str) -> list<list<str>> {
+pub def sql_query(db : i64, sql : str) -> list<list<str>> effect ffi {
     db_query(db, sql)
 }
 
 /// Execute a parameterized SQL query (SELECT) and return all rows.
 /// `params` are bound to `?` placeholders in the SQL string.
-pub def sql_query_params(db : i64, sql : str, params : list<str>) -> list<list<str>> {
+pub def sql_query_params(db : i64, sql : str, params : list<str>) -> list<list<str>> effect ffi {
     db_query_params(db, sql, params)
 }
 
 /// Close a database handle.
-pub def sql_close(db : i64) -> i64 {
+pub def sql_close(db : i64) -> i64 effect ffi {
     db_close(db)
 }
 
 /// Execute a parameterized SQL statement (INSERT, UPDATE, DELETE, etc.).
 /// Returns the number of affected rows, or -1 on error.
-pub def sql_exec_params(db : i64, sql : str, params : list<str>) -> i64 {
+pub def sql_exec_params(db : i64, sql : str, params : list<str>) -> i64 effect ffi {
     db_exec_params(db, sql, params)
 }
 

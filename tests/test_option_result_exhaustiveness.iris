@@ -1,0 +1,39 @@
+// Test Option exhaustiveness
+def test_option_exhaustive() -> i64 {
+    val o = some(42)
+    when o {
+        some(x) => x,
+        none => 0,
+    }
+}
+
+// Test Option non-exhaustive (missing None)
+def test_option_non_exhaustive() -> i64 {
+    val o = some(42)
+    when o {
+        some(x) => x,
+        // Missing none
+    }
+}
+
+// Test Result exhaustive
+def test_result_exhaustive() -> i64 {
+    val r = ok(42)
+    when r {
+        ok(x) => x,
+        err(e) => -1,
+    }
+}
+
+// Test Result non-exhaustive (missing Err)
+def test_result_non_exhaustive() -> i64 {
+    val r = ok(42)
+    when r {
+        ok(x) => x,
+        // Missing err
+    }
+}
+
+def main() -> i64 {
+    test_option_exhaustive() + test_result_exhaustive()
+}

@@ -25,7 +25,7 @@ pub def channel_len(ch: chan<i64>) -> i64 {
 
 /// Sleep for a given number of milliseconds.
 /// Returns `true` when the timeout completes.
-pub def sleep(ms: i64) -> bool {
+pub def sleep(ms: i64) -> bool effect time {
     timeout(ms)
 }
 
@@ -34,14 +34,46 @@ pub def num_threads() -> i64 {
     thread_count()
 }
 
-/// Get current time in milliseconds since epoch (for basic timing).
-pub def now() -> i64 {
-    time_now_ms()
+/// Get current Unix timestamp in seconds.
+pub def now() -> i64 effect time {
+    datetime_timestamp() to i64
 }
 
 /// Sleep for `ms` milliseconds.
 /// Returns `true` after the delay completes.
-pub def delay(ms: i64) -> bool {
-    sleep_ms(ms);
-    true
+pub def delay(ms: i64) -> bool effect time {
+    timeout(ms)
 }
+
+/// Select the first ready channel from a list (returns index 0..n-1, or -1 if none ready).
+pub def select_first(channels: list<chan<i64>>) -> i64 {
+    val n = list_len(channels)
+    var i = 0
+    while i < n {
+        val ch = list_get(channels, i)
+        if chan_len(ch) > 0 { return i }
+        i = i + 1
+    }
+    -1
+}
+
+/// Receive from channel with a timeout in milliseconds.
+/// Returns `some(val)` if received before timeout, `none` otherwise.
+pub def recv_timeout_ms(ch: chan<i64>, timeout_ms: i64) -> option<i64> {
+    recv_timeout(ch, timeout_ms)
+}
+
+/// Create a new structured TaskGroup.
+pub def new_task_group() -> task_group {
+    task_group()
+}
+
+/// Force a cycle collection sweep on the GC side-table.
+pub def gc_collect_sweep() -> bool {
+    gc_collect()
+}
+
+/// Retrieve current GC allocation and collection statistics.
+pub def gc_get_stats() -> map<str, i64> {
+    gc_stats()
+}

@@ -1,0 +1,29 @@
+trait Iterator {
+    type Item
+    def next(self) -> option<Self::Item>
+}
+
+record MyInt {
+    value: i64
+}
+
+impl Iterator for MyInt {
+    type Item = str
+    def next(self) -> option<str> {
+        if self.value > 0 {
+            some(to_str(self.value))
+        } else {
+            none()
+        }
+    }
+}
+
+def main() -> i64 {
+    val x = MyInt { value: 42 }
+    val result = Iterator__MyInt__next(x);
+    when result {
+        some(v) => println(v),
+        none => println("Failed: none"),
+    }
+    0
+}

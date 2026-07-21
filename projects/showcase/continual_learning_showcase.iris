@@ -1,0 +1,196 @@
+// projects/showcase/continual_learning_showcase.iris
+bring std.ml
+bring std.fmt
+
+def make_f64_list_3(v0 : f64, v1 : f64, v2 : f64) -> list<f64> {
+    val l = list();
+    list_push(l, v0);
+    list_push(l, v1);
+    list_push(l, v2);
+    l
+}
+
+def make_f64_list_6(v0 : f64, v1 : f64, v2 : f64, v3 : f64, v4 : f64, v5 : f64) -> list<f64> {
+    val l = list();
+    list_push(l, v0);
+    list_push(l, v1);
+    list_push(l, v2);
+    list_push(l, v3);
+    list_push(l, v4);
+    list_push(l, v5);
+    l
+}
+
+def make_i64_list_2(v0 : i64, v1 : i64) -> list<i64> {
+    val l = list();
+    list_push(l, v0);
+    list_push(l, v1);
+    l
+}
+
+def format_f64_list(l : list<f64>) -> str {
+    var res = "[";
+    var idx = 0;
+    while idx < list_len(l) {
+        res = concat(res, to_str(list_get(l, idx)));
+        if idx + 1 < list_len(l) {
+            res = concat(res, ", ");
+        };
+        idx = idx + 1;
+    };
+    concat(res, "]")
+}
+
+def format_i64_list(l : list<i64>) -> str {
+    var res = "[";
+    var idx = 0;
+    while idx < list_len(l) {
+        res = concat(res, to_str(list_get(l, idx)));
+        if idx + 1 < list_len(l) {
+            res = concat(res, ", ");
+        };
+        idx = idx + 1;
+    };
+    concat(res, "]")
+}
+
+def test_onnx_metadata(onnx_path : str) -> i64 {
+    print("--------------------------------------------------");
+    print("1. Testing ONNX Metadata / Reflection API");
+    print("--------------------------------------------------");
+    val handle = onnx_load(onnx_path);
+    print(concat("Loaded ONNX Model. Handle: ", to_str(handle)));
+    if handle == 0 {
+        print("Error: Failed to load ONNX model!");
+        return 1;
+    };
+
+    val in_count = onnx_get_input_count(handle);
+    val out_count = onnx_get_output_count(handle);
+    print(concat("Input Count:  ", to_str(in_count)));
+    print(concat("Output Count: ", to_str(out_count)));
+
+    var idx = 0;
+    while idx < in_count {
+        val name = onnx_get_input_name(handle, idx);
+        print(concat(concat("  Input ", to_str(idx)), concat(": ", name)));
+        idx = idx + 1;
+    };
+
+    var o_idx = 0;
+    while o_idx < out_count {
+        val name = onnx_get_output_name(handle, o_idx);
+        print(concat(concat("  Output ", to_str(o_idx)), concat(": ", name)));
+        o_idx = o_idx + 1;
+    };
+
+    onnx_free(handle);
+    print("ONNX Metadata Reflection test completed successfully!");
+    0
+}
+
+def test_onnx_multi_tensor(onnx_path : str) -> i64 {
+    print("\n--------------------------------------------------");
+    print("2. Testing ONNX Multi-Tensor / Multimodal Inference");
+    print("--------------------------------------------------");
+    val handle = onnx_load(onnx_path);
+    if handle == 0 {
+        print("Error: Failed to load ONNX model!");
+        return 1;
+    };
+
+    // Prepare inputs: we pass a list of MLTensor
+    // identity.onnx expects [2, 3] shape
+    val data1 = make_f64_list_6(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+    val shape1 = make_i64_list_2(2, 3);
+    val t1 = tensor_pair(data1, shape1);
+
+    val inputs = list();
+    list_push(inputs, t1);
+    print(concat("Inputs List Length: ", to_str(list_len(inputs))));
+    val outputs = onnx_run_multi(handle, inputs);
+    print(concat("Output List Length: ", to_str(list_len(outputs))));
+
+    if list_len(outputs) > 0 {
+        val out_tensor = list_get(outputs, 0);
+        val (out_data, out_shape) = out_tensor;
+        print(concat("Output Tensor Shape: ", format_i64_list(out_shape)));
+        print(concat("Output Tensor Data:  ", format_f64_list(out_data)));
+    } else {
+        print("Error: No outputs returned!");
+    };
+
+    onnx_free(handle);
+    0
+}
+
+def test_pytorch_train_and_run(pt_path : str) -> i64 {
+    print("\n--------------------------------------------------");
+    print("3. Testing PyTorch JIT Continual Learning & SGD");
+    print("--------------------------------------------------");
+    val handle = pytorch_load(pt_path);
+    print(concat("Loaded PyTorch Model. Handle: ", to_str(handle)));
+    if handle == 0 {
+        print("Error: Failed to load PyTorch model!");
+        return 1;
+    };
+
+    // Input shape is [1, 3], target shape is [1, 2]
+    val input_data = make_f64_list_3(1.0, 2.0, 3.0);
+    val input_shape = make_i64_list_2(1, 3);
+    val t_in = tensor_pair(input_data, input_shape);
+
+    // Initial forward run
+    print("Running initial inference...");
+    val init_out = pytorch_run(handle, t_in);
+    val (init_data, init_shape) = init_out;
+    print(concat("  Initial Output Data: ", format_f64_list(init_data)));
+
+    // Perform fine-tuning / SGD training loop
+    print("Starting on-device training loop (MSE Loss + SGD)...");
+    val target_data = make_i64_list_2(10, 20); // wait, make it f64 list, but we can reuse make_f64_list_3 but with size 2:
+    val target_data_f64 = list();
+    list_push(target_data_f64, 10.0);
+    list_push(target_data_f64, 20.0);
+    val target_shape = make_i64_list_2(1, 2);
+    val t_target = tensor_pair(target_data_f64, target_shape);
+
+    val inputs_list = list();
+    list_push(inputs_list, t_in);
+    val targets_list = list();
+    list_push(targets_list, t_target);
+
+    var step = 1;
+    val max_steps = 10;
+    val lr = 0.05;
+
+    while step <= max_steps {
+        val loss = pytorch_train_step(handle, inputs_list, targets_list, lr);
+        print(concat(concat("  Step ", to_str(step)), concat(": Loss = ", to_str(loss))));
+        step = step + 1;
+    };
+
+    // Final forward run to verify learning occurred (loss decreased)
+    print("Running post-training inference...");
+    val final_out = pytorch_run(handle, t_in);
+    val (final_data, final_shape) = final_out;
+    print(concat("  Final Output Data: ", format_f64_list(final_data)));
+
+    pytorch_free(handle);
+    0
+}
+
+def main() -> i64 {
+    print("==================================================");
+    print("    IRIS ADVANCED MACHINE LEARNING SHOWCASE");
+    print("==================================================");
+
+    test_onnx_metadata("tests/fixtures/identity.onnx");
+    test_onnx_multi_tensor("tests/fixtures/identity.onnx");
+    test_pytorch_train_and_run("tests/fixtures/model.pt");
+
+    print("==================================================");
+    print("            ALL ML TESTS COMPLETED");
+    print("==================================================");
+    0
+}

@@ -1,0 +1,59 @@
+def main() -> i64 {
+    val x = some(42);
+    println(x.is_some());
+    println(x.is_none());
+    println(x.unwrap());
+
+    val y: option<i64> = none();
+    println(y.is_some());
+    println(y.is_none());
+
+    val a = ok(100);
+    println(a.is_ok());
+    println(a.is_err());
+    println(a.unwrap());
+
+    val b: result<i64, str> = err("fail");
+    println(b.is_ok());
+    println(b.is_err());
+    println(b.unwrap_err());
+
+    val s = "hello world";
+    println(s.len());
+    println(s.contains("world"));
+    println(s.index(0));
+    println(s.slice(0, 5));
+    println(s.find("world"));
+
+    val lst = list();
+    lst.push(10);
+    lst.push(20);
+    lst.push(30);
+    println(lst.len());
+    println(lst.get(1));
+    lst.set(1, 25);
+    println(lst.get(1));
+    println(lst.pop());
+
+    val n = 42;
+    println(n.to_str());
+
+    val m = map();
+    m.set("a", 1);
+    m.set("b", 2);
+    println(m.len());
+    println(m.contains("a"));
+
+    val ch = channel();
+    ch.send(99);
+    println(ch.recv());
+
+    // Combinators: option.map
+    val doubled = x.map(|v: i64| v * 2);
+    println(doubled);
+
+    val defaulted = y.unwrap_or(-1);
+    println(defaulted);
+
+    0
+}

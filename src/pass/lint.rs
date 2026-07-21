@@ -116,6 +116,8 @@ fn stmt_uses_name(stmt: &AstStmt, name: &str) -> bool {
             expr_uses_name(start, name) || expr_uses_name(end, name) || block_uses_name(body, name)
         }
         AstStmt::Break { .. } | AstStmt::Continue { .. } => false,
+        AstStmt::MaskStmt { body, .. } => block_uses_name(body, name),
+        AstStmt::HandleStmt { expr, .. } => expr_uses_name(expr, name),
     }
 }
 
@@ -160,6 +162,8 @@ fn expr_uses_name(expr: &AstExpr, name: &str) -> bool {
         AstExpr::MethodCall { base, args, .. } => {
             expr_uses_name(base, name) || args.iter().any(|a| expr_uses_name(a, name))
         }
+        AstExpr::Mask { body, .. } => block_uses_name(body, name),
+        AstExpr::Handle { expr, .. } => expr_uses_name(expr, name),
     }
 }
 

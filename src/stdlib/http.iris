@@ -7,23 +7,23 @@
 // ── HTTP Client ───────────────────────────────────────────────────────────────
 
 /// Perform a GET request. Returns the response body as a string.
-pub def http_get(url: str) -> str {
+pub def http_get(url: str) -> str effect net {
     http_get(url)
 }
 
 /// Perform a POST request with a plain-text body. Returns the response body.
-pub def http_post(url: str, body: str) -> str {
+pub def http_post(url: str, body: str) -> str effect net {
     http_post(url, body)
 }
 
 /// Perform an HTTP request with explicit method, url, and body.
 /// `method` is "GET", "POST", "PUT", "DELETE", etc.
-pub def http_request(method: str, url: str, body: str) -> str {
+pub def http_request(method: str, url: str, body: str) -> str effect net {
     http_request(method, url, body)
 }
 
 /// Perform a POST request with a JSON body (sets Content-Type: application/json).
-pub def http_post_json(url: str, json_body: str) -> str {
+pub def http_post_json(url: str, json_body: str) -> str effect net {
     http_post_json(url, json_body)
 }
 

@@ -4,7 +4,7 @@ pub record File {
     handle: i64,
 }
 
-pub def file_open_stream(path: str, mode: str) -> result<File, str> {
+pub def file_open_stream(path: str, mode: str) -> result<File, str> effect fs, io {
     val h = file_open(path, mode);
     if h == 0 {
         err(concat("Failed to open file: ", path))
@@ -13,7 +13,7 @@ pub def file_open_stream(path: str, mode: str) -> result<File, str> {
     }
 }
 
-pub def file_close_stream(f: File) -> result<bool, str> {
+pub def file_close_stream(f: File) -> result<bool, str> effect fs, io {
     val b = file_close(f.handle);
     if b {
         ok(true)
@@ -22,12 +22,12 @@ pub def file_close_stream(f: File) -> result<bool, str> {
     }
 }
 
-pub def file_read_stream(f: File, bytes: i64) -> result<str, str> {
+pub def file_read_stream(f: File, bytes: i64) -> result<str, str> effect fs, io {
     val s = file_read(f.handle, bytes);
     ok(s)
 }
 
-pub def file_write_stream(f: File, data: str) -> result<bool, str> {
+pub def file_write_stream(f: File, data: str) -> result<bool, str> effect fs, io {
     val b = file_write(f.handle, data);
     if b {
         ok(true)
@@ -37,12 +37,12 @@ pub def file_write_stream(f: File, data: str) -> result<bool, str> {
 }
 
 /// Read entire file contents
-pub def read_text(path: str) -> result<str, str> {
+pub def read_text(path: str) -> result<str, str> effect fs, io {
     file_read_all(path)
 }
 
 /// Write text to a file
-pub def write_text(path: str, content: str) -> result<bool, str> {
+pub def write_text(path: str, content: str) -> result<bool, str> effect fs, io {
     val r = file_write_all(path, content);
     when r {
         ok(bytes) => ok(true),
@@ -51,7 +51,7 @@ pub def write_text(path: str, content: str) -> result<bool, str> {
 }
 
 /// Append text to a file
-pub def append_text(path: str, content: str) -> result<bool, str> {
+pub def append_text(path: str, content: str) -> result<bool, str> effect fs, io {
     val h = file_open_stream(path, "a");
     when h {
         ok(f) => {
@@ -64,12 +64,12 @@ pub def append_text(path: str, content: str) -> result<bool, str> {
 }
 
 /// Returns true if the path exists.
-pub def path_exists(path: str) -> bool {
+pub def path_exists(path: str) -> bool effect fs, io {
     file_exists(path)
 }
 
 /// Read a file and return its lines as a list<str>.
-pub def read_lines(path: str) -> result<list<str>, str> {
+pub def read_lines(path: str) -> result<list<str>, str> effect fs, io {
     if !path_exists(path) {
         return err("File not found");
     }
@@ -77,7 +77,7 @@ pub def read_lines(path: str) -> result<list<str>, str> {
 }
 
 /// Copy src to dst
-pub def copy_file(src: str, dst: str) -> result<bool, str> {
+pub def copy_file(src: str, dst: str) -> result<bool, str> effect fs, io {
     val content = read_text(src);
     when content {
         ok(s) => write_text(dst, s),

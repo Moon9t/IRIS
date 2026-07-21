@@ -1,4 +1,0 @@
-def main() -> i64 {
-    print("AIS loaded");
-    0
-}

@@ -28,7 +28,10 @@ fn contains_infer(ty: &IrType) -> bool {
         IrType::Tuple(fields) => fields.iter().any(contains_infer),
         IrType::Struct { fields, .. } => fields.iter().any(|(_, t)| contains_infer(t)),
         IrType::Fn { params, ret } => params.iter().any(contains_infer) || contains_infer(ret),
-        IrType::Scalar(_) | IrType::Tensor { .. } | IrType::Str | IrType::Enum { .. } => false,
+        IrType::TraitObject { methods, .. } => methods.iter().any(|m| {
+            m.params.iter().any(contains_infer) || contains_infer(&m.ret)
+        }),
+        IrType::Scalar(_) | IrType::Tensor { .. } | IrType::Str | IrType::Enum { .. } | IrType::TaskGroup | IrType::WeakRef(_) => false,
     }
 }
 

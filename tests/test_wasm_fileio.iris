@@ -1,0 +1,41 @@
+def main() -> i64 {
+    println("=== File I/O Test on WASM ===");
+
+    // Write a file
+    val write_result = file_write_all("wasm_test_output.txt", "Hello from IRIS on WASM!\nLine 2: File I/O works.\n");
+    if is_err(write_result) {
+        println("ERROR writing: " + unwrap_err(write_result));
+        return 1
+    };
+    val bytes_written = unwrap(write_result);
+    println("Write OK: " + to_str(bytes_written) + " bytes written");
+
+    // Check file exists
+    if !file_exists("wasm_test_output.txt") {
+        println("ERROR: file does not exist after writing!");
+        return 2
+    };
+    println("File exists check OK");
+
+    // Read it back
+    val read_result = file_read_all("wasm_test_output.txt");
+    if is_err(read_result) {
+        println("ERROR reading: " + unwrap_err(read_result));
+        return 3
+    };
+    val content = unwrap(read_result);
+    println("Read back (" + to_str(len(content)) + " bytes):");
+    println(content);
+
+    // Read lines
+    val lines = file_lines("wasm_test_output.txt");
+    println("Number of lines: " + to_str(len(lines)));
+    var i = 0;
+    while i < len(lines) {
+        println("  Line " + to_str(i) + ": " + list_get(lines, i));
+        i = i + 1
+    };
+
+    println("=== All File I/O Tests Passed ===");
+    0
+}

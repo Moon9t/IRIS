@@ -1,0 +1,13 @@
+// Test: while let with counter modification
+def main() -> i64 {
+    var counter = some(3)
+    while let some(v) = counter {
+        if v == 1 {
+            counter = none()
+        } else {
+            counter = some(v - 1)
+        }
+    }
+    println("done");
+    0
+}

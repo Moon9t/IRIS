@@ -1,0 +1,19 @@
+record Array[T, const N: usize] {
+    data: [T; N]
+}
+
+def test_array_sum() -> i64 {
+    val arr: Array<i64, 5> = Array { data: [1, 2, 3, 4, 5] }
+    arr.data[0] + arr.data[4]
+}
+
+def test_array_sum_10() -> i64 {
+    val arr: Array<i64, 5> = Array { data: [10, 20, 30, 40, 50] }
+    arr.data[0] + arr.data[1] + arr.data[2] + arr.data[3] + arr.data[4]
+}
+
+def main() -> i64 {
+    val s = test_array_sum()
+    val s10 = test_array_sum_10()
+    s + s10
+}

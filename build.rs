@@ -11,6 +11,8 @@ fn main() {
     println!("cargo:rerun-if-changed=src/runtime/onnx_shim.c");
     println!("cargo:rerun-if-changed=src/runtime/onnx_shim.h");
     println!("cargo:rerun-if-env-changed=SQLITE3_DIR");
+    println!("cargo:rerun-if-env-changed=IRIS_LINK_ML_SHIMS");
+    println!("cargo:rerun-if-env-changed=IRIS_USE_DEFAULT_SDK_PATHS");
     // Re-run when HEAD changes (new commit / checkout).
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs");
@@ -128,28 +130,14 @@ fn compile_c_runtime() {
 }
 
 fn sdk_dir(var_name: &str, default_path: &str) -> Option<String> {
-    // Only link ML shims into the compiler binary itself if explicitly requested
-    let link_ml_shims = std::env::var("IRIS_LINK_ML_SHIMS")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    if !link_ml_shims {
-        return None;
-    }
-
     if let Ok(val) = std::env::var(var_name) {
         if !val.is_empty() {
             return Some(val);
         }
     }
-    // Only use default path if explicitly requested via IRIS_USE_DEFAULT_SDK_PATHS=1
-    if std::env::var("IRIS_USE_DEFAULT_SDK_PATHS")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-    {
-        let candidate = std::path::Path::new(default_path);
-        if candidate.exists() {
-            return Some(default_path.to_owned());
-        }
+    let candidate = std::path::Path::new(default_path);
+    if candidate.exists() {
+        return Some(default_path.to_owned());
     }
     None
 }
@@ -386,3 +374,5 @@ fn rustc_version() -> String {
         })
         .unwrap_or_else(|| "unknown".to_owned())
 }
+
+// Touched to trigger stdlib rebuild with legacy ROS2 backward compatibility.

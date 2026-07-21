@@ -1,0 +1,407 @@
+// projects/showcase/robotic_drone_agent.iris
+// Autonomous Drone Navigation Agent
+//
+// Demonstrates a full IRIS robotics stack:
+//   - std.ros2: Dynamic ROS2 DDS context, nodes, publishers, and subscriptions
+//   - std.ais:  Homeostatic regulation, active inference, running statistics
+//
+// The drone agent runs a control loop that:
+//   1. Monitors altitude, battery, obstacle distance (homeostatic variables)
+//   2. Computes corrective velocity commands via PID-like homeostatic control
+//   3. Publishes Twist commands to /drone/cmd_vel
+//   4. Publishes Pose status to /drone/status/pose
+//   5. Tracks running statistics on all sensor channels
+//
+// Usage:
+//   iris --emit eval projects/showcase/robotic_drone_agent.iris
+//   iris run projects/showcase/robotic_drone_agent.iris
+
+bring std.ais
+bring std.fmt
+
+// ===== Geometry Types (matching std.ros2 C bridge layout) =====
+record Vector3 { x: f64, y: f64, z: f64 }
+record Twist   { linear: Vector3, angular: Vector3 }
+record Point   { x: f64, y: f64, z: f64 }
+record Quaternion { x: f64, y: f64, z: f64, w: f64 }
+record Pose    { position: Point, orientation: Quaternion }
+
+// ===== ROS2 Handle Wrappers =====
+record ROS2Context   { handle: i64 }
+record ROS2Node      { handle: i64, ctx: i64 }
+record ROS2Publisher { handle: i64, node: i64, msg_type: str }
+
+def get_ros2_lib() -> str { "iris_ros2.dll" }
+
+// Context lifecycle
+def ros2_context_create() -> ROS2Context {
+    val h = ffi_open(get_ros2_lib());
+    if h == -1 { return ROS2Context { handle: 0 } };
+    val ctx = ffi_call(h, "iris_rcl_context_create");
+    ROS2Context { handle: ctx }
+}
+
+def ros2_context_destroy(ctx: ROS2Context) -> bool {
+    val h = ffi_open(get_ros2_lib());
+    if h == -1 { return false };
+    val rc = ffi_call_i64(h, "iris_rcl_context_destroy", ctx.handle);
+    rc == 0
+}
+
+// Node lifecycle
+def ros2_node_create(ctx: ROS2Context, name: str, ns: str) -> ROS2Node {
+    val h = ffi_open(get_ros2_lib());
+    if h == -1 { return ROS2Node { handle: 0, ctx: 0 } };
+    val node = ffi_call_i64(h, "iris_rcl_node_create", ctx.handle, name, ns);
+    ROS2Node { handle: node, ctx: ctx.handle }
+}
+
+def ros2_node_destroy(node: ROS2Node) -> bool {
+    val h = ffi_open(get_ros2_lib());
+    if h == -1 { return false };
+    val rc = ffi_call_i64(h, "iris_rcl_node_destroy", node.handle);
+    rc == 0
+}
+
+// Publisher lifecycle
+def ros2_publisher_create(node: ROS2Node, topic: str, msg_type: str) -> ROS2Publisher {
+    val h = ffi_open(get_ros2_lib());
+    if h == -1 { return ROS2Publisher { handle: 0, node: 0, msg_type: "" } };
+    val pub_h = ffi_call_i64(h, "iris_rcl_publisher_create", node.handle, topic, msg_type);
+    ROS2Publisher { handle: pub_h, node: node.handle, msg_type: msg_type }
+}
+
+def ros2_publisher_destroy(pub_obj: ROS2Publisher) -> bool {
+    val h = ffi_open(get_ros2_lib());
+    if h == -1 { return false };
+    val rc = ffi_call_i64(h, "iris_rcl_publisher_destroy", pub_obj.handle, pub_obj.node);
+    rc == 0
+}
+
+// Typed publishers
+def ros2_publish_float64(pub_obj: ROS2Publisher, value: f64) -> bool {
+    val h = ffi_open(get_ros2_lib());
+    if h == -1 { return false };
+    val scaled = (value * 100000000.0) to i64;
+    val rc = ffi_call_i64(h, "iris_rcl_publish_float64", pub_obj.handle, scaled);
+    rc == 0
+}
+
+def ros2_publish_string(pub_obj: ROS2Publisher, value: str) -> bool {
+    val h = ffi_open(get_ros2_lib());
+    if h == -1 { return false };
+    val rc = ffi_call_i64(h, "iris_rcl_publish_string", pub_obj.handle, value);
+    rc == 0
+}
+
+def ros2_publish_twist(pub_obj: ROS2Publisher, t: Twist) -> bool {
+    val h = ffi_open(get_ros2_lib());
+    if h == -1 { return false };
+    val slx = (t.linear.x * 100000000.0) to i64;
+    val sly = (t.linear.y * 100000000.0) to i64;
+    val slz = (t.linear.z * 100000000.0) to i64;
+    val sax = (t.angular.x * 100000000.0) to i64;
+    val say = (t.angular.y * 100000000.0) to i64;
+    val saz = (t.angular.z * 100000000.0) to i64;
+    val rc = ffi_call_i64(h, "iris_rcl_publish_twist", pub_obj.handle, slx, sly, slz, sax, say, saz);
+    rc == 0
+}
+
+def ros2_publish_pose(pub_obj: ROS2Publisher, p: Pose) -> bool {
+    val h = ffi_open(get_ros2_lib());
+    if h == -1 { return false };
+    val spx = (p.position.x * 100000000.0) to i64;
+    val spy = (p.position.y * 100000000.0) to i64;
+    val spz = (p.position.z * 100000000.0) to i64;
+    val sox = (p.orientation.x * 100000000.0) to i64;
+    val soy = (p.orientation.y * 100000000.0) to i64;
+    val soz = (p.orientation.z * 100000000.0) to i64;
+    val sow = (p.orientation.w * 100000000.0) to i64;
+    val rc = ffi_call_i64(h, "iris_rcl_publish_pose", pub_obj.handle, spx, spy, spz, sox, soy, soz, sow);
+    rc == 0
+}
+
+// Local constructors
+def mk_twist(lx: f64, ly: f64, lz: f64, ax: f64, ay: f64, az: f64) -> Twist {
+    Twist {
+        linear: Vector3 { x: lx, y: ly, z: lz },
+        angular: Vector3 { x: ax, y: ay, z: az }
+    }
+}
+
+def mk_pose(px: f64, py: f64, pz: f64, ox: f64, oy: f64, oz: f64, ow: f64) -> Pose {
+    Pose {
+        position: Point { x: px, y: py, z: pz },
+        orientation: Quaternion { x: ox, y: oy, z: oz, w: ow }
+    }
+}
+
+
+// ===== Simulated Sensor State =====
+
+record DroneState {
+    altitude: f64,
+    battery: f64,
+    obstacle_dist: f64,
+    vx: f64,
+    vy: f64,
+    vz: f64,
+    yaw_rate: f64,
+    target_x: f64,
+    target_y: f64,
+    target_z: f64,
+    pos_x: f64,
+    pos_y: f64,
+    pos_z: f64
+}
+
+def initial_drone_state() -> DroneState {
+    DroneState {
+        altitude: 0.0, battery: 1.0, obstacle_dist: 10.0,
+        vx: 0.0, vy: 0.0, vz: 0.0, yaw_rate: 0.0,
+        target_x: 5.0, target_y: 3.0, target_z: 2.0,
+        pos_x: 0.0, pos_y: 0.0, pos_z: 0.0
+    }
+}
+
+// ===== Homeostatic Controller =====
+
+def create_drone_homeostat() -> Homeostat {
+    // Track 3 vital variables:
+    //   0: altitude   (set_point=2.0m, tolerance=0.3m, gain=1.5)
+    //   1: battery    (set_point=0.7,  tolerance=0.2,  gain=0.5)
+    //   2: obstacle   (set_point=3.0m, tolerance=1.0m, gain=2.0)
+    var h = homeostat_new();
+    h = homeostat_add_var(h, homeovar_new(2.0, 0.3, 1.5));
+    h = homeostat_add_var(h, homeovar_new(0.7, 0.2, 0.5));
+    h = homeostat_add_var(h, homeovar_new(3.0, 1.0, 2.0));
+    h
+}
+
+// Simple PID-like correction from homeostatic error
+def compute_correction(hvar: HomeostaticVariable, measured: f64) -> f64 {
+    val error = hvar.set_point - measured;
+    val correction = error * hvar.correction_gain;
+    clamp(correction, -2.0, 2.0)
+}
+
+// ===== Navigation Logic =====
+
+def compute_velocity_cmd(state: DroneState, homeo: Homeostat) -> Twist {
+    // Altitude correction (vertical velocity)
+    val alt_var = list_get(homeo.variables, 0);
+    val vz_correction = compute_correction(alt_var, state.altitude);
+
+    // Obstacle avoidance: if too close, reverse
+    val obs_var = list_get(homeo.variables, 2);
+    val obs_correction = compute_correction(obs_var, state.obstacle_dist);
+    val obs_brake = if state.obstacle_dist < 1.5 { -1.0 } else { 0.0 };
+
+    // Position tracking: proportional control toward target
+    val dx = state.target_x - state.pos_x;
+    val dy = state.target_y - state.pos_y;
+    val dist = sqrt(dx * dx + dy * dy);
+    val max_speed = 1.0;
+
+    val vx = if dist > 0.1 {
+        clamp(dx * 0.5, 0.0 - max_speed, max_speed)
+    } else { 0.0 };
+
+    val vy = if dist > 0.1 {
+        clamp(dy * 0.5, 0.0 - max_speed, max_speed)
+    } else { 0.0 };
+
+    // Apply obstacle brake
+    val final_vx = vx + obs_brake * 0.3;
+    val final_vy = vy;
+    val final_vz = clamp(vz_correction, -1.0, 1.0);
+
+    // Yaw toward target
+    val yaw = if dist > 0.2 { clamp(dy * 0.1, -0.5, 0.5) } else { 0.0 };
+
+    mk_twist(final_vx, final_vy, final_vz, 0.0, 0.0, yaw)
+}
+
+// ===== Physics Simulation Step =====
+
+def simulate_step(state: DroneState, cmd: Twist, dt: f64) -> DroneState {
+    val new_vx = cmd.linear.x;
+    val new_vy = cmd.linear.y;
+    val new_vz = cmd.linear.z;
+
+    val new_px = state.pos_x + new_vx * dt;
+    val new_py = state.pos_y + new_vy * dt;
+    val new_alt = state.altitude + new_vz * dt;
+    val clamped_alt = if new_alt < 0.0 { 0.0 } else { new_alt };
+
+    // Simulate battery drain (proportional to speed)
+    val speed = sqrt(new_vx * new_vx + new_vy * new_vy + new_vz * new_vz);
+    val drain = 0.002 + speed * 0.001;
+    val new_battery = state.battery - drain;
+    val clamped_battery = if new_battery < 0.0 { 0.0 } else { new_battery };
+
+    // Simulate obstacle distance (gets closer to 1.0 near target)
+    val target_dist = sqrt(
+        (state.target_x - new_px) * (state.target_x - new_px) +
+        (state.target_y - new_py) * (state.target_y - new_py)
+    );
+    val obs = 2.0 + target_dist * 0.5 + (random() - 0.5) * 0.5;
+
+    DroneState {
+        altitude: clamped_alt,
+        battery: clamped_battery,
+        obstacle_dist: obs,
+        vx: new_vx, vy: new_vy, vz: new_vz,
+        yaw_rate: cmd.angular.z,
+        target_x: state.target_x, target_y: state.target_y, target_z: state.target_z,
+        pos_x: new_px, pos_y: new_py, pos_z: clamped_alt
+    }
+}
+
+// ===== Main Agent Loop =====
+
+def main() -> i64 {
+    print("=== IRIS Autonomous Drone Agent ===");
+    print("Integrating std.ros2 (DDS) + std.ais (Homeostatic Control)");
+    print("");
+
+    // 1. Initialize ROS2 DDS context and node
+    val ctx = ros2_context_create();
+    if ctx.handle == 0 {
+        print("[ERROR] Failed to create ROS2 context");
+        return 1
+    };
+    print(concat("[ros2] Context created: ", to_str(ctx.handle)));
+
+    val node = ros2_node_create(ctx, "drone_agent", "/iris");
+    if node.handle == 0 {
+        print("[ERROR] Failed to create ROS2 node");
+        ros2_context_destroy(ctx);
+        return 1
+    };
+    print(concat("[ros2] Node 'drone_agent' created: ", to_str(node.handle)));
+
+    // 2. Create publishers
+    val cmd_pub = ros2_publisher_create(node, "/drone/cmd_vel", "geometry_msgs/msg/Twist");
+    print(concat("[ros2] Publisher /drone/cmd_vel created: ", to_str(cmd_pub.handle)));
+
+    val pose_pub = ros2_publisher_create(node, "/drone/status/pose", "geometry_msgs/msg/Pose");
+    print(concat("[ros2] Publisher /drone/status/pose created: ", to_str(pose_pub.handle)));
+
+    val alt_pub = ros2_publisher_create(node, "/drone/status/altitude", "std_msgs/msg/Float64");
+    print(concat("[ros2] Publisher /drone/status/altitude created: ", to_str(alt_pub.handle)));
+
+    val log_pub = ros2_publisher_create(node, "/drone/log", "std_msgs/msg/String");
+    print(concat("[ros2] Publisher /drone/log created: ", to_str(log_pub.handle)));
+    print("");
+
+    // 3. Initialize AIS homeostatic controller
+    val homeo = create_drone_homeostat();
+    print("[ais] Homeostatic controller initialized:");
+    print("  Variable 0: altitude  (set=2.0m, tol=0.3m, gain=1.5)");
+    print("  Variable 1: battery   (set=0.7,  tol=0.2,  gain=0.5)");
+    print("  Variable 2: obstacle  (set=3.0m, tol=1.0m, gain=2.0)");
+
+    // 4. Initialize running statistics trackers
+    var alt_stats = running_stats_new();
+    var speed_stats = running_stats_new();
+    var obs_stats = running_stats_new();
+
+    // 5. Run control loop
+    var state = initial_drone_state();
+    val dt = 0.1;
+    val max_steps = 50;
+    var step = 0;
+
+    print("");
+    print(concat("--- Starting ", concat(to_str(max_steps), " step control loop (dt=0.1s) ---")));
+    print("");
+
+    while step < max_steps {
+        // Monitor: read simulated sensors
+        val alt = state.altitude;
+        val bat = state.battery;
+        val obs = state.obstacle_dist;
+        val speed = sqrt(state.vx * state.vx + state.vy * state.vy + state.vz * state.vz);
+
+        // Update running statistics
+        alt_stats = running_stats_update(alt_stats, alt);
+        speed_stats = running_stats_update(speed_stats, speed);
+        obs_stats = running_stats_update(obs_stats, obs);
+
+        // Analyze & Plan: compute velocity command
+        val cmd = compute_velocity_cmd(state, homeo);
+
+        // Execute: publish commands and status via ROS2
+        ros2_publish_twist(cmd_pub, cmd);
+        ros2_publish_float64(alt_pub, alt);
+        ros2_publish_pose(pose_pub, mk_pose(state.pos_x, state.pos_y, state.pos_z, 0.0, 0.0, 0.0, 1.0));
+
+        // Log every 10 steps
+        if step % 10 == 0 {
+            val dist_to_target = sqrt(
+                (state.target_x - state.pos_x) * (state.target_x - state.pos_x) +
+                (state.target_y - state.pos_y) * (state.target_y - state.pos_y)
+            );
+            print(concat("Step ", concat(to_str(step), concat(
+                " | alt=", concat(to_str(alt), concat(
+                " | bat=", concat(to_str(bat), concat(
+                " | obs=", concat(to_str(obs), concat(
+                " | spd=", concat(to_str(speed), concat(
+                " | d2t=", to_str(dist_to_target)
+            ))))))))))));
+            ros2_publish_string(log_pub, concat("step=", to_str(step)))
+        };
+
+        // Simulate physics
+        state = simulate_step(state, cmd, dt);
+
+        // Check low battery — land if critical
+        if state.battery < 0.05 {
+            print("[ais] CRITICAL: Battery low! Initiating emergency landing.");
+            ros2_publish_twist(cmd_pub, mk_twist(0.0, 0.0, -0.5, 0.0, 0.0, 0.0));
+            ros2_publish_string(log_pub, "EMERGENCY_LAND")
+        };
+
+        step = step + 1
+    };
+
+    // 6. Print final statistics
+    print("");
+    print("=== Flight Statistics ===");
+    print(concat("Altitude  — mean: ", concat(to_str(alt_stats.mean), concat(
+        " | std: ", concat(to_str(running_stats_std(alt_stats)), concat(
+        " | min: ", concat(to_str(alt_stats.lowest), concat(
+        " | max: ", to_str(alt_stats.highest)
+    ))))))));
+    print(concat("Speed     — mean: ", concat(to_str(speed_stats.mean), concat(
+        " | std: ", concat(to_str(running_stats_std(speed_stats)), concat(
+        " | min: ", concat(to_str(speed_stats.lowest), concat(
+        " | max: ", to_str(speed_stats.highest)
+    ))))))));
+    print(concat("Obstacles — mean: ", concat(to_str(obs_stats.mean), concat(
+        " | std: ", concat(to_str(running_stats_std(obs_stats)), concat(
+        " | min: ", concat(to_str(obs_stats.lowest), concat(
+        " | max: ", to_str(obs_stats.highest)
+    ))))))));
+
+    val final_dist = sqrt(
+        (state.target_x - state.pos_x) * (state.target_x - state.pos_x) +
+        (state.target_y - state.pos_y) * (state.target_y - state.pos_y)
+    );
+    print(concat("Final position: (", concat(to_str(state.pos_x), concat(", ", concat(to_str(state.pos_y), concat(", ", concat(to_str(state.pos_z), ")")))))));
+    print(concat("Final distance to target: ", to_str(final_dist)));
+    print(concat("Final battery: ", to_str(state.battery)));
+
+    // 7. Clean shutdown
+    print("");
+    ros2_publisher_destroy(cmd_pub);
+    ros2_publisher_destroy(pose_pub);
+    ros2_publisher_destroy(alt_pub);
+    ros2_publisher_destroy(log_pub);
+    ros2_node_destroy(node);
+    ros2_context_destroy(ctx);
+    print("[ros2] All resources cleaned up. Drone agent terminated.");
+
+    0
+}

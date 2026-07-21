@@ -155,6 +155,28 @@ pub enum IrType {
     List(Box<IrType>),
     /// Hash map type: `map<K, V>` — a key-value store.
     Map(Box<IrType>, Box<IrType>),
+    /// TaskGroup type for structured concurrency.
+    TaskGroup,
+    /// WeakRef type: `weak_ref<T>` — non-owning reference.
+    WeakRef(Box<IrType>),
+    /// `dyn Trait` — fat pointer { data_ptr, vtable_ptr }.
+    /// At the IR level, we store the trait name and the method signatures
+    /// (param types + return type) so the codegen can lay out the vtable
+    /// and DynCall sites can produce well-typed indirect calls. Method
+    /// bodies are looked up at runtime via the impl dispatch table.
+    TraitObject {
+        name: String,
+        /// Method signatures in vtable slot order (no `self`).
+        methods: Vec<TraitMethodSig>,
+    },
+}
+
+/// Signature of a single method on a trait object's vtable slot.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TraitMethodSig {
+    pub name: String,
+    pub params: Vec<IrType>,
+    pub ret: Box<IrType>,
 }
 
 impl std::fmt::Display for IrType {
@@ -196,6 +218,29 @@ impl std::fmt::Display for IrType {
             IrType::Sparse(inner) => write!(f, "sparse<{}>", inner),
             IrType::List(elem) => write!(f, "list<{}>", elem),
             IrType::Map(k, v) => write!(f, "map<{}, {}>", k, v),
+            IrType::TaskGroup => f.write_str("task_group"),
+            IrType::WeakRef(inner) => write!(f, "weak_ref<{}>", inner),
+            IrType::TraitObject { name, methods } => {
+                write!(f, "dyn {}", name)?;
+                if !methods.is_empty() {
+                    f.write_str(" {")?;
+                    for (i, m) in methods.iter().enumerate() {
+                        if i > 0 {
+                            f.write_str("; ")?;
+                        }
+                        write!(f, "{}(", m.name)?;
+                        for (j, p) in m.params.iter().enumerate() {
+                            if j > 0 {
+                                f.write_str(", ")?;
+                            }
+                            write!(f, "{}", p)?;
+                        }
+                        write!(f, ") -> {}", m.ret)?;
+                    }
+                    f.write_str("}")?;
+                }
+                Ok(())
+            }
         }
     }
 }

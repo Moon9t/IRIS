@@ -5,7 +5,7 @@ pub mod ir_serial;
 pub mod jit;
 pub mod llvm_ir;
 pub mod llvm_native;
-pub mod llvm_stub;
+
 pub mod onnx;
 pub mod onnx_binary;
 pub mod pgo;
@@ -26,7 +26,6 @@ pub use llvm_ir::{
     emit_llvm_ir, emit_llvm_ir_with_target, native_target_triple, target_data_layout,
     target_preset_to_triple,
 };
-pub use llvm_stub::emit_llvm_stub;
 pub use onnx::emit_onnx_text;
 pub use onnx_binary::emit_onnx_binary;
 pub use pgo::{emit_pgo_instrument, emit_pgo_optimize};

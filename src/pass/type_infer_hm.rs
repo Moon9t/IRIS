@@ -47,6 +47,9 @@ fn local_contains_infer(ty: &IrType) -> bool {
         IrType::Fn { params, ret } => {
             params.iter().any(local_contains_infer) || local_contains_infer(ret)
         }
+        IrType::TaskGroup
+        | IrType::WeakRef(_)
+        | IrType::TraitObject { .. } => false,
     }
 }
 
@@ -579,6 +582,16 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
                     }
                 }
                 IrInstr::GetField {
+                    result, result_ty, ..
+                } => {
+                    if let Some(resolved) = value_types.get(result) {
+                        *result_ty = resolved.clone();
+                    }
+                }
+                IrInstr::MakeTraitObject {
+                    result, result_ty, ..
+                }
+                | IrInstr::DynCall {
                     result, result_ty, ..
                 } => {
                     if let Some(resolved) = value_types.get(result) {

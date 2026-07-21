@@ -1,0 +1,118 @@
+// Phase 3: extern "C" FFI Declarations Tests
+
+// Test 1: Basic extern "C" def syntax
+extern "C" def add_i64(x: i64, y: i64) -> i64
+
+def test_extern_def_syntax() -> i64 {
+    print("=== extern 'C' FFI Declarations Tests ===");
+    print("PASS: extern \"C\" def parsed successfully");
+    1
+}
+
+// Test 2: extern def without calling convention (backward compatible)
+extern def mul_i64(x: i64, y: i64) -> i64
+
+def test_extern_no_abi() -> i64 {
+    print("PASS: extern def without ABI parsed successfully");
+    1
+}
+
+// Test 3: extern with str (pointer) types
+extern "C" def concat_str(a: str, b: str) -> str
+
+def test_extern_str_params() -> i64 {
+    print("PASS: extern \"C\" def with str params parsed");
+    1
+}
+
+// Test 4: extern with complex types
+extern "C" def process_option(x: option<i64>) -> i64
+extern "C" def process_result(x: result<i64, str>) -> i64
+
+def test_extern_complex_types() -> i64 {
+    print("PASS: extern \"C\" def with option/result parsed");
+    1
+}
+
+// Test 5: extern with f64 return
+extern "C" def floor(x: f64) -> f64
+
+// Test 6: extern with multiple params
+extern "C" def fmod(x: f64, y: f64) -> f64
+
+// Test 7: Call C sqrt via extern
+extern "C" def sqrt(x: f64) -> f64
+
+def test_sqrt_call() -> i64 {
+    val r = sqrt(16.0);
+    val diff = if r - 4.0 < 0.0 { -(r - 4.0) } else { r - 4.0 };
+    if diff < 0.0001 {
+        print(concat("PASS: sqrt(16.0) = ", to_str(r)));
+        1
+    } else {
+        print(concat("FAIL: sqrt(16.0) expected ~4.0 got ", to_str(r)));
+        0
+    }
+}
+
+// Test 8: Call C fabs via extern
+extern "C" def fabs(x: f64) -> f64
+
+def test_fabs_call() -> i64 {
+    val r = fabs(-3.5);
+    val diff = if r - 3.5 < 0.0 { -(r - 3.5) } else { r - 3.5 };
+    if diff < 0.0001 {
+        print(concat("PASS: fabs(-3.5) = ", to_str(r)));
+        1
+    } else {
+        print(concat("FAIL: fabs(-3.5) expected 3.5 got ", to_str(r)));
+        0
+    }
+}
+
+// Test 9: Call C pow via extern
+extern "C" def pow(x: f64, y: f64) -> f64
+
+def test_pow_call() -> i64 {
+    val r = pow(2.0, 10.0);
+    val diff = if r - 1024.0 < 0.0 { -(r - 1024.0) } else { r - 1024.0 };
+    if diff < 0.0001 {
+        print(concat("PASS: pow(2.0, 10.0) = ", to_str(r)));
+        1
+    } else {
+        print(concat("FAIL: pow(2.0, 10.0) expected 1024.0 got ", to_str(r)));
+        0
+    }
+}
+
+def main() -> i64 {
+    var passed = 0;
+    var failed = 0;
+
+    val t1 = test_extern_def_syntax();
+    if t1 == 1 { passed = passed + 1; } else { failed = failed + 1; }
+
+    val t2 = test_extern_no_abi();
+    if t2 == 1 { passed = passed + 1; } else { failed = failed + 1; }
+
+    val t3 = test_extern_str_params();
+    if t3 == 1 { passed = passed + 1; } else { failed = failed + 1; }
+
+    val t4 = test_extern_complex_types();
+    if t4 == 1 { passed = passed + 1; } else { failed = failed + 1; }
+
+    val t5 = test_sqrt_call();
+    if t5 == 1 { passed = passed + 1; } else { failed = failed + 1; }
+
+    val t6 = test_fabs_call();
+    if t6 == 1 { passed = passed + 1; } else { failed = failed + 1; }
+
+    val t7 = test_pow_call();
+    if t7 == 1 { passed = passed + 1; } else { failed = failed + 1; }
+
+    print(concat("Passed: ", concat(to_str(passed), concat("/", concat(to_str(passed + failed), " tests")))));
+    if failed > 0 {
+        print(concat("FAILED: ", to_str(failed)));
+    }
+    passed
+}

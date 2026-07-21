@@ -99,7 +99,10 @@ impl Pass for GcAnnotatePass {
                     if let Some(result) = instr.result() {
                         if let Some(ty) = func.value_types.get(&result) {
                             if is_heap_ty(ty) {
-                                heap_vals.push((result, ty.clone(), block.id));
+                                // Do not track compile-time string constants
+                                if !matches!(instr, IrInstr::ConstStr { .. }) {
+                                    heap_vals.push((result, ty.clone(), block.id));
+                                }
                             }
                         }
                     }
@@ -133,7 +136,7 @@ impl Pass for GcAnnotatePass {
                 for (i, instr) in func.blocks[bidx].instrs.iter().enumerate() {
                     if let Some(result) = instr.result() {
                         if let Some(ty) = func.value_types.get(&result) {
-                            if is_heap_ty(ty) {
+                            if is_heap_ty(ty) && !matches!(instr, IrInstr::ConstStr { .. }) {
                                 inserts_after.push((i, IrInstr::Retain { ptr: result }));
                             }
                         }
@@ -305,6 +308,9 @@ fn escape_sources_for_value(
         | IrInstr::MakeErr { value, .. } => vec![*value],
         IrInstr::MakeClosure { captures, .. } => captures.clone(),
         IrInstr::GetField { base, .. } | IrInstr::GetElement { base, .. } => vec![*base],
+        // Trait objects hold a heap-allocated data pointer that must be retained.
+        IrInstr::MakeTraitObject { value, .. } => vec![*value],
+        IrInstr::DynCall { obj, .. } => vec![*obj],
         IrInstr::OptionUnwrap { operand, .. }
         | IrInstr::ResultUnwrap { operand, .. }
         | IrInstr::ResultUnwrapErr { operand, .. } => vec![*operand],

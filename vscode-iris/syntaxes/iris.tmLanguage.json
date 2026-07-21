@@ -203,7 +203,7 @@
         {
           "comment": "Concurrency builtins",
           "name": "support.function.builtin.iris",
-          "match": "\\b(atomic|atomic_load|atomic_store|atomic_add|channel|send|recv|chan_try_recv|chan_len|select|timeout|thread_count)\\b"
+          "match": "\\b(atomic|atomic_load|atomic_store|atomic_add|atomic_cas|mutex_new|mutex_lock|mutex_unlock|channel|send|recv|chan_try_recv|chan_len|select|timeout|thread_count|par_for|par_map|par_reduce)\\b"
         },
         {
           "comment": "Deque builtins",
@@ -284,6 +284,11 @@
           "comment": "NN stdlib: MLP",
           "name": "support.function.stdlib.iris",
           "match": "\\b(mlp_create|mlp_forward|mlp_backward|mlp_train_step|mlp_train|mlp_predict|mlp_predict_class|mlp_eval_loss|encode_shape|shape_n_in|shape_n_out|layer_weight_offset|layer_bias_offset)\\b"
+        },
+        {
+          "comment": "AIS stdlib: homeostasis, active inference, meta-cognition, MAPE-K",
+          "name": "support.function.stdlib.iris",
+          "match": "\\b(homeostasis_init|homeostasis_step|homeostasis_drive|active_inf_init|active_inf_step|run_statistics_init|run_stats_update|run_stats_mean|run_stats_variance|neuroevo_init|neuroevo_mutate|neuroevo_select|ewc_init|ewc_compute_fisher|ewc_penalty|decision_argmax|decision_epsilon_greedy|decision_softmax|decision_boltzmann|decision_ucb|reward_discount|reward_gae|perception_normalize|perception_clip|world_model_init|world_model_update|world_model_predict|safety_constitution_init|safety_check|epistemic_novelty|epistemic_curiosity|multi_agent_consensus|meta_cognition_init|meta_cognition_update|mapek_agent_init|mapek_step|mapek_run)\\b"
         }
       ]
     },
@@ -291,7 +296,7 @@
       "patterns": [
         {
           "name": "keyword.operator.arithmetic.iris",
-          "match": "(\\+|-|\\*|/|%)"
+          "match": "(\\+|(?!->)-|\\*|/|%)"
         },
         {
           "name": "keyword.operator.comparison.iris",
@@ -299,7 +304,7 @@
         },
         {
           "name": "keyword.operator.logical.iris",
-          "match": "(&&|\\|\\||!)"
+          "match": "(&&|\\|\\||(?!=)!)"
         },
         {
           "name": "keyword.operator.assignment.iris",

@@ -326,6 +326,21 @@ fn emit_llvm_ir_impl(
                             str_vec.push(value.clone());
                         }
                     }
+                    IrInstr::PushHandler { arms } => {
+                        for arm in arms {
+                            if !str_table.contains_key(&arm.effect_name) {
+                                let idx = str_vec.len();
+                                str_table.insert(arm.effect_name.clone(), idx);
+                                str_vec.push(arm.effect_name.clone());
+                            }
+                            let fn_key = format!("__fn__{}", arm.func_name);
+                            if !str_table.contains_key(&fn_key) {
+                                let idx = str_vec.len();
+                                str_table.insert(fn_key.clone(), idx);
+                                str_vec.push(arm.func_name.clone());
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -5075,6 +5090,15 @@ fn emit_instr_ir(
                     format!("{} {}", llvm_arg_ty, val(*a))
                 })
                 .collect();
+
+            // Check if this extern call is intercepted by an effect handler.
+            let name_idx = str_table.get(name).copied();
+            if name_idx.is_some() {
+                // Note: native codegen for effect handler dispatch is not yet implemented.
+                // For now, we fall through to the real extern call.
+                // The interpreter handles effect handlers correctly.
+            }
+            // Emit the real extern call regardless.
             if let Some(r) = result {
                 writeln!(
                     out,
@@ -5172,6 +5196,14 @@ fn emit_instr_ir(
             writeln!(out, "  call void @iris_sleep_ms(i64 {})", val(*ms))?;
             writeln!(out, "  %v{} = add i64 0, 0", result.0)?;
         }
+        // Phase 115: Trait object instructions (no-op in simple codegen)
+        IrInstr::MakeTraitObject { .. } => {}
+        IrInstr::DynCall { .. } => {}
+        // Phase 113: TaskGroup instructions (no-op in simple codegen)
+        IrInstr::TaskGroupNew { .. } => {}
+        IrInstr::TaskGroupSpawn { .. } => {}
+        IrInstr::TaskGroupJoin { .. } => {}
+        IrInstr::TaskGroupCancel { .. } => {}
         // Phase 104: BuiltinCall — unified dispatch for new builtins
         IrInstr::BuiltinCall {
             result,
@@ -5224,6 +5256,54 @@ fn emit_instr_ir(
                 )?;
             }
         }
+        IrInstr::PushHandler { arms } => {
+            // Push each arm onto the runtime handler stack.
+            for arm in arms {
+                let name_idx = str_table.get(&arm.effect_name).copied().unwrap_or(0);
+                let fn_idx = str_table.get(&format!("__fn__{}", arm.func_name)).copied().unwrap_or(0);
+                let has_resume = if arm.has_resume { 1i32 } else { 0i32 };
+                // Emit GEP to get pointers to the string constants.
+                writeln!(
+                    out,
+                    "  call void @iris_push_handler_arm(ptr @.str.{}, ptr @.str.{}, i64 {}, i32 {})",
+                    name_idx, fn_idx, arm.num_args, has_resume
+                )?;
+            }
+            writeln!(out, "  call void @iris_push_handler_frame()")?;
+        }
+        IrInstr::PopHandler => {
+            writeln!(out, "  call void @iris_pop_handler()")?;
+        }
+        IrInstr::ResumeCont { cont, value, result } => {
+            let v = val(*value);
+            writeln!(
+                out,
+                "  call void @iris_resume_cont(ptr {}, i64 {})",
+                val(*cont), v
+            )?;
+            // The handler should return immediately after resume.
+            // Store the value as the result so the handler can return it.
+            let res_ty = func.value_type(*result).ok_or_else(|| CodegenError::Unsupported {
+                backend: "llvm".into(),
+                detail: format!("ResumeCont result v{} has no type", result.0),
+            })?;
+            let llvm_ret = llvm_type_complete(&res_ty)?;
+            // Coerce the value to the proper type if needed
+            write!(out, "  {} = ", val(*result))?;
+            if llvm_ret.starts_with('i') {
+                writeln!(out, "trunc i64 {} to {}", v, llvm_ret)?;
+            } else if llvm_ret == "ptr" {
+                writeln!(out, "inttoptr i64 {} to ptr", v)?;
+            } else if llvm_ret == "double" {
+                writeln!(out, "bitcast i64 {} to double", v)?;
+            } else if llvm_ret == "float" {
+                writeln!(out, "bitcast i64 {} to float", v)?;
+            } else if llvm_ret == "i1" {
+                writeln!(out, "trunc i64 {} to i1", v)?;
+            } else {
+                writeln!(out, "inttoptr i64 {} to ptr", v)?;
+            }
+        }
     }
     Ok(())
 }
@@ -5262,6 +5342,9 @@ pub fn llvm_type_complete(ty: &IrType) -> Result<String, CodegenError> {
         | IrType::Sparse(_) => Ok("ptr".to_owned()),
         IrType::List(_) | IrType::Map(_, _) => Ok("ptr".to_owned()),
         IrType::Fn { .. } => Ok("ptr".to_owned()), // function pointer
+        IrType::TaskGroup => Ok("ptr".to_owned()),
+        IrType::WeakRef(_) => Ok("ptr".to_owned()),
+        IrType::TraitObject { .. } => Ok("ptr".to_owned()),
         // Infer appears for spawn-wrapper parameters whose types couldn't
         // be resolved at lowering time. All such cases are heap-allocated
         // (chan, list, map, etc.) so `ptr` is safe.
@@ -5483,7 +5566,7 @@ fn fmt_float(v: f64) -> String {
     }
 }
 
-fn f32_to_llvm_hex(f: f32) -> String {
+fn _f32_to_llvm_hex(f: f32) -> String {
     if f == 0.0 {
         if f.is_sign_negative() {
             return "-0x0.0p+0".to_owned();
@@ -5654,6 +5737,11 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare void @iris_retain(ptr)",
         "declare void @iris_release(ptr)",
         "declare void @iris_retain_kind(ptr, i32)",
+        // Effect handler runtime
+        "declare void @iris_push_handler_arm(ptr, ptr, i64, i32)",
+        "declare void @iris_push_handler_frame()",
+        "declare void @iris_pop_handler()",
+        "declare void @iris_resume_cont(ptr, i64)",
         "declare void @iris_release_kind(ptr, i32)",
         // Channels / Concurrency
         "declare ptr @iris_chan_new(i64)",

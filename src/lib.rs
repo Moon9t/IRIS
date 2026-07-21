@@ -97,6 +97,7 @@ pub fn compile_with_recovery(
                     type_aliases: vec![],
                     traits: vec![],
                     impls: vec![],
+                    effects: vec![],
                     brings: vec![],
                     extern_fns: vec![],
                 },
@@ -255,7 +256,25 @@ pub fn compile_ast_to_module(
 ) -> Result<IrModule, Error> {
     use crate::lower::{lower, lower_graph_to_ir, lower_model};
     use crate::pass::infer_shapes;
+    use crate::pass::ast_exhaustive::AstExhaustivenessPass;
+    use crate::pass::variance_checker::VarianceChecker;
 
+    // AST-level exhaustiveness checking before lowering.
+    AstExhaustivenessPass::new().run(ast_module).map_err(Error::Pass)?;
+    VarianceChecker::new().run(ast_module).map_err(Error::Pass)?;
+
+    // Effect checker (non-strict by default; emits warnings only).
+    // Set IRIS_STRICT_EFFECTS=1 to require explicit `effect` clauses on effectful functions.
+    let strict_effects = std::env::var("IRIS_STRICT_EFFECTS")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false);
+    {
+        let mut effect_checker = crate::pass::effect_checker::EffectChecker::new(strict_effects);
+        effect_checker.run(ast_module);
+        for err in &effect_checker.errors {
+            eprintln!("{}", err);
+        }
+    }
 
     let mut ir_module = lower(ast_module, module_name)?;
     for model in &ast_module.models {
@@ -327,7 +346,27 @@ fn compile_ast(
         return Ok(out);
     }
 
-    let mut ir_module = lower(ast_module, module_name)?;
+    let mut ir_module = {
+        // AST-level exhaustiveness checking before lowering
+        use crate::pass::ast_exhaustive::AstExhaustivenessPass;
+        use crate::pass::variance_checker::VarianceChecker;
+        AstExhaustivenessPass::new().run(ast_module).map_err(Error::Pass)?;
+        VarianceChecker::new().run(ast_module).map_err(Error::Pass)?;
+
+        // Effect checker (non-strict by default; emits warnings only).
+        // Set IRIS_STRICT_EFFECTS=1 to require explicit `effect` clauses on effectful functions.
+        let strict_effects = std::env::var("IRIS_STRICT_EFFECTS")
+            .map(|v| v == "1" || v.to_lowercase() == "true")
+            .unwrap_or(false);
+        {
+            let mut effect_checker = crate::pass::effect_checker::EffectChecker::new(strict_effects);
+            effect_checker.run(ast_module);
+            for err in &effect_checker.errors {
+                eprintln!("{}", err);
+            }
+        }
+        lower(ast_module, module_name)?
+    };
 
     for model in &ast_module.models {
         let graph = lower_model(model)?;

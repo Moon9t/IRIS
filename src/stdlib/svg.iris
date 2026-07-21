@@ -64,7 +64,7 @@ pub def svg_text(ctx: SVGContext, x: f64, y: f64, text: str, color: str, size: i
     SVGContext { width: ctx.width, height: ctx.height, content: concat(ctx.content, text_tag) }
 }
 
-pub def svg_save(ctx: SVGContext, path: str) -> i64 {
+pub def svg_save(ctx: SVGContext, path: str) -> i64 effect fs {
     val final_content = concat(ctx.content, "</svg>\n");
     fs.write_text(path, final_content);
     return 0;

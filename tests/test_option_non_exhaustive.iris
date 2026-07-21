@@ -1,0 +1,13 @@
+// Test: Exhaustiveness Checking - Non-exhaustive Option
+
+def test_option_non_exhaustive() -> i64 {
+    val o = some(42)
+    when o {
+        some(x) => x,
+        // Missing none!
+    }
+}
+
+def main() -> i64 {
+    test_option_non_exhaustive()
+}

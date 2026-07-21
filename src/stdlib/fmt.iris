@@ -176,7 +176,7 @@ pub def sprintf(fmt: str, args: list<str>) -> str {
 }
 
 /// Convenience: format and print with a newline.
-pub def printf(fmt: str, args: list<str>) -> str {
+pub def printf(fmt: str, args: list<str>) -> str effect io {
     val result = sprintf_from(fmt, args, 0);
     print(result);
     result

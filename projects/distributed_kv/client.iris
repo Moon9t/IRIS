@@ -4,17 +4,14 @@ bring std.net
 bring "protocol.iris"
 
 pub def send_command(host: str, port: i64, cmd: str) -> str {
-    val conn_opt = tcp_connect_to(host, port);
-    val response = when conn_opt {
-        some(conn) => {
-            val _ = tcp_write_conn(conn, cmd);
-            val resp = tcp_read_conn(conn);
-            val _ = tcp_close_conn(conn);
-            resp
-        },
-        none => {
-            "ERR:Connection failed"
-        }
+    val conn = tcp_connect_to(host, port);
+    val response = if conn >= 0 {
+        val _ = tcp_write_conn(conn, cmd);
+        val resp = tcp_read_conn(conn);
+        val _ = tcp_close_conn(conn);
+        resp
+    } else {
+        "ERR:Connection failed"
     };
     response
 }
@@ -25,10 +22,10 @@ pub def assert_response(cmd: str, expected_status: str, expected_body: str, actu
     val res = if list_len(parts) >= 2 {
         val status = list_get(parts, 0);
         val body = list_get(parts, 1);
-        
+
         val status_ok = (status == expected_status);
         val body_ok = contains(body, expected_body);
-        
+
         if status_ok && body_ok {
             print(concat("  PASS: ", concat(cmd, concat(" -> ", trimmed))));
             true
@@ -45,48 +42,48 @@ pub def assert_response(cmd: str, expected_status: str, expected_body: str, actu
 
 pub def run_test_sequence(port: i64) -> i64 {
     val host = "127.0.0.1";
-    
+
     print("");
     print("  Running client test sequence...");
-    
+
     var passes = 0;
-    
+
     // Test 1: PING
     val r1 = send_command(host, port, "PING");
     if assert_response("PING", STATUS_PONG, "PONG", r1) { passes = passes + 1; } else { val _ = 0; };
-    
+
     // Test 2: SET name IRIS
     val r2 = send_command(host, port, "SET name IRIS");
     if assert_response("SET name IRIS", STATUS_OK, "Key set", r2) { passes = passes + 1; } else { val _ = 0; };
-    
+
     // Test 3: SET version 1.0
     val r3 = send_command(host, port, "SET version 1.0");
     if assert_response("SET version 1.0", STATUS_OK, "Key set", r3) { passes = passes + 1; } else { val _ = 0; };
-    
+
     // Test 4: GET name
     val r4 = send_command(host, port, "GET name");
     if assert_response("GET name", STATUS_OK, "IRIS", r4) { passes = passes + 1; } else { val _ = 0; };
-    
+
     // Test 5: GET unknown
     val r5 = send_command(host, port, "GET unknown");
     if assert_response("GET unknown", STATUS_NOT_FOUND, "Key not found", r5) { passes = passes + 1; } else { val _ = 0; };
-    
+
     // Test 6: LIST
     val r6 = send_command(host, port, "LIST");
     if assert_response("LIST", STATUS_OK, "name", r6) { passes = passes + 1; } else { val _ = 0; };
-    
+
     // Test 7: DEL name
     val r7 = send_command(host, port, "DEL name");
     if assert_response("DEL name", STATUS_OK, "Key deleted", r7) { passes = passes + 1; } else { val _ = 0; };
-    
+
     // Test 8: GET name (should be not found)
     val r8 = send_command(host, port, "GET name");
     if assert_response("GET name", STATUS_NOT_FOUND, "Key not found", r8) { passes = passes + 1; } else { val _ = 0; };
-    
+
     // Test 9: QUIT
     val r9 = send_command(host, port, "QUIT");
     if assert_response("QUIT", STATUS_OK, "Goodbye", r9) { passes = passes + 1; } else { val _ = 0; };
-    
+
     print("");
     print(concat("  Passed ", concat(to_str(passes), " / 9 tests.")));
     passes

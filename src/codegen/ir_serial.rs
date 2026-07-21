@@ -19,7 +19,7 @@ use crate::ir::block::{BlockId, IrBlock};
 use crate::ir::function::{FunctionId, IrFunction, Param, SpanTable};
 use crate::ir::instr::{BinOp, InstrId, IrInstr, ScalarUnaryOp, TensorOp};
 use crate::ir::module::IrModule;
-use crate::ir::types::{DType, Dim, IrType, Shape};
+use crate::ir::types::{DType, Dim, IrType, Shape, TraitMethodSig};
 use crate::ir::value::{BlockParam, ValueDef, ValueId};
 
 // ── opcodes ─────────────────────────────────────────────────────────────────
@@ -142,6 +142,14 @@ const OP_DB_QUERY: u8 = 0x71;
 const OP_DB_CLOSE: u8 = 0x72;
 const OP_DB_EXEC_PARAMS: u8 = 0x73;
 const OP_DB_QUERY_PARAMS: u8 = 0x74;
+const OP_TASK_GROUP_NEW: u8 = 0x75;
+const OP_TASK_GROUP_SPAWN: u8 = 0x76;
+const OP_TASK_GROUP_JOIN: u8 = 0x77;
+const OP_TASK_GROUP_CANCEL: u8 = 0x78;
+// Phase 91: Dynamic dispatch (trait objects)
+const OP_MAKE_TRAIT_OBJECT: u8 = 0x79;
+const OP_DYN_CALL: u8 = 0x7A;
+const OP_RESUME_CONT: u8 = 0x7B;
 
 const MAGIC: &[u8; 4] = b"IRIS";
 const VERSION: u8 = 1;
@@ -328,6 +336,26 @@ impl Writer {
                 self.u8(0x12);
                 self.ty(k);
                 self.ty(v);
+            }
+            IrType::TaskGroup => {
+                self.u8(0x13);
+            }
+            IrType::WeakRef(inner) => {
+                self.u8(0x14);
+                self.ty(inner);
+            }
+            IrType::TraitObject { name, methods } => {
+                self.u8(0x15);
+                self.str(name);
+                self.u32(methods.len() as u32);
+                for m in methods {
+                    self.str(&m.name);
+                    self.u32(m.params.len() as u32);
+                    for p in &m.params {
+                        self.ty(p);
+                    }
+                    self.ty(&m.ret);
+                }
             }
         }
     }
@@ -564,6 +592,37 @@ impl Writer {
                 self.u32(*field_index as u32);
                 self.ty(result_ty);
             }
+            IrInstr::MakeTraitObject {
+                result,
+                value,
+                target_trait,
+                concrete_ty,
+                result_ty,
+            } => {
+                self.u8(OP_MAKE_TRAIT_OBJECT);
+                self.vid(*result);
+                self.vid(*value);
+                self.str(target_trait);
+                self.str(concrete_ty);
+                self.ty(result_ty);
+            }
+            IrInstr::DynCall {
+                result,
+                obj,
+                method_name,
+                args,
+                result_ty,
+            } => {
+                self.u8(OP_DYN_CALL);
+                self.vid(*result);
+                self.vid(*obj);
+                self.str(method_name);
+                self.u32(args.len() as u32);
+                for a in args {
+                    self.vid(*a);
+                }
+                self.ty(result_ty);
+            }
             IrInstr::MakeVariant {
                 result,
                 variant_idx,
@@ -790,6 +849,24 @@ impl Writer {
                 self.u8(OP_SPAWN);
                 self.str(body_fn);
                 self.vids(args);
+            }
+            IrInstr::TaskGroupNew { result } => {
+                self.u8(OP_TASK_GROUP_NEW);
+                self.vid(*result);
+            }
+            IrInstr::TaskGroupSpawn { group, body_fn, args } => {
+                self.u8(OP_TASK_GROUP_SPAWN);
+                self.vid(*group);
+                self.str(body_fn);
+                self.vids(args);
+            }
+            IrInstr::TaskGroupJoin { group } => {
+                self.u8(OP_TASK_GROUP_JOIN);
+                self.vid(*group);
+            }
+            IrInstr::TaskGroupCancel { group } => {
+                self.u8(OP_TASK_GROUP_CANCEL);
+                self.vid(*group);
             }
             IrInstr::ParFor {
                 var,
@@ -1413,6 +1490,14 @@ impl Writer {
                 }
                 self.ty(result_ty);
             }
+            IrInstr::PushHandler { .. } => {}
+            IrInstr::PopHandler => {}
+            IrInstr::ResumeCont { cont, value, result } => {
+                self.u8(OP_RESUME_CONT);
+                self.vid(*cont);
+                self.vid(*value);
+                self.vid(*result);
+            }
         }
     }
 }
@@ -1624,6 +1709,28 @@ impl<'a> Reader<'a> {
                 let k = self.ty()?;
                 let v = self.ty()?;
                 IrType::Map(Box::new(k), Box::new(v))
+            }
+            0x13 => IrType::TaskGroup,
+            0x14 => IrType::WeakRef(Box::new(self.ty()?)),
+            0x15 => {
+                let name = self.str()?;
+                let n = self.u32()? as usize;
+                let mut methods = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let mname = self.str()?;
+                    let pn = self.u32()? as usize;
+                    let mut params = Vec::with_capacity(pn);
+                    for _ in 0..pn {
+                        params.push(self.ty()?);
+                    }
+                    let ret = self.ty()?;
+                    methods.push(TraitMethodSig {
+                        name: mname,
+                        params,
+                        ret: Box::new(ret),
+                    });
+                }
+                IrType::TraitObject { name, methods }
             }
             t => return Err(format!("unknown type tag 0x{:02x}", t)),
         })
@@ -2080,6 +2187,62 @@ impl<'a> Reader<'a> {
                 let body_fn = self.str()?;
                 let args = self.vids()?;
                 IrInstr::Spawn { body_fn, args }
+            }
+            OP_TASK_GROUP_NEW => {
+                let result = self.vid()?;
+                IrInstr::TaskGroupNew { result }
+            }
+            OP_TASK_GROUP_SPAWN => {
+                let group = self.vid()?;
+                let body_fn = self.str()?;
+                let args = self.vids()?;
+                IrInstr::TaskGroupSpawn { group, body_fn, args }
+            }
+            OP_TASK_GROUP_JOIN => {
+                let group = self.vid()?;
+                IrInstr::TaskGroupJoin { group }
+            }
+            OP_TASK_GROUP_CANCEL => {
+                let group = self.vid()?;
+                IrInstr::TaskGroupCancel { group }
+            }
+            OP_MAKE_TRAIT_OBJECT => {
+                let result = self.vid()?;
+                let value = self.vid()?;
+                let target_trait = self.str()?;
+                let concrete_ty = self.str()?;
+                let result_ty = self.ty()?;
+                IrInstr::MakeTraitObject {
+                    result,
+                    value,
+                    target_trait,
+                    concrete_ty,
+                    result_ty,
+                }
+            }
+            OP_DYN_CALL => {
+                let result = self.vid()?;
+                let obj = self.vid()?;
+                let method_name = self.str()?;
+                let n = self.u32()? as usize;
+                let mut args = Vec::with_capacity(n);
+                for _ in 0..n {
+                    args.push(self.vid()?);
+                }
+                let result_ty = self.ty()?;
+                IrInstr::DynCall {
+                    result,
+                    obj,
+                    method_name,
+                    args,
+                    result_ty,
+                }
+            }
+            OP_RESUME_CONT => {
+                let cont = self.vid()?;
+                let value = self.vid()?;
+                let result = self.vid()?;
+                IrInstr::ResumeCont { cont, value, result }
             }
             OP_PAR_FOR => {
                 let var = self.vid()?;

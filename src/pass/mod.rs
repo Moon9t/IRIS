@@ -1,6 +1,8 @@
 pub mod const_fold;
 pub mod copy_prop;
 pub mod dead_node;
+pub mod effect_checker;
+pub mod effect_registry;
 pub mod exhaustive;
 pub mod gc_annotate;
 pub mod graph_pass;
@@ -15,6 +17,8 @@ pub mod strength_reduce;
 pub mod type_infer;
 pub mod type_infer_hm;
 pub mod validate;
+pub mod ast_exhaustive;
+pub mod variance_checker;
 
 pub use const_fold::ConstFoldPass;
 pub use copy_prop::CopyPropPass;
@@ -31,6 +35,7 @@ pub use shape_check::ShapeCheckPass;
 pub use shape_infer_graph::infer_shapes;
 pub use strength_reduce::StrengthReducePass;
 pub use type_infer_hm::HmTypeInferPass;
+pub use ast_exhaustive::AstExhaustivenessPass;
 
 use std::collections::HashSet;
 use crate::error::PassError;

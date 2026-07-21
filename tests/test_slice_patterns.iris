@@ -1,0 +1,101 @@
+// Test: Slice Patterns in when expressions
+// Tests the [a, b, ..rest] syntax for list pattern matching
+
+def check(b: bool) -> i64 { if b { 0 } else { 1 } }
+
+def test_exact_match() -> i64 {
+    val lst: list<i64> = list();
+    list_push(lst, 1);
+    list_push(lst, 2);
+    val result = when lst {
+        [1, 2] => 1,
+        _ => 0,
+    };
+    check(result == 1);
+    result
+}
+
+def test_rest_binding() -> i64 {
+    val lst: list<i64> = list();
+    list_push(lst, 1);
+    list_push(lst, 2);
+    list_push(lst, 3);
+    list_push(lst, 4);
+    val result = when lst {
+        [a, ..rest] => len(rest),
+        _ => 0,
+    };
+    check(result == 3);
+    result
+}
+
+def test_mixed_match() -> i64 {
+    val lst: list<i64> = list();
+    list_push(lst, 1);
+    list_push(lst, 2);
+    val result = when lst {
+        [1, 2, 3] => 1,
+        [1, 2] => 2,
+        _ => 0,
+    };
+    check(result == 2);
+    result
+}
+
+def test_wildcard_elements() -> i64 {
+    val lst: list<i64> = list();
+    list_push(lst, 1);
+    list_push(lst, 2);
+    list_push(lst, 3);
+    val result = when lst {
+        [_, _, _] => 3,
+        _ => 0,
+    };
+    check(result == 3);
+    result
+}
+
+def test_exact_no_match_longer() -> i64 {
+    val lst: list<i64> = list();
+    list_push(lst, 1);
+    list_push(lst, 2);
+    list_push(lst, 3);
+    val result = when lst {
+        [1, 2] => 1,
+        _ => 0,
+    };
+    check(result == 0);
+    result
+}
+
+def test_empty_list() -> i64 {
+    val lst: list<i64> = list();
+    val result = when lst {
+        [] => 0,
+        _ => 1,
+    };
+    check(result == 0);
+    result
+}
+
+def test_bind_prefix_elements() -> i64 {
+    val lst: list<i64> = list();
+    list_push(lst, 3);
+    list_push(lst, 4);
+    val result = when lst {
+        [a, b] => a + b,
+        _ => 0,
+    };
+    check(result == 7);
+    result
+}
+
+def main() -> i64 {
+    test_exact_match() +
+    test_rest_binding() +
+    test_mixed_match() +
+    test_wildcard_elements() +
+    test_exact_no_match_longer() +
+    test_empty_list() +
+    test_bind_prefix_elements()
+}

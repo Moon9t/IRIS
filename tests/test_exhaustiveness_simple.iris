@@ -1,0 +1,16 @@
+// Test: Exhaustiveness Checking - Non-exhaustive enum match
+
+choice Color { Red, Green, Blue }
+
+def test_non_exhaustive_match() -> i64 {
+    val c = Color.Red
+    when c {
+        Color.Red => 1,
+        Color.Green => 2,
+        // Missing Color.Blue!
+    }
+}
+
+def main() -> i64 {
+    0
+}

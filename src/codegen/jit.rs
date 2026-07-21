@@ -266,17 +266,19 @@ fn is_native_jit_available() -> bool {
     if !clang_ok {
         return false;
     }
-    // On Windows the JIT targets x86_64-w64-windows-gnu and therefore needs
-    // the MSYS2/MinGW ucrt64 toolchain (headers + libraries + GCC CRT). If
-    // any of those paths are missing the native tier cannot link a runnable
-    // binary.
+    // On Windows targeting MinGW/gnu, the JIT needs MSYS2/ucrt64 toolchain
+    // (headers + libraries + GCC CRT). For MSVC targets, clang auto-discovers
+    // the MSVC toolchain, so MSYS2 is not required.
     #[cfg(target_os = "windows")]
     {
-        if msys2_ucrt64_include().is_none()
-            || msys2_ucrt64_lib().is_none()
-            || msys2_gcc_lib().is_none()
-        {
-            return false;
+        let target = crate::codegen::llvm_ir::native_target_triple();
+        if !target.contains("msvc") {
+            if msys2_ucrt64_include().is_none()
+                || msys2_ucrt64_lib().is_none()
+                || msys2_gcc_lib().is_none()
+            {
+                return false;
+            }
         }
     }
     true

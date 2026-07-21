@@ -78,6 +78,9 @@ fn fmt_onnx_type(ty: &IrType) -> String {
         IrType::List(inner) => format!("unknown_type {{ // list<{}> }}", inner),
         IrType::Map(k, v) => format!("unknown_type {{ // map<{}, {}> }}", k, v),
         IrType::Infer | IrType::Fn { .. } => "unknown_type {}".to_owned(),
+        IrType::TaskGroup => "unknown_type { // task_group }".to_owned(),
+        IrType::WeakRef(inner) => format!("unknown_type {{ // weak_ref<{}> }}", inner),
+        IrType::TraitObject { name, .. } => format!("unknown_type {{ // dyn {} }}", name),
     }
 }
 

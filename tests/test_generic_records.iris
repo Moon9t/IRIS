@@ -1,0 +1,33 @@
+// Test: Generic Records with explicit type annotation
+
+record Box[T] {
+    item: T
+}
+
+record Pair[T, U] {
+    first: T,
+    second: U
+}
+
+def main() -> i64 {
+    // Basic generic record with explicit type annotation
+    val b: Box<i64> = Box { item: 42 }
+    val r1 = b.item
+    print("Box<i64>.item = ");
+    println(to_str(r1));
+
+    // Generic record with str
+    val bs: Box<str> = Box { item: "hello" }
+    print("Box<str>.item = ");
+    println(bs.item);
+
+    // Multi-param generic record
+    val p: Pair<i64, i64> = Pair { first: 10, second: 20 }
+    print("Pair.first = ");
+    println(to_str(p.first));
+    print("Pair.second = ");
+    println(to_str(p.second));
+
+    // Return sum to verify
+    r1
+}

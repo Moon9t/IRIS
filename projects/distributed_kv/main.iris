@@ -8,17 +8,17 @@ bring "client.iris"
 
 def main() -> i64 {
     print("");
-    print("  ╔══════════════════════════════════════════════════════════╗");
-    print("  ║        IRIS Distributed Key-Value Store Demo             ║");
-    print("  ║        Thread-Safe · Mutexed · TCP Networking            ║");
-    print("  ╚══════════════════════════════════════════════════════════╝");
+    print("  -----------------------------------------------------------");
+    print("        IRIS Distributed Key-Value Store Demo               ");
+    print("        Thread-Safe · Mutexed · TCP Networking               ");
+    print("  -----------------------------------------------------------");
     print("");
     
     // 1. Initialize store
     val store = store_new();
     
-    // 2. Start TCP server in background thread
-    val port = 9090;
+        // 2. Start TCP server in background thread
+    val port = 9095;
     
     print("  Starting TCP Server in background thread...");
     spawn {
@@ -43,11 +43,11 @@ def main() -> i64 {
     
     // 5. Print summary report
     print("");
-    print("  ┌─ Summary Report ───────────────────────────");
-    print(concat("  │ Port:               ", to_str(port)));
-    print(concat("  │ Tests Passed:       ", concat(to_str(passes), " / 9")));
-    print(concat("  │ Persistence Status: ", if saved { "Saved" } else { "Failed" }));
-    print("  └────────────────────────────────────────────");
+    print("  ---------------------------------------------");
+    print(concat("  * Port:               ", to_str(port)));
+    print(concat("  * Tests Passed:       ", concat(to_str(passes), " / 9")));
+    print(concat("  * Persistence Status: ", if saved { "Saved" } else { "Failed" }));
+    print("  ---------------------------------------------");
     print("");
     
     0

@@ -1,5 +1,15 @@
 # IRIS Language Extension Changelog
 
+## 1.0.1
+
+### Bug Fixes
+
+- **Syntax highlighting**: Fixed `-` arithmetic operator incorrectly matching inside `->` arrow type annotations
+- **Syntax highlighting**: Fixed `!` logical-NOT operator incorrectly matching inside `!=` comparison operators
+- **Grammar**: Added AIS/MAPE-K stdlib functions (`mapek_agent_init`, `mapek_step`, `mapek_run`, `homeostasis_*`, `active_inf_*`, `epistemic_*`, `safety_check`, etc.)
+- **Grammar**: Added concurrency primitives (`atomic_cas`, `mutex_new`, `mutex_lock`, `mutex_unlock`, `par_for`, `par_map`, `par_reduce`)
+- **Rebuild**: Clean production build of bundled extension JS
+
 ## 1.0.0
 
 ### New Features

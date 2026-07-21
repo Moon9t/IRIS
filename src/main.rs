@@ -101,8 +101,8 @@ fn run() {
                 process::exit(1);
             }
         }
-        Ok(ParseArgsResult::Pkg) => {
-            if let Err(e) = iris::pkg::run_pkg_command(&args) {
+        Ok(ParseArgsResult::Pkg { args: pkg_args }) => {
+            if let Err(e) = iris::pkg::run_pkg_command(&pkg_args) {
                 eprintln!("error: {}", e);
                 process::exit(1);
             }
@@ -194,7 +194,9 @@ fn run() {
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("iris_out");
-                    PathBuf::from(format!("{}{}", stem, std::env::consts::EXE_SUFFIX))
+                    let is_wasm = cli.target.as_deref().map_or(false, |t| resolved_target(Some(t)).contains("wasm32"));
+                    let ext = if is_wasm { ".wasm" } else { std::env::consts::EXE_SUFFIX };
+                    PathBuf::from(format!("{}{}", stem, ext))
                 });
                 match iris::codegen::build_binary_with_target(
                     &module,

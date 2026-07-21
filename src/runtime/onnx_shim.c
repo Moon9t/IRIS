@@ -66,29 +66,48 @@ void* iris_onnx_session_create(const char* model_path) {
 }
 
 int iris_onnx_session_run(void* session, IrisTensor** inputs, size_t n_inputs, IrisTensor*** outputs, size_t* n_outputs) {
-    if (!session || !inputs || !outputs || !n_outputs) return -1;
+    if (!session || !inputs || !outputs || !n_outputs) {
+        fprintf(stderr, "iris: ORT Run error: invalid arguments\n");
+        return -1;
+    }
     const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
     ONNXModel* m = (ONNXModel*)session;
 
     // Get input and output names from session metadata
     size_t num_input_nodes = 0;
     OrtStatus* status = g_ort->SessionGetInputCount(m->session, &num_input_nodes);
-    if (status) { g_ort->ReleaseStatus(status); return -1; }
+    if (status) {
+        fprintf(stderr, "iris: ORT Run error: SessionGetInputCount failed: %s\n", g_ort->GetErrorMessage(status));
+        g_ort->ReleaseStatus(status);
+        return -1;
+    }
     
     size_t num_output_nodes = 0;
     status = g_ort->SessionGetOutputCount(m->session, &num_output_nodes);
-    if (status) { g_ort->ReleaseStatus(status); return -1; }
+    if (status) {
+        fprintf(stderr, "iris: ORT Run error: SessionGetOutputCount failed: %s\n", g_ort->GetErrorMessage(status));
+        g_ort->ReleaseStatus(status);
+        return -1;
+    }
 
     // Allocate input and output name arrays
     const char** input_names = malloc(sizeof(char*) * num_input_nodes);
     const char** output_names = malloc(sizeof(char*) * num_output_nodes);
-    if (!input_names || !output_names) { free(input_names); free(output_names); return -1; }
+    if (!input_names || !output_names) {
+        fprintf(stderr, "iris: ORT Run error: out of memory for names\n");
+        free(input_names); free(output_names);
+        return -1;
+    }
 
     // Get input names
     for (size_t i = 0; i < num_input_nodes; ++i) {
         char* name = NULL;
         status = g_ort->SessionGetInputName(m->session, i, m->allocator, &name);
-        if (status) { g_ort->ReleaseStatus(status); free(input_names); free(output_names); return -1; }
+        if (status) {
+            fprintf(stderr, "iris: ORT Run error: SessionGetInputName failed: %s\n", g_ort->GetErrorMessage(status));
+            g_ort->ReleaseStatus(status); free(input_names); free(output_names);
+            return -1;
+        }
         input_names[i] = name;
     }
 
@@ -96,19 +115,31 @@ int iris_onnx_session_run(void* session, IrisTensor** inputs, size_t n_inputs, I
     for (size_t i = 0; i < num_output_nodes; ++i) {
         char* name = NULL;
         status = g_ort->SessionGetOutputName(m->session, i, m->allocator, &name);
-        if (status) { g_ort->ReleaseStatus(status); free(input_names); free(output_names); return -1; }
+        if (status) {
+            fprintf(stderr, "iris: ORT Run error: SessionGetOutputName failed: %s\n", g_ort->GetErrorMessage(status));
+            g_ort->ReleaseStatus(status); free(input_names); free(output_names);
+            return -1;
+        }
         output_names[i] = name;
     }
 
     // Prepare input OrtValue tensors
     OrtValue** input_tensors = malloc(sizeof(OrtValue*) * n_inputs);
-    if (!input_tensors) { free(input_names); free(output_names); return -1; }
+    if (!input_tensors) {
+        fprintf(stderr, "iris: ORT Run error: out of memory for input tensors\n");
+        free(input_names); free(output_names);
+        return -1;
+    }
 
     for (size_t i = 0; i < n_inputs && i < num_input_nodes; ++i) {
         IrisTensor* it = inputs[i];
         OrtMemoryInfo* mem_info = NULL;
         status = g_ort->CreateCpuMemoryInfo(OrtArenaAllocator, ORT_INVALID_DEVICE_ID, &mem_info);
-        if (status) { g_ort->ReleaseStatus(status); free(input_tensors); free(input_names); free(output_names); return -1; }
+        if (status) {
+            fprintf(stderr, "iris: ORT Run error: CreateCpuMemoryInfo failed: %s\n", g_ort->GetErrorMessage(status));
+            g_ort->ReleaseStatus(status); free(input_tensors); free(input_names); free(output_names);
+            return -1;
+        }
 
         OrtValue* val = NULL;
         status = g_ort->CreateTensorWithDataAsOrtValue(mem_info, it->data, sizeof(float) * it->numel, it->shape, it->ndim, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &val);
@@ -138,6 +169,10 @@ int iris_onnx_session_run(void* session, IrisTensor** inputs, size_t n_inputs, I
     free(input_tensors);
 
     if (status) {
+        const char* msg = g_ort->GetErrorMessage(status);
+        if (msg) {
+            fprintf(stderr, "iris: ORT Run failed: %s\n", msg);
+        }
         g_ort->ReleaseStatus(status);
         free(output_values);
         free(input_names);
@@ -217,11 +252,56 @@ void iris_onnx_session_free(void* session) {
     free(m);
 }
 
+int64_t iris_onnx_get_input_count(int64_t session) {
+    if (!session) return 0;
+    const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    ONNXModel* m = (ONNXModel*)(intptr_t)session;
+    size_t count = 0;
+    OrtStatus* status = g_ort->SessionGetInputCount(m->session, &count);
+    if (status) { g_ort->ReleaseStatus(status); return 0; }
+    return (int64_t)count;
+}
+
+int64_t iris_onnx_get_output_count(int64_t session) {
+    if (!session) return 0;
+    const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    ONNXModel* m = (ONNXModel*)(intptr_t)session;
+    size_t count = 0;
+    OrtStatus* status = g_ort->SessionGetOutputCount(m->session, &count);
+    if (status) { g_ort->ReleaseStatus(status); return 0; }
+    return (int64_t)count;
+}
+
+const char* iris_onnx_get_input_name(int64_t session, int64_t idx) {
+    if (!session) return "";
+    const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    ONNXModel* m = (ONNXModel*)(intptr_t)session;
+    char* name = NULL;
+    OrtStatus* status = g_ort->SessionGetInputName(m->session, (size_t)idx, m->allocator, &name);
+    if (status) { g_ort->ReleaseStatus(status); return ""; }
+    return name;
+}
+
+const char* iris_onnx_get_output_name(int64_t session, int64_t idx) {
+    if (!session) return "";
+    const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    ONNXModel* m = (ONNXModel*)(intptr_t)session;
+    char* name = NULL;
+    OrtStatus* status = g_ort->SessionGetOutputName(m->session, (size_t)idx, m->allocator, &name);
+    if (status) { g_ort->ReleaseStatus(status); return ""; }
+    return name;
+}
+
 #else
 
 // Fallback when ORT not available
 void* iris_onnx_session_create(const char* model_path) { (void)model_path; fprintf(stderr, "iris: ONNX Runtime not enabled at build time\n"); return NULL; }
 int   iris_onnx_session_run(void* session, IrisTensor** inputs, size_t n_inputs, IrisTensor*** outputs, size_t* n_outputs) { (void)session;(void)inputs;(void)n_inputs;(void)outputs;(void)n_outputs; fprintf(stderr, "iris: ONNX Runtime not enabled at build time\n"); return -1; }
 void  iris_onnx_session_free(void* session) { (void)session; }
+int64_t     iris_onnx_get_input_count(int64_t session) { (void)session; return 0; }
+int64_t     iris_onnx_get_output_count(int64_t session) { (void)session; return 0; }
+const char* iris_onnx_get_input_name(int64_t session, int64_t idx) { (void)session; (void)idx; return ""; }
+const char* iris_onnx_get_output_name(int64_t session, int64_t idx) { (void)session; (void)idx; return ""; }
 
 #endif /* ONNX_RUNTIME_ENABLED */
+

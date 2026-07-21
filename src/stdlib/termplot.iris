@@ -1,7 +1,7 @@
 // std.termplot - ASCII Plotting for the terminal
 // IRIS v0.5.0
 
-pub def term_plot_bar(values: list<f64>, max_width: i64, title: str) -> i64 {
+pub def term_plot_bar(values: list<f64>, max_width: i64, title: str) -> i64 effect io {
     val n = list_len(values);
     if n == 0 {
         return 0;

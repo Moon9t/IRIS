@@ -1,0 +1,66 @@
+choice Color { Red, Green, Blue }
+
+def test_exhaustive_match() -> i64 {
+    val c = Color.Red
+    when c {
+        Color.Red => 1,
+        Color.Green => 2,
+        Color.Blue => 3,
+    }
+}
+
+def test_non_exhaustive_match() -> i64 {
+    val c = Color.Red
+    when c {
+        Color.Red => 1,
+        Color.Green => 2,
+        // Missing Color.Blue - should error
+    }
+}
+
+def test_wildcard_match() -> i64 {
+    val c = Color.Red
+    when c {
+        Color.Red => 1,
+        _ => 99,  // Wildcard covers remaining
+    }
+}
+
+def test_option_exhaustive() -> i64 {
+    val o = some(42)
+    when o {
+        some(x) => x,
+        none => 0,
+    }
+}
+
+def test_option_non_exhaustive() -> i64 {
+    val o = some(42)
+    when o {
+        some(x) => x,
+        // Missing none - should error
+    }
+}
+
+def test_result_exhaustive() -> i64 {
+    val r = ok(42)
+    when r {
+        ok(x) => x,
+        err(e) => -1,
+    }
+}
+
+def test_result_non_exhaustive() -> i64 {
+    val r = ok(42)
+    when r {
+        ok(x) => x,
+        // Missing err - should error
+    }
+}
+
+def main() -> i64 {
+    test_exhaustive_match() +
+    test_wildcard_match() +
+    test_option_exhaustive() +
+    test_result_exhaustive()
+}

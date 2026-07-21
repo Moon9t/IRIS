@@ -1,7 +1,36 @@
 LIBRARY iris_ros2
 EXPORTS
+    ; Legacy singleton API
     rcl_init = iris_rcl_init
     rcl_get_zero_initialized_node = iris_rcl_get_zero_initialized_node
     rcl_get_zero_initialized_publisher = iris_rcl_get_zero_initialized_publisher
     rcl_publish = iris_rcl_publish
     rcl_shutdown = iris_rcl_shutdown
+    ; Dynamic Context API
+    iris_rcl_context_create
+    iris_rcl_context_destroy
+    ; Dynamic Node API
+    iris_rcl_node_create
+    iris_rcl_node_destroy
+    ; Dynamic Publisher API
+    iris_rcl_publisher_create
+    iris_rcl_publisher_destroy
+    ; Dynamic Subscription API
+    iris_rcl_subscription_create
+    iris_rcl_subscription_destroy
+    ; Typed Publish
+    iris_rcl_publish_float64
+    iris_rcl_publish_int64
+    iris_rcl_publish_string
+    iris_rcl_publish_vector3
+    iris_rcl_publish_twist
+    iris_rcl_publish_pose
+    ; Wait Set
+    iris_rcl_wait_for_message
+    ; Typed Take (Receive)
+    iris_rcl_take_float64
+    iris_rcl_take_int64_val
+    iris_rcl_take_string
+    iris_rcl_take_vector3
+    iris_rcl_take_twist
+    iris_rcl_take_pose

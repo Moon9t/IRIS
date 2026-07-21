@@ -1,0 +1,66 @@
+// Test: Range Patterns in when expressions
+
+def test_range_basic() -> i64 {
+    val x = 7
+    when x {
+        1..=5 => 1,
+        6..=10 => 2,
+        11..=15 => 3,
+        _ => 0,
+    }
+}
+
+def test_range_edge() -> i64 {
+    val x = 5
+    when x {
+        1..=5 => 1,  // inclusive start and end
+        6..=10 => 2,
+        _ => 0,
+    }
+}
+
+def test_range_single() -> i64 {
+    val x = 7
+    when x {
+        7..=7 => 42,
+        _ => 0,
+    }
+}
+
+def test_range_neg() -> i64 {
+    val x = 3
+    when x {
+        1..=3 => 1,
+        4..=10 => 2,
+        _ => 0,
+    }
+}
+
+def test_range_overlapping() -> i64 {
+    // First matching arm wins
+    val x = 5
+    when x {
+        1..=10 => 1,
+        5..=5 => 2,
+        _ => 0,
+    }
+}
+
+def test_range_mixed() -> i64 {
+    val x = 3
+    when x {
+        1 => 10,           // literal
+        2..=4 => 20,       // range
+        5..=10 => 30,      // range
+        _ => 0,
+    }
+}
+
+def main() -> i64 {
+    test_range_basic() + 
+    test_range_edge() + 
+    test_range_single() + 
+    test_range_neg() + 
+    test_range_overlapping() + 
+    test_range_mixed()
+}

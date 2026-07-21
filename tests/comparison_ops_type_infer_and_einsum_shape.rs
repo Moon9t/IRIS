@@ -323,7 +323,7 @@ fn test_einsum_shape_check_wrong_input_count() {
 
 #[test]
 fn test_llvm_load_no_undef() {
-    use iris::codegen::llvm_stub::emit_llvm_stub;
+    use iris::codegen::emit_llvm_ir;
 
     let tensor_ty = IrType::Tensor {
         dtype: DType::F32,
@@ -364,7 +364,7 @@ fn test_llvm_load_no_undef() {
     let mut module = IrModule::new("test");
     module.add_function(builder.build()).unwrap();
 
-    let output = emit_llvm_stub(&module).expect("emit");
+    let output = emit_llvm_ir(&module).expect("emit");
     assert!(
         output.contains("getelementptr"),
         "LLVM load with index must emit getelementptr\n{}",

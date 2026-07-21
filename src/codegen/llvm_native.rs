@@ -1,7 +1,7 @@
 //! Native LLVM IR generation via `inkwell`.
 //!
 //! This module provides in-process LLVM code generation as an alternative
-//! to the text-based `llvm_ir.rs` / `llvm_stub.rs` emitters. It is gated
+//! to the text-based `llvm_ir.rs` emitter. It is gated
 //! behind the `native-llvm` Cargo feature.
 //!
 //! Capabilities when `native-llvm` is enabled:
@@ -102,11 +102,69 @@ mod backend {
                 self.declare_function(func)?;
             }
 
+            // Emit vtable globals for trait objects.
+            self.emit_vtable_globals(ir_module)?;
+
             // Define each function body.
             for func in ir_module.functions() {
-                self.compile_function(func)?;
+                self.compile_function(func, ir_module)?;
             }
 
+            Ok(())
+        }
+
+        fn emit_vtable_globals(&self, module: &IrModule) -> Result<(), CodegenError> {
+            let ptr_ty = self.context.i8_type().ptr_type(AddressSpace::from(0));
+            for (trait_name, methods) in module.trait_defs() {
+                let Some(impl_list) = module.trait_impl_methods().get(trait_name) else {
+                    continue;
+                };
+                let mut by_concrete: std::collections::BTreeMap<String, Vec<(String, String)>> =
+                    std::collections::BTreeMap::new();
+                for (concrete, mname, mangled) in impl_list {
+                    by_concrete
+                        .entry(concrete.clone())
+                        .or_default()
+                        .push((mname.clone(), mangled.clone()));
+                }
+                for (concrete, mut entries) in by_concrete {
+                    entries.sort_by(|a, b| {
+                        let ai = methods.iter().position(|m| m.name == a.0);
+                        let bi = methods.iter().position(|m| m.name == b.0);
+                        ai.cmp(&bi)
+                    });
+                    let n = entries.len();
+                    if n == 0 {
+                        continue;
+                    }
+                    let global_name = format!("vtable_{}__{}", trait_name, concrete);
+                    // Build an array type [N x ptr] and collect fn ptr values.
+                    let mut fn_ptrs = Vec::with_capacity(n);
+                    for (_mname, mangled) in &entries {
+                        if let Some(fn_val) = self.module.get_function(mangled) {
+                            fn_ptrs.push(fn_val.as_global_value().as_pointer_value());
+                        } else {
+                            return Err(CodegenError::Unsupported {
+                                backend: "llvm_native".into(),
+                                detail: format!(
+                                    "vtable: function '{}' not found for trait '{}' concrete '{}'",
+                                    mangled, trait_name, concrete
+                                ),
+                            });
+                        }
+                    }
+                    let array_ty = ptr_ty.array_type(n as u32);
+                    let global = self.module.add_global(array_ty, None, &global_name);
+                    global.set_linkage(inkwell::module::Linkage::Internal);
+                    // Build a constant array of ptr values.
+                    let vals: Vec<&dyn BasicValue<'ctx>> = fn_ptrs
+                        .iter()
+                        .map(|p| p as &dyn BasicValue)
+                        .collect();
+                    let init_val = ptr_ty.const_array(&vals);
+                    global.set_initializer(&init_val);
+                }
+            }
             Ok(())
         }
 
@@ -199,7 +257,7 @@ mod backend {
         // Internal: function body compilation
         // ------------------------------------------------------------------
 
-        fn compile_function(&mut self, func: &IrFunction) -> Result<(), CodegenError> {
+        fn compile_function(&mut self, func: &IrFunction, module: &IrModule) -> Result<(), CodegenError> {
             let llvm_fn = self
                 .module
                 .get_function(&func.name)
@@ -247,7 +305,7 @@ mod backend {
 
                     // Compile instructions.
                     for instr in &block.instrs {
-                        self.compile_instr(instr, func)?;
+                        self.compile_instr(instr, func, module)?;
                     }
                 }
             }
@@ -347,6 +405,7 @@ mod backend {
             &mut self,
             instr: &IrInstr,
             func: &IrFunction,
+            module: &IrModule,
         ) -> Result<(), CodegenError> {
             match instr {
                 // Constants
@@ -600,6 +659,57 @@ mod backend {
                     self.values.insert(*result, ptr.into());
                 }
 
+                IrInstr::MakeTraitObject {
+                    result,
+                    value,
+                    target_trait,
+                    concrete_ty,
+                    ..
+                } => {
+                    // Allocate {ptr, ptr} struct (16 bytes), store data + vtable ptr.
+                    let ptr_ty = self.context.i8_type().ptr_type(AddressSpace::from(0));
+                    let malloc_fn = self.get_or_declare_malloc()?;
+                    let size_val = self.context.i64_type().const_int(16, false);
+                    let malloc_call = self
+                        .builder
+                        .build_call(malloc_fn, &[size_val.into()], "trait_obj_alloc")?;
+                    let obj_ptr = malloc_call
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap()
+                        .into_pointer_value();
+                    // Field 0: data pointer.
+                    let f0 = unsafe {
+                        self.builder.build_gep(
+                            ptr_ty,
+                            obj_ptr,
+                            &[self.context.i64_type().const_int(0, false)],
+                            "to_f0",
+                        )?
+                    };
+                    let data_val = self.get_value(*value)?;
+                    self.builder.build_store(f0, data_val)?;
+                    // Field 1: vtable pointer (decayed from the global).
+                    let vtable_name = format!("vtable_{}__{}", target_trait, concrete_ty);
+                    let vtable_global = self.module.get_global(&vtable_name).ok_or_else(|| {
+                        CodegenError::Unsupported {
+                            backend: "llvm_native".into(),
+                            detail: format!("vtable global '{}' not found", vtable_name),
+                        }
+                    })?;
+                    let f1 = unsafe {
+                        self.builder.build_gep(
+                            ptr_ty,
+                            obj_ptr,
+                            &[self.context.i64_type().const_int(1, false)],
+                            "to_f1",
+                        )?
+                    };
+                    let vtable_ptr = vtable_global.as_pointer_value();
+                    self.builder.build_store(f1, vtable_ptr)?;
+                    self.values.insert(*result, obj_ptr.into());
+                }
+
                 // Tuple operations
                 IrInstr::MakeTuple {
                     result,
@@ -796,6 +906,58 @@ mod backend {
                         }
                         self.builder.build_call(spawn_fn, &[fn_ptr.into(), buf.into()], "")?;
                     }
+                }
+
+                // TaskGroup operations
+                IrInstr::TaskGroupNew { result } => {
+                    let tg_new_fn = self.get_or_declare_runtime_fn_ret("iris_task_group_new", &[], self.ptr_ty().into())?;
+                    let call_result = self.builder.build_call(tg_new_fn, &[], "tg_new")?;
+                    if let Some(val) = call_result.try_as_basic_value().left() {
+                        self.values.insert(*result, val);
+                    }
+                }
+                IrInstr::TaskGroupSpawn { group, body_fn, args } => {
+                    let tg_spawn_fn = self.get_or_declare_runtime_fn_void(
+                        "iris_task_group_spawn",
+                        &[self.ptr_ty().into(), self.ptr_ty().into(), self.ptr_ty().into()],
+                    )?;
+                    let tg_ptr = self.get_value(*group)?;
+                    if let Some(fn_val) = self.module.get_function(body_fn) {
+                        let fn_ptr = fn_val.as_global_value().as_pointer_value();
+                        let n_args = args.len();
+                        let buf_size = self.context.i64_type().const_int((n_args * 8) as u64, false);
+                        let malloc_fn = self.get_or_declare_malloc()?;
+                        let buf = if n_args > 0 {
+                            let b = self.builder.build_call(malloc_fn, &[buf_size.into()], "tg_spawn_buf")?
+                                .try_as_basic_value().left().unwrap().into_pointer_value();
+                            for (i, arg) in args.iter().enumerate() {
+                                let av = self.get_value(*arg)?;
+                                let slot = unsafe {
+                                    self.builder.build_gep(
+                                        self.ptr_ty(),
+                                        b,
+                                        &[self.context.i64_type().const_int(i as u64, false)],
+                                        &format!("tg_arg_{}", i),
+                                    )?
+                                };
+                                self.builder.build_store(slot, av)?;
+                            }
+                            b.into()
+                        } else {
+                            self.ptr_ty().const_null().into()
+                        };
+                        self.builder.build_call(tg_spawn_fn, &[tg_ptr.into(), fn_ptr.into(), buf.into()], "")?;
+                    }
+                }
+                IrInstr::TaskGroupJoin { group } => {
+                    let tg_join_fn = self.get_or_declare_runtime_fn_void("iris_task_group_join", &[self.ptr_ty().into()])?;
+                    let tg_ptr = self.get_value(*group)?;
+                    self.builder.build_call(tg_join_fn, &[tg_ptr.into()], "")?;
+                }
+                IrInstr::TaskGroupCancel { group } => {
+                    let tg_cancel_fn = self.get_or_declare_runtime_fn_void("iris_task_group_cancel", &[self.ptr_ty().into()])?;
+                    let tg_ptr = self.get_value(*group)?;
+                    self.builder.build_call(tg_cancel_fn, &[tg_ptr.into()], "")?;
                 }
 
                 // List operations — delegate to C runtime
@@ -1203,6 +1365,105 @@ mod backend {
                     }
                 }
 
+                IrInstr::DynCall {
+                    result,
+                    obj,
+                    method_name,
+                    args,
+                    ..
+                } => {
+                    // Inline vtable dispatch via inkwell API.
+                    let ptr_ty = self.context.i8_type().ptr_type(AddressSpace::from(0));
+                    let obj_val = self.get_value(*obj)?.into_pointer_value();
+                    // Determine the trait name from the value type.
+                    let obj_ty = func.value_type(*obj);
+                    let trait_name = match obj_ty {
+                        Some(IrType::TraitObject { name, .. }) => name.clone(),
+                        _ => "_unknown".to_owned(),
+                    };
+                    // Resolve method slot index from trait_def.
+                    let slot = module
+                        .trait_def(&trait_name)
+                        .and_then(|methods| methods.iter().position(|m| m.name == *method_name));
+                    let Some(slot_idx) = slot else {
+                        return Err(CodegenError::Unsupported {
+                            backend: "llvm_native".into(),
+                            detail: format!(
+                                "DynCall: unknown method '{}' on trait '{}'",
+                                method_name, trait_name
+                            ),
+                        });
+                    };
+                    // Load data ptr from offset 0 of the trait object.
+                    let f0 = unsafe {
+                        self.builder.build_gep(
+                            ptr_ty,
+                            obj_val,
+                            &[self.context.i64_type().const_int(0, false)],
+                            "dyn_f0",
+                        )?
+                    };
+                    let data_ptr = self
+                        .builder
+                        .build_load(ptr_ty, f0, "dyn_data")?
+                        .into_pointer_value();
+                    // Load vtable ptr from offset 1.
+                    let f1 = unsafe {
+                        self.builder.build_gep(
+                            ptr_ty,
+                            obj_val,
+                            &[self.context.i64_type().const_int(1, false)],
+                            "dyn_f1",
+                        )?
+                    };
+                    let vtable_ptr = self
+                        .builder
+                        .build_load(ptr_ty, f1, "dyn_vtable")?
+                        .into_pointer_value();
+                    // GEP into vtable at slot index.
+                    let slot_gep = unsafe {
+                        self.builder.build_gep(
+                            ptr_ty,
+                            vtable_ptr,
+                            &[
+                                self.context.i64_type().const_int(0, false),
+                                self.context.i64_type().const_int(slot_idx as u64, false),
+                            ],
+                            "vt_slot",
+                        )?
+                    };
+                    let fn_ptr = self
+                        .builder
+                        .build_load(ptr_ty, slot_gep, "vt_fn")?
+                        .into_pointer_value();
+                    // Build argument list: data ptr first, then remaining args.
+                    let mut call_args = vec![data_ptr.into()];
+                    for a in args {
+                        call_args.push(self.get_value(*a)?);
+                    }
+                    // Determine return type.
+                    let ret_basic = ir_type_to_basic_type(self.context, result_ty)?
+                        .unwrap_or(self.ptr_ty().into());
+                    // Create function type for indirect call.
+                    let param_types: Vec<BasicTypeEnum> =
+                        std::iter::once(self.ptr_ty().into())
+                            .chain(args.iter().map(|_| self.ptr_ty().into()))
+                            .collect();
+                    let fn_type = match ret_basic {
+                        BasicTypeEnum::VoidType(v) => v.fn_type(&param_types, false).into(),
+                        _ => ret_basic.fn_type(&param_types, false).into(),
+                    };
+                    let fn_val = unsafe {
+                        self.builder
+                            .build_indirect_call(fn_type, fn_ptr, &call_args, "dyn_call")?
+                    };
+                    if let Some(r) = result {
+                        if let Some(val) = fn_val.try_as_basic_value().left() {
+                            self.values.insert(*r, val);
+                        }
+                    }
+                }
+
                 // File I/O — delegate to C runtime
                 IrInstr::FileReadAll { result, path } => {
                     let p = self.get_value(*path)?;
@@ -1360,8 +1621,9 @@ mod backend {
                     if let Some(val) = r.try_as_basic_value().left() { self.values.insert(*result, val); }
                 }
                 IrInstr::MutexNew { result, value, .. } => {
-                    let f = self.get_or_declare_runtime_fn_ret("iris_mutex_new", &[], self.ptr_ty().into())?;
-                    let r = self.builder.build_call(f, &[], "mutex_new")?;
+                    let v = self.get_value(*value)?;
+                    let f = self.get_or_declare_runtime_fn_ret("iris_mutex_new", &[self.ptr_ty().into()], self.ptr_ty().into())?;
+                    let r = self.builder.build_call(f, &[v.into()], "mutex_new")?;
                     if let Some(val) = r.try_as_basic_value().left() { self.values.insert(*result, val); }
                 }
                 IrInstr::MutexLock { result, mutex, .. } => {

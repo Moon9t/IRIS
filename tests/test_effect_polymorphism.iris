@@ -1,0 +1,15 @@
+// Effect row polymorphism: effect vars on functions
+
+// Simple function with effect variable E
+def identity[T](x: T) -> T effect E {
+    x
+}
+
+def add_one(x: i64) -> i64 effect io {
+    x + 1
+}
+
+def main() -> i64 {
+    val r = add_one(0);
+    if r == 1 { 0 } else { 1 }
+}

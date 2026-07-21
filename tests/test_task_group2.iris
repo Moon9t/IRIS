@@ -1,0 +1,17 @@
+def test_basic_join() -> i64 {
+    val tg = task_group()
+    spawn(tg) { 0 };
+    task_group_join(tg);;
+    0
+}
+
+def test_detached() -> i64 {
+    spawn { 0 };
+    0
+}
+
+def main() -> i64 {
+    test_basic_join();
+    test_detached();
+    0
+}

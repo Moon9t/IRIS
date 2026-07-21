@@ -1,0 +1,35 @@
+// tests/test_weak_ref.iris -- Test suite for Phase 8 Weak References and GC diagnostics
+
+def main() -> i64 {
+    print("=== Test 1: Weak Reference Creation & Upgrade ===")
+    val target = list()
+    list_push(target, 42)
+    list_push(target, 100)
+    
+    val w = weak_ref(target)
+    val alive = weak_alive(w)
+    if alive {
+        print("PASS: weak_alive is true for live target")
+    } else {
+        print("FAIL: weak_alive returned false for live target")
+    }
+    
+    val up = weak_upgrade(w)
+    when up {
+        some(obj) => {
+            print("PASS: weak_upgrade succeeded, obj type =", type_of(obj))
+        },
+        none => print("FAIL: weak_upgrade returned none for live target")
+    }
+    
+    print("\n=== Test 2: GC Stats Introspection ===")
+    val stats = gc_stats()
+    print("GC stats map retrieved successfully, keys len =", map_len(stats))
+    if map_len(stats) >= 4 {
+        print("PASS: gc_stats returned 4 metric entries")
+    } else {
+        print("FAIL: gc_stats missing metric entries")
+    }
+    
+    0
+}

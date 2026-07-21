@@ -1,22 +1,22 @@
 // src/stdlib/time.iris -- IRIS standard time library
 
 /// Returns current time in milliseconds since epoch.
-pub def now_ms() -> i64 { time_now_ms() }
+pub def now_ms() -> i64 effect time { time_now_ms() }
 
 /// Returns current time in seconds since epoch.
-pub def now_s() -> i64 { time_now_ms() / 1000 }
+pub def now_s() -> i64 effect time { time_now_ms() / 1000 }
 
 /// Sleep for the given number of milliseconds.
-pub def sleep(ms: i64) -> i64 { sleep_ms(ms) }
+pub def sleep(ms: i64) -> i64 effect time { sleep_ms(ms) }
 
 /// Elapsed milliseconds since a recorded start time.
-pub def elapsed_ms(start: i64) -> i64 { time_now_ms() - start }
+pub def elapsed_ms(start: i64) -> i64 effect time { time_now_ms() - start }
 
 /// Start a stopwatch — returns the start timestamp.
-pub def stopwatch_start() -> i64 { time_now_ms() }
+pub def stopwatch_start() -> i64 effect time { time_now_ms() }
 
 /// Stop a stopwatch — returns elapsed milliseconds.
-pub def stopwatch_stop(start: i64) -> i64 { time_now_ms() - start }
+pub def stopwatch_stop(start: i64) -> i64 effect time { time_now_ms() - start }
 
 /// Format a duration in ms as a human-readable string (e.g. "1.23s", "450ms").
 pub def format_duration(ms: i64) -> str {

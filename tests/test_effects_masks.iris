@@ -1,0 +1,30 @@
+// Test: effect masks (`with e1, e2 { ... }`).
+// The mask restricts the body's effects — calls with effects outside the
+// mask MUST error at compile time.
+
+def emit(s: str) -> i64 effect io {
+    println(s);
+    0
+}
+
+def pure_compute() -> i64 {
+    42
+}
+
+// Pure mask: body can only use pure effects
+def masked_pure() -> i64 {
+    with pure {
+        pure_compute()
+    }
+}
+
+// Multi-effect mask: io + alloc allowed
+def masked_io_alloc() -> i64 {
+    with io, alloc {
+        emit("masked")
+    }
+}
+
+def main() -> i64 {
+    masked_pure() + masked_io_alloc()
+}

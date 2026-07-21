@@ -1,0 +1,18 @@
+// Test covariant type parameter syntax
+record Box[+T] {
+    value: T
+}
+
+// Test contravariant type parameter syntax
+record Processor[-T] {
+    handle: (T) -> i64
+}
+
+// Test invariant type parameter (default, no prefix)
+record Container[T] {
+    value: T
+}
+
+def main() -> i64 {
+    0
+}

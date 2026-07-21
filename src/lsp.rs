@@ -2534,6 +2534,15 @@ fn ast_type_str(ty: &crate::parser::ast::AstType) -> String {
             let ps: Vec<String> = params.iter().map(ast_type_str).collect();
             format!("({}) -> {}", ps.join(", "), ast_type_str(ret))
         }
+        AstType::Generic { name, args, .. } => {
+            let inner: Vec<String> = args.iter().map(ast_type_str).collect();
+            format!("{}<{}>", name, inner.join(", "))
+        }
+        AstType::ConstInt(v, _) => v.to_string(),
+        AstType::AssocType { base, assoc_name, .. } => format!("{}::{}", base, assoc_name),
+        AstType::WeakRef(t, _) => format!("weak_ref<{}>", ast_type_str(t)),
+        AstType::DynTrait { trait_name, .. } => format!("dyn {}", trait_name),
+        AstType::MaskEffectType { effects, .. } => format!("with {}", effects.join(", ")),
     }
 }
 
@@ -3319,6 +3328,7 @@ fn token_to_str(tok: &crate::parser::lexer::Token, _source: &str) -> String {
         Token::Def => "def".into(),
         Token::Val => "val".into(),
         Token::Var => "var".into(),
+        Token::Let => "let".into(),
         Token::If => "if".into(),
         Token::Else => "else".into(),
         Token::When => "when".into(),
@@ -3379,6 +3389,7 @@ fn token_to_str(tok: &crate::parser::lexer::Token, _source: &str) -> String {
         Token::Comma => ",".into(),
         Token::Semi => ";".into(),
         Token::Colon => ":".into(),
+        Token::DoubleColon => "::".into(),
         Token::Dot => ".".into(),
         Token::DotDot => "..".into(),
         Token::DotDotEq => "..=".into(),
@@ -3418,6 +3429,10 @@ fn token_to_str(tok: &crate::parser::lexer::Token, _source: &str) -> String {
         Token::StringLit(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
         Token::FStringLit(s) => format!("f\"{}\"", s),
         Token::Eof => String::new(),
+        Token::Effect => "effect".to_owned(),
+        Token::With => "with".to_owned(),
+        Token::Dyn => "dyn".to_owned(),
+        Token::Resume => "resume".to_owned(),
     }
 }
 
@@ -4059,6 +4074,12 @@ pub fn run_lsp_server() -> std::io::Result<()> {
                                         collect_all_calls_in_block(body, calls, source);
                                     }
                                     AstStmt::Break { .. } | AstStmt::Continue { .. } => {}
+                                    AstStmt::MaskStmt { body, .. } => {
+                                        collect_all_calls_in_block(body, calls, source);
+                                    }
+                                    AstStmt::HandleStmt { expr, .. } => {
+                                        collect_all_calls_in_expr(expr, calls, source);
+                                    }
                                 }
                             }
 
@@ -4161,6 +4182,12 @@ pub fn run_lsp_server() -> std::io::Result<()> {
                                         for arg in args {
                                             collect_all_calls_in_expr(arg, calls, source);
                                         }
+                                    }
+                                    AstExpr::Mask { body, .. } => {
+                                        collect_all_calls_in_block(body, calls, source);
+                                    }
+                                    AstExpr::Handle { expr, .. } => {
+                                        collect_all_calls_in_expr(expr, calls, source);
                                     }
                                 }
                             }
@@ -4795,6 +4822,12 @@ fn find_calls_in_expr(
                 find_calls_in_expr(arg, target_name, ranges, source);
             }
         }
+        AstExpr::Mask { body, .. } => {
+            find_calls_in_block(body, target_name, ranges, source);
+        }
+        AstExpr::Handle { expr, .. } => {
+            find_calls_in_expr(expr, target_name, ranges, source);
+        }
     }
 }
 
@@ -4868,5 +4901,11 @@ fn find_calls_in_stmt(
             find_calls_in_block(body, target_name, ranges, source);
         }
         AstStmt::Break { .. } | AstStmt::Continue { .. } => {}
+        AstStmt::MaskStmt { body, .. } => {
+            find_calls_in_block(body, target_name, ranges, source);
+        }
+        AstStmt::HandleStmt { expr, .. } => {
+            find_calls_in_expr(expr, target_name, ranges, source);
+        }
     }
 }

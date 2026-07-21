@@ -6,8 +6,8 @@ def main() -> i64 {
     spawn {
         var i = 1
         while i <= 5 {
-            send(ch, i);
             atomic_add(counter, 1);
+            send(ch, i);
             i = i + 1;
             
         }

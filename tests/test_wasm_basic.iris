@@ -1,0 +1,6 @@
+def main() -> i64 {
+    println("Hello from IRIS on WASM!");
+    println("Math check: 2 + 2 = " + to_str(2 + 2));
+    println("Float: " + to_str(3.14159));
+    0
+}

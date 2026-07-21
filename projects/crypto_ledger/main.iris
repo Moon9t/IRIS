@@ -11,10 +11,10 @@ def main() -> i64 {
     val start_time = now_ms();
     
     print("");
-    print("  ╔══════════════════════════════════════════════════════════╗");
-    print("  ║        IRIS Cryptographic Ledger Demo                    ║");
-    print("  ║        Concurrent · Hashed · Verified Chain              ║");
-    print("  ╚══════════════════════════════════════════════════════════╝");
+    print("  ------------------------------------------------------------");
+    print("  IRIS Cryptographic Ledger Demo                            ");
+    print("  Concurrent · Hashed · Verified Chain                     ");
+    print("  ------------------------------------------------------------");
     print("");
     
     // 1. Initialize ledger
@@ -98,12 +98,12 @@ def main() -> i64 {
     
     // 6. Print summary report
     print("");
-    print("  ┌─ Summary Report ───────────────────────────");
-    print(concat("  │ Status:             ", if is_valid { "Valid" } else { "Invalid" }));
-    print(concat("  │ Total Blocks:       ", to_str(list_len(ledger.blocks))));
-    print(concat("  │ Total Transactions: ", to_str(list_len(txs) + 1)));
-    print(concat("  │ Execution Time:     ", concat(to_str(elapsed), " ms")));
-    print("  └────────────────────────────────────────────");
+    print("  --------------------------------------------");
+    print(concat("  * Status:             ", if is_valid { "Valid" } else { "Invalid" }));
+    print(concat("  * Total Blocks:       ", to_str(list_len(ledger.blocks))));
+    print(concat("  * Total Transactions: ", to_str(list_len(txs) + 1)));
+    print(concat("  * Execution Time:     ", concat(to_str(elapsed), " ms")));
+    print("  --------------------------------------------");
     print("");
     
     0

@@ -697,6 +697,15 @@ fn apply_reps(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
         IrInstr::GetField { base, .. } => {
             replace(base);
         }
+        IrInstr::MakeTraitObject { value, .. } => {
+            replace(value);
+        }
+        IrInstr::DynCall { obj, args, .. } => {
+            replace(obj);
+            for v in args {
+                replace(v);
+            }
+        }
         IrInstr::MakeVariant { fields, .. } => {
             for v in fields {
                 replace(v);
@@ -779,6 +788,19 @@ fn apply_reps(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
             for v in args {
                 replace(v);
             }
+        }
+        IrInstr::TaskGroupNew { .. } => {}
+        IrInstr::TaskGroupSpawn { group, args, .. } => {
+            replace(group);
+            for v in args {
+                replace(v);
+            }
+        }
+        IrInstr::TaskGroupJoin { group, .. } => {
+            replace(group);
+        }
+        IrInstr::TaskGroupCancel { group, .. } => {
+            replace(group);
         }
         IrInstr::AtomicNew { value, .. } => {
             replace(value);
@@ -1102,6 +1124,12 @@ fn apply_reps(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
             for a in args {
                 replace(a);
             }
+        }
+        IrInstr::PushHandler { .. } => {}
+        IrInstr::PopHandler => {}
+        IrInstr::ResumeCont { cont, value, .. } => {
+            replace(cont);
+            replace(value);
         }
     }
 }

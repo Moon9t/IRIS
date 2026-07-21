@@ -262,6 +262,41 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
             )?;
         }
 
+        IrInstr::MakeTraitObject {
+            result,
+            value,
+            target_trait,
+            concrete_ty,
+            result_ty,
+        } => {
+            write!(
+                out,
+                "{} = make_trait_object value={} trait={} concrete={} : {}",
+                result, value, target_trait, concrete_ty, result_ty
+            )?;
+        }
+
+        IrInstr::DynCall {
+            result,
+            obj,
+            method_name,
+            args,
+            result_ty,
+        } => {
+            write!(
+                out,
+                "{} = dyn_call obj={} method={} args=[{}] : {}",
+                result,
+                obj,
+                method_name,
+                args.iter()
+                    .map(|a| format!("{}", a))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                result_ty
+            )?;
+        }
+
         IrInstr::MakeVariant {
             result,
             variant_idx,
@@ -419,6 +454,20 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
         IrInstr::Spawn { body_fn, args } => {
             let arg_strs: Vec<String> = args.iter().map(|v| format!("{}", v)).collect();
             write!(out, "spawn @{}({})", body_fn, arg_strs.join(", "))?;
+        }
+
+        IrInstr::TaskGroupNew { result } => {
+            write!(out, "{} = task_group_new", result)?;
+        }
+        IrInstr::TaskGroupSpawn { group, body_fn, args } => {
+            let arg_strs: Vec<String> = args.iter().map(|v| format!("{}", v)).collect();
+            write!(out, "task_group_spawn {} @{}({})", group, body_fn, arg_strs.join(", "))?;
+        }
+        IrInstr::TaskGroupJoin { group } => {
+            write!(out, "task_group_join {}", group)?;
+        }
+        IrInstr::TaskGroupCancel { group } => {
+            write!(out, "task_group_cancel {}", group)?;
         }
 
         IrInstr::AtomicNew {
@@ -973,7 +1022,7 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
         IrInstr::SleepMs { result, ms } => {
             write!(out, "{} = sleep_ms {}", result, ms)?;
         }
-        IrInstr::BuiltinCall {
+            IrInstr::BuiltinCall {
             result,
             name,
             args,
@@ -988,6 +1037,20 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
                 arg_str.join(", "),
                 result_ty
             )?;
+        }
+        IrInstr::PushHandler { arms } => {
+            write!(out, "push_handler arms=[")?;
+            for (i, arm) in arms.iter().enumerate() {
+                if i > 0 { write!(out, ", ")?; }
+                write!(out, "{} -> {}", arm.effect_name, arm.func_name)?;
+            }
+            writeln!(out, "]")?;
+        }
+        IrInstr::PopHandler => {
+            writeln!(out, "pop_handler")?;
+        }
+        IrInstr::ResumeCont { cont, value, result } => {
+            writeln!(out, "resume_cont cont=v{} value=v{} result=v{}", cont.0, value.0, result.0)?;
         }
     }
     Ok(())

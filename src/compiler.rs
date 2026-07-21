@@ -198,16 +198,47 @@ impl FileCompiler {
         from_dir: &Path,
         search: &[PathBuf],
     ) -> Result<PathBuf, Error> {
-        let candidate = from_dir.join(rel_path);
-        if candidate.exists() {
-            return candidate.canonicalize().map_err(Error::Io);
+        let find_entry_point = |dir: &Path| -> Option<PathBuf> {
+            if dir.is_file() {
+                return Some(dir.to_path_buf());
+            }
+            if dir.is_dir() {
+                let lib = dir.join("lib.iris");
+                if lib.exists() {
+                    return Some(lib);
+                }
+                let main = dir.join("main.iris");
+                if main.exists() {
+                    return Some(main);
+                }
+                let name = dir.file_name().and_then(|s| s.to_str()).unwrap_or("lib");
+                let named = dir.join(format!("{}.iris", name));
+                if named.exists() {
+                    return Some(named);
+                }
+            }
+            None
+        };
+
+        if let Some(res) = find_entry_point(&from_dir.join(rel_path)) {
+            return res.canonicalize().map_err(Error::Io);
         }
+
+        let mut cur = Some(from_dir.to_path_buf());
+        while let Some(dir) = cur {
+            let dep_dir = dir.join(".iris").join("deps").join(rel_path);
+            if let Some(res) = find_entry_point(&dep_dir) {
+                return res.canonicalize().map_err(Error::Io);
+            }
+            cur = dir.parent().map(|p| p.to_path_buf());
+        }
+
         for dir in search {
-            let candidate = dir.join(rel_path);
-            if candidate.exists() {
-                return candidate.canonicalize().map_err(Error::Io);
+            if let Some(res) = find_entry_point(&dir.join(rel_path)) {
+                return res.canonicalize().map_err(Error::Io);
             }
         }
+
         Err(Error::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("cannot find brought module: {}", rel_path),
@@ -303,6 +334,11 @@ fn rewrite_type(ty: &mut AstType, symbols: &HashSet<String>, prefix: &str) {
             rewrite_type(k, symbols, prefix);
             rewrite_type(v, symbols, prefix);
         }
+        AstType::Generic { ref mut args, .. } => {
+            for arg in args {
+                rewrite_type(arg, symbols, prefix);
+            }
+        }
         AstType::Fn {
             ref mut params,
             ref mut ret,
@@ -313,6 +349,13 @@ fn rewrite_type(ty: &mut AstType, symbols: &HashSet<String>, prefix: &str) {
             }
             rewrite_type(ret, symbols, prefix);
         }
+        AstType::ConstInt(_, _) => {}
+        AstType::AssocType { .. } => {}
+        AstType::WeakRef(ref mut elem, _) => {
+            rewrite_type(elem, symbols, prefix);
+        }
+        AstType::DynTrait { .. } => {}
+        AstType::MaskEffectType { .. } => {}
     }
 }
 
@@ -456,6 +499,19 @@ fn rewrite_expr(expr: &mut AstExpr, symbols: &HashSet<String>, prefix: &str) {
                 rewrite_expr(arg, symbols, prefix);
             }
         }
+        AstExpr::Mask { ref mut body, .. } => {
+            rewrite_block(body, symbols, prefix);
+        }
+        AstExpr::Handle {
+            ref mut expr,
+            ref mut arms,
+            ..
+        } => {
+            rewrite_expr(expr, symbols, prefix);
+            for arm in arms {
+                rewrite_expr(&mut arm.body, symbols, prefix);
+            }
+        }
     }
 }
 
@@ -482,6 +538,16 @@ fn rewrite_when_pattern(pat: &mut AstWhenPattern, symbols: &HashSet<String>, pre
             }
         }
         AstWhenPattern::Range { .. } => {}
+        AstWhenPattern::Or(ref mut pats) => {
+            for p in pats {
+                rewrite_when_pattern(p, symbols, prefix);
+            }
+        }
+        AstWhenPattern::Slice { prefix: ref mut prefix_pats, .. } => {
+            for p in prefix_pats {
+                rewrite_when_pattern(p, symbols, prefix);
+            }
+        }
     }
 }
 
@@ -569,6 +635,19 @@ fn rewrite_stmt(stmt: &mut AstStmt, symbols: &HashSet<String>, prefix: &str) {
         } => {
             rewrite_expr(iter, symbols, prefix);
             rewrite_block(body, symbols, prefix);
+        }
+        AstStmt::MaskStmt { ref mut body, .. } => {
+            rewrite_block(body, symbols, prefix);
+        }
+        AstStmt::HandleStmt {
+            ref mut expr,
+            ref mut arms,
+            ..
+        } => {
+            rewrite_expr(expr, symbols, prefix);
+            for arm in arms {
+                rewrite_expr(&mut arm.body, symbols, prefix);
+            }
         }
     }
 }

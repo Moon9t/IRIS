@@ -327,3 +327,69 @@ pub def bandit_pull(arm: i64, n_arms: i64) -> f64 {
     val mean = to_f64(arm + 1) / to_f64(n_arms + 1)
     mean + (random() - 0.5) * 0.2
 }
+
+// ---------------------------------------------------------------------------
+// Contextual Bandit
+// ---------------------------------------------------------------------------
+
+/// Create a new flat weight list for a contextual bandit with n_actions and n_features.
+pub def contextual_bandit_new(n_actions: i64, n_features: i64) -> list<f64> {
+    val weights: list<f64> = list()
+    val total = n_actions * n_features
+    for i in 0 .. total {
+        list_push(weights, 0.0)
+    }
+    weights
+}
+
+/// Compute action values Q(context, action) for all actions.
+pub def contextual_bandit_values(weights: list<f64>, context: list<f64>, n_actions: i64, n_features: i64) -> list<f64> {
+    val values: list<f64> = list()
+    for a in 0 .. n_actions {
+        var val_a = 0.0
+        val offset = a * n_features
+        for f in 0 .. n_features {
+            val_a = val_a + list_get(weights, offset + f) * list_get(context, f)
+        }
+        list_push(values, val_a)
+    }
+    values
+}
+
+/// Select action using epsilon-greedy exploration.
+pub def contextual_bandit_select(weights: list<f64>, context: list<f64>, n_actions: i64, n_features: i64, epsilon: f64) -> i64 {
+    val values = contextual_bandit_values(weights, context, n_actions, n_features)
+    if random() < epsilon {
+        random_range(0, n_actions - 1)
+    } else {
+        var best_a = 0
+        var best_v = list_get(values, 0)
+        for a in 1 .. n_actions {
+            val v = list_get(values, a)
+            if v > best_v {
+                best_v = v
+                best_a = a
+            }
+        }
+        best_a
+    }
+}
+
+/// Update weights using SGD error correction.
+pub def contextual_bandit_update(weights: list<f64>, context: list<f64>, action: i64, reward: f64, n_features: i64, lr: f64) -> list<f64> {
+    val values: list<f64> = list()
+    // Recompute only selected action's value
+    var val_a = 0.0
+    val offset = action * n_features
+    for f in 0 .. n_features {
+        val_a = val_a + list_get(weights, offset + f) * list_get(context, f)
+    }
+    val td_error = reward - val_a
+    for f in 0 .. n_features {
+        val idx = offset + f
+        val old_w = list_get(weights, idx)
+        list_set(weights, idx, old_w + lr * td_error * list_get(context, f))
+    }
+    weights
+}
+

@@ -1,0 +1,16 @@
+// Test: effect handlers with extern functions
+
+// Declare an extern function we can intercept.
+extern def echo(s: str) -> str
+
+def main() -> i64 {
+    val result = handle {
+        echo("hello")
+    } with {
+        echo(s) => "intercepted"
+    };
+
+    print(result);
+    print("\n");
+    if result == "intercepted" { 0 } else { 1 }
+}

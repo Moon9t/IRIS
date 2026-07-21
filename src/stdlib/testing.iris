@@ -1,7 +1,7 @@
 // src/stdlib/testing.iris -- IRIS standard testing library
 
 /// Assert two i64 values are equal. Returns true on pass, false on fail.
-pub def assert_eq(actual: i64, expected: i64, msg: str) -> bool {
+pub def assert_eq(actual: i64, expected: i64, msg: str) -> bool effect io {
     if actual != expected {
         val exp_s = to_str(expected);
         val act_s = to_str(actual);
@@ -13,7 +13,7 @@ pub def assert_eq(actual: i64, expected: i64, msg: str) -> bool {
 }
 
 /// Assert two f64 values are approximately equal (within tolerance).
-pub def assert_approx_eq(actual: f64, expected: f64, tol: f64, msg: str) -> bool {
+pub def assert_approx_eq(actual: f64, expected: f64, tol: f64, msg: str) -> bool effect io {
     val diff = abs(actual - expected);
     if diff > tol {
         val exp_s = to_str(expected);
@@ -27,7 +27,7 @@ pub def assert_approx_eq(actual: f64, expected: f64, tol: f64, msg: str) -> bool
 }
 
 /// Assert two str values are equal.
-pub def assert_str_eq(actual: str, expected: str, msg: str) -> bool {
+pub def assert_str_eq(actual: str, expected: str, msg: str) -> bool effect io {
     if actual != expected {
         print(concat("FAIL [assert_str_eq] ", concat(msg, concat(" — expected '", concat(expected, concat("', got '", concat(actual, "'")))))));
         false
@@ -37,7 +37,7 @@ pub def assert_str_eq(actual: str, expected: str, msg: str) -> bool {
 }
 
 /// Assert a boolean is true.
-pub def assert_true(cond: bool, msg: str) -> bool {
+pub def assert_true(cond: bool, msg: str) -> bool effect io {
     if !cond {
         print(concat("FAIL [assert_true] ", msg));
         false
@@ -47,7 +47,7 @@ pub def assert_true(cond: bool, msg: str) -> bool {
 }
 
 /// Assert a boolean is false.
-pub def assert_false(cond: bool, msg: str) -> bool {
+pub def assert_false(cond: bool, msg: str) -> bool effect io {
     if cond {
         print(concat("FAIL [assert_false] ", msg));
         false
@@ -57,7 +57,7 @@ pub def assert_false(cond: bool, msg: str) -> bool {
 }
 
 /// Assert an option is some and unwrap it; panic if none.
-pub def assert_some(opt: option<i64>, msg: str) -> i64 {
+pub def assert_some(opt: option<i64>, msg: str) -> i64 effect io, throw {
     if is_some(opt) {
         unwrap(opt)
     } else {
@@ -68,7 +68,7 @@ pub def assert_some(opt: option<i64>, msg: str) -> i64 {
 }
 
 /// Assert an option is none.
-pub def assert_none(opt: option<i64>, msg: str) -> bool {
+pub def assert_none(opt: option<i64>, msg: str) -> bool effect io {
     if is_some(opt) {
         print(concat("FAIL [assert_none] ", msg));
         false
@@ -78,7 +78,7 @@ pub def assert_none(opt: option<i64>, msg: str) -> bool {
 }
 
 /// Assert a result<i64, str> is ok.
-pub def assert_ok(res: result<i64, str>, msg: str) -> i64 {
+pub def assert_ok(res: result<i64, str>, msg: str) -> i64 effect io, throw {
     if is_ok(res) {
         unwrap(res)
     } else {
@@ -89,7 +89,7 @@ pub def assert_ok(res: result<i64, str>, msg: str) -> i64 {
 }
 
 /// Assert a result<i64, str> is err.
-pub def assert_err(res: result<i64, str>, msg: str) -> bool {
+pub def assert_err(res: result<i64, str>, msg: str) -> bool effect io {
     if is_ok(res) {
         print(concat("FAIL [assert_err] ", msg));
         false
@@ -99,7 +99,7 @@ pub def assert_err(res: result<i64, str>, msg: str) -> bool {
 }
 
 /// Assert two i64 lists are equal element-by-element.
-pub def assert_list_eq(actual: list<i64>, expected: list<i64>, msg: str) -> bool {
+pub def assert_list_eq(actual: list<i64>, expected: list<i64>, msg: str) -> bool effect io {
     val la = list_len(actual);
     val le = list_len(expected);
     if la != le {
@@ -122,7 +122,7 @@ pub def assert_list_eq(actual: list<i64>, expected: list<i64>, msg: str) -> bool
 }
 
 /// Panic with a formatted failure message (unconditional fail).
-pub def fail(msg: str) -> bool {
+pub def fail(msg: str) -> bool effect io, throw {
     print(concat("FAIL ", msg));
     panic(concat("test failed: ", msg));
     false

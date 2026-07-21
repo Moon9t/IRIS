@@ -1,117 +1,73 @@
 // src/stdlib/net.iris -- IRIS networking library.
-// Exposes robust object-like wrapper records and helpers for TCP and UDP sockets.
+// All functions return raw i64 socket handles (unboxed, no heap allocation).
+// A return value of -1 indicates error.
 
 // ── TCP Connection ───────────────────────────────────────────────────────────
 
-/// A TCP client connection with host, port, and socket handle.
-pub record TcpConnection {
-    handle: i64,
-    host: str,
-    port: i64,
-}
-
 /// Connect to a remote TCP host and port.
-/// Returns `some(TcpConnection)` on success, or `none` on failure.
-pub def tcp_connect_to(host: str, port: i64) -> option<TcpConnection> {
-    val handle = tcp_connect(host, port)
-    if handle < 0 {
-        none
-    } else {
-        some(TcpConnection { handle: handle, host: host, port: port })
-    }
+/// Returns socket handle on success, or -1 on failure.
+pub def tcp_connect_to(host: str, port: i64) -> i64 effect net {
+    tcp_connect(host, port)
 }
 
-/// Write string data to a TCP connection.
-/// Returns `true` on success.
-pub def tcp_write_conn(conn: TcpConnection, data: str) -> bool {
-    tcp_write(conn.handle, data);
+/// Write string data to a TCP connection handle.
+pub def tcp_write_conn(handle: i64, data: str) -> bool effect net {
+    tcp_write(handle, data);
     true
 }
 
-/// Read incoming data from a TCP connection as a string.
-/// Blocks until data is available or connection closes.
-pub def tcp_read_conn(conn: TcpConnection) -> str {
-    tcp_read(conn.handle)
+/// Read incoming data from a TCP connection handle as a string.
+pub def tcp_read_conn(handle: i64) -> str effect net {
+    tcp_read(handle)
 }
 
-/// Close a TCP connection.
-/// Returns `true` on success.
-pub def tcp_close_conn(conn: TcpConnection) -> bool {
-    tcp_close(conn.handle);
+/// Close a TCP connection handle.
+pub def tcp_close_conn(handle: i64) -> bool effect net {
+    tcp_close(handle);
     true
 }
 
 // ── TCP Server ───────────────────────────────────────────────────────────────
 
-/// A TCP listening server with port and socket handle.
-pub record TcpServer {
-    handle: i64,
-    port: i64,
-}
-
 /// Listen on a local TCP port for incoming connections.
-/// Returns `some(TcpServer)` on success, or `none` on failure.
-pub def tcp_listen_on(port: i64) -> option<TcpServer> {
-    val handle = tcp_listen(port)
-    if handle < 0 {
-        none
-    } else {
-        some(TcpServer { handle: handle, port: port })
-    }
+/// Returns server socket handle on success, or -1 on failure.
+pub def tcp_listen_on(port: i64) -> i64 effect net {
+    tcp_listen(port)
 }
 
 /// Accept an incoming client connection on a TCP server.
 /// Blocks until a connection is received.
-/// Returns `some(TcpConnection)` on success, or `none` on failure.
-pub def tcp_accept_conn(server: TcpServer) -> option<TcpConnection> {
-    val conn_handle = tcp_accept(server.handle)
-    if conn_handle < 0 {
-        none
-    } else {
-        // Source host is set to a dummy name since raw tcp_accept doesn't extract remote address.
-        some(TcpConnection { handle: conn_handle, host: "client", port: 0 })
-    }
+/// Returns client socket handle on success, or -1 on failure.
+pub def tcp_accept_conn(server_handle: i64) -> i64 effect net {
+    tcp_accept(server_handle)
 }
 
-/// Close a TCP listening server.
-/// Returns `true` on success.
-pub def tcp_close_server(server: TcpServer) -> bool {
-    tcp_close(server.handle);
+/// Close a TCP listening server handle.
+pub def tcp_close_server(handle: i64) -> bool effect net {
+    tcp_close(handle);
     true
 }
 
 // ── UDP Socket ───────────────────────────────────────────────────────────────
 
-/// A UDP socket with port and socket handle.
-pub record UdpSocket {
-    handle: i64,
-    port: i64,
-}
-
 /// Bind a UDP socket to a local port (or port 0 for an ephemeral port).
-/// Returns `some(UdpSocket)` on success, or `none` on failure.
-pub def udp_bind(port: i64) -> option<UdpSocket> {
-    val handle = udp_open(port)
-    if handle < 0 {
-        none
-    } else {
-        some(UdpSocket { handle: handle, port: port })
-    }
+/// Returns UDP socket handle on success, or -1 on failure.
+pub def udp_bind(port: i64) -> i64 effect net {
+    udp_open(port)
 }
 
 /// Send data over a UDP socket to a target host and port.
-/// Returns `true` on success.
-pub def udp_send_to(socket: UdpSocket, host: str, port: i64, data: str) -> bool {
+pub def udp_send_to(socket_handle: i64, host: str, port: i64, data: str) -> bool effect net {
     val addr_port = concat(concat(concat(concat(host, ":"), to_str(port)), ":"), data)
-    udp_send(socket.handle, addr_port);
+    udp_send(socket_handle, addr_port);
     true
 }
 
 /// Receive data from a UDP socket.
 /// Blocks until a packet is received.
 /// Returns a tuple containing: (source_ip, source_port, payload_data).
-pub def udp_recv_from(socket: UdpSocket) -> (str, i64, str) {
-    val raw = udp_recv(socket.handle)
+pub def udp_recv_from(socket_handle: i64) -> (str, i64, str) effect net {
+    val raw = udp_recv(socket_handle)
     val first_colon = find(raw, ":")
     if is_some(first_colon) {
         val fidx = unwrap(first_colon)
@@ -132,9 +88,8 @@ pub def udp_recv_from(socket: UdpSocket) -> (str, i64, str) {
     }
 }
 
-/// Close a UDP socket.
-/// Returns `true` on success.
-pub def udp_close_socket(socket: UdpSocket) -> bool {
-    udp_close(socket.handle);
+/// Close a UDP socket handle.
+pub def udp_close_socket(socket_handle: i64) -> bool effect net {
+    udp_close(socket_handle);
     true
 }

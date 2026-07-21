@@ -1,0 +1,53 @@
+// Test: Pattern Guards
+
+choice Color { Red, Green, Blue }
+
+def test_guard() -> i64 {
+    val x = some(5)
+    when x {
+        some(v) if v > 3 => 1,
+        some(v) => 2,
+        none => 0,
+    }
+}
+
+def test_guard_else() -> i64 {
+    val x = some(2)
+    when x {
+        some(v) if v > 3 => 1,
+        some(v) => 2,
+        none => 0,
+    }
+}
+
+def test_guard_multiple() -> i64 {
+    val x = some(10)
+    when x {
+        some(v) if v < 5 => 1,
+        some(v) if v < 15 => 2,
+        some(v) => 3,
+        none => 0,
+    }
+}
+
+def test_guard_enum() -> i64 {
+    val c = Color.Green
+    when c {
+        Color.Red => 1,
+        Color.Green if true => 2,
+        Color.Blue => 3,
+    }
+}
+
+def test_guard_false() -> i64 {
+    val x = some(5)
+    when x {
+        some(v) if v > 10 => 1,
+        some(v) => 2,
+        none => 0,
+    }
+}
+
+def main() -> i64 {
+    test_guard() + test_guard_else() + test_guard_multiple() + test_guard_enum() + test_guard_false()
+}

@@ -166,6 +166,30 @@ def describe_shape(s: Shape) -> i64 {
 }
 ```
 
+### Generics & Higher-Kinded Types (HKT)
+
+IRIS features a static type system with full support for parametric polymorphism, const generics, and Higher-Kinded Types (HKTs). HKTs allow generic types to be parameterized over other type constructors (e.g., `F[_]`), which are monomorphized recursively on-demand during compilation.
+
+```iris
+record Box[T] {
+    item: T
+}
+
+// Wrapper takes a type constructor F (e.g. Box) and a type A
+record Wrapper[F[_], A] {
+    value: F<A>
+}
+
+def main() -> i64 {
+    val w: Wrapper<Box, i64> = Wrapper {
+        value: Box { item: 100 }
+    }
+    print("Wrapper item = ");
+    println(to_str(w.value.item));
+    0
+}
+```
+
 ### Machine Learning, Tensors, & Autodiff
 
 Create, manipulate, and differentiate mathematical models natively.

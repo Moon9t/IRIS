@@ -233,3 +233,19 @@ def get_y() -> f32 {
     let out = compile(src, "test", EmitKind::Eval).expect("should eval");
     assert_eq!(out.trim(), "7", "expected y=7");
 }
+
+#[test]
+fn test_nested_field_assignment() {
+    let src = r#"
+record Inner { value: i64 }
+record Outer { inner: Inner, id: i64 }
+def main() -> i64 {
+    var o = Outer { inner: Inner { value: 42 }, id: 1 };
+    o.inner.value = 100;
+    o.inner.value
+}
+"#;
+    let out = compile(src, "test", EmitKind::Eval).expect("should eval");
+    assert_eq!(out.trim(), "100", "expected nested field mutation to update and return 100");
+}
+

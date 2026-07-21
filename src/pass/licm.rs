@@ -246,6 +246,8 @@ fn is_side_effecting_for_licm(instr: &IrInstr) -> bool {
             | IrInstr::Cast { .. }
             | IrInstr::MakeStruct { .. }
             | IrInstr::GetField { .. }
+            | IrInstr::MakeTraitObject { .. }
+            | IrInstr::DynCall { .. }
             | IrInstr::MakeVariant { .. }
             | IrInstr::ExtractVariantField { .. }
             | IrInstr::MakeTuple { .. }

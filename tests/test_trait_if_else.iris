@@ -1,0 +1,29 @@
+record Cat { name: str }
+record Dog { name: str }
+
+trait Pet {
+    def speak(self) -> str
+    def name(self) -> str
+}
+
+impl Pet for Cat {
+    def speak(self) -> str { "Meow" }
+    def name(self) -> str { self.name }
+}
+
+impl Pet for Dog {
+    def speak(self) -> str { "Woof" }
+    def name(self) -> str { self.name }
+}
+
+def test_val_annot(cond: bool) -> i64 {
+    val p: dyn Pet = if cond { Cat { name: "Fluffy" } } else { Dog { name: "Rex" } }
+    val s = p.speak()
+    if s == "Meow" || s == "Woof" { 0 } else { 1 }
+}
+
+def main() -> i64 {
+    val r1 = test_val_annot(true)
+    val r2 = test_val_annot(false)
+    if r1 != 0 { 1 } else if r2 != 0 { 2 } else { 0 }
+}

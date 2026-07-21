@@ -1,0 +1,32 @@
+// Tests for the IRIS effect system.
+
+// === Pure function (no effect clause) — should auto-promote silently ===
+def pure_id(x: i64) -> i64 {
+    x
+}
+
+// === io-bound function with explicit effect clause ===
+def say_hello() -> i64 effect io {
+    println("hello");
+    0
+}
+
+// === Function calling an effectful function — should infer effect row ===
+def call_say() -> i64 effect io {
+    say_hello()
+}
+
+// === Function with explicit `effect io, alloc` calling println ===
+def emit_alloc() -> i64 effect io, alloc {
+    println("allocates");
+    0
+}
+
+// === Function proc chain — should inherit effects ===
+def chain() -> i64 effect io {
+    call_say()
+}
+
+def main() -> i64 effect io, alloc {
+    pure_id(0) + say_hello() + call_say() + emit_alloc() + chain()
+}

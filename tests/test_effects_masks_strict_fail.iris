@@ -1,0 +1,17 @@
+// Test: effect masks restrict effects.
+// In strict mode, this should error because the pure mask contains io.
+
+def strict_emit(s: str) -> i64 effect io {
+    println(s);
+    0
+}
+
+def masked_pure_strict() -> i64 effect io {
+    with pure {
+        strict_emit("should error in strict")
+    }
+}
+
+def main() -> i64 {
+    0
+}

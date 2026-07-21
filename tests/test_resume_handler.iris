@@ -1,0 +1,18 @@
+// Test: effect handler with `resume(val)` continuation
+// The handler intercepts echo(), calls resume("intercepted_via_resume").
+// The call site should see the resumed value.
+
+extern def echo(s: str) -> str
+
+def main() -> i64 {
+    val result = handle {
+        echo("hello")
+    } with {
+        echo(s) -> resume(v) => v("intercepted_via_resume")
+    };
+
+    print(result);
+    print("\n");
+
+    if result == "intercepted_via_resume" { 0 } else { 1 }
+}

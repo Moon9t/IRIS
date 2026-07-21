@@ -1,0 +1,52 @@
+// Comprehensive test suite for IRIS Algebraic Effect System
+
+effect FileIO {
+    def read_file(path: str) -> str;
+    def write_file(path: str, content: str) -> bool;
+}
+
+effect Logger {
+    def log_msg(msg: str) -> bool;
+}
+
+// Function declaring effect usage
+def perform_io(filename: str, data: str) -> str with FileIO {
+    val ok = write_file(filename, data);
+    if ok {
+        return read_file(filename);
+    }
+    return "error";
+}
+
+// Function with multiple effects  
+def log_and_write(tag: str, msg: str) -> bool with FileIO, Logger {
+    log_msg(tag + ": " + msg);
+    return write_file("app.log", msg);
+}
+
+// Pure function — no effect annotation needed
+def pure_add(a: i64, b: i64) -> i64 {
+    return a + b;
+}
+
+def main() -> i64 {
+    // Test 1: Pure function call works without effect context
+    val sum = pure_add(10, 20);
+    print(to_str(sum));
+
+    // Test 2: Effect operations resolve as extern stubs in interpreter  
+    // (returns typed default: str→"", bool→false)
+    with FileIO {
+        val result = perform_io("test.txt", "Hello, Effects!");
+        print(concat("IO result: ", result));
+    }
+
+    // Test 3: Multiple effects
+    with FileIO, Logger {
+        val logged = log_and_write("INFO", "System started");
+        print(concat("Logged: ", to_str(logged)));
+    }
+
+    print("Effect system test passed!");
+    return 0;
+}

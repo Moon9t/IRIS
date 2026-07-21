@@ -5,7 +5,7 @@ use crate::error::ParseError;
 pub struct BytePos(pub u32);
 
 /// A half-open `[start, end)` byte range in the source.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     pub start: BytePos,
     pub end: BytePos,
@@ -38,6 +38,7 @@ pub enum Token {
     Def,
     Val,
     Var,
+    Let,
     Return,
     If,
     Else,
@@ -83,6 +84,20 @@ pub enum Token {
     Input,
     Output,
 
+    /// `effect` keyword for effect annotations on function signatures
+    Effect,
+
+    /// `with` keyword for effect mask blocks (`with pure { ... }`)
+    With,
+
+
+
+    /// `dyn` keyword for trait objects (`dyn Trait`)
+    Dyn,
+
+    /// `resume` keyword inside handler arms (`k(p) -> resume(v) => body`)
+    Resume,
+
     // Type keywords
     F32,
     F64,
@@ -116,6 +131,7 @@ pub enum Token {
     RAngle,   // >
     Comma,    // ,
     Colon,    // :
+    DoubleColon, // ::
     Semi,     // ;
     Arrow,    // ->
     Eq,       // =
@@ -183,6 +199,7 @@ impl std::fmt::Display for Token {
             Token::Def => write!(f, "def"),
             Token::Val => write!(f, "val"),
             Token::Var => write!(f, "var"),
+            Token::Let => write!(f, "let"),
             Token::Return => write!(f, "return"),
             Token::If => write!(f, "if"),
             Token::Else => write!(f, "else"),
@@ -211,6 +228,11 @@ impl std::fmt::Display for Token {
             Token::Layer => write!(f, "layer"),
             Token::Input => write!(f, "input"),
             Token::Output => write!(f, "output"),
+            Token::Effect => write!(f, "effect"),
+            Token::With => write!(f, "with"),
+
+            Token::Dyn => write!(f, "dyn"),
+            Token::Resume => write!(f, "resume"),
             Token::F32 => write!(f, "f32"),
             Token::F64 => write!(f, "f64"),
             Token::I32 => write!(f, "i32"),
@@ -238,6 +260,7 @@ impl std::fmt::Display for Token {
             Token::RAngle => write!(f, ">"),
             Token::Comma => write!(f, ","),
             Token::Colon => write!(f, ":"),
+            Token::DoubleColon => write!(f, "::"),
             Token::Semi => write!(f, ";"),
             Token::Arrow => write!(f, "->"),
             Token::Eq => write!(f, "="),
@@ -497,6 +520,15 @@ impl<'src> Lexer<'src> {
             });
         }
 
+        // `::` path separator — must come before single `:`
+        if ch == b':' && self.peek2() == Some(b':') {
+            self.pos += 2;
+            return Ok(Spanned {
+                node: Token::DoubleColon,
+                span: Span::new(start, self.pos as u32),
+            });
+        }
+
         // Single-character punctuation
         let maybe_punct = match ch {
             b'(' => Some(Token::LParen),
@@ -719,6 +751,7 @@ impl<'src> Lexer<'src> {
             "def" => Token::Def,
             "val" => Token::Val,
             "var" => Token::Var,
+            "let" => Token::Let,
             "return" => Token::Return,
             "if" => Token::If,
             "else" => Token::Else,
@@ -744,6 +777,11 @@ impl<'src> Lexer<'src> {
             "pub" => Token::Pub,
             "extern" => Token::Extern,
             "model" => Token::Model,
+            "effect" => Token::Effect,
+            "with" => Token::With,
+
+            "dyn" => Token::Dyn,
+            "resume" => Token::Resume,
             // "layer", "input", "output" are contextual — parsed as Ident inside model blocks
             "f32" => Token::F32,
             "f64" => Token::F64,

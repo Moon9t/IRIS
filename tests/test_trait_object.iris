@@ -1,0 +1,65 @@
+// Phase 91: Trait Objects (dyn Trait)
+
+record Cat {
+    name: str,
+    lives: i64,
+}
+
+record Dog {
+    name: str,
+    tricks: i64,
+}
+
+trait Pet {
+    def speak(self) -> str
+    def name(self) -> str
+}
+
+impl Pet for Cat {
+    def speak(self) -> str {
+        "meow"
+    }
+    def name(self) -> str {
+        self.name
+    }
+}
+
+impl Pet for Dog {
+    def speak(self) -> str {
+        "woof"
+    }
+    def name(self) -> str {
+        self.name
+    }
+}
+
+// Pass a `dyn Pet` value through a function — verify virtual dispatch.
+def through_pet(p: dyn Pet) -> str {
+    p.speak() + " " + p.name()
+}
+
+// Box two different concrete types as dyn Pet and dispatch through them.
+// Returns 0 on success, non-zero indicates which branch failed.
+def main() -> i64 {
+    val c: Cat = Cat { name: "Whiskers", lives: 9 };
+    val d: dyn Pet = c;
+    val s = d.speak();
+    if s == "meow" {
+        val n = d.name();
+        if n == "Whiskers" {
+            val g = through_pet(d);
+            if g == "meow Whiskers" {
+                val dog: Dog = Dog { name: "Rex", tricks: 5 };
+                val dp: dyn Pet = dog;
+                val ds = dp.speak();
+                if ds == "woof" { 0 } else { 10 }
+            } else {
+                20
+            }
+        } else {
+            30
+        }
+    } else {
+        40
+    }
+}

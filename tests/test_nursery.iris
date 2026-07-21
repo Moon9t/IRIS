@@ -1,0 +1,52 @@
+// tests/test_nursery.iris -- Test suite for Phase 5 Structured Concurrency (nursery & timeouts)
+
+bring std.async
+
+def main() -> i64 {
+    print("=== Test 1: Nursery Scoped Spawn ===");
+    val ch = channel_unbounded();
+    
+    nursery {
+        spawn {
+            chan_send(ch, 10);
+        };
+        spawn {
+            chan_send(ch, 20);
+        };
+    };
+    
+    val a = recv(ch);
+    val b = recv(ch);
+    val sum = a + b;
+    print("Nursery tasks completed, sum =", sum);
+    if sum == 30 {
+        print("PASS: Nursery sum == 30");
+    } else {
+        print("FAIL: Nursery sum != 30");
+    };
+    
+    print("\n=== Test 2: Timed Channel Receive ===");
+    val timed_ch = channel_unbounded();
+    
+    // Receive on empty channel with 50ms timeout -> should return none
+    val empty_res = recv_timeout_ms(timed_ch, 50);
+    when empty_res {
+        some(v) => print("FAIL: expected timeout, got", v),
+        none => print("PASS: Timed receive returned none on empty channel")
+    };
+    
+    chan_send(timed_ch, 99);
+    val val_res = recv_timeout_ms(timed_ch, 100);
+    when val_res {
+        some(v) => {
+            if v == 99 {
+                print("PASS: Timed receive returned value", v);
+            } else {
+                print("FAIL: Unexpected value", v);
+            }
+        },
+        none => print("FAIL: Timed receive timed out unexpectedly")
+    };
+
+    0
+}

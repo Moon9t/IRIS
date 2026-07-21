@@ -1,5 +1,0 @@
-bring std.ml
-
-def main() -> i64 {
-    0
-}

@@ -140,21 +140,21 @@ fn test_ir_printer_contains_expected_tokens() {
 }
 
 #[test]
-fn test_llvm_stub_contains_expected_tokens() {
+fn test_llvm_ir_contains_expected_tokens() {
     let mut module = build_add_module();
     let mut pm = PassManager::new();
     pm.add_pass(ValidatePass);
     pm.run(&mut module).unwrap();
 
-    let output = iris::codegen::emit_llvm_stub(&module).unwrap();
+    let output = iris::codegen::emit_llvm_ir(&module).unwrap();
     assert!(
         output.contains("define"),
-        "LLVM stub should contain 'define'"
+        "LLVM IR should contain 'define'"
     );
-    assert!(output.contains("@add"), "LLVM stub should contain '@add'");
+    assert!(output.contains("@add"), "LLVM IR should contain '@add'");
     assert!(
-        output.contains("float"),
-        "LLVM stub should contain 'float' type"
+        output.contains("double"),
+        "LLVM IR should contain 'double' type"
     );
 }
 

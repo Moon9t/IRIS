@@ -126,8 +126,12 @@ pub enum Command {
     Lsp,
     /// Start the DAP debug adapter (JSON-RPC on stdin/stdout)
     Dap,
-    /// Package manager commands
-    Pkg,
+    /// Package manager commands (all remaining args passthrough)
+    #[command(trailing_var_arg = true)]
+    Pkg {
+        /// Subcommand and arguments for the package manager
+        args: Vec<String>,
+    },
     /// Run performance benchmarks
     Bench {
         /// Input file
@@ -198,7 +202,10 @@ pub enum ParseArgsResult {
     Repl,
     Lsp,
     Dap,
-    Pkg,
+    Pkg {
+        /// Raw arguments after `pkg` subcommand
+        args: Vec<String>,
+    },
     Bench,
     Profile,
     Test,
@@ -259,7 +266,7 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
         Some(Command::Repl) => Ok(ParseArgsResult::Repl),
         Some(Command::Lsp) => Ok(ParseArgsResult::Lsp),
         Some(Command::Dap) => Ok(ParseArgsResult::Dap),
-        Some(Command::Pkg) => Ok(ParseArgsResult::Pkg),
+        Some(Command::Pkg { args }) => Ok(ParseArgsResult::Pkg { args }),
         Some(Command::Bench { file }) => {
             if file.is_some() {
                 // bench <file.iris> — treat as a compilation request

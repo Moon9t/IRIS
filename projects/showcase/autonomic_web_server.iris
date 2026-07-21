@@ -1,0 +1,266 @@
+// projects/showcase/autonomic_web_server.iris
+// Autonomic Self-Tuning & Self-Protecting Web Server Simulation
+//
+// Demonstrates:
+//   1. std.ais: SoftwareGovernor, Homeostat, Constitution
+//   2. std.rl:  Contextual Bandit for dynamic parameter tuning
+//   3. std.ml:  Online drift forecasting of memory and CPU telemetry
+//
+// The autonomic web server monitors its CPU, RAM, active connections,
+// latency, and error rate. It selects from three action configurations
+// (Low, Mid, High resource modes) to optimize user experience under
+// variable traffic loads, while the Software Constitution overrides
+// decisions if RAM/CPU exceed critical safety thresholds.
+
+bring std.ais
+bring std.rl
+bring std.ml
+bring std.fmt
+
+// ===== Web Server State =====
+
+record ServerState {
+    traffic_load: f64,        // requests per second (external variable)
+    cpu_usage: f64,           // 0.0 - 1.0
+    memory_usage: f64,        // MBs
+    active_connections: i64,
+    latency: f64,             // ms
+    error_rate: f64,          // fraction of requests dropped/failed
+    config_mode: i64          // 0=LOW_RESOURCE, 1=MID_RESOURCE, 2=HIGH_RESOURCE
+}
+
+def initial_server_state() -> ServerState {
+    ServerState {
+        traffic_load: 50.0,
+        cpu_usage: 0.1,
+        memory_usage: 200.0,
+        active_connections: 50,
+        latency: 30.0,
+        error_rate: 0.0,
+        config_mode: 1 // start in MID_RESOURCE mode
+    }
+}
+
+// ===== Physics Simulation of Server Metrics =====
+
+def simulate_server_step(state: ServerState, config: i64, load: f64) -> ServerState {
+    // Active connections follow traffic load
+    val new_conn = (load * 2.0) to i64;
+
+    // Mode characteristics:
+    // Mode 0: Low resource limit. Aggressively sheds load.
+    //         Low CPU, low RAM, but high latency/errors if load is high.
+    // Mode 1: Mid resource limit. Balanced.
+    // Mode 2: High resource limit. High thread pools, large memory caching.
+    //         Low latency even under load, but high RAM and CPU footprint.
+    
+    var cpu = 0.0;
+    var ram = 0.0;
+    var lat = 0.0;
+    var err = 0.0;
+
+    if config == 0 {
+        // LOW RESOURCE
+        cpu = 0.05 + load * 0.001;
+        ram = 150.0 + load * 0.2;
+        lat = 150.0 + load * 1.5;
+        err = if load > 30.0 { (load - 30.0) / load } else { 0.0 };
+    } else {
+        if config == 1 {
+            // MID RESOURCE
+            cpu = 0.1 + load * 0.003;
+            ram = 300.0 + load * 0.8;
+            lat = 40.0 + load * 0.4;
+            err = if load > 120.0 { (load - 120.0) / load } else { 0.0 };
+        } else {
+            // HIGH RESOURCE
+            cpu = 0.2 + load * 0.005;
+            ram = 600.0 + load * 2.5; // Big cache memory footprint
+            lat = 15.0 + load * 0.05;
+            err = if load > 400.0 { (load - 400.0) / load } else { 0.0 };
+        }
+    };
+
+    // Add small random noise
+    cpu = clamp(cpu + (random() - 0.5) * 0.05, 0.0, 1.0);
+    ram = ram + (random() - 0.5) * 20.0;
+    lat = if lat < 10.0 { 10.0 } else { lat };
+    err = clamp(err, 0.0, 1.0);
+
+    ServerState {
+        traffic_load: load,
+        cpu_usage: cpu,
+        memory_usage: ram,
+        active_connections: new_conn,
+        latency: lat,
+        error_rate: err,
+        config_mode: config
+    }
+}
+
+// ===== Reward / Utility Metric =====
+// Autonomic manager seeks to maximize this reward
+def compute_reward(state: ServerState) -> f64 {
+    // Penalize latency, high memory/CPU usage, and errors heavily
+    val latency_penalty = state.latency * 0.5;
+    val memory_penalty = state.memory_usage * 0.1;
+    val cpu_penalty = state.cpu_usage * 100.0;
+    val error_penalty = state.error_rate * 1000.0;
+    0.0 - (latency_penalty + memory_penalty + cpu_penalty + error_penalty)
+}
+
+// ===== Main Program =====
+
+def main() -> i64 {
+    print("=== IRIS Autonomic Self-Governing Web Server ===");
+    print("Integrating std.ais (MAPE-K / Constitution) + std.rl (Bandits) + std.ml (Forecasting)");
+    print("");
+
+    // 1. Action space configuration names
+    val action_names: list<str> = list();
+    list_push(action_names, "LOW_RESOURCE (Safety Override)");
+    list_push(action_names, "MID_RESOURCE (Balanced)");
+    list_push(action_names, "HIGH_RESOURCE (High Performance)");
+
+    // 2. Setup Software Governor
+    // Homeostat checks if CPU (target=0.4, tol=0.3) and RAM (target=350, tol=300) are healthy
+    var homeo = homeostat_new();
+    homeo = homeostat_add_var(homeo, homeovar_new(0.4, 0.3, 1.0));
+    homeo = homeostat_add_var(homeo, homeovar_new(350.0, 300.0, 0.01));
+
+    // Constitution defines critical safety limits: Safety Mode triggers if violated
+    var consti = constitution_new(2); // Critical threshold mode
+    consti = constitution_add(consti, "MEMORY_LIMIT", 900); // Alert if RAM exceeds 900MB
+    consti = constitution_add(consti, "CPU_LIMIT", 95);     // Alert if CPU exceeds 95%
+
+    var gov = software_governor_new(homeo, consti, action_names);
+    // Add custom Autonomic Safety Override Rule: Metric 1 (RAM) > 850 MB -> Force LOW_RESOURCE (mode 0)
+    gov = software_governor_add_rule(gov, autonomic_rule_new("memory_usage", ">", 850.0, 0, 2));
+
+    // 3. Setup Contextual Bandit weights
+    // Features: [1.0 (bias), traffic_load / 100.0, last_mode / 2.0]
+    val n_features = 3;
+    val n_actions = 3;
+    val weights = rl.contextual_bandit_new(n_actions, n_features);
+
+    // 4. History logs for forecasting
+    val ram_history: list<f64> = list();
+    val cpu_history: list<f64> = list();
+
+    // 5. Run simulation over fluctuating traffic
+    var state = initial_server_state();
+    var step = 0;
+    val max_steps = 40;
+
+    print("--- Starting Server Autonomic Loop (40 step cycle) ---");
+    print("");
+
+    while step < max_steps {
+        // Telemetry Monitoring
+        val cpu = state.cpu_usage;
+        val ram = state.memory_usage;
+        val lat = state.latency;
+        val load = state.traffic_load;
+
+        // Record to telemetry history
+        list_push(ram_history, ram);
+        list_push(cpu_history, cpu);
+
+        // ML Telemetry Forecasting (projecting 1 step ahead based on last 5 readings)
+        val predicted_ram = ml.predict_next_telemetry(ram_history, 5);
+        val predicted_cpu = ml.predict_next_telemetry(cpu_history, 5);
+
+        // Update homeostat values
+        val sensor_vals: list<f64> = list();
+        list_push(sensor_vals, cpu);
+        list_push(sensor_vals, ram);
+        val homeo_res = homeostat_update(gov.homeostat, sensor_vals, 0.1);
+        gov = SoftwareGovernor {
+            homeostat: homeo_res.0,
+            constitution: gov.constitution,
+            rules: gov.rules,
+            metrics_history: gov.metrics_history,
+            action_space: gov.action_space,
+            last_action: gov.last_action
+        };
+
+        // AIS Decision Engine (Analyze & Plan)
+        var action = 1; // Default to MID_RESOURCE
+        var safety_triggered = false;
+
+        // A. Constitution Safety Checks (RAM limit)
+        if ram > 850.0 {
+            safety_triggered = true;
+            action = 0; // Force LOW_RESOURCE override
+        } else {
+            // Proactive Forecaster: if we predict a RAM crash next step, override early!
+            if predicted_ram > 900.0 {
+                safety_triggered = true;
+                action = 0;
+            }
+        };
+
+        // B. Contextual Bandit Decision (if safety allows)
+        if safety_triggered == false {
+            val context: list<f64> = list();
+            list_push(context, 1.0); // Bias
+            list_push(context, load / 100.0);
+            list_push(context, (state.config_mode to f64) / 2.0);
+            action = rl.contextual_bandit_select(weights, context, n_actions, n_features, 0.1);
+        };
+
+        // C. Execute chosen configuration
+        val next_state = simulate_server_step(state, action, load);
+
+        // D. Calculate Reward and Update Bandit weights
+        val reward = compute_reward(next_state);
+        if safety_triggered == false {
+            val context: list<f64> = list();
+            list_push(context, 1.0);
+            list_push(context, load / 100.0);
+            list_push(context, (state.config_mode to f64) / 2.0);
+            val _ = rl.contextual_bandit_update(weights, context, action, reward, n_features, 0.05);
+        };
+
+        // Print logs every 5 steps
+        if step % 5 == 0 {
+            val action_name = list_get(gov.action_space, action);
+            val alert_msg = if safety_triggered { " [SAFETY OVERRIDE]" } else { "" };
+            print(f"Step {step} | Load: {load} | RAM: {ram} (pred: {predicted_ram}) | Latency: {lat}ms | Mode: {action_name}{alert_msg}");
+        };
+
+        // Update traffic load profiles dynamically:
+        // Traffic spike from step 10 to 20, then drop, then high spike at step 30
+        val next_load = if step < 10 {
+            50.0
+        } else {
+            if step < 20 {
+                180.0 // traffic spike!
+            } else {
+                if step < 30 {
+                    30.0  // idle hours
+                } else {
+                    250.0 // huge traffic surge!
+                }
+            }
+        };
+
+        state = ServerState {
+            traffic_load: next_load,
+            cpu_usage: next_state.cpu_usage,
+            memory_usage: next_state.memory_usage,
+            active_connections: next_state.active_connections,
+            latency: next_state.latency,
+            error_rate: next_state.error_rate,
+            config_mode: next_state.config_mode
+        };
+
+        step = step + 1
+    };
+
+    print("");
+    print("=== Autonomic Web Server Simulation Terminated Cleanly ===");
+    print("Software Governor successfully adjusted server profiles and averted memory exhaustion via proactive forecasting.");
+
+    0
+}
