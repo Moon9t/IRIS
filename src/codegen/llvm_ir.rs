@@ -5275,11 +5275,20 @@ fn emit_instr_ir(
             writeln!(out, "  call void @iris_pop_handler()")?;
         }
         IrInstr::ResumeCont { cont, value, result } => {
-            let v = val(*value);
+            let val_ty = func.value_type(*value).cloned().unwrap_or(IrType::Infer);
+            let raw_v = val(*value);
+            let val_i64 = if raw_v.starts_with("%v") || raw_v.starts_with('@') || llvm_type_complete(&val_ty).unwrap_or_default() == "ptr" {
+                *gep_counter += 1;
+                let tmp = format!("%_res_i64_{}", gep_counter);
+                writeln!(out, "  {} = ptrtoint ptr {} to i64", tmp, raw_v)?;
+                tmp
+            } else {
+                raw_v
+            };
             writeln!(
                 out,
                 "  call void @iris_resume_cont(ptr {}, i64 {})",
-                val(*cont), v
+                val(*cont), val_i64
             )?;
             // The handler should return immediately after resume.
             // Store the value as the result so the handler can return it.
@@ -5291,17 +5300,17 @@ fn emit_instr_ir(
             // Coerce the value to the proper type if needed
             write!(out, "  {} = ", val(*result))?;
             if llvm_ret.starts_with('i') {
-                writeln!(out, "trunc i64 {} to {}", v, llvm_ret)?;
+                writeln!(out, "trunc i64 {} to {}", val_i64, llvm_ret)?;
             } else if llvm_ret == "ptr" {
-                writeln!(out, "inttoptr i64 {} to ptr", v)?;
+                writeln!(out, "inttoptr i64 {} to ptr", val_i64)?;
             } else if llvm_ret == "double" {
-                writeln!(out, "bitcast i64 {} to double", v)?;
+                writeln!(out, "bitcast i64 {} to double", val_i64)?;
             } else if llvm_ret == "float" {
-                writeln!(out, "bitcast i64 {} to float", v)?;
+                writeln!(out, "bitcast i64 {} to float", val_i64)?;
             } else if llvm_ret == "i1" {
-                writeln!(out, "trunc i64 {} to i1", v)?;
+                writeln!(out, "trunc i64 {} to i1", val_i64)?;
             } else {
-                writeln!(out, "inttoptr i64 {} to ptr", v)?;
+                writeln!(out, "inttoptr i64 {} to ptr", val_i64)?;
             }
         }
     }

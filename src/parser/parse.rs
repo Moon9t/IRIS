@@ -138,11 +138,19 @@ impl<'t> Parser<'t> {
             return false;
         }
         let mut i = self.pos + 1;
+        let mut brace_depth = 0i32;
         while i < self.tokens.len() {
             match &self.tokens[i].node {
-                Token::With => return true,
-                Token::Semi | Token::RBrace | Token::Eof => return false,
-                Token::Eq | Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq | Token::PercentEq => return false,
+                Token::LBrace => brace_depth += 1,
+                Token::RBrace => {
+                    brace_depth -= 1;
+                    if brace_depth < 0 {
+                        return false;
+                    }
+                }
+                Token::With if brace_depth == 0 => return true,
+                Token::Semi | Token::Eof if brace_depth == 0 => return false,
+                Token::Eq | Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq | Token::PercentEq if brace_depth == 0 => return false,
                 _ => {}
             }
             i += 1;
@@ -2122,12 +2130,20 @@ impl<'t> Parser<'t> {
                     let mut resume_param = None;
                     if matches!(self.peek_tok(), Token::Arrow) {
                         self.advance();
-                        self.expect(&Token::Resume)?;
-                        if matches!(self.peek_tok(), Token::LParen) {
+                        if matches!(self.peek_tok(), Token::Resume) || matches!(self.peek_tok(), Token::Ident(ref name) if name == "resume") {
                             self.advance();
-                            let rp = self.expect_ident()?;
-                            self.expect(&Token::RParen)?;
-                            resume_param = Some(rp);
+                            if matches!(self.peek_tok(), Token::LParen) {
+                                self.advance();
+                                let rp = self.expect_ident()?;
+                                self.expect(&Token::RParen)?;
+                                resume_param = Some(rp);
+                            }
+                        } else {
+                            return Err(ParseError::UnexpectedToken {
+                                expected: "'resume'".to_owned(),
+                                found: format!("{}", self.peek_tok()),
+                                span: self.current_span(),
+                            });
                         }
                     }
                     self.expect(&Token::FatArrow)?;
@@ -3090,12 +3106,20 @@ impl<'t> Parser<'t> {
             let mut resume_param = None;
             if matches!(self.peek_tok(), Token::Arrow) {
                 self.advance();
-                self.expect(&Token::Resume)?;
-                if matches!(self.peek_tok(), Token::LParen) {
+                if matches!(self.peek_tok(), Token::Resume) || matches!(self.peek_tok(), Token::Ident(ref name) if name == "resume") {
                     self.advance();
-                    let rp = self.expect_ident()?;
-                    self.expect(&Token::RParen)?;
-                    resume_param = Some(rp);
+                    if matches!(self.peek_tok(), Token::LParen) {
+                        self.advance();
+                        let rp = self.expect_ident()?;
+                        self.expect(&Token::RParen)?;
+                        resume_param = Some(rp);
+                    }
+                } else {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "'resume'".to_owned(),
+                        found: format!("{}", self.peek_tok()),
+                        span: self.current_span(),
+                    });
                 }
             }
             self.expect(&Token::FatArrow)?;

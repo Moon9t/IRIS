@@ -2240,10 +2240,11 @@ impl<'m> Lowerer<'m> {
         // Populate the handler scope with param values only.
         // The continuation is the first block param when has_resume is true.
         if let Some(ref rp) = arm.resume_param {
+            let cont_ty = IrType::WeakRef(Box::new(IrType::Infer));
             let val = handler_lowerer
                 .builder
-                .add_block_param(entry, Some(&rp.name), IrType::Infer);
-            handler_lowerer.scope.insert(rp.name.clone(), (val, IrType::Infer));
+                .add_block_param(entry, Some(&rp.name), cont_ty.clone());
+            handler_lowerer.scope.insert(rp.name.clone(), (val, cont_ty));
         }
         for p in &arm.params {
             let val = handler_lowerer
