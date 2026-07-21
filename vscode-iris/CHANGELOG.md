@@ -1,5 +1,12 @@
 # IRIS Language Extension Changelog
 
+## 1.0.2
+
+### New Features
+
+- **Syntax highlighting**: Added support for Higher-Kinded Types (HKT) generic parameter placeholders `[_]`.
+- **Language Specifications**: Highlighting for `where` clauses and angle bracket generic arguments.
+
 ## 1.0.1
 
 ### Bug Fixes

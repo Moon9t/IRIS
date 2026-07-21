@@ -1,33 +1,33 @@
-// store.iris — Thread-safe in-memory key-value store
+// store.iris — Thread-safe in-memory key-value store using generic KVStore definition
 
 bring std.fs
 
-pub record KVStore {
-    mu: mutex<map<str, str>>
+pub record KVStore[K, V] {
+    mu: mutex<map<K, V>>
 }
 
-pub def store_new() -> KVStore {
+pub def store_new_str() -> KVStore<str, str> {
     val data: map<str, str> = map();
     val mu = mutex_new(data);
-    val s = KVStore { mu: mu };
+    val s: KVStore<str, str> = KVStore { mu: mu };
     s
 }
 
-pub def store_get(store: KVStore, key: str) -> option<str> {
+pub def store_get(store: KVStore<str, str>, key: str) -> option<str> {
     val data = mutex_lock(store.mu);
     val res = map_get(data, key);
     mutex_unlock(store.mu);
     res
 }
 
-pub def store_set(store: KVStore, key: str, value: str) -> i64 {
+pub def store_set(store: KVStore<str, str>, key: str, value: str) -> i64 {
     val data = mutex_lock(store.mu);
     map_set(data, key, value);
     mutex_unlock(store.mu);
     0
 }
 
-pub def store_delete(store: KVStore, key: str) -> bool {
+pub def store_delete(store: KVStore<str, str>, key: str) -> bool {
     val data = mutex_lock(store.mu);
     val has_key = map_contains(data, key);
     if has_key {
@@ -39,14 +39,14 @@ pub def store_delete(store: KVStore, key: str) -> bool {
     has_key
 }
 
-pub def store_list_keys(store: KVStore) -> list<str> {
+pub def store_list_keys(store: KVStore<str, str>) -> list<str> {
     val data = mutex_lock(store.mu);
     val keys = map_keys(data);
     mutex_unlock(store.mu);
     keys
 }
 
-pub def store_save(store: KVStore, path: str) -> bool {
+pub def store_save(store: KVStore<str, str>, path: str) -> bool {
     val data = mutex_lock(store.mu);
     val json_repr = json_stringify(data);
     mutex_unlock(store.mu);

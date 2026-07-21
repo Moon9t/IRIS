@@ -27,7 +27,7 @@ Common computer science primitives.
 ### `04_types_and_traits/`
 The IRIS static type system.
 - **Algebraic Data Types:** `enums.iris`, `structs.iris`, `tuples.iris`
-- **Interfaces & Patterns:** `traits.iris`, `generics.iris`, `pattern_matching.iris`, `options_results.iris`
+- **Interfaces & Patterns:** `traits.iris`, `generics.iris` (showcases generic records and Higher-Kinded Types (HKT)), `pattern_matching.iris`, `options_results.iris`
 - **System Overview:** `type_system.iris`
 
 ### `05_systems/`

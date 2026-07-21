@@ -4638,9 +4638,9 @@ mod tcp_store {
     use std::sync::atomic::{AtomicI64, Ordering};
     use std::sync::{Arc, LazyLock, Mutex};
 
-    static STREAMS: LazyLock<Mutex<HashMap<i64, Arc<Mutex<TcpStream>>>>> =
+    static STREAMS: LazyLock<Mutex<HashMap<i64, Arc<TcpStream>>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
-    static LISTENERS: LazyLock<Mutex<HashMap<i64, TcpListener>>> =
+    static LISTENERS: LazyLock<Mutex<HashMap<i64, Arc<TcpListener>>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
     static NEXT_ID: AtomicI64 = AtomicI64::new(1);
 
@@ -4653,20 +4653,24 @@ mod tcp_store {
         STREAMS
             .lock()
             .unwrap()
-            .insert(id, Arc::new(Mutex::new(s)));
+            .insert(id, Arc::new(s));
         id
     }
     pub fn store_listener(l: TcpListener) -> i64 {
         let id = next_handle();
-        LISTENERS.lock().unwrap().insert(id, l);
+        LISTENERS.lock().unwrap().insert(id, Arc::new(l));
         id
     }
     pub fn read_stream(id: i64) -> Result<String, ()> {
         use std::io::Read;
-        let map = STREAMS.lock().unwrap();
-        if let Some(stream) = map.get(&id) {
+        let stream = {
+            let map = STREAMS.lock().unwrap();
+            map.get(&id).cloned()
+        };
+        if let Some(stream) = stream {
             let mut buf = vec![0u8; 8192];
-            match stream.lock().unwrap().read(&mut buf) {
+            // Read directly from &TcpStream (it is thread-safe and implements Read)
+            match (&*stream).read(&mut buf) {
                 Ok(n) => Ok(String::from_utf8_lossy(&buf[..n]).to_string()),
                 Err(_) => Err(()),
             }
@@ -4676,14 +4680,21 @@ mod tcp_store {
     }
     pub fn write_stream(id: i64, data: &str) {
         use std::io::Write;
-        let map = STREAMS.lock().unwrap();
-        if let Some(stream) = map.get(&id) {
-            let _ = stream.lock().unwrap().write_all(data.as_bytes());
+        let stream = {
+            let map = STREAMS.lock().unwrap();
+            map.get(&id).cloned()
+        };
+        if let Some(stream) = stream {
+            // Write directly to &TcpStream (it is thread-safe and implements Write)
+            let _ = (&*stream).write_all(data.as_bytes());
         }
     }
     pub fn accept_listener(id: i64) -> Result<i64, ()> {
-        let map = LISTENERS.lock().unwrap();
-        if let Some(listener) = map.get(&id) {
+        let listener = {
+            let map = LISTENERS.lock().unwrap();
+            map.get(&id).cloned()
+        };
+        if let Some(listener) = listener {
             match listener.accept() {
                 Ok((stream, _)) => Ok(store_stream(stream)),
                 Err(_) => Err(()),

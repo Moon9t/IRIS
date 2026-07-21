@@ -5,7 +5,7 @@ bring std.net
 bring "protocol.iris"
 bring "store.iris"
 
-pub def start_server(port: i64, store: KVStore) -> i64 {
+pub def start_server(port: i64, store: KVStore<str, str>) -> i64 {
     val server = tcp_listen_on(port);
     if server >= 0 {
         print(concat("[Server] Listening on port ", to_str(port)));

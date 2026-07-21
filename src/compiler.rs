@@ -334,7 +334,10 @@ fn rewrite_type(ty: &mut AstType, symbols: &HashSet<String>, prefix: &str) {
             rewrite_type(k, symbols, prefix);
             rewrite_type(v, symbols, prefix);
         }
-        AstType::Generic { ref mut args, .. } => {
+        AstType::Generic { ref mut name, ref mut args, .. } => {
+            if symbols.contains(name) {
+                *name = format!("{}__{}", prefix, name);
+            }
             for arg in args {
                 rewrite_type(arg, symbols, prefix);
             }
@@ -354,7 +357,11 @@ fn rewrite_type(ty: &mut AstType, symbols: &HashSet<String>, prefix: &str) {
         AstType::WeakRef(ref mut elem, _) => {
             rewrite_type(elem, symbols, prefix);
         }
-        AstType::DynTrait { .. } => {}
+        AstType::DynTrait { ref mut trait_name, .. } => {
+            if symbols.contains(trait_name) {
+                *trait_name = format!("{}__{}", prefix, trait_name);
+            }
+        }
         AstType::MaskEffectType { .. } => {}
     }
 }
