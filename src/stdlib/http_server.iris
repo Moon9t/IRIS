@@ -38,7 +38,10 @@ pub def http_serve(port: i64, handler: |str| -> str) -> i64 effect net {
 }
 
 // Multi-threaded HTTP server: each connection is handled in a new thread.
-pub def http_serve_mt(port: i64, handler: |str| -> str) -> i64 effect net, spawn {
+// Effect names are ordinary identifiers, so this row cannot say `spawn` — that
+// is a reserved keyword and the effect-list parser rejects it, which broke every
+// program that brought this module.
+pub def http_serve_mt(port: i64, handler: |str| -> str) -> i64 effect net, thread {
     val listener = tcp_listen(port)
     loop {
         val conn = tcp_accept(listener)

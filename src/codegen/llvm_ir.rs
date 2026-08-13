@@ -312,6 +312,10 @@ fn emit_llvm_ir_impl(
         writeln!(out)?;
     }
 
+    // Continuation struct for effect handler resume support.
+    writeln!(out, "%Continuation = type {{ i32, i64 }}")?;
+    writeln!(out)?;
+
     // ── Collect global string constants ───────────────────────────────────
     let mut str_table: HashMap<String, usize> = HashMap::new();
     let mut str_vec: Vec<String> = Vec::new();
@@ -324,6 +328,19 @@ fn emit_llvm_ir_impl(
                             let idx = str_vec.len();
                             str_table.insert(value.clone(), idx);
                             str_vec.push(value.clone());
+                        }
+                    }
+                    // An extern call is dispatched through the effect machinery
+                    // using its own name as the effect name, so that name needs a
+                    // string constant. Without this the lookup at the dispatch
+                    // site fell back to index 0 and passed whatever string
+                    // happened to be first in the table — producing runtime
+                    // failures naming absurd effects like ',' or '=='.
+                    IrInstr::CallExtern { name, .. } => {
+                        if !str_table.contains_key(name) {
+                            let idx = str_vec.len();
+                            str_table.insert(name.clone(), idx);
+                            str_vec.push(name.clone());
                         }
                     }
                     IrInstr::PushHandler { arms } => {
@@ -1992,13 +2009,13 @@ fn emit_instr_ir(
                     | BinOp::CmpGe
             );
             let semantic_operand_ty = func.value_type(*lhs).or_else(|| func.value_type(*rhs));
-            // String equality/inequality: use iris_str_eq (pointer equality is wrong).
+            // String comparison: use iris_str_eq / iris_str_cmp (pointer comparison is wrong).
             let lhs_ety = emitted_types.get(lhs).map(|s| s.as_str());
             let rhs_ety = emitted_types.get(rhs).map(|s| s.as_str());
             let is_str_cmp = semantic_operand_ty == Some(&IrType::Str)
-                || lhs_ety == Some("ptr")
+                || (lhs_ety == Some("ptr")
                     && rhs_ety == Some("ptr")
-                    && matches!(op, BinOp::CmpEq | BinOp::CmpNe);
+                    && matches!(op, BinOp::CmpEq | BinOp::CmpNe));
             if is_str_cmp && matches!(op, BinOp::CmpEq | BinOp::CmpNe) {
                 let lv =
                     coerce_to_type(*lhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
@@ -2021,6 +2038,30 @@ fn emit_instr_ir(
                     writeln!(out, "  %v{} = xor i1 {}, true", result.0, tmp)?;
                 }
                 // skip the rest of BinOp handling
+            } else if is_str_cmp && matches!(op, BinOp::CmpLt | BinOp::CmpLe | BinOp::CmpGt | BinOp::CmpGe) {
+                let lv =
+                    coerce_to_type(*lhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
+                let rv =
+                    coerce_to_type(*rhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
+                let cmp_tmp = format!("%str_cmp_tmp{}", gep_counter);
+                *gep_counter += 1;
+                writeln!(
+                    out,
+                    "  {} = call i64 @iris_str_cmp(ptr {}, ptr {})",
+                    cmp_tmp, lv, rv
+                )?;
+                let llvm_pred = match op {
+                    BinOp::CmpLt => "slt",
+                    BinOp::CmpLe => "sle",
+                    BinOp::CmpGt => "sgt",
+                    BinOp::CmpGe => "sge",
+                    _ => unreachable!(),
+                };
+                writeln!(
+                    out,
+                    "  %v{} = icmp {} i64 {}, 0",
+                    result.0, llvm_pred, cmp_tmp
+                )?;
             } else {
                 let ty_s = if comparison_op {
                     lhs_ety
@@ -2045,9 +2086,9 @@ fn emit_instr_ir(
                     (BinOp::Sub, true) => format!("fsub {} {}, {}", ty_s, lv, rv),
                     (BinOp::Mul, true) => format!("fmul {} {}, {}", ty_s, lv, rv),
                     (BinOp::Div, true) => format!("fdiv {} {}, {}", ty_s, lv, rv),
-                    (BinOp::Add, false) => format!("add nsw {} {}, {}", ty_s, lv, rv),
-                    (BinOp::Sub, false) => format!("sub {} {}, {}", ty_s, lv, rv),
-                    (BinOp::Mul, false) => format!("mul nsw {} {}, {}", ty_s, lv, rv),
+                    (BinOp::Add, false) => format!("call i64 @iris_add_checked(i64 {}, i64 {})", lv, rv),
+                    (BinOp::Sub, false) => format!("call i64 @iris_sub_checked(i64 {}, i64 {})", lv, rv),
+                    (BinOp::Mul, false) => format!("call i64 @iris_mul_checked(i64 {}, i64 {})", lv, rv),
                     (BinOp::Div, false) | (BinOp::FloorDiv, _) => {
                         format!("sdiv {} {}, {}", ty_s, lv, rv)
                     }
@@ -2870,11 +2911,31 @@ fn emit_instr_ir(
         } => {
             if scalar_arrays.contains(array) {
                 let ety_s = llvm_type_complete(elem_ty)?;
-                // Need to know the array size for GEP type — look up from alloca.
                 let arr_size = find_alloc_size(func, *array);
                 let gep = format!("%agep{}_{}", result.0, gep_counter);
                 *gep_counter += 1;
                 if let Some(sz) = arr_size {
+                    let bc = *gep_counter;
+                    *gep_counter += 1;
+                    let idx_val = val(*index);
+                    writeln!(
+                        out,
+                        "  %bci{}_0 = icmp ult i64 {}, {}",
+                        bc, idx_val, sz
+                    )?;
+                    writeln!(
+                        out,
+                        "  br i1 %bci{}_0, label %bco{}_ok, label %bco{}_fail",
+                        bc, bc, bc
+                    )?;
+                    writeln!(out, "bco{}_fail:", bc)?;
+                    writeln!(
+                        out,
+                        "  call void @iris_bounds_check_abort(i64 {}, i64 {})",
+                        idx_val, sz
+                    )?;
+                    writeln!(out, "  unreachable")?;
+                    writeln!(out, "bco{}_ok:", bc)?;
                     writeln!(
                         out,
                         "  {} = getelementptr inbounds [{} x {}], ptr %v{}, i64 0, i64 {}",
@@ -2930,6 +2991,27 @@ fn emit_instr_ir(
                 let gep = format!("%asgep_{}", gep_counter);
                 *gep_counter += 1;
                 if let Some(sz) = arr_size {
+                    let bc = *gep_counter;
+                    *gep_counter += 1;
+                    let idx_val = val(*index);
+                    writeln!(
+                        out,
+                        "  %bsci{}_0 = icmp ult i64 {}, {}",
+                        bc, idx_val, sz
+                    )?;
+                    writeln!(
+                        out,
+                        "  br i1 %bsci{}_0, label %bsco{}_ok, label %bsco{}_fail",
+                        bc, bc, bc
+                    )?;
+                    writeln!(out, "bsco{}_fail:", bc)?;
+                    writeln!(
+                        out,
+                        "  call void @iris_bounds_check_abort(i64 {}, i64 {})",
+                        idx_val, sz
+                    )?;
+                    writeln!(out, "  unreachable")?;
+                    writeln!(out, "bsco{}_ok:", bc)?;
                     writeln!(
                         out,
                         "  {} = getelementptr inbounds [{} x {}], ptr %v{}, i64 0, i64 {}",
@@ -5073,7 +5155,7 @@ fn emit_instr_ir(
                 }
             }
         }
-        // Phase 81: FFI extern calls
+        // Phase 81: FFI extern calls — route through effect handler dispatch.
         IrInstr::CallExtern {
             result,
             name,
@@ -5081,41 +5163,147 @@ fn emit_instr_ir(
             ret_ty,
         } => {
             let llvm_ret = llvm_type_complete(ret_ty).unwrap_or_else(|_| "ptr".to_owned());
-            let arg_strs: Vec<String> = args
-                .iter()
-                .map(|a| {
-                    let arg_ty = func.value_type(*a).cloned().unwrap_or(IrType::Infer);
-                    let llvm_arg_ty =
-                        llvm_type_complete(&arg_ty).unwrap_or_else(|_| "ptr".to_owned());
-                    format!("{} {}", llvm_arg_ty, val(*a))
-                })
-                .collect();
+            let nargs = args.len();
+            // A miss means the string-collection pass never saw this extern call.
+            // Falling back to index 0 silently passed an unrelated string as the
+            // effect name, which surfaced at runtime as "no handler for effect ','"
+            // — a wrong answer instead of an error. Fail loudly instead.
+            let name_idx = *str_table.get(name).ok_or_else(|| CodegenError::Unsupported {
+                backend: "llvm".into(),
+                detail: format!(
+                    "internal: extern name '{}' is missing from the string constant table",
+                    name
+                ),
+            })?;
 
-            // Check if this extern call is intercepted by an effect handler.
-            let name_idx = str_table.get(name).copied();
-            if name_idx.is_some() {
-                // Note: native codegen for effect handler dispatch is not yet implemented.
-                // For now, we fall through to the real extern call.
-                // The interpreter handles effect handlers correctly.
+            // Pack args into an i64 array for the dispatch function.
+            *gep_counter += 1;
+            let args_buf_idx = *gep_counter;
+            if nargs > 0 {
+                writeln!(
+                    out,
+                    "  %_eff_args_{} = alloca [{} x i64], align 8",
+                    args_buf_idx, nargs
+                )?;
+                for (i, a) in args.iter().enumerate() {
+                    let arg_val = val(*a);
+                    let arg_ty = func.value_type(*a).cloned().unwrap_or(IrType::Infer);
+                    let arg_llvm_ty =
+                        llvm_type_complete(&arg_ty).unwrap_or_else(|_| "ptr".to_owned());
+                    let i64_val = if arg_llvm_ty == "i64" {
+                        arg_val.to_string()
+                    } else if arg_llvm_ty == "double" {
+                        *gep_counter += 1;
+                        let tmp = format!("%_eff_f2i_{}", gep_counter);
+                        writeln!(
+                            out,
+                            "  {} = bitcast double {} to i64",
+                            tmp, arg_val
+                        )?;
+                        tmp
+                    } else {
+                        // ptr or other → ptrtoint to i64
+                        *gep_counter += 1;
+                        let tmp = format!("%_eff_p2i_{}", gep_counter);
+                        writeln!(
+                            out,
+                            "  {} = ptrtoint {} {} to i64",
+                            tmp, arg_llvm_ty, arg_val
+                        )?;
+                        tmp
+                    };
+                    *gep_counter += 1;
+                    writeln!(
+                        out,
+                        "  %_eff_ap_{} = getelementptr [{} x i64], ptr %_eff_args_{}, i32 0, i32 {}",
+                        gep_counter, nargs, args_buf_idx, i
+                    )?;
+                    writeln!(
+                        out,
+                        "  store i64 {}, ptr %_eff_ap_{}",
+                        i64_val, gep_counter
+                    )?;
+                }
             }
-            // Emit the real extern call regardless.
-            if let Some(r) = result {
-                writeln!(
-                    out,
-                    "  %v{} = call {} @{}({})",
-                    r.0,
-                    llvm_ret,
-                    name,
-                    arg_strs.join(", ")
-                )?;
+
+            // Allocate a Continuation on the stack for resume support.
+            *gep_counter += 1;
+            let cont_var = format!("%_cont_{}", gep_counter);
+            writeln!(
+                out,
+                "  {} = alloca %Continuation, align 8",
+                cont_var
+            )?;
+            writeln!(
+                out,
+                "  store %Continuation {{ i32 0, i64 0 }}, ptr {}",
+                cont_var
+            )?;
+
+            // Call the dispatch function.
+            let args_buf_str = if nargs > 0 {
+                format!("%_eff_args_{}", args_buf_idx)
             } else {
-                writeln!(
-                    out,
-                    "  call {} @{}({})",
-                    llvm_ret,
-                    name,
-                    arg_strs.join(", ")
-                )?;
+                "null".to_string()
+            };
+
+            // LLVM has no copy instruction, so `%vN = %_eff_result_M` is not
+            // valid IR. When the dispatch already returns the expected type,
+            // name the call's destination directly rather than aliasing it
+            // afterwards; every other type still goes through a real cast below.
+            let result_i64 = match result {
+                Some(r) if llvm_ret == "i64" => format!("%v{}", r.0),
+                _ => format!("%_eff_result_{}", gep_counter),
+            };
+            // Only reference the real function if it's defined in the module;
+            // otherwise pass null (handler-only externs have no implementation).
+            let real_fn_ref = if _module.function_index.contains_key(name) {
+                format!("ptr @{}", name)
+            } else {
+                "ptr null".to_string()
+            };
+            writeln!(
+                out,
+                "  {} = call i64 @iris_effect_dispatch_or_call(ptr @.str.{}, {}, ptr {}, i64 {}, ptr {})",
+                result_i64, name_idx, real_fn_ref, cont_var, nargs, args_buf_str
+            )?;
+
+            // Cast the i64 result to the expected return type.
+            if let Some(r) = result {
+                if llvm_ret == "i64" {
+                    // Nothing to do: the call above wrote straight into %v{r}.
+                } else if llvm_ret == "ptr" {
+                    writeln!(
+                        out,
+                        "  %v{} = inttoptr i64 {} to ptr",
+                        r.0, result_i64
+                    )?;
+                } else if llvm_ret == "double" {
+                    writeln!(
+                        out,
+                        "  %v{} = bitcast i64 {} to double",
+                        r.0, result_i64
+                    )?;
+                } else if llvm_ret == "i32" {
+                    writeln!(
+                        out,
+                        "  %v{} = trunc i64 {} to i32",
+                        r.0, result_i64
+                    )?;
+                } else if llvm_ret == "i1" {
+                    writeln!(
+                        out,
+                        "  %v{} = trunc i64 {} to i1",
+                        r.0, result_i64
+                    )?;
+                } else {
+                    // Fallback: bitcast or inttoptr
+                    writeln!(
+                        out,
+                        "  %v{} = inttoptr i64 {} to {}",
+                        r.0, result_i64, llvm_ret
+                    )?;
+                }
             }
         }
         // Phase 88: TCP network I/O
@@ -5262,11 +5450,16 @@ fn emit_instr_ir(
                 let name_idx = str_table.get(&arm.effect_name).copied().unwrap_or(0);
                 let fn_idx = str_table.get(&format!("__fn__{}", arm.func_name)).copied().unwrap_or(0);
                 let has_resume = if arm.has_resume { 1i32 } else { 0i32 };
-                // Emit GEP to get pointers to the string constants.
                 writeln!(
                     out,
                     "  call void @iris_push_handler_arm(ptr @.str.{}, ptr @.str.{}, i64 {}, i32 {})",
                     name_idx, fn_idx, arm.num_args, has_resume
+                )?;
+                // Store the actual function pointer for native dispatch.
+                writeln!(
+                    out,
+                    "  call void @iris_push_handler_fn(ptr @{})",
+                    arm.func_name
                 )?;
             }
             writeln!(out, "  call void @iris_push_handler_frame()")?;
@@ -5647,6 +5840,7 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare i64 @iris_str_len(ptr)",
         "declare ptr @iris_str_concat(ptr, ptr)",
         "declare i1 @iris_str_eq(ptr, ptr)",
+        "declare i64 @iris_str_cmp(ptr, ptr)",
         "declare i1 @iris_str_contains(ptr, ptr)",
         "declare i1 @iris_str_starts_with(ptr, ptr)",
         "declare i1 @iris_str_ends_with(ptr, ptr)",
@@ -5718,6 +5912,7 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_env_var(ptr)",
         // Arrays / Tensors
         "declare ptr @iris_alloc_array()",
+        "declare void @iris_bounds_check_abort(i64, i64)",
         "declare ptr @iris_array_load(ptr, i64)",
         "declare void @iris_array_store(ptr, i64, ptr)",
         "declare ptr @iris_tensor_op()",
@@ -5748,9 +5943,15 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare void @iris_retain_kind(ptr, i32)",
         // Effect handler runtime
         "declare void @iris_push_handler_arm(ptr, ptr, i64, i32)",
+        "declare void @iris_push_handler_fn(ptr)",
         "declare void @iris_push_handler_frame()",
         "declare void @iris_pop_handler()",
+        "declare i32 @iris_handler_depth()",
+        "declare i32 @iris_can_handle(ptr)",
+        "declare i32 @iris_handler_has_resume(ptr)",
+        "declare ptr @iris_find_handler_fn(ptr)",
         "declare void @iris_resume_cont(ptr, i64)",
+        "declare i64 @iris_effect_dispatch_or_call(ptr, ptr, ptr, i64, ptr)",
         "declare void @iris_release_kind(ptr, i32)",
         // Channels / Concurrency
         "declare ptr @iris_chan_new(i64)",
@@ -5832,6 +6033,10 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare i64 @iris_min_i64(i64, i64)",
         "declare i64 @iris_max_i64(i64, i64)",
         "declare i64 @iris_abs_i64(i64)",
+        // Integer overflow-checked arithmetic
+        "declare i64 @iris_add_checked(i64, i64)",
+        "declare i64 @iris_sub_checked(i64, i64)",
+        "declare i64 @iris_mul_checked(i64, i64)",
         "declare double @iris_sign_f64(double)",
         "declare double @tan(double)",
         // LLVM intrinsics
@@ -5888,6 +6093,7 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare i1 @iris_regex_match(ptr, ptr)",
         "declare ptr @iris_regex_find_all(ptr, ptr)",
         "declare ptr @iris_regex_replace(ptr, ptr, ptr)",
+        "declare ptr @iris_regex_replace_all(ptr, ptr, ptr)",
         // DateTime
         "declare ptr @iris_datetime_now()",
         "declare double @iris_datetime_timestamp()",
@@ -5998,6 +6204,17 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare i1 @iris_bitset_get(ptr, i64)",
         "declare i64 @iris_bitset_count(ptr)",
         "declare ptr @iris_bitset_clear(ptr, i64)",
+        // New builtins (list ops, map_entries, recv_timeout, weak refs, gc)
+        "declare i64 @iris_list_remove(ptr, i64)",
+        "declare i64 @iris_list_insert(ptr, i64, ptr)",
+        "declare ptr @iris_map_entries(ptr)",
+        "declare ptr @iris_recv_timeout(ptr, i64)",
+        "declare void @iris_chan_send_b(ptr, ptr)",
+        "declare ptr @iris_weak_ref(ptr)",
+        "declare i32 @iris_weak_alive(ptr)",
+        "declare ptr @iris_weak_upgrade(ptr)",
+        "declare ptr @iris_gc_stats_map()",
+        "declare i32 @iris_gc_collect_call()",
     ];
     for decl in declares {
         writeln!(out, "{}", decl)?;

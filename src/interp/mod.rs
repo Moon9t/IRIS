@@ -266,6 +266,61 @@ pub fn eval_function(func: &IrFunction, args: &[IrValue]) -> Result<Vec<IrValue>
     Ok(result)
 }
 
+// ---------------------------------------------------------------------------
+// Captured program output
+// ---------------------------------------------------------------------------
+//
+// `--emit eval` must return the same string whether a program ran natively or was
+// interpreted. The native path returns the child process's stdout, which is the
+// printed output followed by the return value. The interpreter wrote prints
+// straight to this process's stdout, so callers received only the return value —
+// which is why an interpreted run of a correct program could return "0" while the
+// expected text appeared on the terminal instead.
+//
+// The sink is thread-local so parallel test threads cannot interleave into one
+// another's buffers. Output printed from `spawn`ed interpreter threads is not
+// captured: it has no deterministic position in the stream anyway, and still goes
+// to stdout.
+thread_local! {
+    static OUT_SINK: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
+}
+
+/// Emit one line of program output — to the active sink, or stdout if none.
+fn emit_line(line: &str) {
+    OUT_SINK.with(|sink| {
+        if let Some(buf) = sink.borrow_mut().as_mut() {
+            buf.push_str(line);
+            buf.push('\n');
+        } else {
+            println!("{}", line);
+        }
+    });
+}
+
+/// Like `eval_function_in_module_opts`, but captures printed output instead of
+/// letting it escape to stdout.
+///
+/// Returns the captured text alongside the result so a caller can reproduce the
+/// native path's output shape. The captured buffer is returned even when
+/// evaluation fails, since partial output is often what explains the failure.
+pub fn eval_function_in_module_opts_capturing(
+    module: &IrModule,
+    func: &IrFunction,
+    args: &[IrValue],
+    opts: InterpOptions,
+) -> (Result<Vec<IrValue>, InterpError>, String) {
+    OUT_SINK.with(|sink| *sink.borrow_mut() = Some(String::new()));
+    let mut interp = Interpreter::new(Some(module), opts, 0);
+    let result = interp
+        .run(func, args)
+        .and_then(|vals| interp.join_all_spawns().map(|()| vals));
+    // `take` also uninstalls the sink, so a later un-captured run still prints.
+    let captured = OUT_SINK
+        .with(|sink| sink.borrow_mut().take())
+        .unwrap_or_default();
+    (result, captured)
+}
+
 /// Like `eval_function` but with access to a full module for cross-function calls.
 pub fn eval_function_in_module(
     module: &IrModule,
@@ -1291,8 +1346,8 @@ impl<'m> Interpreter<'m> {
                             let v = self.get(*operand)?;
                             match &v {
                                 // Print strings without surrounding quotes.
-                                IrValue::Str(s) => println!("{}", s),
-                                other => println!("{}", other),
+                                IrValue::Str(s) => emit_line(s),
+                                other => emit_line(&format!("{}", other)),
                             }
                         }
 
@@ -3364,6 +3419,7 @@ impl<'m> Interpreter<'m> {
                                 "list_map" => self.builtin_list_map(&arg_vals)?,
                                 "list_filter" => self.builtin_list_filter(&arg_vals)?,
                                 "list_reduce" => self.builtin_list_reduce(&arg_vals)?,
+                                "par_map" => self.builtin_par_map(&arg_vals)?,
                                 _ => interp_builtin(name, &arg_vals)?,
                             };
                             self.values.insert(*result, ret);
@@ -3598,6 +3654,77 @@ impl<'m> Interpreter<'m> {
             acc = self.call_closure_val(closure, &[acc.clone(), item.clone()])?;
         }
         Ok(acc)
+    }
+
+    /// par_map(list, closure) — apply closure to each element in parallel.
+    fn builtin_par_map(&mut self, args: &[IrValue]) -> Result<IrValue, InterpError> {
+        if args.len() < 2 {
+            return Err(InterpError::TypeError {
+                detail: "par_map: expected 2 arguments (list, closure)".into(),
+            });
+        }
+        let items = match &args[0] {
+            IrValue::List(rc) => rc.lock().unwrap().clone(),
+            _ => {
+                return Err(InterpError::TypeError {
+                    detail: "par_map: first argument must be a list".into(),
+                })
+            }
+        };
+        let closure = &args[1];
+        let module_raw: usize = self.module
+            .map(|m| m as *const IrModule as usize)
+            .unwrap_or(0);
+        let opts = self.opts;
+        let depth = self.depth;
+        let n = items.len();
+        // Extract closure info
+        let (fn_name, captured) = match closure {
+            IrValue::Closure { fn_name, captured, .. } => (fn_name.clone(), captured.clone()),
+            _ => {
+                return Err(InterpError::TypeError {
+                    detail: "par_map: second argument must be a closure".into(),
+                })
+            }
+        };
+        let mut handles = Vec::with_capacity(n);
+        for elem in items {
+            let callee_fn = fn_name.clone();
+            let callee_captures = captured.clone();
+            let handle = std::thread::spawn(move || {
+                let module: Option<&IrModule> = if module_raw == 0 {
+                    None
+                } else {
+                    Some(unsafe { &*(module_raw as *const IrModule) })
+                };
+                let mut sub = Interpreter::new(module, opts, depth + 1);
+                if let Some(func) = sub.module.and_then(|m| m.function_by_name(&callee_fn)) {
+                    let func = func.clone();
+                    // Captures are prepended before explicit args (same as CallClosure)
+                    let mut call_args: Vec<IrValue> = callee_captures;
+                    call_args.push(elem);
+                    let ret_vals = sub.run(&func, &call_args)?;
+                    // run returns Vec<IrValue> — return first (or Unit if empty)
+                    Ok(ret_vals.into_iter().next().unwrap_or(IrValue::Unit))
+                } else {
+                    Err(InterpError::Unsupported {
+                        detail: format!("par_map: unknown function: {}", callee_fn),
+                    })
+                }
+            });
+            handles.push(handle);
+        }
+        let mut results = Vec::with_capacity(n);
+        for h in handles {
+            match h.join() {
+                Ok(Ok(val)) => results.push(val),
+                Ok(Err(e)) => return Err(e),
+                Err(_) => return Err(InterpError::Unsupported {
+                    detail: "par_map: thread panicked".to_string(),
+                }),
+            }
+        }
+        Ok(IrValue::List(std::sync::Arc::new(std::sync::Mutex::new(results))))
     }
 
     /// Checks if an extern call is intercepted by an active effect handler.
@@ -4442,9 +4569,15 @@ fn eval_binop(op: BinOp, lv: &IrValue, rv: &IrValue) -> Result<IrValue, InterpEr
         (BinOp::CmpGt, F64(a), F64(b)) => Ok(Bool(a > b)),
         (BinOp::CmpGe, F64(a), F64(b)) => Ok(Bool(a >= b)),
         // I32 arithmetic
-        (BinOp::Add, I32(a), I32(b)) => Ok(I32(a.wrapping_add(*b))),
-        (BinOp::Sub, I32(a), I32(b)) => Ok(I32(a.wrapping_sub(*b))),
-        (BinOp::Mul, I32(a), I32(b)) => Ok(I32(a.wrapping_mul(*b))),
+        (BinOp::Add, I32(a), I32(b)) => {
+            a.checked_add(*b).ok_or_else(|| InterpError::Panic { msg: format!("integer overflow in addition ({} + {})", a, b) }).map(I32)
+        }
+        (BinOp::Sub, I32(a), I32(b)) => {
+            a.checked_sub(*b).ok_or_else(|| InterpError::Panic { msg: format!("integer overflow in subtraction ({} - {})", a, b) }).map(I32)
+        }
+        (BinOp::Mul, I32(a), I32(b)) => {
+            a.checked_mul(*b).ok_or_else(|| InterpError::Panic { msg: format!("integer overflow in multiplication ({} * {})", a, b) }).map(I32)
+        }
         (BinOp::Div, I32(a), I32(b)) => {
             if *b == 0 {
                 return Err(InterpError::DivisionByZero);
@@ -4471,9 +4604,15 @@ fn eval_binop(op: BinOp, lv: &IrValue, rv: &IrValue) -> Result<IrValue, InterpEr
         (BinOp::CmpGt, I32(a), I32(b)) => Ok(Bool(a > b)),
         (BinOp::CmpGe, I32(a), I32(b)) => Ok(Bool(a >= b)),
         // I64 arithmetic
-        (BinOp::Add, I64(a), I64(b)) => Ok(I64(a.wrapping_add(*b))),
-        (BinOp::Sub, I64(a), I64(b)) => Ok(I64(a.wrapping_sub(*b))),
-        (BinOp::Mul, I64(a), I64(b)) => Ok(I64(a.wrapping_mul(*b))),
+        (BinOp::Add, I64(a), I64(b)) => {
+            a.checked_add(*b).ok_or_else(|| InterpError::Panic { msg: format!("integer overflow in addition ({} + {})", a, b) }).map(I64)
+        }
+        (BinOp::Sub, I64(a), I64(b)) => {
+            a.checked_sub(*b).ok_or_else(|| InterpError::Panic { msg: format!("integer overflow in subtraction ({} - {})", a, b) }).map(I64)
+        }
+        (BinOp::Mul, I64(a), I64(b)) => {
+            a.checked_mul(*b).ok_or_else(|| InterpError::Panic { msg: format!("integer overflow in multiplication ({} * {})", a, b) }).map(I64)
+        }
         (BinOp::Div, I64(a), I64(b)) => {
             if *b == 0 {
                 return Err(InterpError::DivisionByZero);
@@ -5183,6 +5322,16 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
                 &replacement,
             )))
         }
+        "regex_replace_all" => {
+            let pattern = str_arg(&args[0]);
+            let text = str_arg(&args[1]);
+            let replacement = str_arg(&args[2]);
+            Ok(IrValue::Str(simple_regex_replace_all(
+                &pattern,
+                &text,
+                &replacement,
+            )))
+        }
         // ---- DateTime ----
         "datetime_now" => {
             use std::time::{SystemTime, UNIX_EPOCH};
@@ -5496,8 +5645,8 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
             }
             Ok(IrValue::Bool(false))
         }
-        "gc_collect" => Ok(IrValue::Bool(true)),
-        "gc_stats" => {
+        "gc_collect" | "gc_collect_call" => Ok(IrValue::Bool(true)),
+        "gc_stats" | "gc_stats_map" => {
             let mut map = std::collections::HashMap::new();
             map.insert("allocated".to_string(), IrValue::I64(0));
             map.insert("freed".to_string(), IrValue::I64(0));
@@ -6501,6 +6650,67 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
             }
         }
 
+        "list_remove" => {
+            if let IrValue::List(arc_list) = &args[0] {
+                let idx = i64_arg(&args[1]) as usize;
+                let mut list = arc_list.lock().unwrap();
+                if idx < list.len() {
+                    let removed = list.remove(idx);
+                    Ok(removed)
+                } else {
+                    Err(InterpError::Panic { msg: format!("list_remove: index {} out of bounds (len {})", idx, list.len()) })
+                }
+            } else {
+                Err(InterpError::TypeError { detail: "list_remove: first argument must be a list".into() })
+            }
+        }
+        "list_insert" => {
+            if let IrValue::List(arc_list) = &args[0] {
+                let idx = i64_arg(&args[1]) as usize;
+                let val = args[2].clone();
+                let mut list = arc_list.lock().unwrap();
+                if idx <= list.len() {
+                    list.insert(idx, val);
+                    Ok(IrValue::I64(0))
+                } else {
+                    Err(InterpError::Panic { msg: format!("list_insert: index {} out of bounds (len {})", idx, list.len()) })
+                }
+            } else {
+                Err(InterpError::TypeError { detail: "list_insert: first argument must be a list".into() })
+            }
+        }
+        "map_entries" => {
+            if let IrValue::Map(arc_map) = &args[0] {
+                let map = arc_map.lock().unwrap();
+                let entries: Vec<IrValue> = map.iter().map(|(k, v)| {
+                    IrValue::Str(format!("{}:{}", k, match v {
+                        IrValue::I64(n) => n.to_string(),
+                        IrValue::F64(f) => f.to_string(),
+                        IrValue::Str(s) => s.clone(),
+                        IrValue::Bool(b) => b.to_string(),
+                        _ => "<value>".to_string(),
+                    }))
+                }).collect();
+                Ok(IrValue::List(std::sync::Arc::new(std::sync::Mutex::new(entries))))
+            } else {
+                Err(InterpError::TypeError { detail: "map_entries: argument must be a map".into() })
+            }
+        }
+        "chan_send" => {
+            if let IrValue::Chan(rc) = &args[0] {
+                let v = args[1].clone();
+                let mut queue = rc.queue.lock().unwrap();
+                while queue.len() >= rc.capacity {
+                    queue = rc.not_full.wait(queue).unwrap();
+                }
+                queue.push_back(v);
+                rc.not_empty.notify_one();
+                Ok(IrValue::I64(0))
+            } else {
+                Err(InterpError::TypeError { detail: "chan_send: first argument must be a channel".into() })
+            }
+        }
+
         _ => Err(InterpError::Unsupported {
             detail: format!("unknown builtin: {}", name),
         }),
@@ -6784,6 +6994,39 @@ fn simple_regex_match(pattern: &str, text: &str) -> bool {
     false
 }
 
+fn regex_char_class_matches(cc: &[u8], c: u8) -> (bool, usize) {
+    let mut negated = false;
+    let mut pos = 0;
+    if pos < cc.len() && cc[pos] == b'^' {
+        negated = true;
+        pos += 1;
+    }
+    let mut matched = false;
+    while pos < cc.len() && cc[pos] != b']' {
+        let lo = cc[pos];
+        if pos + 2 < cc.len() && cc[pos + 1] == b'-' && cc[pos + 2] != b']' {
+            let hi = cc[pos + 2];
+            if c >= lo && c <= hi { matched = true; }
+            pos += 3;
+        } else if lo == b'\\' && pos + 1 < cc.len() {
+            pos += 1;
+            let esc = cc[pos];
+            pos += 1;
+            match esc {
+                b'd' => if c.is_ascii_digit() { matched = true; },
+                b'w' => if c.is_ascii_alphanumeric() || c == b'_' { matched = true; },
+                b's' => if c == b' ' || c == b'\t' || c == b'\n' || c == b'\r' { matched = true; },
+                _ => if c == esc { matched = true; },
+            }
+        } else {
+            if c == lo { matched = true; }
+            pos += 1;
+        }
+    }
+    if pos < cc.len() && cc[pos] == b']' { pos += 1; }
+    (if negated { !matched } else { matched }, pos)
+}
+
 fn regex_match_here(pat: &[u8], txt: &[u8]) -> bool {
     if pat.is_empty() {
         return true;
@@ -6809,6 +7052,150 @@ fn regex_match_here(pat: &[u8], txt: &[u8]) -> bool {
         }
         return false;
     }
+    /* Grouping: (sub-pattern) with | alternation */
+    if pat[0] == b'(' {
+        let mut depth = 1;
+        let mut p = 1;
+        while p < pat.len() && depth > 0 {
+            if pat[p] == b'(' { depth += 1; }
+            else if pat[p] == b')' { depth -= 1; }
+            p += 1;
+        }
+        /* p is past the closing ')' */
+        let group = &pat[1..p-1]; // exclude parens
+        let rest = &pat[p..];
+        // Check for alternation
+        let alt_pos = {
+            let mut found = None;
+            let mut ad = 0;
+            for (i, &b) in group.iter().enumerate() {
+                if b == b'(' { ad += 1; }
+                else if b == b')' { ad -= 1; }
+                else if b == b'|' && ad == 0 { found = Some(i); break; }
+            }
+            found
+        };
+        if let Some(ap) = alt_pos {
+            let left = &group[..ap];
+            let right = &group[ap+1..];
+            let mut combined = Vec::with_capacity(left.len() + rest.len());
+            combined.extend_from_slice(left);
+            combined.extend_from_slice(rest);
+            if regex_match_here(&combined, txt) { return true; }
+            combined.clear();
+            combined.extend_from_slice(right);
+            combined.extend_from_slice(rest);
+            return regex_match_here(&combined, txt);
+        } else {
+            let mut combined = Vec::with_capacity(group.len() + rest.len());
+            combined.extend_from_slice(group);
+            combined.extend_from_slice(rest);
+            return regex_match_here(&combined, txt);
+        }
+    }
+    /* Escape sequences: \d, \w, \s */
+    if pat[0] == b'\\' && pat.len() >= 2 {
+        let esc = pat[1];
+        let m = match esc {
+            b'd' => txt.first().map_or(false, |&c| c.is_ascii_digit()),
+            b'w' => txt.first().map_or(false, |&c| c.is_ascii_alphanumeric() || c == b'_'),
+            b's' => txt.first().map_or(false, |&c| c == b' ' || c == b'\t' || c == b'\n' || c == b'\r'),
+            _ => txt.first().map_or(false, |&c| c == esc),
+        };
+        let after_esc = &pat[2..];
+        if !after_esc.is_empty() && (after_esc[0] == b'+' || after_esc[0] == b'*' || after_esc[0] == b'?') {
+            let q = after_esc[0];
+            let rest = &after_esc[1..];
+            if q == b'+' {
+                if !m || txt.is_empty() { return false; }
+                // Match one or more
+                let mut i = 1;
+                loop {
+                    if regex_match_here(rest, &txt[i..]) { return true; }
+                    if i >= txt.len() { break; }
+                    let c = txt[i];
+                    let ok = match esc {
+                        b'd' => c.is_ascii_digit(),
+                        b'w' => c.is_ascii_alphanumeric() || c == b'_',
+                        b's' => c == b' ' || c == b'\t' || c == b'\n' || c == b'\r',
+                        _ => c == esc,
+                    };
+                    if !ok { break; }
+                    i += 1;
+                }
+                return false;
+            } else if q == b'*' {
+                let mut i = 0;
+                loop {
+                    if regex_match_here(rest, &txt[i..]) { return true; }
+                    if i >= txt.len() { break; }
+                    let c = txt[i];
+                    let ok = match esc {
+                        b'd' => c.is_ascii_digit(),
+                        b'w' => c.is_ascii_alphanumeric() || c == b'_',
+                        b's' => c == b' ' || c == b'\t' || c == b'\n' || c == b'\r',
+                        _ => c == esc,
+                    };
+                    if !ok { break; }
+                    i += 1;
+                }
+                return false;
+            } else {
+                // '?': zero or one
+                if m && !txt.is_empty() {
+                    if regex_match_here(rest, &txt[1..]) { return true; }
+                }
+                return regex_match_here(rest, txt);
+            }
+        }
+        if m && !txt.is_empty() {
+            return regex_match_here(&pat[2..], &txt[1..]);
+        }
+        return false;
+    }
+    /* Character class: [...] */
+    if pat[0] == b'[' {
+        if txt.is_empty() { return false; }
+        let (m, consumed) = regex_char_class_matches(&pat[1..], txt[0]);
+        // Check for quantifier after the class
+        let after_class = 1 + consumed; // skip '[' + class content
+        if after_class < pat.len() && (pat[after_class] == b'+' || pat[after_class] == b'*' || pat[after_class] == b'?') {
+            let q = pat[after_class];
+            let rest = &pat[after_class + 1..];
+            if q == b'+' {
+                if !m { return false; }
+                let mut i = 1;
+                loop {
+                    if regex_match_here(rest, &txt[i..]) { return true; }
+                    if i >= txt.len() { break; }
+                    let (m2, _) = regex_char_class_matches(&pat[1..], txt[i]);
+                    if !m2 { break; }
+                    i += 1;
+                }
+                return false;
+            } else if q == b'*' {
+                let mut i = 0;
+                loop {
+                    if regex_match_here(rest, &txt[i..]) { return true; }
+                    if i >= txt.len() { break; }
+                    let (m2, _) = regex_char_class_matches(&pat[1..], txt[i]);
+                    if !m2 { break; }
+                    i += 1;
+                }
+                return false;
+            } else {
+                // '?': zero or one
+                if m {
+                    if regex_match_here(rest, &txt[1..]) { return true; }
+                }
+                return regex_match_here(rest, txt);
+            }
+        }
+        if m {
+            return regex_match_here(&pat[1 + consumed..], &txt[1..]);
+        }
+        return false;
+    }
     if !txt.is_empty() && (pat[0] == b'.' || pat[0] == txt[0]) {
         return regex_match_here(&pat[1..], &txt[1..]);
     }
@@ -6828,63 +7215,197 @@ fn regex_match_star(c: u8, pat: &[u8], txt: &[u8]) -> bool {
     }
 }
 
+fn regex_mpl(pat: &[u8], txt: &[u8]) -> isize {
+    if pat.is_empty() { return 0; }
+    if pat == b"$" { return if txt.is_empty() { 0 } else { -1 }; }
+
+    // Grouping: (sub-pattern)
+    if pat[0] == b'(' {
+        let mut depth = 1; let mut p = 1;
+        while p < pat.len() && depth > 0 {
+            if pat[p] == b'(' { depth += 1; }
+            else if pat[p] == b')' { depth -= 1; if depth == 0 { p += 1; break; } }
+            p += 1;
+        }
+        let group = &pat[1..p-1];
+        let rest = &pat[p..];
+        let alt_pos = {
+            let mut found = None; let mut ad = 0;
+            for (i, &b) in group.iter().enumerate() {
+                if b == b'(' { ad += 1; }
+                else if b == b')' { ad -= 1; }
+                else if b == b'|' && ad == 0 { found = Some(i); break; }
+            }
+            found
+        };
+        if let Some(ap) = alt_pos {
+            let left = &group[..ap]; let right = &group[ap+1..];
+            let mut best: isize = -1;
+            for alt in &[left, right] {
+                let mut combined = Vec::with_capacity(alt.len() + rest.len());
+                combined.extend_from_slice(alt);
+                combined.extend_from_slice(rest);
+                let r = regex_mpl(&combined, txt);
+                if r >= 0 && r > best { best = r; }
+            }
+            return best;
+        } else {
+            let mut combined = Vec::with_capacity(group.len() + rest.len());
+            combined.extend_from_slice(group);
+            combined.extend_from_slice(rest);
+            return regex_mpl(&combined, txt);
+        }
+    }
+
+    // Escape: \d, \w, \s
+    if pat[0] == b'\\' && pat.len() >= 2 {
+        let esc = pat[1];
+        let af = &pat[2..];
+        let m = txt.first().map_or(false, |&c| match esc {
+            b'd' => c.is_ascii_digit(),
+            b'w' => c.is_ascii_alphanumeric() || c == b'_',
+            b's' => c == b' ' || c == b'\t' || c == b'\n' || c == b'\r',
+            _ => c == esc,
+        });
+        let esc_match = |c: u8| -> bool {
+            match esc {
+                b'd' => c.is_ascii_digit(),
+                b'w' => c.is_ascii_alphanumeric() || c == b'_',
+                b's' => c == b' ' || c == b'\t' || c == b'\n' || c == b'\r',
+                _ => c == esc,
+            }
+        };
+        if !af.is_empty() && (af[0] == b'+' || af[0] == b'*' || af[0] == b'?') {
+            let q = af[0]; let rest = &af[1..];
+            if q == b'+' {
+                if !m { return -1; }
+                let mut cnt: isize = 0; let mut i = 0;
+                while i < txt.len() && esc_match(txt[i]) { cnt += 1; i += 1; }
+                for c in (1..=cnt).rev() {
+                    let r = regex_mpl(rest, &txt[c as usize..]);
+                    if r >= 0 { return c + r; }
+                }
+                return -1;
+            } else if q == b'*' {
+                let mut cnt: isize = 0; let mut i = 0;
+                while i < txt.len() && esc_match(txt[i]) { cnt += 1; i += 1; }
+                for c in (0..=cnt).rev() {
+                    let r = regex_mpl(rest, &txt[c as usize..]);
+                    if r >= 0 { return c + r; }
+                }
+                return -1;
+            } else {
+                if m && !txt.is_empty() {
+                    let r = regex_mpl(rest, &txt[1..]);
+                    if r >= 0 { return 1 + r; }
+                }
+                return regex_mpl(rest, txt);
+            }
+        }
+        if m && !txt.is_empty() {
+            let r = regex_mpl(af, &txt[1..]);
+            if r >= 0 { return 1 + r; }
+        }
+        return -1;
+    }
+
+    // Character class: [...]
+    if pat[0] == b'[' {
+        if txt.is_empty() { return -1; }
+        let (m, consumed) = regex_char_class_matches(&pat[1..], txt[0]);
+        let after_class = 1 + consumed;
+        if after_class < pat.len() && (pat[after_class] == b'+' || pat[after_class] == b'*' || pat[after_class] == b'?') {
+            let q = pat[after_class]; let rest = &pat[after_class + 1..];
+            if q == b'+' {
+                if !m { return -1; }
+                let mut cnt: isize = 0; let mut i = 0;
+                while i < txt.len() {
+                    let (m2, _) = regex_char_class_matches(&pat[1..], txt[i]);
+                    if !m2 { break; }
+                    cnt += 1; i += 1;
+                }
+                for c in (1..=cnt).rev() {
+                    let r = regex_mpl(rest, &txt[c as usize..]);
+                    if r >= 0 { return c + r; }
+                }
+                return -1;
+            } else if q == b'*' {
+                let mut cnt: isize = 0; let mut i = 0;
+                while i < txt.len() {
+                    let (m2, _) = regex_char_class_matches(&pat[1..], txt[i]);
+                    if !m2 { break; }
+                    cnt += 1; i += 1;
+                }
+                for c in (0..=cnt).rev() {
+                    let r = regex_mpl(rest, &txt[c as usize..]);
+                    if r >= 0 { return c + r; }
+                }
+                return -1;
+            } else {
+                if m {
+                    let r = regex_mpl(rest, &txt[1..]);
+                    if r >= 0 { return 1 + r; }
+                }
+                return regex_mpl(rest, txt);
+            }
+        }
+        if m {
+            let r = regex_mpl(&pat[1+consumed..], &txt[1..]);
+            if r >= 0 { return 1 + r; }
+        }
+        return -1;
+    }
+
+    // Single char with quantifiers
+    if pat.len() >= 2 && pat[1] == b'*' {
+        let mut cnt: isize = 0; let mut i = 0;
+        while i < txt.len() && (pat[0] == b'.' || txt[i] == pat[0]) { cnt += 1; i += 1; }
+        for c in (0..=cnt).rev() {
+            let r = regex_mpl(&pat[2..], &txt[c as usize..]);
+            if r >= 0 { return c + r; }
+        }
+        return -1;
+    }
+    if pat.len() >= 2 && pat[1] == b'+' {
+        if txt.is_empty() || (pat[0] != b'.' && txt[0] != pat[0]) { return -1; }
+        let mut cnt: isize = 0; let mut i = 0;
+        while i < txt.len() && (pat[0] == b'.' || txt[i] == pat[0]) { cnt += 1; i += 1; }
+        for c in (1..=cnt).rev() {
+            let r = regex_mpl(&pat[2..], &txt[c as usize..]);
+            if r >= 0 { return c + r; }
+        }
+        return -1;
+    }
+    if pat.len() >= 2 && pat[1] == b'?' {
+        if !txt.is_empty() && (pat[0] == b'.' || txt[0] == pat[0]) {
+            let r = regex_mpl(&pat[2..], &txt[1..]);
+            if r >= 0 { return 1 + r; }
+        }
+        return regex_mpl(&pat[2..], txt);
+    }
+    // Single char, no quantifier
+    if !txt.is_empty() && (pat[0] == b'.' || txt[0] == pat[0]) {
+        let r = regex_mpl(&pat[1..], &txt[1..]);
+        if r >= 0 { return 1 + r; }
+    }
+    -1
+}
+
 fn simple_regex_find_all(pattern: &str, text: &str) -> Vec<String> {
-    let pat = pattern.as_bytes();
+    let pat = if pattern.starts_with('^') { &pattern.as_bytes()[1..] } else { pattern.as_bytes() };
     let txt = text.as_bytes();
     let mut results = Vec::new();
-    let mut start = 0;
-    while start <= txt.len() {
-        if let Some((ms, me)) = regex_find_at(pat, &txt[start..]) {
-            if me > ms {
-                results.push(String::from_utf8_lossy(&txt[start + ms..start + me]).to_string());
-                start += ms + (me - ms).max(1);
-            } else {
-                start += 1;
-            }
+    let mut pos = 0;
+    while pos < txt.len() {
+        let len = regex_mpl(pat, &txt[pos..]);
+        if len > 0 {
+            results.push(String::from_utf8_lossy(&txt[pos..pos + len as usize]).to_string());
+            pos += len as usize;
         } else {
-            break;
+            pos += 1;
         }
     }
     results
-}
-
-fn regex_find_at(pat: &[u8], txt: &[u8]) -> Option<(usize, usize)> {
-    let anchored = pat.first() == Some(&b'^');
-    let p = if anchored { &pat[1..] } else { pat };
-    let limit = if anchored { 1 } else { txt.len() + 1 };
-    for i in 0..limit.min(txt.len() + 1) {
-        for end in i..=txt.len() {
-            if regex_match_exact(p, &txt[i..end]) {
-                return Some((i, end));
-            }
-        }
-    }
-    None
-}
-
-fn regex_match_exact(pat: &[u8], txt: &[u8]) -> bool {
-    if pat.is_empty() {
-        return txt.is_empty();
-    }
-    if pat == b"$" {
-        return txt.is_empty();
-    }
-    if pat.len() >= 2 && pat[1] == b'*' {
-        let c = pat[0];
-        for i in 0..=txt.len() {
-            if (i == 0 || c == b'.' || txt[i - 1] == c) && regex_match_exact(&pat[2..], &txt[i..]) {
-                return true;
-            }
-            if i < txt.len() && c != b'.' && txt[i] != c {
-                break;
-            }
-        }
-        return false;
-    }
-    if !txt.is_empty() && (pat[0] == b'.' || pat[0] == txt[0]) {
-        return regex_match_exact(&pat[1..], &txt[1..]);
-    }
-    false
 }
 
 fn simple_regex_replace(pattern: &str, text: &str, replacement: &str) -> String {
@@ -6898,6 +7419,31 @@ fn simple_regex_replace(pattern: &str, text: &str, replacement: &str) -> String 
                 replacement,
                 &result[pos + m.len()..]
             );
+        }
+    }
+    result
+}
+
+fn simple_regex_replace_all(pattern: &str, text: &str, replacement: &str) -> String {
+    let mut result = text.to_string();
+    loop {
+        let before = result.clone();
+        let matches = simple_regex_find_all(pattern, &result);
+        if matches.is_empty() {
+            break;
+        }
+        for m in &matches {
+            if let Some(pos) = result.find(m.as_str()) {
+                result = format!(
+                    "{}{}{}",
+                    &result[..pos],
+                    replacement,
+                    &result[pos + m.len()..]
+                );
+            }
+        }
+        if result == before {
+            break;
         }
     }
     result
