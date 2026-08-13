@@ -387,9 +387,27 @@ fn emit_llvm_ir_impl(
             .iter()
             .map(|t| llvm_type_complete(t).unwrap_or_else(|_| "ptr".to_owned()))
             .collect();
+        // `extern_weak`, not plain external linkage.
+        //
+        // `extern def` serves two purposes that codegen cannot distinguish: a
+        // real FFI symbol (`iris_mlrt_onnx_load`, exported by the C runtime) and
+        // an effect operation that exists only to be intercepted by a handler
+        // (`extern def echo` in the effect tests, which has no implementation
+        // anywhere). Both are dispatched through
+        // `iris_effect_dispatch_or_call`, which takes the real function's
+        // address and falls back to an installed handler when it is null.
+        //
+        // Taking the address of a plain `declare` would make a handler-only
+        // extern an undefined symbol at link time. Weak linkage resolves to the
+        // real function when one is linked in and to null when none is, which is
+        // exactly the distinction the dispatcher already expects.
+        //
+        // Tradeoff, deliberately accepted: a misspelled FFI extern is no longer
+        // a link error. It becomes a runtime "no handler for effect 'x' and no
+        // real implementation", which names the symbol and is clear enough.
         writeln!(
             out,
-            "declare {} @{}({})",
+            "declare extern_weak {} @{}({})",
             ret_s,
             ext.name,
             param_ss.join(", ")
@@ -5255,13 +5273,17 @@ fn emit_instr_ir(
                 Some(r) if llvm_ret == "i64" => format!("%v{}", r.0),
                 _ => format!("%_eff_result_{}", gep_counter),
             };
-            // Only reference the real function if it's defined in the module;
-            // otherwise pass null (handler-only externs have no implementation).
-            let real_fn_ref = if _module.function_index.contains_key(name) {
-                format!("ptr @{}", name)
-            } else {
-                "ptr null".to_string()
-            };
+            // Pass the symbol's address in both cases. An IRIS-defined function
+            // is referenced directly; anything else is the `extern_weak`
+            // declaration emitted above, whose address is the real
+            // implementation when one is linked and null when it is not.
+            //
+            // This previously passed `ptr null` for everything not defined in the
+            // module, which is every C extern — so no real FFI function could be
+            // reached through this path at all. It failed at runtime as "no
+            // handler for effect 'iris_mlrt_onnx_load' and no real
+            // implementation" even though the runtime exports that symbol.
+            let real_fn_ref = format!("ptr @{}", name);
             writeln!(
                 out,
                 "  {} = call i64 @iris_effect_dispatch_or_call(ptr @.str.{}, {}, ptr {}, i64 {}, ptr {})",
