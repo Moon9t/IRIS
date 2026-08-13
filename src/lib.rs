@@ -35,8 +35,10 @@ pub mod compiler;
 pub mod dap;
 pub mod debugger;
 pub mod diagnostics;
+pub mod docs;
 pub mod error;
 pub mod explain;
+pub mod formatter;
 pub mod interp;
 pub mod ir;
 pub mod lower;
@@ -44,6 +46,8 @@ pub mod lsp;
 pub mod parser;
 pub mod pass;
 pub mod pkg;
+pub mod package_manager;
+pub mod preprocessor;
 pub mod profiler;
 pub mod proto;
 pub mod repl;
@@ -100,6 +104,8 @@ pub fn compile_with_recovery(
                     effects: vec![],
                     brings: vec![],
                     extern_fns: vec![],
+                    modules: vec![],
+                    macros: vec![],
                 },
                 vec![e],
             )
@@ -153,8 +159,8 @@ pub fn compile_multi(
     main_module: &str,
     emit: EmitKind,
 ) -> Result<String, Error> {
-    let main_ast = compile_multi_to_ast(sources, main_module)?;
-    compile_ast(&main_ast, main_module, emit, 1_000_000, 500, None)
+    let mut main_ast = compile_multi_to_ast(sources, main_module)?;
+    compile_ast(&mut main_ast, main_module, emit, 1_000_000, 500, None)
 }
 
 /// Internal: parse+merge all brought modules into a single merged `AstModule`.
@@ -250,7 +256,7 @@ fn bring_key(path: &crate::parser::ast::BringPath) -> String {
 /// Internal: compile a pre-built `AstModule` through the full pipeline to an `IrModule`.
 /// Used when building native binaries so we can pass the module to `build_binary`.
 pub fn compile_ast_to_module(
-    ast_module: &crate::parser::ast::AstModule,
+    ast_module: &mut crate::parser::ast::AstModule,
     module_name: &str,
     dump_ir_after: Option<&str>,
 ) -> Result<IrModule, Error> {
@@ -259,9 +265,34 @@ pub fn compile_ast_to_module(
     use crate::pass::ast_exhaustive::AstExhaustivenessPass;
     use crate::pass::variance_checker::VarianceChecker;
 
+    // Flatten inline modules before passes.
+    crate::compiler::flatten_inline_modules(ast_module);
+
+    // Inject default method bodies from trait definitions into impls.
+    crate::compiler::inject_default_impl_methods(ast_module);
+
+    // Desugar yield into list accumulator pattern before passes.
+    crate::compiler::desugar_yield(ast_module);
+
+    // Expand macro calls before any passes or lowering.
+    crate::compiler::expand_macros(ast_module);
+
     // AST-level exhaustiveness checking before lowering.
     AstExhaustivenessPass::new().run(ast_module).map_err(Error::Pass)?;
     VarianceChecker::new().run(ast_module).map_err(Error::Pass)?;
+
+    // Borrow checker: validate reference safety at compile time.
+    {
+        let mut checker = crate::pass::borrow_checker::BorrowChecker::new();
+        checker.check_module(ast_module);
+        if checker.has_errors() {
+            checker.print_errors();
+            return Err(Error::Pass(crate::error::PassError::TypeError {
+                func: "<borrow checking>".into(),
+                detail: format!("{} borrow error(s) found", checker.errors().len()),
+            }));
+        }
+    }
 
     // Effect checker (non-strict by default; emits warnings only).
     // Set IRIS_STRICT_EFFECTS=1 to require explicit `effect` clauses on effectful functions.
@@ -298,7 +329,7 @@ pub fn compile_ast_to_module(
 
 /// Internal: compile a pre-built `AstModule` through the full pipeline.
 fn compile_ast(
-    ast_module: &crate::parser::ast::AstModule,
+    ast_module: &mut crate::parser::ast::AstModule,
     module_name: &str,
     emit: EmitKind,
     _max_steps: usize,
@@ -317,6 +348,18 @@ fn compile_ast(
     use crate::lower::{lower, lower_graph_to_ir, lower_model};
     use crate::pass::infer_shapes;
     use crate::pass::{DeadNodePass, GraphPassManager};
+
+    // Flatten inline modules before any processing.
+    crate::compiler::flatten_inline_modules(ast_module);
+
+    // Inject default method bodies from trait definitions into impls.
+    crate::compiler::inject_default_impl_methods(ast_module);
+
+    // Desugar yield into list accumulator pattern before passes.
+    crate::compiler::desugar_yield(ast_module);
+
+    // Expand macro calls before any passes or lowering.
+    crate::compiler::expand_macros(ast_module);
 
     if emit == EmitKind::Graph {
         let mut out = String::new();
@@ -352,6 +395,19 @@ fn compile_ast(
         use crate::pass::variance_checker::VarianceChecker;
         AstExhaustivenessPass::new().run(ast_module).map_err(Error::Pass)?;
         VarianceChecker::new().run(ast_module).map_err(Error::Pass)?;
+
+        // Borrow checker: validate reference safety at compile time.
+        {
+            let mut checker = crate::pass::borrow_checker::BorrowChecker::new();
+            checker.check_module(ast_module);
+            if checker.has_errors() {
+                checker.print_errors();
+                return Err(Error::Pass(crate::error::PassError::TypeError {
+                    func: "<borrow checking>".into(),
+                    detail: format!("{} borrow error(s) found", checker.errors().len()),
+                }));
+            }
+        }
 
         // Effect checker (non-strict by default; emits warnings only).
         // Set IRIS_STRICT_EFFECTS=1 to require explicit `effect` clauses on effectful functions.
@@ -454,6 +510,13 @@ pub fn eval_ir_module(module: &IrModule) -> Result<String, Error> {
 }
 
 fn eval_ir_module_internal(module: &IrModule) -> Result<String, Error> {
+    // Opt-in shortcut: skip building a native binary altogether. Compiling and
+    // linking one program per evaluation dominates test-suite runtime, and the
+    // interpreter produces the same answer, so a suite can trade native coverage
+    // for a very large speedup.
+    if codegen::build::force_interpreter() {
+        return interpret_module_for_eval(module);
+    }
     match codegen::execute_binary_for_eval(module) {
         Ok(s) => Ok(s),
         Err(e) => {
@@ -465,29 +528,7 @@ fn eval_ir_module_internal(module: &IrModule) -> Result<String, Error> {
                 crate::error::CodegenError::Unsupported { backend, .. }
                     if backend == "native" || backend == "binary" =>
                 {
-                    let func = module
-                        .functions()
-                        .iter()
-                        .find(|f| f.name == "main" && f.params.is_empty())
-                        .or_else(|| module.functions().iter().find(|f| f.params.is_empty()))
-                        .ok_or_else(|| {
-                            Error::Codegen(crate::error::CodegenError::Unsupported {
-                                backend: "native".into(),
-                                detail: "no zero-argument function found for eval".into(),
-                            })
-                        })?;
-                    let opts = crate::interp::InterpOptions {
-                        max_steps: 10_000_000,
-                        max_depth: 5_000,
-                    };
-                    match crate::interp::eval_function_in_module_opts(module, func, &[], opts) {
-                        Ok(vals) => Ok(vals
-                            .into_iter()
-                            .map(|v| format!("{}", v))
-                            .collect::<Vec<_>>()
-                            .join("\n")),
-                        Err(ie) => Err(Error::Interp(ie)),
-                    }
+                    interpret_module_for_eval(module)
                 }
                 other => Err(Error::Codegen(other)),
             }
@@ -495,12 +536,59 @@ fn eval_ir_module_internal(module: &IrModule) -> Result<String, Error> {
     }
 }
 
+/// Interpret a module's entry function for `--emit eval`.
+///
+/// Reproduces the native path's output shape exactly — printed lines first, then
+/// the returned value(s) — so callers cannot tell which path ran. Previously this
+/// returned only the return value, silently discarding everything the program
+/// printed.
+fn interpret_module_for_eval(module: &IrModule) -> Result<String, Error> {
+    let func = module
+        .functions()
+        .iter()
+        .find(|f| f.name == "main" && f.params.is_empty())
+        .or_else(|| module.functions().iter().find(|f| f.params.is_empty()))
+        .ok_or_else(|| {
+            Error::Codegen(crate::error::CodegenError::Unsupported {
+                backend: "native".into(),
+                detail: "no zero-argument function found for eval".into(),
+            })
+        })?;
+    let opts = crate::interp::InterpOptions {
+        max_steps: 10_000_000,
+        max_depth: 5_000,
+    };
+    let (result, printed) =
+        crate::interp::eval_function_in_module_opts_capturing(module, func, &[], opts);
+    let vals = result.map_err(Error::Interp)?;
+    // `printed` already ends each line with a newline, so the return value lands
+    // on its own line, matching the native binary's stdout.
+    let mut out = printed;
+    out.push_str(
+        &vals
+            .into_iter()
+            .map(|v| match v {
+                // Render a returned string bare, exactly as `print` does. The
+                // `Display` impl quotes strings, and a native binary never emits
+                // those quotes, so using it here made every str-returning
+                // program disagree between the two paths.
+                crate::interp::IrValue::Str(s) => s,
+                other => format!("{}", other),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    Ok(out)
+}
+
 /// Parse source text with full error recovery, printing all errors to stderr
 /// and returning the first as `Error::Parse`. Used by all in-memory compile paths.
 fn parse_recovering(source: &str) -> Result<crate::parser::ast::AstModule, Error> {
     use crate::parser::lexer::Lexer;
     use crate::parser::parse::Parser;
-    let tokens = Lexer::new(source).tokenize()?;
+    let pp = crate::preprocessor::Preprocessor::new();
+    let source = pp.process(source, "<source>").map_err(Error::Preprocessor)?;
+    let tokens = Lexer::new(&source).tokenize()?;
     let mut parser = Parser::new(&tokens);
     let (module, errors) = parser.parse_module_recovering();
     if errors.is_empty() {
@@ -528,8 +616,8 @@ fn parse_recovering(source: &str) -> Result<crate::parser::ast::AstModule, Error
 /// Returns the emitted output as a `String`, or an `Error` if any
 /// stage fails. The pipeline aborts at the first error.
 pub fn compile(source: &str, module_name: &str, emit: EmitKind) -> Result<String, Error> {
-    let ast_module = parse_recovering(source)?;
-    compile_ast(&ast_module, module_name, emit, 1_000_000, 500, None)
+    let mut ast_module = parse_recovering(source)?;
+    compile_ast(&mut ast_module, module_name, emit, 1_000_000, 500, None)
 }
 
 /// Compiles an IRIS source string and also returns dead-variable warnings.
@@ -540,9 +628,9 @@ pub fn compile_with_warnings(
     module_name: &str,
     emit: EmitKind,
 ) -> Result<(String, Vec<IrWarning>), Error> {
-    let ast_module = parse_recovering(source)?;
+    let mut ast_module = parse_recovering(source)?;
     let warnings = pass::find_unused_vars(&ast_module);
-    let output = compile_ast(&ast_module, module_name, emit, 1_000_000, 500, None)?;
+    let output = compile_ast(&mut ast_module, module_name, emit, 1_000_000, 500, None)?;
     Ok((output, warnings))
 }
 
@@ -555,8 +643,8 @@ pub fn compile_with_opts(
     max_steps: usize,
     max_depth: usize,
 ) -> Result<String, Error> {
-    let ast_module = parse_recovering(source)?;
-    compile_ast(&ast_module, module_name, emit, max_steps, max_depth, None)
+    let mut ast_module = parse_recovering(source)?;
+    compile_ast(&mut ast_module, module_name, emit, max_steps, max_depth, None)
 }
 
 /// Compiles an IRIS source string and on error returns a human-readable
@@ -577,9 +665,9 @@ pub fn compile_with_diagnostics(
 ///
 /// Uses `FileCompiler` from `src/compiler.rs` internally.
 pub fn compile_file(path: &std::path::Path, emit: EmitKind) -> Result<String, Error> {
-    let main_ast = compiler::FileCompiler::new().compile_file_to_ast(path, &[])?;
+    let mut main_ast = compiler::FileCompiler::new().compile_file_to_ast(path, &[])?;
     let module_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("main");
-    compile_ast(&main_ast, module_name, emit, 1_000_000, 500, None)
+    compile_ast(&mut main_ast, module_name, emit, 1_000_000, 500, None)
 }
 
 /// Compiles an `.iris` file with bring resolution, using the provided `source`
@@ -590,20 +678,20 @@ pub fn compile_file_text(
     file_path: &std::path::Path,
     emit: EmitKind,
 ) -> Result<String, Error> {
-    let main_ast =
+    let mut main_ast =
         compiler::FileCompiler::new().compile_file_to_ast_with_text(file_path, source, &[])?;
     let module_name = file_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("main");
-    compile_ast(&main_ast, module_name, emit, 1_000_000, 500, None)
+    compile_ast(&mut main_ast, module_name, emit, 1_000_000, 500, None)
 }
 
 /// Like [`compile_file`] but returns the merged `IrModule` for further processing.
 pub fn compile_file_to_module(path: &std::path::Path) -> Result<IrModule, Error> {
-    let main_ast = compiler::FileCompiler::new().compile_file_to_ast(path, &[])?;
+    let mut main_ast = compiler::FileCompiler::new().compile_file_to_ast(path, &[])?;
     let module_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("main");
-    compile_ast_to_module(&main_ast, module_name, None)
+    compile_ast_to_module(&mut main_ast, module_name, None)
 }
 
 /// Like [`compile_file`] but passes through all options including `dump_ir_after`.
@@ -614,10 +702,10 @@ pub fn compile_file_with_full_opts(
     max_depth: usize,
     dump_ir_after: Option<&str>,
 ) -> Result<String, Error> {
-    let main_ast = compiler::FileCompiler::new().compile_file_to_ast(path, &[])?;
+    let mut main_ast = compiler::FileCompiler::new().compile_file_to_ast(path, &[])?;
     let module_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("main");
     compile_ast(
-        &main_ast,
+        &mut main_ast,
         module_name,
         emit,
         max_steps,
@@ -631,9 +719,9 @@ pub fn compile_file_to_module_with_opts(
     path: &std::path::Path,
     dump_ir_after: Option<&str>,
 ) -> Result<IrModule, Error> {
-    let main_ast = compiler::FileCompiler::new().compile_file_to_ast(path, &[])?;
+    let mut main_ast = compiler::FileCompiler::new().compile_file_to_ast(path, &[])?;
     let module_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("main");
-    compile_ast_to_module(&main_ast, module_name, dump_ir_after)
+    compile_ast_to_module(&mut main_ast, module_name, dump_ir_after)
 }
 
 /// Like [`compile_with_opts`] but also supports `--dump-ir-after`.
@@ -645,9 +733,9 @@ pub fn compile_with_full_opts(
     max_depth: usize,
     dump_ir_after: Option<&str>,
 ) -> Result<String, Error> {
-    let ast_module = parse_recovering(source)?;
+    let mut ast_module = parse_recovering(source)?;
     compile_ast(
-        &ast_module,
+        &mut ast_module,
         module_name,
         emit,
         max_steps,

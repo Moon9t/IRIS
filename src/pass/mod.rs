@@ -19,6 +19,7 @@ pub mod type_infer_hm;
 pub mod validate;
 pub mod ast_exhaustive;
 pub mod variance_checker;
+pub mod borrow_checker;
 
 pub use const_fold::ConstFoldPass;
 pub use copy_prop::CopyPropPass;

@@ -1,0 +1,160 @@
+// src/stdlib/unicode.iris -- Unicode-aware string utilities for IRIS
+// IRIS strings are stored as UTF-8 byte arrays. These utilities provide
+// codepoint counting, decoding, and Unicode property checks on top of
+// the byte-level primitives.
+
+// Check if byte value `b` is a UTF-8 continuation byte (top 2 bits = 10).
+pub def is_continuation(b: i64) -> bool {
+    if b >= 128 { return true };
+    false
+}
+
+// Count the number of UTF-8 codepoints in `s`.
+pub def codepoint_count(s: str) -> i64 {
+    var count = 0;
+    var i = 0;
+    val n = len(s);
+    while i < n {
+        val b = str_index(s, i);
+        if !is_continuation(b) { count = count + 1 };
+        i = i + 1;
+    };
+    count
+}
+
+// Decode one codepoint starting at byte index `pos`.
+// Returns (codepoint, next_byte_index). Returns (-1, -1) past end.
+pub def decode_at(s: str, pos: i64) -> (i64, i64) {
+    val n = len(s);
+    if pos >= n { return (-1, -1) };
+    val b1 = str_index(s, pos);
+    if b1 < 128 { return (b1, pos + 1) };
+    if b1 >= 192 {
+        if b1 <= 223 {
+            if pos + 1 >= n { return (b1, pos + 1) };
+            val b2 = str_index(s, pos + 1);
+            val cp = (b1 - 192) * 64 + (b2 - 128);
+            return (cp, pos + 2);
+        };
+    };
+    if b1 >= 224 {
+        if b1 <= 239 {
+            if pos + 2 >= n { return (b1, pos + 1) };
+            val b2 = str_index(s, pos + 1);
+            val b3 = str_index(s, pos + 2);
+            val cp = (b1 - 224) * 4096 + (b2 - 128) * 64 + (b3 - 128);
+            return (cp, pos + 3);
+        };
+    };
+    if b1 >= 240 {
+        if b1 <= 247 {
+            if pos + 3 >= n { return (b1, pos + 1) };
+            val b2 = str_index(s, pos + 1);
+            val b3 = str_index(s, pos + 2);
+            val b4 = str_index(s, pos + 3);
+            val cp = (b1 - 240) * 262144 + (b2 - 128) * 4096 + (b3 - 128) * 64 + (b4 - 128);
+            return (cp, pos + 4);
+        };
+    };
+    return (b1, pos + 1)
+}
+
+// Returns the codepoint at byte index `pos` as an integer.
+// (For multi-byte codepoints, use `decode_at` to get the full codepoint.)
+pub def codepoint_at(s: str, pos: i64) -> i64 {
+    val (cp, _next) = decode_at(s, pos);
+    cp
+}
+
+// Check if codepoint is an ASCII letter (a-z, A-Z).
+pub def is_ascii_letter(c: i64) -> bool {
+    if c >= 65 {
+        if c <= 90 { return true };
+    };
+    if c >= 97 {
+        if c <= 122 { return true };
+    };
+    false
+}
+
+// Check if codepoint is an ASCII digit (0-9).
+pub def is_ascii_digit(c: i64) -> bool {
+    if c >= 48 {
+        if c <= 57 { return true };
+    };
+    false
+}
+
+// Check if codepoint is whitespace (space, tab, newline, CR, FF, VT).
+pub def is_whitespace(c: i64) -> bool {
+    if c == 32 { return true };
+    if c == 9 { return true };
+    if c == 10 { return true };
+    if c == 13 { return true };
+    if c == 12 { return true };
+    if c == 11 { return true };
+    false
+}
+
+// Check if codepoint is a letter (ASCII + Latin-1 supplement ranges).
+pub def is_letter(c: i64) -> bool {
+    if is_ascii_letter(c) { return true };
+    if c >= 192 {
+        if c <= 214 { return true };
+    };
+    if c >= 216 {
+        if c <= 246 { return true };
+    };
+    if c >= 248 {
+        if c <= 255 { return true };
+    };
+    false
+}
+
+// Check if codepoint is a digit (ASCII + Unicode digit range).
+pub def is_digit(c: i64) -> bool {
+    if is_ascii_digit(c) { return true };
+    if c >= 1632 {
+        if c <= 1641 { return true };
+    };
+    if c >= 1776 {
+        if c <= 1785 { return true };
+    };
+    false
+}
+
+// Word count: splits on runs of whitespace (byte-level approximation).
+pub def word_count(s: str) -> i64 {
+    var count = 0;
+    var in_word = false;
+    var i = 0;
+    val n = len(s);
+    while i < n {
+        val b = str_index(s, i);
+        val ws = is_whitespace(b);
+        if ws {
+            in_word = false;
+        } else {
+            if !in_word {
+                count = count + 1;
+                in_word = true;
+            };
+        };
+        i = i + 1;
+    };
+    count
+}
+
+// Approximate general category.
+pub def category(c: i64) -> str {
+    if is_whitespace(c) { return "Zs" };
+    if is_ascii_digit(c) { return "Nd" };
+    if c >= 65 {
+        if c <= 90 { return "Lu" };
+    };
+    if c >= 97 {
+        if c <= 122 { return "Ll" };
+    };
+    if is_letter(c) { return "Lo" };
+    "Cn"
+}

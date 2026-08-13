@@ -1,0 +1,42 @@
+// src/stdlib/collections.iris -- Extended collection operations
+
+// Remove the first occurrence of `val` from `lst` by value.
+// Returns 1 if removed, 0 if not found.
+pub def list_remove_val(lst: list<i64>, elem: i64) -> i64 {
+    val idx = list_index_of(lst, elem);
+    if idx == -1 {
+        0
+    } else {
+        list_remove(lst, idx);
+        1
+    }
+}
+
+// Create a list of `n` copies of `val`.
+pub def list_fill(n: i64, elem: i64) -> list<i64> {
+    val result = list();
+    var i = 0;
+    while i < n {
+        push(result, elem);
+        i = i + 1;
+    }
+    result
+}
+
+// Get a value from a map, returning `default` if the key is missing.
+pub def map_get_or(m: map<str, i64>, k: str, default: i64) -> i64 {
+    val opt = map_get(m, k);
+    opt.unwrap_or(default)
+}
+
+// Merge two maps into a new map. If both have the same key, the value from `b` wins.
+pub def map_merge(a: map<str, i64>, b: map<str, i64>) -> map<str, i64> {
+    val result = map();
+    for k in map_keys(a) {
+        map_set(result, k, map_get(a, k).unwrap_or(0));
+    }
+    for k in map_keys(b) {
+        map_set(result, k, map_get(b, k).unwrap_or(0));
+    }
+    result
+}
