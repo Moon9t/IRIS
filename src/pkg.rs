@@ -1093,7 +1093,7 @@ pub fn cmd_build(run_after: bool, offline: bool) -> Result<(), String> {
 
     let extra_refs: Vec<&Path> = extra_paths.iter().map(|p| p.as_path()).collect();
     let compiler = crate::FileCompiler::new();
-    let main_ast = compiler
+    let mut main_ast = compiler
         .compile_file_to_ast(&entry_path, &extra_refs)
         .map_err(|e| format!("{}", e))?;
 
@@ -1101,7 +1101,7 @@ pub fn cmd_build(run_after: bool, offline: bool) -> Result<(), String> {
         .file_stem()
         .and_then(|n| n.to_str())
         .unwrap_or("main");
-    let ir = crate::compile_ast_to_module(&main_ast, module_name, None)
+    let ir = crate::compile_ast_to_module(&mut main_ast, module_name, None)
         .map_err(|e| format!("{}", e))?;
 
     let output_name = format!("{}{}", manifest.name, std::env::consts::EXE_SUFFIX);

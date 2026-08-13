@@ -96,6 +96,8 @@ pub struct IrFunction {
     /// Number of leading parameters that are lambda captures (0 for normal fns).
     /// Used by LLVM codegen to emit env-based capture extraction.
     pub capture_count: usize,
+    /// Whether this function is `const` — callable at compile time.
+    pub is_const: bool,
 }
 
 impl IrFunction {

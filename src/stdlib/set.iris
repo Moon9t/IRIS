@@ -1,17 +1,27 @@
-// src/stdlib/set.iris -- IRIS standard set library (list-backed, no duplicates)
+// src/stdlib/set.iris -- IRIS standard set library (generic, list-backed, no duplicates)
 
-record Set { items: list<str> }
+/// A set of elements of type T. Maintains unique elements via linear scan.
+record Set[T] { items: list<T> }
 
-pub def set_new() -> Set {
-    Set { items: list() }
+/// Create a new set seeded with value v (for type inference).
+pub def set_new[T](v: T) -> Set<T> {
+    var items: list<T> = list()
+    push(items, v);
+    Set { items: items }
 }
 
-pub def set_len(s: Set) -> i64 {
+/// Return the number of elements in the set.
+pub def set_len[T](s: Set<T>) -> i64 {
     list_len(s.items)
 }
 
-// Returns true if v is in the set.
-pub def set_contains(s: Set, v: str) -> bool {
+/// Return true if the set has no elements.
+pub def set_is_empty[T](s: Set<T>) -> bool {
+    list_len(s.items) == 0
+}
+
+/// Return true if v is in the set.
+pub def set_contains[T](s: Set<T>, v: T) -> bool {
     var found = false
     var i = 0
     val n = list_len(s.items)
@@ -22,12 +32,12 @@ pub def set_contains(s: Set, v: str) -> bool {
     found
 }
 
-// Returns a new set with v added (no-op if already present).
-pub def set_add(s: Set, v: str) -> Set {
+/// Return a new set with v added (no-op if already present).
+pub def set_add[T](s: Set<T>, v: T) -> Set<T> {
     if set_contains(s, v) {
         s
     } else {
-        var new_items: list<str> = list()
+        var new_items: list<T> = list()
         var i = 0
         val n = list_len(s.items)
         while i < n {
@@ -39,9 +49,9 @@ pub def set_add(s: Set, v: str) -> Set {
     }
 }
 
-// Returns a new set with v removed (no-op if not present).
-pub def set_remove(s: Set, v: str) -> Set {
-    var new_items: list<str> = list()
+/// Return a new set with v removed (no-op if not present).
+pub def set_remove[T](s: Set<T>, v: T) -> Set<T> {
+    var new_items: list<T> = list()
     var i = 0
     val n = list_len(s.items)
     while i < n {
@@ -52,40 +62,93 @@ pub def set_remove(s: Set, v: str) -> Set {
     Set { items: new_items }
 }
 
-// Returns a new set containing all elements from both a and b.
-pub def set_union(a: Set, b: Set) -> Set {
+/// Return a new set containing all elements from both a and b.
+pub def set_union[T](a: Set<T>, b: Set<T>) -> Set<T> {
     var result = a
     var i = 0
     val n = list_len(b.items)
     while i < n {
-        result = set_add(result, list_get(b.items, i))
+        result = set_add(result, list_get(b.items, i));
         i = i + 1
     }
     result
 }
 
-// Returns a new set containing only elements present in both a and b.
-pub def set_intersection(a: Set, b: Set) -> Set {
-    var result = set_new()
+/// Return a new set containing only elements present in both a and b.
+pub def set_intersection[T](a: Set<T>, b: Set<T>) -> Set<T> {
+    var result_items: list<T> = list()
     var i = 0
     val n = list_len(a.items)
     while i < n {
         val item = list_get(a.items, i)
-        result = if set_contains(b, item) { set_add(result, item) } else { result }
+        val _ = if set_contains(b, item) { push(result_items, item); 0 } else { 0 }
+        i = i + 1
+    }
+    Set { items: result_items }
+}
+
+/// Return a new set containing elements in a that are not in b.
+pub def set_difference[T](a: Set<T>, b: Set<T>) -> Set<T> {
+    var result_items: list<T> = list()
+    var i = 0
+    val n = list_len(a.items)
+    while i < n {
+        val item = list_get(a.items, i)
+        val _ = if set_contains(b, item) { 0 } else { push(result_items, item); 0 }
+        i = i + 1
+    }
+    Set { items: result_items }
+}
+
+/// Build a set from a list (removes duplicates).
+pub def set_from_list[T](lst: list<T>) -> Set<T> {
+    var s: Set<T> = set_new(list_get(lst, 0))
+    var i = 1
+    val n = list_len(lst)
+    while i < n {
+        s = set_add(s, list_get(lst, i));
+        i = i + 1
+    }
+    s
+}
+
+/// Return the elements as a list.
+pub def set_to_list[T](s: Set<T>) -> list<T> {
+    var result: list<T> = list()
+    var i = 0
+    val n = list_len(s.items)
+    while i < n {
+        push(result, list_get(s.items, i));
         i = i + 1
     }
     result
 }
 
-// Returns a new set containing elements in a that are not in b.
-pub def set_difference(a: Set, b: Set) -> Set {
-    var result = set_new()
+/// Return true if every element of a is in b.
+pub def set_is_subset[T](a: Set<T>, b: Set<T>) -> bool {
+    var result = true
     var i = 0
     val n = list_len(a.items)
     while i < n {
-        val item = list_get(a.items, i)
-        result = if set_contains(b, item) { result } else { set_add(result, item) }
+        result = if set_contains(b, list_get(a.items, i)) { result } else { false }
         i = i + 1
     }
     result
+}
+
+/// Return true if every element of b is in a.
+pub def set_is_superset[T](a: Set<T>, b: Set<T>) -> bool {
+    set_is_subset(b, a)
+}
+
+/// Return a new set with elements in either a or b but not both.
+pub def set_symmetric_difference[T](a: Set<T>, b: Set<T>) -> Set<T> {
+    var diff_ab = set_difference(a, b)
+    var diff_ba = set_difference(b, a)
+    set_union(diff_ab, diff_ba)
+}
+
+/// Return true if a and b have no elements in common.
+pub def set_is_disjoint[T](a: Set<T>, b: Set<T>) -> bool {
+    set_is_empty(set_intersection(a, b))
 }

@@ -7,9 +7,11 @@
 #include <windows.h>
 #endif
 
-// Build-time switch: if ONNX_RUNTIME_ENABLED is defined, include ORT C API
-#ifdef ONNX_RUNTIME_ENABLED
-#include <onnxruntime_c_api.h>
+// ONNX Runtime is resolved lazily at runtime (dlopen/LoadLibrary) rather than
+// linked. iris_ml_dynload.h pulls in the vendored ORT C API header for the ABI
+// layout and provides iris_ort_api(), which returns NULL when onnxruntime is
+// unavailable. Nothing here creates a link-time dependency on the SDK.
+#include "iris_ml_dynload.h"
 
 // Compatibility: some ORT distributions may not define ORT_INVALID_DEVICE_ID
 #ifndef ORT_INVALID_DEVICE_ID
@@ -24,7 +26,8 @@ typedef struct {
 } ONNXModel;
 
 void* iris_onnx_session_create(const char* model_path) {
-    const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    const OrtApi* g_ort = iris_ort_api();
+    if (!g_ort) return NULL;
     OrtEnv* env = NULL;
     OrtStatus* status = g_ort->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "iris", &env);
     if (status) { fprintf(stderr, "iris: ORT CreateEnv failed\n"); g_ort->ReleaseStatus(status); return NULL; }
@@ -70,7 +73,8 @@ int iris_onnx_session_run(void* session, IrisTensor** inputs, size_t n_inputs, I
         fprintf(stderr, "iris: ORT Run error: invalid arguments\n");
         return -1;
     }
-    const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    const OrtApi* g_ort = iris_ort_api();
+    if (!g_ort) return -1;
     ONNXModel* m = (ONNXModel*)session;
 
     // Get input and output names from session metadata
@@ -244,7 +248,8 @@ int iris_onnx_session_run(void* session, IrisTensor** inputs, size_t n_inputs, I
 
 void iris_onnx_session_free(void* session) {
     if (!session) return;
-    const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    const OrtApi* g_ort = iris_ort_api();
+    if (!g_ort) return;
     ONNXModel* m = (ONNXModel*)session;
     if (m->session) g_ort->ReleaseSession(m->session);
     if (m->sess_opts) g_ort->ReleaseSessionOptions(m->sess_opts);
@@ -254,7 +259,8 @@ void iris_onnx_session_free(void* session) {
 
 int64_t iris_onnx_get_input_count(int64_t session) {
     if (!session) return 0;
-    const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    const OrtApi* g_ort = iris_ort_api();
+    if (!g_ort) return 0;
     ONNXModel* m = (ONNXModel*)(intptr_t)session;
     size_t count = 0;
     OrtStatus* status = g_ort->SessionGetInputCount(m->session, &count);
@@ -264,7 +270,8 @@ int64_t iris_onnx_get_input_count(int64_t session) {
 
 int64_t iris_onnx_get_output_count(int64_t session) {
     if (!session) return 0;
-    const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    const OrtApi* g_ort = iris_ort_api();
+    if (!g_ort) return 0;
     ONNXModel* m = (ONNXModel*)(intptr_t)session;
     size_t count = 0;
     OrtStatus* status = g_ort->SessionGetOutputCount(m->session, &count);
@@ -274,7 +281,8 @@ int64_t iris_onnx_get_output_count(int64_t session) {
 
 const char* iris_onnx_get_input_name(int64_t session, int64_t idx) {
     if (!session) return "";
-    const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    const OrtApi* g_ort = iris_ort_api();
+    if (!g_ort) return "";
     ONNXModel* m = (ONNXModel*)(intptr_t)session;
     char* name = NULL;
     OrtStatus* status = g_ort->SessionGetInputName(m->session, (size_t)idx, m->allocator, &name);
@@ -284,7 +292,8 @@ const char* iris_onnx_get_input_name(int64_t session, int64_t idx) {
 
 const char* iris_onnx_get_output_name(int64_t session, int64_t idx) {
     if (!session) return "";
-    const OrtApi* g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    const OrtApi* g_ort = iris_ort_api();
+    if (!g_ort) return "";
     ONNXModel* m = (ONNXModel*)(intptr_t)session;
     char* name = NULL;
     OrtStatus* status = g_ort->SessionGetOutputName(m->session, (size_t)idx, m->allocator, &name);
@@ -292,16 +301,8 @@ const char* iris_onnx_get_output_name(int64_t session, int64_t idx) {
     return name;
 }
 
-#else
-
-// Fallback when ORT not available
-void* iris_onnx_session_create(const char* model_path) { (void)model_path; fprintf(stderr, "iris: ONNX Runtime not enabled at build time\n"); return NULL; }
-int   iris_onnx_session_run(void* session, IrisTensor** inputs, size_t n_inputs, IrisTensor*** outputs, size_t* n_outputs) { (void)session;(void)inputs;(void)n_inputs;(void)outputs;(void)n_outputs; fprintf(stderr, "iris: ONNX Runtime not enabled at build time\n"); return -1; }
-void  iris_onnx_session_free(void* session) { (void)session; }
-int64_t     iris_onnx_get_input_count(int64_t session) { (void)session; return 0; }
-int64_t     iris_onnx_get_output_count(int64_t session) { (void)session; return 0; }
-const char* iris_onnx_get_input_name(int64_t session, int64_t idx) { (void)session; (void)idx; return ""; }
-const char* iris_onnx_get_output_name(int64_t session, int64_t idx) { (void)session; (void)idx; return ""; }
-
-#endif /* ONNX_RUNTIME_ENABLED */
+/* The former "#else" branch — stub definitions used when ONNX_RUNTIME_ENABLED
+ * was not set at build time — is gone. There is no longer a build-time switch:
+ * these functions are always compiled, and iris_ort_api() reports the missing
+ * library at the point of use instead. */
 

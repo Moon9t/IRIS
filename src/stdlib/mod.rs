@@ -8,6 +8,7 @@ pub fn stdlib_source(name: &str) -> Option<&'static str> {
     match name {
         "math" => Some(include_str!("math.iris")),
         "string" => Some(include_str!("string.iris")),
+        "collections" => Some(include_str!("collections.iris")),
         "fmt" => Some(include_str!("fmt.iris")),
         "set" => Some(include_str!("set.iris")),
         "queue" => Some(include_str!("queue.iris")),
@@ -51,6 +52,7 @@ pub fn stdlib_source(name: &str) -> Option<&'static str> {
         // Networking
         "http_server" => Some(include_str!("http_server.iris")),
         "net" => Some(include_str!("net.iris")),
+        "unicode" => Some(include_str!("unicode.iris")),
         _ => None,
     }
 }

@@ -8,8 +8,11 @@
 #include <sys/stat.h>
 #endif
 
-#if defined(TENSORFLOW_ENABLED)
-#include <tensorflow/c/c_api.h>
+// TensorFlow is resolved lazily at runtime (dlopen/LoadLibrary) rather than
+// linked. iris_ml_dynload.h declares the TF C ABI and routes the TF_* spellings
+// below through function pointers filled in by iris_tf_available(). Nothing here
+// creates a link-time dependency on the TensorFlow SDK.
+#include "iris_ml_dynload.h"
 
 typedef struct TFModel { TF_Graph* graph; TF_Session* session; TF_Status* status; } TFModel;
 
@@ -19,6 +22,7 @@ static void deallocator_noop(void* data, size_t len, void* arg) {
 
 void* iris_tf_load_saved_model(const char* path) {
     if (!path) return NULL;
+    if (!iris_tf_available()) return NULL;
 
 #ifdef _WIN32
     DWORD attrs = GetFileAttributesA(path);
@@ -52,6 +56,10 @@ void* iris_tf_load_saved_model(const char* path) {
 
 int iris_tf_run(void* model, IrisTensor** inputs, size_t n_inputs, IrisTensor*** outputs, size_t* n_outputs) {
     if (!model || n_inputs == 0 || !inputs) return -1;
+    // A non-NULL model can only come from iris_tf_load_saved_model(), which
+    // already succeeded — but re-check so a bogus pointer cannot reach a NULL
+    // function pointer. The result is cached, so this is a single int compare.
+    if (!iris_tf_available()) return -1;
     TFModel* m = (TFModel*)model;
 
     // Scan operations to discover input and output nodes
@@ -189,6 +197,7 @@ int iris_tf_run(void* model, IrisTensor** inputs, size_t n_inputs, IrisTensor***
 
 void iris_tf_free(void* model) {
     if (!model) return;
+    if (!iris_tf_available()) return;
     TFModel* m = (TFModel*)model;
     if (m->session) TF_CloseSession(m->session, m->status);
     if (m->session) TF_DeleteSession(m->session, m->status);
@@ -197,11 +206,7 @@ void iris_tf_free(void* model) {
     free(m);
 }
 
-#else
-
-void* iris_tf_load_saved_model(const char* path) { (void)path; fprintf(stderr, "iris: TensorFlow support not enabled at build time\n"); return NULL; }
-int   iris_tf_run(void* model, IrisTensor** inputs, size_t n_inputs, IrisTensor*** outputs, size_t* n_outputs) { (void)model;(void)inputs;(void)n_inputs;(void)outputs;(void)n_outputs; fprintf(stderr, "iris: TensorFlow support not enabled at build time\n"); return -1; }
-void  iris_tf_free(void* model) { (void)model; }
-
-#endif
+/* The former "#else" branch — stubs used when TENSORFLOW_ENABLED was not set at
+ * build time — is gone. These functions are always compiled now, and
+ * iris_tf_available() reports the missing library at the point of use. */
 

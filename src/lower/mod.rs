@@ -180,6 +180,7 @@ use crate::parser::lexer::Span;
 /// Returns true if a pattern extracts variable bindings (needs safe evaluation order with guards).
 fn pattern_has_bindings(pattern: &AstWhenPattern) -> bool {
     match pattern {
+        AstWhenPattern::Binding { .. } => true,
         AstWhenPattern::OptionSome { binding: Some(_) } => true,
         AstWhenPattern::ResultOk { binding: Some(_) } => true,
         AstWhenPattern::ResultErr { binding: Some(_) } => true,
@@ -187,6 +188,10 @@ fn pattern_has_bindings(pattern: &AstWhenPattern) -> bool {
         // A tuple pattern has bindings if ANY sub-pattern is an ident binding
         AstWhenPattern::Tuple(subs) => subs.iter().any(|s| pattern_has_bindings(s)
             || matches!(s, AstWhenPattern::EnumVariant { enum_name, .. } if enum_name.is_empty())),
+        // A struct pattern has bindings if any field sub-pattern has bindings or is a bare ident
+        AstWhenPattern::Struct { fields, .. } => fields.iter().any(|(_, f)| pattern_has_bindings(f)
+            || matches!(f, AstWhenPattern::EnumVariant { enum_name, .. } if enum_name.is_empty())
+            || matches!(f, AstWhenPattern::Wildcard)),
         _ => false,
     }
 }
@@ -271,12 +276,41 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
                 .iter()
                 .map(|f| (f.name.name.clone(), lower_type_with_structs(&f.ty, &module)))
                 .collect();
+            let defaults: Vec<Option<AstExpr>> = s
+                .fields
+                .iter()
+                .map(|f| f.default.clone())
+                .collect();
             module
                 .add_struct_def(s.name.name.clone(), fields)
                 .map_err(|_| LowerError::DuplicateFunction {
                     name: s.name.name.clone(),
                     span: s.name.span,
                 })?;
+            if defaults.iter().any(|d| d.is_some()) {
+                module.struct_defaults.insert(s.name.name.clone(), defaults);
+            }
+        }
+    }
+
+    // Register generic struct templates so field access works inside generic
+    // functions.  We use `lower_type_with_structs` (without Infer substitution)
+    // so type params appear as `Struct { name: "T", fields: [] }` — a marker
+    // that can be substituted with the concrete type at monomorphization time.
+    for (name, template) in &generic_struct_templates {
+        let fields: Vec<(String, IrType)> = template
+            .fields
+            .iter()
+            .map(|f| (f.name.name.clone(), lower_type_with_structs(&f.ty, &module)))
+            .collect();
+        let defaults: Vec<Option<AstExpr>> = template
+            .fields
+            .iter()
+            .map(|f| f.default.clone())
+            .collect();
+        let _ = module.add_struct_def(name.clone(), fields);
+        if defaults.iter().any(|d| d.is_some()) {
+            module.struct_defaults.insert(name.clone(), defaults);
         }
     }
 
@@ -329,7 +363,11 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
 
             // Register the monomorphized struct definition.
             let mangled_name = format!("{}__{}", base_name, type_args.iter().map(|arg| mangle_ir_type(&lower_type_with_structs(arg, &module))).collect::<Vec<_>>().join("_"));
-            module.add_struct_def(mangled_name, lowered_fields).ok();
+            module.add_struct_def(mangled_name.clone(), lowered_fields).ok();
+            // Carry over defaults from the template (defaults are typically literals).
+            if let Some(template_defaults) = module.struct_defaults.get(&base_name).cloned() {
+                module.struct_defaults.insert(mangled_name, template_defaults);
+            }
         }
     }
 
@@ -362,6 +400,10 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
         if impl_def.trait_name.is_empty() {
             continue;
         }
+        // Skip blanket impls — they're monomorphized later based on known concrete types.
+        if !impl_def.generic_params.is_empty() {
+            continue;
+        }
         let trait_name = impl_def.trait_name.clone();
         for method in &impl_def.methods {
             let mangled = format!(
@@ -392,6 +434,10 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
             }
             fn_sigs.insert(func.name.name.clone(), ret_ty);
         } else {
+            generic_fn_map.insert(func.name.name.clone(), func.clone());
+        }
+        // Also store const fn bodies so we can evaluate calls at compile time.
+        if func.is_const {
             generic_fn_map.insert(func.name.name.clone(), func.clone());
         }
         if func.params.iter().any(|p| p.default.is_some()) {
@@ -464,6 +510,93 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
     let mut struct_method_map: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut impl_fns: Vec<crate::parser::ast::AstFunction> = Vec::new();
     for impl_def in &ast.impls {
+        // Handle blanket impls: monomorphize for each known concrete type.
+        if !impl_def.generic_params.is_empty() && !impl_def.trait_name.is_empty() {
+            // Find the type param name (e.g., "T" in `impl[T where T: Show]`).
+            if let crate::parser::ast::AstGenericParam::Type(ref tp_name, ref bounds, _) =
+                &impl_def.generic_params[0]
+            {
+                // Find all concrete types that satisfy the required trait bounds.
+                // We use trait_impl_methods to find types implementing each bound.
+                let mut candidate_types: Option<Vec<String>> = None;
+                for bound_trait in bounds {
+                    let types_for_bound: Vec<String> = module
+                        .trait_impl_methods()
+                        .get(bound_trait)
+                        .map(|entries| {
+                            entries.iter().map(|(cty, _, _)| cty.clone()).collect::<std::collections::HashSet<_>>().into_iter().collect()
+                        })
+                        .unwrap_or_default();
+                    candidate_types = Some(match candidate_types {
+                        Some(prev) => prev.into_iter().filter(|t| types_for_bound.contains(t)).collect(),
+                        None => types_for_bound,
+                    });
+                }
+                // If no bounds specified, skip (can't determine concrete types).
+                let concrete_types = candidate_types.unwrap_or_default();
+                // If bounds exist but no concrete types found yet, also add all types in the module.
+                let concrete_types = if concrete_types.is_empty() && !bounds.is_empty() {
+                    // Fallback: try all known struct/enum types.
+                    module.struct_defs.keys().cloned().collect::<Vec<_>>()
+                } else {
+                    concrete_types
+                };
+
+                for concrete_ty_name in &concrete_types {
+                    let concrete_ir = type_name_to_ir_type(concrete_ty_name, &module);
+                    // Also register in trait_impl_methods for vtable/dyn dispatch.
+                    for method in &impl_def.methods {
+                        let mangled = format!(
+                            "{}__{}__{}",
+                            impl_def.trait_name, concrete_ty_name, method.name.name
+                        );
+                        module.add_trait_impl_method(
+                            impl_def.trait_name.clone(),
+                            concrete_ty_name.clone(),
+                            method.name.name.clone(),
+                            mangled.clone(),
+                        );
+                        // Resolve return type with substitutions.
+                        let mut ret_ty = lower_type_with_structs(&method.return_ty, &module);
+                        if method.is_async { ret_ty = IrType::Chan(Box::new(ret_ty)); }
+                        fn_sigs.insert(mangled.clone(), ret_ty);
+                        trait_dispatch_map
+                            .entry(method.name.name.clone())
+                            .or_default()
+                            .push((concrete_ir.clone(), mangled.clone()));
+                        // Build a renamed copy with concrete type substitutions.
+                        let mut renamed = method.clone();
+                        renamed.name.name = mangled;
+                        renamed.type_params.clear(); // No longer generic.
+                        for param in &mut renamed.params {
+                            if param.name.name == "self" {
+                                if let crate::parser::ast::AstType::Named(ref n, _) = param.ty {
+                                    if n == tp_name || n == "self" || n == "Self" {
+                                        param.ty = crate::parser::ast::AstType::Named(
+                                            concrete_ty_name.to_string(),
+                                            param.ty.span(),
+                                        );
+                                    }
+                                }
+                            } else {
+                                // Substitute type params in other param types.
+                                let ast_subs: HashMap<String, AstType> = vec![
+                                    (tp_name.clone(), crate::parser::ast::AstType::Named(concrete_ty_name.to_string(), method.span)),
+                                ].into_iter().collect();
+                                param.ty = substitute_ast_type(&param.ty, &ast_subs, &HashMap::new());
+                            }
+                        }
+                        let ast_subs: HashMap<String, AstType> = vec![
+                            (tp_name.clone(), crate::parser::ast::AstType::Named(concrete_ty_name.to_string(), method.span)),
+                        ].into_iter().collect();
+                        renamed.return_ty = substitute_ast_type(&renamed.return_ty, &ast_subs, &HashMap::new());
+                        impl_fns.push(renamed);
+                    }
+                }
+                continue; // Skip the normal (non-generic) path below.
+            }
+        }
+        // Normal (non-blanket) impl processing.
         let dispatch_ty = type_name_to_ir_type(&impl_def.type_name, &module);
         for method in &impl_def.methods {
             let mangled = if impl_def.trait_name.is_empty() {
@@ -596,6 +729,28 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
     for lf in all_lifted {
         let _ = module.add_function(lf);
     }
+
+    // Post-lowering: scan all functions for struct types used in MakeStruct
+    // that aren't in module.struct_defs (e.g. monomorphized generics like
+    // Box__i64 created during struct literal lowering). Register them.
+    let mut extra_struct_defs: HashMap<String, Vec<(String, IrType)>> = HashMap::new();
+    for func in module.functions() {
+        for block in func.blocks() {
+            for instr in &block.instrs {
+                if let IrInstr::MakeStruct { result_ty, .. } = instr {
+                    if let IrType::Struct { name, fields } = result_ty {
+                        if module.struct_def(name).is_none() && !extra_struct_defs.contains_key(name) {
+                            extra_struct_defs.insert(name.clone(), fields.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (name, fields) in extra_struct_defs {
+        let _ = module.add_struct_def(name, fields);
+    }
+
     Ok(module)
 }
 
@@ -603,8 +758,8 @@ struct Lowerer<'m> {
     builder: IrFunctionBuilder,
     /// Current lexical scope: name → (ValueId, IrType).
     scope: HashMap<String, (ValueId, IrType)>,
-    /// Stack of (header_block, merge_block, loop_var_names) for nested loops.
-    loop_stack: Vec<(BlockId, BlockId, Vec<String>)>,
+    /// Stack of (header_block, merge_block, loop_var_names, label) for nested loops.
+    loop_stack: Vec<(BlockId, BlockId, BlockId, Vec<String>, Option<String>, bool)>,
     /// Reference to the module for struct/enum type lookups.
     module: &'m IrModule,
     /// Pre-collected function return types for resolving call result types.
@@ -652,6 +807,21 @@ struct Lowerer<'m> {
     /// sees a call to this name, it emits `ResumeCont` instead of a regular
     /// call instruction.
     resume_param_name: Option<String>,
+    /// Monomorphized struct defs computed on-the-fly during generic function
+    /// lowering.  Checked before `module.struct_def()` in field access.
+    local_struct_defs: HashMap<String, Vec<(String, IrType)>>,
+    /// Default values for monomorphized structs computed on-the-fly.
+    /// Checked alongside `module.struct_defaults()` during struct literal lowering.
+    local_struct_defaults: HashMap<String, Vec<Option<crate::parser::ast::AstExpr>>>,
+    /// Deferred expressions to emit before each return or at function exit.
+    /// Entries are in declaration order; emitted in reverse (LIFO).
+    defer_stack: Vec<crate::parser::ast::AstExpr>,
+    /// Try-catch state: the catch block to branch to on `?` unwrap failure.
+    try_catch_catch_bb: Option<BlockId>,
+    /// Try-catch state: the continuation block after the try/catch.
+    try_catch_cont_bb: Option<BlockId>,
+    /// Try-catch state: the catch parameter name (e.g. `e` in `catch e { ... }`).
+    try_catch_param: Option<String>,
 }
 
 fn get_qualified_enum_name(base: &AstExpr) -> Option<String> {
@@ -680,6 +850,7 @@ impl<'m> Lowerer<'m> {
                     let candidate = format!("{}__{}", prefix, name);
                     if self.fn_sigs.contains_key(&candidate)
                         || self.mono_sigs.borrow().contains_key(&candidate)
+                        || self.generic_fns.contains_key(&candidate)
                         || self.const_defs.contains_key(&candidate)
                         || self.module.struct_def(&candidate).is_some()
                         || self.module.enum_def(&candidate).is_some()
@@ -696,6 +867,7 @@ impl<'m> Lowerer<'m> {
         }
         if self.fn_sigs.contains_key(name)
             || self.mono_sigs.borrow().contains_key(name)
+            || self.generic_fns.contains_key(name)
             || self.const_defs.contains_key(name)
             || self.module.struct_def(name).is_some()
             || self.module.enum_def(name).is_some()
@@ -715,6 +887,11 @@ impl<'m> Lowerer<'m> {
             }
         }
         for key in self.mono_sigs.borrow().keys() {
+            if key.ends_with(&suffix) {
+                return key.clone();
+            }
+        }
+        for key in self.generic_fns.keys() {
             if key.ends_with(&suffix) {
                 return key.clone();
             }
@@ -787,6 +964,12 @@ impl<'m> Lowerer<'m> {
             taped_values: HashSet::new(),
             tape_nodes: HashMap::new(),
             resume_param_name: None,
+            local_struct_defs: HashMap::new(),
+            local_struct_defaults: HashMap::new(),
+            defer_stack: Vec::new(),
+            try_catch_catch_bb: None,
+            try_catch_cont_bb: None,
+            try_catch_param: None,
         }
     }
 
@@ -885,6 +1068,15 @@ impl<'m> Lowerer<'m> {
             }
             AstExpr::Tuple { elements, .. } => {
                 IrType::Tuple(elements.iter().map(|e| self.infer_ast_expr_type_simple(e)).collect())
+            }
+            AstExpr::MapLiteral { entries, .. } => {
+                if let Some((k, _)) = entries.first() {
+                    let k_ty = self.infer_ast_expr_type_simple(k);
+                    let v_ty = self.infer_ast_expr_type_simple(&entries[0].1);
+                    IrType::Map(Box::new(k_ty), Box::new(v_ty))
+                } else {
+                    IrType::Map(Box::new(IrType::Str), Box::new(IrType::Scalar(DType::I64)))
+                }
             }
             _ => IrType::Infer,
         }
@@ -1097,6 +1289,34 @@ impl<'m> Lowerer<'m> {
                     return Ok((result, IrType::Str));
                 }
 
+                if lhs_ty == IrType::Str && matches!(op, AstBinOp::Mul) {
+                    let count_val = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::Cast { result: count_val, operand: rhs_val, from_ty: rhs_ty.clone(), to_ty: IrType::Scalar(DType::I64) },
+                        Some(IrType::Scalar(DType::I64)),
+                    );
+                    let result = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::StrRepeat { result, operand: lhs_val, count: count_val },
+                        Some(IrType::Str),
+                    );
+                    return Ok((result, IrType::Str));
+                }
+
+                if rhs_ty == IrType::Str && matches!(op, AstBinOp::Mul) {
+                    let count_val = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::Cast { result: count_val, operand: lhs_val, from_ty: lhs_ty.clone(), to_ty: IrType::Scalar(DType::I64) },
+                        Some(IrType::Scalar(DType::I64)),
+                    );
+                    let result = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::StrRepeat { result, operand: rhs_val, count: count_val },
+                        Some(IrType::Str),
+                    );
+                    return Ok((result, IrType::Str));
+                }
+
                 // Auto-promote f32 <-> f64: widen the narrower operand so that
                 // float literals (always f32) work transparently with f64 params.
                 let (lhs_val, rhs_val, lhs_ty) = match (&lhs_ty, &rhs_ty) {
@@ -1222,7 +1442,7 @@ impl<'m> Lowerer<'m> {
                 Ok((result, ty))
             }
 
-            AstExpr::Call { callee, args, span } => self.lower_call(callee, args, *span),
+            AstExpr::Call { callee, args, span, .. } => self.lower_call(callee, args, *span),
 
             AstExpr::If {
                 cond,
@@ -1232,22 +1452,30 @@ impl<'m> Lowerer<'m> {
             } => self.lower_if_expr(cond, then_block, else_block.as_ref(), *span),
 
             AstExpr::Block(block) => {
-                let result = self.lower_block(block)?;
-                result.ok_or_else(|| LowerError::Unsupported {
-                    detail: "block expression with no tail value".into(),
-                    span: block.span,
-                })
+                if let Some(v) = self.lower_block(block)? {
+                    Ok(v)
+                } else if let Some((param_id, param_ty)) = self.builder.current_block_first_param() {
+                    // Block has no tail but the current block has a block param
+                    // (e.g. from `?` unwrapping). Use it as the block's value.
+                    Ok((param_id, param_ty))
+                } else {
+                    // Block was terminated early (e.g. break/return/continue).
+                    // The value is only used to satisfy type requirements; the
+                    // current block is already sealed, so we cannot emit more
+                    // instructions.
+                    Ok((self.builder.fresh_value(), IrType::Scalar(DType::I64)))
+                }
             }
 
             AstExpr::Mask { body, .. } => {
                 // Effect mask: lower the body as if it were a normal block.
-                // The effect checker enforces that the body's callee effects
-                // are within the masked effect row.
-                let result = self.lower_block(body)?;
-                result.ok_or_else(|| LowerError::Unsupported {
-                    detail: "effect mask block with no tail value".into(),
-                    span: body.span,
-                })
+                if let Some(v) = self.lower_block(body)? {
+                    Ok(v)
+                } else if let Some((param_id, param_ty)) = self.builder.current_block_first_param() {
+                    Ok((param_id, param_ty))
+                } else {
+                    Ok((self.builder.fresh_value(), IrType::Scalar(DType::I64)))
+                }
             }
 
             AstExpr::Index {
@@ -1302,8 +1530,15 @@ impl<'m> Lowerer<'m> {
                 Ok((result, elem_ty))
             }
 
-            AstExpr::StructLit { name, fields, span } => {
+            AstExpr::StructLit { name, fields, spread, span } => {
                 let mut resolved_name = resolve_brought_name(name, self.module);
+                // Always check if binding_ty provides a more specific (mangled) name
+                // like "Box__i64" even when the base template "Box" exists.
+                if let Some(IrType::Struct { name: expected_name, .. }) = &self.binding_ty {
+                    if expected_name.starts_with(&format!("{}__", name)) {
+                        resolved_name = expected_name.clone();
+                    }
+                }
                 if self.module.struct_def(&resolved_name).is_none() {
                     let mut found = false;
                     if let Some(IrType::Struct { name: expected_name, .. }) = &self.binding_ty {
@@ -1325,7 +1560,7 @@ impl<'m> Lowerer<'m> {
                 }
 
                 // Look up the struct definition.
-                let struct_fields = self
+                let mut struct_fields = self
                     .module
                     .struct_def(&resolved_name)
                     .ok_or_else(|| LowerError::UndefinedVariable {
@@ -1335,23 +1570,128 @@ impl<'m> Lowerer<'m> {
                     })?
                     .clone();
 
+                // When inside a monomorphized generic function, resolve template
+                // field types using type_param_subs (e.g. Struct { name: "T" } → Scalar(I64)).
+                // Also compute the mangled struct name.
+                if !self.type_param_subs.is_empty() {
+                    for (_fname, fty) in &mut struct_fields {
+                        *fty = resolve_concrete_field(fty, &self.type_param_subs, self.module);
+                    }
+                    // Compute mangled name: e.g. "MinHeap" → "MinHeap__i64"
+                    let mangle = self.type_param_subs.values().map(mangle_ir_type).collect::<Vec<_>>().join("_");
+                    if !mangle.is_empty() {
+                        resolved_name = format!("{}__{}", resolved_name, mangle);
+                    }
+                }
+
+                // If spread is present, evaluate it to get the source struct.
+                let spread_val = if let Some(spread_expr) = spread {
+                    let (sv, st) = self.lower_expr(spread_expr)?;
+                    Some((sv, st))
+                } else {
+                    None
+                };
+
                 // Lower each field expression in declaration order.
                 let mut field_vals = Vec::with_capacity(struct_fields.len());
-                for (field_name, _field_ty) in &struct_fields {
-                    let provided =
+                let mut field_actual_tys = Vec::with_capacity(struct_fields.len());
+                // Look up field defaults for this struct (by resolved name).
+                let field_defaults = self.local_struct_defaults.get(&resolved_name)
+                    .or_else(|| self.module.struct_defaults.get(&resolved_name))
+                    .cloned();
+                for (field_idx, (field_name, field_ty)) in struct_fields.iter().enumerate() {
+                    if let Some(provided) =
                         fields
                             .iter()
                             .find(|(n, _)| n == field_name)
+                    {
+                        // Propagate the struct field type down as binding_ty so `list()` can infer its type.
+                        let prev_binding_ty = self.binding_ty.take();
+                        self.binding_ty = Some(field_ty.clone());
+                        let (val, actual_ty) = self.lower_expr(&provided.1)?;
+                        self.binding_ty = prev_binding_ty;
+                        field_vals.push(val);
+                        field_actual_tys.push(actual_ty);
+                    } else if let Some((spread_val_id, spread_ty)) = &spread_val {
+                        // Copy field from spread source struct via GetField.
+                        let spread_struct_fields = match spread_ty {
+                            IrType::Struct { fields, .. } => fields.clone(),
+                            _ => {
+                                return Err(LowerError::Unsupported {
+                                    detail: format!("struct update source is not a struct type"),
+                                    span: *span,
+                                });
+                            }
+                        };
+                        let field_index = spread_struct_fields
+                            .iter()
+                            .position(|(n, _)| n == field_name)
                             .ok_or_else(|| LowerError::Unsupported {
-                                detail: format!("missing field '{}' in struct literal", field_name),
+                                detail: format!("spread source struct has no field '{}'", field_name),
                                 span: *span,
                             })?;
-                    // Propagate the struct field type down as binding_ty so `list()` can infer its type.
-                    let prev_binding_ty = self.binding_ty.take();
-                    self.binding_ty = Some(_field_ty.clone());
-                    let (val, _) = self.lower_expr(&provided.1)?;
-                    self.binding_ty = prev_binding_ty;
-                    field_vals.push(val);
+                        let result = self.builder.fresh_value();
+                        self.builder.push_instr(
+                            IrInstr::GetField {
+                                result,
+                                base: *spread_val_id,
+                                field_index,
+                                result_ty: field_ty.clone(),
+                            },
+                            Some(field_ty.clone()),
+                        );
+                        field_vals.push(result);
+                        field_actual_tys.push(field_ty.clone());
+                    } else if let Some(defaults) = &field_defaults {
+                        if let Some(Some(default_expr)) = defaults.get(field_idx) {
+                            // Use the default value for this field.
+                            let prev_binding_ty = self.binding_ty.take();
+                            self.binding_ty = Some(field_ty.clone());
+                            let (val, actual_ty) = self.lower_expr(default_expr)?;
+                            self.binding_ty = prev_binding_ty;
+                            field_vals.push(val);
+                            field_actual_tys.push(actual_ty);
+                        } else {
+                            return Err(LowerError::Unsupported {
+                                detail: format!("missing field '{}' in struct literal", field_name),
+                                span: *span,
+                            });
+                        }
+                    } else {
+                        return Err(LowerError::Unsupported {
+                            detail: format!("missing field '{}' in struct literal", field_name),
+                            span: *span,
+                        });
+                    }
+                }
+
+                // When not inside a monomorphized function, try to infer type params
+                // from template fields vs actual field value types. E.g. Box { value: 42 }
+                // has template field ("value", Struct{name:"T"}) and actual type Scalar(I64),
+                // so we infer T=i64, resolve the fields, and mangle the name to Box__i64.
+                if self.type_param_subs.is_empty() && resolved_name == *name && spread_val.is_none() {
+                    let mut inferred_subs: std::collections::HashMap<String, IrType> = std::collections::HashMap::new();
+                    for ((_, template_ty), actual_ty) in struct_fields.iter().zip(field_actual_tys.iter()) {
+                        if let IrType::Struct { name: pname, fields: pfields } = template_ty {
+                            if pfields.is_empty() {
+                                inferred_subs.entry(pname.clone()).or_insert_with(|| actual_ty.clone());
+                            }
+                        }
+                    }
+                    if !inferred_subs.is_empty() {
+                        for (_, fty) in &mut struct_fields {
+                            *fty = resolve_concrete_field(fty, &inferred_subs, self.module);
+                        }
+                        let mangle = inferred_subs.values().map(mangle_ir_type).collect::<Vec<_>>().join("_");
+                        if !mangle.is_empty() {
+                            resolved_name = format!("{}__{}", name, mangle);
+                            self.local_struct_defs.insert(resolved_name.clone(), struct_fields.clone());
+                            // Carry over defaults from the template.
+                            if let Some(template_defaults) = self.module.struct_defaults.get(name).cloned() {
+                                self.local_struct_defaults.insert(resolved_name.clone(), template_defaults);
+                            }
+                        }
+                    }
                 }
 
                 let result_ty = IrType::Struct {
@@ -1482,7 +1822,9 @@ impl<'m> Lowerer<'m> {
                 }
                 let struct_fields = match &base_ty {
                     IrType::Struct { name: s_name, fields } => {
-                        if let Some(def_fields) = self.module.struct_def(s_name) {
+                        if let Some(def_fields) = self.local_struct_defs.get(s_name) {
+                            def_fields.clone()
+                        } else if let Some(def_fields) = self.module.struct_def(s_name) {
                             def_fields.clone()
                         } else {
                             fields.clone()
@@ -1659,94 +2001,182 @@ impl<'m> Lowerer<'m> {
             AstExpr::Try { expr, span } => {
                 let (val, res_ty) = self.lower_expr(expr)?;
 
-                // Extract Ok/Err inner types from the result type.
-                let (ok_ty, err_ty) = if let IrType::ResultType(ok, err) = &res_ty {
-                    ((**ok).clone(), (**err).clone())
+                // Determine if this is a result or option type and branch accordingly.
+                if let IrType::ResultType(ok, err) = &res_ty {
+                    let ok_ty = (**ok).clone();
+                    let err_ty = (**err).clone();
+
+                    // Emit IsOk test.
+                    let is_ok_result = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::IsOk {
+                            result: is_ok_result,
+                            operand: val,
+                        },
+                        Some(IrType::Scalar(DType::Bool)),
+                    );
+
+                    let ok_bb = self.builder.create_block(Some("try_ok"));
+                    let err_bb = self.builder.create_block(Some("try_err"));
+                    let cont_bb = self.builder.create_block(Some("try_cont"));
+
+                    self.builder.push_instr(
+                        IrInstr::CondBr {
+                            cond: is_ok_result,
+                            then_block: ok_bb,
+                            then_args: vec![],
+                            else_block: err_bb,
+                            else_args: vec![],
+                        },
+                        None,
+                    );
+
+                    // Ok branch: unwrap and continue.
+                    self.builder.set_current_block(ok_bb);
+                    let ok_unwrapped = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::ResultUnwrap {
+                            result: ok_unwrapped,
+                            operand: val,
+                            result_ty: ok_ty.clone(),
+                        },
+                        Some(ok_ty.clone()),
+                    );
+                    self.builder.push_instr(
+                        IrInstr::Br {
+                            target: cont_bb,
+                            args: vec![ok_unwrapped],
+                        },
+                        None,
+                    );
+
+                    // Err branch: early return or jump to catch block.
+                    self.builder.set_current_block(err_bb);
+                    let err_unwrapped = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::ResultUnwrapErr {
+                            result: err_unwrapped,
+                            operand: val,
+                            result_ty: err_ty.clone(),
+                        },
+                        Some(err_ty.clone()),
+                    );
+                    if let (Some(catch_bb), Some(_cont_bb), Some(ref _catch_param)) =
+                        (self.try_catch_catch_bb, self.try_catch_cont_bb, self.try_catch_param.clone())
+                    {
+                        // Inside try/catch: jump to catch block with error value.
+                        self.builder.push_instr(
+                            IrInstr::Br {
+                                target: catch_bb,
+                                args: vec![err_unwrapped],
+                            },
+                            None,
+                        );
+                    } else {
+                        // Outside try/catch: early return with MakeErr.
+                        let err_result = self.builder.fresh_value();
+                        let err_ret_ty =
+                            IrType::ResultType(Box::new(IrType::Infer), Box::new(err_ty.clone()));
+                        self.builder.push_instr(
+                            IrInstr::MakeErr {
+                                result: err_result,
+                                value: err_unwrapped,
+                                result_ty: err_ret_ty.clone(),
+                            },
+                            Some(err_ret_ty.clone()),
+                        );
+                        self.builder.push_instr(
+                            IrInstr::Return {
+                                values: vec![err_result],
+                            },
+                            None,
+                        );
+                    }
+
+                    // Continuation block: receives the Ok value.
+                    self.builder.set_current_block(cont_bb);
+                    let ok_result =
+                        self.builder
+                            .add_block_param(cont_bb, Some("try_result"), ok_ty.clone());
+                    let _ = span;
+                    Ok((ok_result, ok_ty))
+                } else if let IrType::Option(inner) = &res_ty {
+                    let ok_ty = (**inner).clone();
+
+                    // Emit IsSome test.
+                    let is_some_result = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::IsSome {
+                            result: is_some_result,
+                            operand: val,
+                        },
+                        Some(IrType::Scalar(DType::Bool)),
+                    );
+
+                    let some_bb = self.builder.create_block(Some("try_some"));
+                    let none_bb = self.builder.create_block(Some("try_none"));
+                    let cont_bb = self.builder.create_block(Some("try_cont"));
+
+                    self.builder.push_instr(
+                        IrInstr::CondBr {
+                            cond: is_some_result,
+                            then_block: some_bb,
+                            then_args: vec![],
+                            else_block: none_bb,
+                            else_args: vec![],
+                        },
+                        None,
+                    );
+
+                    // Some branch: unwrap and continue.
+                    self.builder.set_current_block(some_bb);
+                    let some_unwrapped = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::OptionUnwrap {
+                            result: some_unwrapped,
+                            operand: val,
+                            result_ty: ok_ty.clone(),
+                        },
+                        Some(ok_ty.clone()),
+                    );
+                    self.builder.push_instr(
+                        IrInstr::Br {
+                            target: cont_bb,
+                            args: vec![some_unwrapped],
+                        },
+                        None,
+                    );
+
+                    // None branch: early return with MakeNone.
+                    self.builder.set_current_block(none_bb);
+                    let none_result = self.builder.fresh_value();
+                    let none_ret_ty =
+                        IrType::Option(Box::new(ok_ty.clone()));
+                    self.builder.push_instr(
+                        IrInstr::MakeNone {
+                            result: none_result,
+                            result_ty: none_ret_ty.clone(),
+                        },
+                        Some(none_ret_ty.clone()),
+                    );
+                    self.builder.push_instr(
+                        IrInstr::Return {
+                            values: vec![none_result],
+                        },
+                        None,
+                    );
+
+                    // Continuation block: receives the Some value.
+                    self.builder.set_current_block(cont_bb);
+                    let ok_result =
+                        self.builder
+                            .add_block_param(cont_bb, Some("try_result"), ok_ty.clone());
+                    let _ = span;
+                    Ok((ok_result, ok_ty))
                 } else {
-                    (IrType::Infer, IrType::Infer)
-                };
-
-                // Emit IsOk test.
-                let is_ok_result = self.builder.fresh_value();
-                self.builder.push_instr(
-                    IrInstr::IsOk {
-                        result: is_ok_result,
-                        operand: val,
-                    },
-                    Some(IrType::Scalar(DType::Bool)),
-                );
-
-                let ok_bb = self.builder.create_block(Some("try_ok"));
-                let err_bb = self.builder.create_block(Some("try_err"));
-                let cont_bb = self.builder.create_block(Some("try_cont"));
-
-                self.builder.push_instr(
-                    IrInstr::CondBr {
-                        cond: is_ok_result,
-                        then_block: ok_bb,
-                        then_args: vec![],
-                        else_block: err_bb,
-                        else_args: vec![],
-                    },
-                    None,
-                );
-
-                // Ok branch: unwrap and continue.
-                self.builder.set_current_block(ok_bb);
-                let ok_unwrapped = self.builder.fresh_value();
-                self.builder.push_instr(
-                    IrInstr::ResultUnwrap {
-                        result: ok_unwrapped,
-                        operand: val,
-                        result_ty: ok_ty.clone(),
-                    },
-                    Some(ok_ty.clone()),
-                );
-                self.builder.push_instr(
-                    IrInstr::Br {
-                        target: cont_bb,
-                        args: vec![ok_unwrapped],
-                    },
-                    None,
-                );
-
-                // Err branch: early return.
-                self.builder.set_current_block(err_bb);
-                let err_unwrapped = self.builder.fresh_value();
-                self.builder.push_instr(
-                    IrInstr::ResultUnwrapErr {
-                        result: err_unwrapped,
-                        operand: val,
-                        result_ty: err_ty.clone(),
-                    },
-                    Some(err_ty.clone()),
-                );
-                // Wrap the error in a result and return early.
-                let err_result = self.builder.fresh_value();
-                let err_ret_ty =
-                    IrType::ResultType(Box::new(IrType::Infer), Box::new(err_ty.clone()));
-                self.builder.push_instr(
-                    IrInstr::MakeErr {
-                        result: err_result,
-                        value: err_unwrapped,
-                        result_ty: err_ret_ty.clone(),
-                    },
-                    Some(err_ret_ty.clone()),
-                );
-                self.builder.push_instr(
-                    IrInstr::Return {
-                        values: vec![err_result],
-                    },
-                    None,
-                );
-
-                // Continuation block: receives the Ok value.
-                self.builder.set_current_block(cont_bb);
-                let ok_result =
-                    self.builder
-                        .add_block_param(cont_bb, Some("try_result"), ok_ty.clone());
-                let _ = span;
-                Ok((ok_result, ok_ty))
+                    let _ = span;
+                    Ok((val, res_ty))
+                }
             }
 
             AstExpr::MethodCall {
@@ -1768,6 +2198,14 @@ impl<'m> Lowerer<'m> {
                         && self.module.struct_def(&base_resolved_enum).is_none()
                     {
                         let mangled_fn = format!("{}__{}", resolved_q, method);
+                        // For generic functions, delegate to lower_call which handles monomorphization.
+                        if self.generic_fns.contains_key(mangled_fn.as_str()) {
+                            let synthetic_callee = Ident {
+                                name: mangled_fn,
+                                span: base_ident.span,
+                            };
+                            return self.lower_call(&synthetic_callee, args, *span);
+                        }
                         let ret_ty =
                             self.fn_sigs.get(mangled_fn.as_str()).cloned().or_else(|| {
                                 self.mono_sigs.borrow().get(mangled_fn.as_str()).cloned()
@@ -1792,6 +2230,14 @@ impl<'m> Lowerer<'m> {
                         }
 
                         let unqualified_mangled_fn = self.resolve_unqualified_name(method);
+                        // For generic functions, delegate to lower_call which handles monomorphization.
+                        if self.generic_fns.contains_key(unqualified_mangled_fn.as_str()) {
+                            let synthetic_callee = Ident {
+                                name: unqualified_mangled_fn,
+                                span: base_ident.span,
+                            };
+                            return self.lower_call(&synthetic_callee, args, *span);
+                        }
                         let ret_ty = self
                             .fn_sigs
                             .get(unqualified_mangled_fn.as_str())
@@ -1890,8 +2336,683 @@ impl<'m> Lowerer<'m> {
                         "fold" => return self.lower_list_fold(base_val, elem_ty, args, *span),
                         "any" => return self.lower_list_any(base_val, elem_ty, args, *span),
                         "all" => return self.lower_list_all(base_val, elem_ty, args, *span),
+                        "len" => {
+                            // lst.len() → ListLen
+                            let result = self.builder.fresh_value();
+                            let ty = IrType::Scalar(DType::I64);
+                            self.builder.push_instr(
+                                IrInstr::ListLen { result, list: base_val },
+                                Some(ty.clone()),
+                            );
+                            return Ok((result, ty));
+                        }
+                        "push" => {
+                            // lst.push(v) → list_push(lst, v) → returns unit
+                            if args.len() != 1 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "push() requires exactly 1 argument".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (v, _) = self.lower_expr(&args[0])?;
+                            self.builder.push_instr(
+                                IrInstr::ListPush { list: base_val, value: v },
+                                None,
+                            );
+                            // Return a dummy i64 zero as unit value
+                            let zero = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::ConstInt { result: zero, value: 0, ty: IrType::Scalar(DType::I64) },
+                                Some(IrType::Scalar(DType::I64)),
+                            );
+                            return Ok((zero, IrType::Scalar(DType::I64)));
+                        }
+                        "pop" => {
+                            // lst.pop() → list_pop(lst) → returns option<elem>
+                            let result = self.builder.fresh_value();
+                            let ret_ty = IrType::Option(Box::new(elem_ty.clone()));
+                            self.builder.push_instr(
+                                IrInstr::ListPop { result, list: base_val, elem_ty: elem_ty.clone() },
+                                Some(ret_ty.clone()),
+                            );
+                            return Ok((result, ret_ty));
+                        }
+                        "get" => {
+                            // lst.get(i) → list_get(lst, i) → returns elem
+                            if args.len() != 1 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "get() requires exactly 1 argument".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (idx, _) = self.lower_expr(&args[0])?;
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::ListGet { result, list: base_val, index: idx, elem_ty: elem_ty.clone() },
+                                Some(elem_ty.clone()),
+                            );
+                            return Ok((result, elem_ty));
+                        }
+                        "set" => {
+                            // lst.set(i, v) → list_set(lst, i, v) → returns unit
+                            if args.len() != 2 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "set() requires exactly 2 arguments".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (idx, _) = self.lower_expr(&args[0])?;
+                            let (v, _) = self.lower_expr(&args[1])?;
+                            self.builder.push_instr(
+                                IrInstr::ListSet { list: base_val, index: idx, value: v },
+                                None,
+                            );
+                            // Return a dummy i64 zero as unit value
+                            let zero = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::ConstInt { result: zero, value: 0, ty: IrType::Scalar(DType::I64) },
+                                Some(IrType::Scalar(DType::I64)),
+                            );
+                            return Ok((zero, IrType::Scalar(DType::I64)));
+                        }
                         _ => {} // fall through to struct method dispatch
                     }
+                }
+
+                // Option<T> method dispatch.
+                if let IrType::Option(inner_ty) = &base_ty {
+                    let inner = (**inner_ty).clone();
+                    match method.as_str() {
+                        "is_some" => {
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::IsSome { result, operand: base_val },
+                                Some(IrType::Scalar(DType::Bool)),
+                            );
+                            return Ok((result, IrType::Scalar(DType::Bool)));
+                        }
+                        "is_none" => {
+                            let is_some_result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::IsSome { result: is_some_result, operand: base_val },
+                                Some(IrType::Scalar(DType::Bool)),
+                            );
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::UnaryOp { result, op: ScalarUnaryOp::Not, operand: is_some_result, ty: IrType::Scalar(DType::Bool) },
+                                Some(IrType::Scalar(DType::Bool)),
+                            );
+                            return Ok((result, IrType::Scalar(DType::Bool)));
+                        }
+                        "unwrap" => {
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::OptionUnwrap { result, operand: base_val, result_ty: inner.clone() },
+                                Some(inner.clone()),
+                            );
+                            return Ok((result, inner));
+                        }
+                        "unwrap_or" => {
+                            // opt.unwrap_or(default) → emulate with conditional via call to unwrap_or builtin
+                            if args.len() != 1 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "unwrap_or() requires exactly 1 argument".into(),
+                                    span: *span,
+                                });
+                            }
+                            // Build inline conditional: if is_some(opt) { opt.unwrap() } else { default }
+                            let (default_val, _default_ty) = self.lower_expr(&args[0])?;
+                            let is_some_result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::IsSome { result: is_some_result, operand: base_val },
+                                Some(IrType::Scalar(DType::Bool)),
+                            );
+                            let then_bb = self.builder.create_block(Some("unwrap_or_then"));
+                            let else_bb = self.builder.create_block(Some("unwrap_or_else"));
+                            let merge_bb = self.builder.create_block(Some("unwrap_or_merge"));
+                            self.builder.push_instr(
+                                IrInstr::CondBr {
+                                    cond: is_some_result,
+                                    then_block: then_bb,
+                                    then_args: vec![],
+                                    else_block: else_bb,
+                                    else_args: vec![],
+                                },
+                                None,
+                            );
+                            // Then branch: opt.unwrap()
+                            self.builder.set_current_block(then_bb);
+                            let unwrapped = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::OptionUnwrap { result: unwrapped, operand: base_val, result_ty: inner.clone() },
+                                Some(inner.clone()),
+                            );
+                            let then_result = unwrapped;
+                            self.builder.push_instr(
+                                IrInstr::Br { target: merge_bb, args: vec![then_result] },
+                                None,
+                            );
+                            // Else branch: default
+                            self.builder.set_current_block(else_bb);
+                            let else_result = default_val;
+                            self.builder.push_instr(
+                                IrInstr::Br { target: merge_bb, args: vec![else_result] },
+                                None,
+                            );
+                            // Merge: phi
+                            let merge_result = self.builder.add_block_param(merge_bb, Some("unwrap_or_res"), inner.clone());
+                            self.builder.set_current_block(merge_bb);
+                            return Ok((merge_result, inner));
+                        }
+                        "map" => {
+                            // opt.map(f) → emulate: if is_some(opt) { some(f(opt.unwrap())) } else { none() }
+                            if args.len() != 1 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "map() requires exactly 1 argument".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (f_val, f_ty) = self.lower_expr(&args[0])?;
+                            // Get the function return type from the closure type
+                            let ret_ty = if let IrType::Fn { ret, .. } = &f_ty {
+                                (**ret).clone()
+                            } else {
+                                IrType::Infer
+                            };
+                            let is_some_result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::IsSome { result: is_some_result, operand: base_val },
+                                Some(IrType::Scalar(DType::Bool)),
+                            );
+                            let then_bb = self.builder.create_block(Some("opt_map_then"));
+                            let else_bb = self.builder.create_block(Some("opt_map_else"));
+                            let merge_bb = self.builder.create_block(Some("opt_map_merge"));
+                            self.builder.push_instr(
+                                IrInstr::CondBr {
+                                    cond: is_some_result,
+                                    then_block: then_bb,
+                                    then_args: vec![],
+                                    else_block: else_bb,
+                                    else_args: vec![],
+                                },
+                                None,
+                            );
+                            // Then: call f(opt.unwrap())
+                            self.builder.set_current_block(then_bb);
+                            let unwrapped = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::OptionUnwrap { result: unwrapped, operand: base_val, result_ty: inner.clone() },
+                                Some(inner.clone()),
+                            );
+                            // Call the closure
+                            let call_result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::CallClosure {
+                                    result: Some(call_result),
+                                    closure: f_val,
+                                    args: vec![unwrapped],
+                                    result_ty: ret_ty.clone(),
+                                    pass_env: true,
+                                },
+                                Some(ret_ty.clone()),
+                            );
+                            // Wrap in Some(...)
+                            let some_result = self.builder.fresh_value();
+                            let some_ty = IrType::Option(Box::new(ret_ty.clone()));
+                            self.builder.push_instr(
+                                IrInstr::MakeSome { result: some_result, value: call_result, result_ty: some_ty.clone() },
+                                Some(some_ty.clone()),
+                            );
+                            self.builder.push_instr(
+                                IrInstr::Br { target: merge_bb, args: vec![some_result] },
+                                None,
+                            );
+                            // Else: None
+                            self.builder.set_current_block(else_bb);
+                            let none_result = self.builder.fresh_value();
+                            let none_ty = IrType::Option(Box::new(ret_ty.clone()));
+                            self.builder.push_instr(
+                                IrInstr::MakeNone { result: none_result, result_ty: none_ty.clone() },
+                                Some(none_ty.clone()),
+                            );
+                            self.builder.push_instr(
+                                IrInstr::Br { target: merge_bb, args: vec![none_result] },
+                                None,
+                            );
+                            // Merge
+                            let merge_result = self.builder.add_block_param(merge_bb, Some("opt_map_res"), none_ty.clone());
+                            self.builder.set_current_block(merge_bb);
+                            return Ok((merge_result, none_ty));
+                        }
+                        _ => {} // fall through
+                    }
+                }
+
+                // Result<T, E> method dispatch.
+                if let IrType::ResultType(ok_ty, err_ty) = &base_ty {
+                    let ok = (**ok_ty).clone();
+                    let err = (**err_ty).clone();
+                    match method.as_str() {
+                        "is_ok" => {
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::IsOk { result, operand: base_val },
+                                Some(IrType::Scalar(DType::Bool)),
+                            );
+                            return Ok((result, IrType::Scalar(DType::Bool)));
+                        }
+                        "is_err" => {
+                            let is_ok_result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::IsOk { result: is_ok_result, operand: base_val },
+                                Some(IrType::Scalar(DType::Bool)),
+                            );
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::UnaryOp { result, op: ScalarUnaryOp::Not, operand: is_ok_result, ty: IrType::Scalar(DType::Bool) },
+                                Some(IrType::Scalar(DType::Bool)),
+                            );
+                            return Ok((result, IrType::Scalar(DType::Bool)));
+                        }
+                        "unwrap" => {
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::ResultUnwrap { result, operand: base_val, result_ty: ok.clone() },
+                                Some(ok.clone()),
+                            );
+                            return Ok((result, ok));
+                        }
+                        "unwrap_err" => {
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::ResultUnwrapErr { result, operand: base_val, result_ty: err.clone() },
+                                Some(err.clone()),
+                            );
+                            return Ok((result, err));
+                        }
+                        "unwrap_or" => {
+                            if args.len() != 1 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "unwrap_or() requires exactly 1 argument".into(),
+                                    span: *span,
+                                });
+                            }
+                            // Build inline conditional: if is_ok(res) { res.unwrap() } else { default }
+                            let (default_val, _) = self.lower_expr(&args[0])?;
+                            let is_ok_result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::IsOk { result: is_ok_result, operand: base_val },
+                                Some(IrType::Scalar(DType::Bool)),
+                            );
+                            let then_bb = self.builder.create_block(Some("res_unwrap_or_then"));
+                            let else_bb = self.builder.create_block(Some("res_unwrap_or_else"));
+                            let merge_bb = self.builder.create_block(Some("res_unwrap_or_merge"));
+                            self.builder.push_instr(
+                                IrInstr::CondBr {
+                                    cond: is_ok_result,
+                                    then_block: then_bb,
+                                    then_args: vec![],
+                                    else_block: else_bb,
+                                    else_args: vec![],
+                                },
+                                None,
+                            );
+                            // Then branch: res.unwrap()
+                            self.builder.set_current_block(then_bb);
+                            let unwrapped = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::ResultUnwrap { result: unwrapped, operand: base_val, result_ty: ok.clone() },
+                                Some(ok.clone()),
+                            );
+                            self.builder.push_instr(
+                                IrInstr::Br { target: merge_bb, args: vec![unwrapped] },
+                                None,
+                            );
+                            // Else branch: default
+                            self.builder.set_current_block(else_bb);
+                            self.builder.push_instr(
+                                IrInstr::Br { target: merge_bb, args: vec![default_val] },
+                                None,
+                            );
+                            // Merge: phi
+                            let merge_result = self.builder.add_block_param(merge_bb, Some("res_unwrap_or_res"), ok.clone());
+                            self.builder.set_current_block(merge_bb);
+                            return Ok((merge_result, ok));
+                        }
+                        _ => {} // fall through
+                    }
+                }
+
+                // str method dispatch.
+                if matches!(base_ty, IrType::Str) {
+                    match method.as_str() {
+                        "len" => {
+                            let result = self.builder.fresh_value();
+                            let ty = IrType::Scalar(DType::I64);
+                            self.builder.push_instr(
+                                IrInstr::StrLen { result, operand: base_val },
+                                Some(ty.clone()),
+                            );
+                            return Ok((result, ty));
+                        }
+                        "to_upper" => {
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::StrToUpper { result, operand: base_val },
+                                Some(IrType::Str),
+                            );
+                            return Ok((result, IrType::Str));
+                        }
+                        "to_lower" => {
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::StrToLower { result, operand: base_val },
+                                Some(IrType::Str),
+                            );
+                            return Ok((result, IrType::Str));
+                        }
+                        "trim" => {
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::StrTrim { result, operand: base_val },
+                                Some(IrType::Str),
+                            );
+                            return Ok((result, IrType::Str));
+                        }
+                        "contains" => {
+                            if args.len() != 1 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "contains() requires exactly 1 argument".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (needle, _) = self.lower_expr(&args[0])?;
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::StrContains { result, haystack: base_val, needle },
+                                Some(IrType::Scalar(DType::Bool)),
+                            );
+                            return Ok((result, IrType::Scalar(DType::Bool)));
+                        }
+                        "starts_with" => {
+                            if args.len() != 1 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "starts_with() requires exactly 1 argument".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (prefix, _) = self.lower_expr(&args[0])?;
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::StrStartsWith { result, haystack: base_val, prefix },
+                                Some(IrType::Scalar(DType::Bool)),
+                            );
+                            return Ok((result, IrType::Scalar(DType::Bool)));
+                        }
+                        "ends_with" => {
+                            if args.len() != 1 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "ends_with() requires exactly 1 argument".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (suffix, _) = self.lower_expr(&args[0])?;
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::StrEndsWith { result, haystack: base_val, suffix },
+                                Some(IrType::Scalar(DType::Bool)),
+                            );
+                            return Ok((result, IrType::Scalar(DType::Bool)));
+                        }
+                        "index" => {
+                            // s.index(i) → StrIndex
+                            if args.len() != 1 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "index() requires exactly 1 argument".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (idx, _) = self.lower_expr(&args[0])?;
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::StrIndex { result, string: base_val, index: idx },
+                                Some(IrType::Scalar(DType::I64)),
+                            );
+                            return Ok((result, IrType::Scalar(DType::I64)));
+                        }
+                        "slice" => {
+                            // s.slice(start, end) → StrSlice
+                            if args.len() != 2 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "slice() requires exactly 2 arguments".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (start, _) = self.lower_expr(&args[0])?;
+                            let (end, _) = self.lower_expr(&args[1])?;
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::StrSlice { result, string: base_val, start, end },
+                                Some(IrType::Str),
+                            );
+                            return Ok((result, IrType::Str));
+                        }
+                        "find" => {
+                            if args.len() != 1 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "find() requires exactly 1 argument".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (needle, _) = self.lower_expr(&args[0])?;
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::StrFind { result, haystack: base_val, needle },
+                                Some(IrType::Option(Box::new(IrType::Scalar(DType::I64)))),
+                            );
+                            return Ok((result, IrType::Option(Box::new(IrType::Scalar(DType::I64)))));
+                        }
+                        "replace" => {
+                            if args.len() != 2 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "replace() requires exactly 2 arguments".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (old_s, _) = self.lower_expr(&args[0])?;
+                            let (new_s, _) = self.lower_expr(&args[1])?;
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::StrReplace { result, string: base_val, from: old_s, to: new_s },
+                                Some(IrType::Str),
+                            );
+                            return Ok((result, IrType::Str));
+                        }
+                        "is_empty" => {
+                            let len_result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::StrLen { result: len_result, operand: base_val },
+                                Some(IrType::Scalar(DType::I64)),
+                            );
+                            let zero = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::ConstInt { result: zero, value: 0, ty: IrType::Scalar(DType::I64) },
+                                Some(IrType::Scalar(DType::I64)),
+                            );
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::BinOp { result, op: BinOp::CmpEq, lhs: len_result, rhs: zero, ty: IrType::Scalar(DType::I64) },
+                                Some(IrType::Scalar(DType::Bool)),
+                            );
+                            return Ok((result, IrType::Scalar(DType::Bool)));
+                        }
+                        "split" => {
+                            if args.len() != 1 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "split() requires exactly 1 argument".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (delim, _) = self.lower_expr(&args[0])?;
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::StrSplit { result, str_val: base_val, delim },
+                                Some(IrType::List(Box::new(IrType::Str))),
+                            );
+                            return Ok((result, IrType::List(Box::new(IrType::Str))));
+                        }
+                        "repeat" => {
+                            if args.len() != 1 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "repeat() requires exactly 1 argument".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (count, _) = self.lower_expr(&args[0])?;
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::StrRepeat { result, operand: base_val, count },
+                                Some(IrType::Str),
+                            );
+                            return Ok((result, IrType::Str));
+                        }
+                        _ => {} // fall through
+                    }
+                }
+
+                // i64/f64 method dispatch: to_str()
+                if let IrType::Scalar(_dt) = &base_ty {
+                    if method == "to_str" && args.is_empty() {
+                        let result = self.builder.fresh_value();
+                        self.builder.push_instr(
+                            IrInstr::ValueToStr { result, operand: base_val },
+                            Some(IrType::Str),
+                        );
+                        return Ok((result, IrType::Str));
+                    }
+                    // Extension methods on scalars — e.g. 21.double()
+                    // Try the extension method dispatch below.
+                }
+
+                // map<K,V> method dispatch.
+                if let IrType::Map(_k_ty, v_ty) = &base_ty {
+                    let v = (**v_ty).clone();
+                    match method.as_str() {
+                        "len" => {
+                            let result = self.builder.fresh_value();
+                            let ty = IrType::Scalar(DType::I64);
+                            self.builder.push_instr(
+                                IrInstr::MapLen { result, map: base_val },
+                                Some(ty.clone()),
+                            );
+                            return Ok((result, ty));
+                        }
+                        "get" => {
+                            if args.len() != 1 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "get() requires exactly 1 argument".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (k, _) = self.lower_expr(&args[0])?;
+                            let result = self.builder.fresh_value();
+                            let ret_ty = IrType::Option(Box::new(v.clone()));
+                            self.builder.push_instr(
+                                IrInstr::MapGet { result, map: base_val, key: k, val_ty: v.clone() },
+                                Some(ret_ty.clone()),
+                            );
+                            return Ok((result, ret_ty));
+                        }
+                        "set" => {
+                            if args.len() != 2 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "set() requires exactly 2 arguments".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (k, _) = self.lower_expr(&args[0])?;
+                            let (v_val, _) = self.lower_expr(&args[1])?;
+                            self.builder.push_instr(
+                                IrInstr::MapSet { map: base_val, key: k, value: v_val },
+                                None,
+                            );
+                            // Return a dummy i64 zero as unit value
+                            let zero = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::ConstInt { result: zero, value: 0, ty: IrType::Scalar(DType::I64) },
+                                Some(IrType::Scalar(DType::I64)),
+                            );
+                            return Ok((zero, IrType::Scalar(DType::I64)));
+                        }
+                        "contains" => {
+                            if args.len() != 1 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "contains() requires exactly 1 argument".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (k, _) = self.lower_expr(&args[0])?;
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::MapContains { result, map: base_val, key: k },
+                                Some(IrType::Scalar(DType::Bool)),
+                            );
+                            return Ok((result, IrType::Scalar(DType::Bool)));
+                        }
+                        _ => {} // fall through
+                    }
+                }
+
+                // channel<T> method dispatch.
+                if let IrType::Chan(inner) = &base_ty {
+                    let elem = (**inner).clone();
+                    match method.as_str() {
+                        "send" => {
+                            if args.len() != 1 {
+                                return Err(LowerError::Unsupported {
+                                    detail: "send() requires exactly 1 argument".into(),
+                                    span: *span,
+                                });
+                            }
+                            let (v, _) = self.lower_expr(&args[0])?;
+                            self.builder.push_instr(
+                                IrInstr::ChanSend { chan: base_val, value: v },
+                                None,
+                            );
+                            // Return a dummy i64 zero as unit value
+                            let zero = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::ConstInt { result: zero, value: 0, ty: IrType::Scalar(DType::I64) },
+                                Some(IrType::Scalar(DType::I64)),
+                            );
+                            return Ok((zero, IrType::Scalar(DType::I64)));
+                        }
+                        "recv" => {
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::ChanRecv { result, chan: base_val, elem_ty: elem.clone() },
+                                Some(elem.clone()),
+                            );
+                            return Ok((result, elem));
+                        }
+                        _ => {} // fall through
+                    }
+                }
+
+                // Extension method dispatch: try to find a user-defined function
+                // named `method` whose first param matches the receiver type.
+                // This enables `21.double()` → `double(21)` for any function `double(i64)`.
+                if self.fn_sigs.contains_key(method) || self.generic_fns.contains_key(method) {
+                    // Build a Call expression: method(base, args...)
+                    let mut call_args = vec![*base.clone()];
+                    call_args.extend(args.iter().cloned());
+                    let call_expr = AstExpr::Call {
+                        callee: Ident { name: method.clone(), span: *span },
+                        args: call_args,
+                        named_args: vec![],
+                        span: *span,
+                    };
+                    return self.lower_expr(&call_expr);
                 }
 
                 // Trait-object dispatch: `obj.method(...)` where obj : dyn Trait.
@@ -2035,6 +3156,191 @@ impl<'m> Lowerer<'m> {
             AstExpr::Handle {
                 expr, arms, return_ty, ..
             } => self.lower_handle(expr, arms, return_ty),
+
+            AstExpr::NullCoal { expr, default, .. } => {
+                let (val, val_ty) = self.lower_expr(expr)?;
+                let (default_val, default_ty) = self.lower_expr(default)?;
+                match &val_ty {
+                    IrType::Option(inner) => {
+                        let result_type = if matches!(**inner, IrType::Infer) {
+                            default_ty.clone()
+                        } else {
+                            (**inner).clone()
+                        };
+                        let is_some_result = self.builder.fresh_value();
+                        self.builder.push_instr(
+                            IrInstr::IsSome { result: is_some_result, operand: val },
+                            Some(IrType::Scalar(DType::Bool)),
+                        );
+                        let then_bb = self.builder.create_block(Some("nullcoal_some"));
+                        let else_bb = self.builder.create_block(Some("nullcoal_none"));
+                        let merge_bb = self.builder.create_block(Some("nullcoal_merge"));
+                        self.builder.push_instr(
+                            IrInstr::CondBr {
+                                cond: is_some_result,
+                                then_block: then_bb,
+                                then_args: vec![],
+                                else_block: else_bb,
+                                else_args: vec![],
+                            },
+                            None,
+                        );
+                        self.builder.set_current_block(then_bb);
+                        let unwrapped = self.builder.fresh_value();
+                        self.builder.push_instr(
+                            IrInstr::OptionUnwrap { result: unwrapped, operand: val, result_ty: result_type.clone() },
+                            Some(result_type.clone()),
+                        );
+                        self.builder.push_instr(IrInstr::Br { target: merge_bb, args: vec![unwrapped] }, None);
+                        self.builder.set_current_block(else_bb);
+                        self.builder.push_instr(IrInstr::Br { target: merge_bb, args: vec![default_val] }, None);
+                        let merge_result = self.builder.add_block_param(merge_bb, Some("nullcoal_res"), result_type.clone());
+                        self.builder.set_current_block(merge_bb);
+                        Ok((merge_result, result_type))
+                    }
+                    IrType::ResultType(ok, _) => {
+                        let result_type = if matches!(**ok, IrType::Infer) {
+                            default_ty.clone()
+                        } else {
+                            (**ok).clone()
+                        };
+                        let is_ok_result = self.builder.fresh_value();
+                        self.builder.push_instr(
+                            IrInstr::IsOk { result: is_ok_result, operand: val },
+                            Some(IrType::Scalar(DType::Bool)),
+                        );
+                        let then_bb = self.builder.create_block(Some("nullcoal_ok"));
+                        let else_bb = self.builder.create_block(Some("nullcoal_err"));
+                        let merge_bb = self.builder.create_block(Some("nullcoal_merge"));
+                        self.builder.push_instr(
+                            IrInstr::CondBr {
+                                cond: is_ok_result,
+                                then_block: then_bb,
+                                then_args: vec![],
+                                else_block: else_bb,
+                                else_args: vec![],
+                            },
+                            None,
+                        );
+                        self.builder.set_current_block(then_bb);
+                        let unwrapped = self.builder.fresh_value();
+                        self.builder.push_instr(
+                            IrInstr::ResultUnwrap { result: unwrapped, operand: val, result_ty: result_type.clone() },
+                            Some(result_type.clone()),
+                        );
+                        self.builder.push_instr(IrInstr::Br { target: merge_bb, args: vec![unwrapped] }, None);
+                        self.builder.set_current_block(else_bb);
+                        self.builder.push_instr(IrInstr::Br { target: merge_bb, args: vec![default_val] }, None);
+                        let merge_result = self.builder.add_block_param(merge_bb, Some("nullcoal_res"), result_type.clone());
+                        self.builder.set_current_block(merge_bb);
+                        Ok((merge_result, result_type))
+                    }
+                    _ => {
+                        Ok((val, val_ty))
+                    }
+                }
+            }
+
+            AstExpr::MapLiteral { entries, span: _ } => {
+                // Create empty map, then call map_set for each pair.
+                let (key_ty, val_ty) = if let Some(IrType::Map(k, v)) = &self.binding_ty {
+                    (*k.clone(), *v.clone())
+                } else {
+                    // Infer from first entry if possible
+                    if let Some((k_expr, _v_expr)) = entries.first() {
+                        let k_ty = self.infer_ast_expr_type_simple(k_expr);
+                        let v_ty = self.infer_ast_expr_type_simple(&_v_expr);
+                        (k_ty, v_ty)
+                    } else {
+                        (IrType::Str, IrType::Scalar(DType::I64))
+                    }
+                };
+                let map_ty = IrType::Map(Box::new(key_ty.clone()), Box::new(val_ty.clone()));
+                let result = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::MapNew { result, key_ty: key_ty.clone(), val_ty: val_ty.clone() },
+                    Some(map_ty.clone()),
+                );
+                for (k, v) in entries {
+                    let (key_id, _) = self.lower_expr(&k)?;
+                    let (val_id, _) = self.lower_expr(&v)?;
+                    self.builder.push_instr(
+                        IrInstr::MapSet { map: result, key: key_id, value: val_id },
+                        None,
+                    );
+                }
+                Ok((result, map_ty))
+            }
+
+            AstExpr::Ref { expr, .. } => self.lower_expr(expr),
+            AstExpr::RefMut { expr, .. } => self.lower_expr(expr),
+            AstExpr::Deref { expr, .. } => self.lower_expr(expr),
+            AstExpr::Move { expr, .. } => self.lower_expr(expr),
+            AstExpr::Unsafe { body, .. } => self.lower_expr(body),
+            AstExpr::Splat { expr, .. } => self.lower_expr(expr),
+            AstExpr::MacroCall { name, .. } => {
+                return Err(crate::error::LowerError::Unsupported {
+                    detail: format!("unexpanded macro call '{}'", name.name),
+                    span: name.span,
+                });
+            }
+
+            AstExpr::TryCatch { body, catch_param, catch_body, span: _ } => {
+                let prev_catch = self.try_catch_catch_bb.take();
+                let prev_cont = self.try_catch_cont_bb.take();
+                let prev_param = self.try_catch_param.take();
+
+                let catch_bb = self.builder.create_block(Some("catch"));
+                let cont_bb = self.builder.create_block(Some("try_cont"));
+
+                self.try_catch_catch_bb = Some(catch_bb);
+                self.try_catch_cont_bb = Some(cont_bb);
+                self.try_catch_param = Some(catch_param.clone());
+
+                let (body_val, body_ty) = self.lower_expr(body)?;
+                if !self.builder.is_current_block_terminated() {
+                    self.builder.push_instr(IrInstr::Br { target: cont_bb, args: vec![body_val] }, None);
+                }
+
+                self.builder.set_current_block(catch_bb);
+                let catch_param_val = self.builder.add_block_param(catch_bb, Some(catch_param), IrType::Infer);
+                self.scope.insert(catch_param.clone(), (catch_param_val, IrType::Infer));
+                let (catch_val, _catch_ty) = self.lower_expr(catch_body)?;
+                if !self.builder.is_current_block_terminated() {
+                    self.builder.push_instr(IrInstr::Br { target: cont_bb, args: vec![catch_val] }, None);
+                }
+
+                self.builder.set_current_block(cont_bb);
+                let result = self.builder.add_block_param(cont_bb, Some("try_result"), body_ty.clone());
+
+                self.try_catch_catch_bb = prev_catch;
+                self.try_catch_cont_bb = prev_cont;
+                self.try_catch_param = prev_param;
+
+                Ok((result, body_ty))
+            }
+
+            AstExpr::Raise { effect_name, args, span: _ } => {
+                let mut lowered_args = Vec::new();
+                let mut arg_tys = Vec::new();
+                for a in args {
+                    let (v, ty) = self.lower_expr(a)?;
+                    lowered_args.push(v);
+                    arg_tys.push(ty);
+                }
+                let ret_ty = self.module.extern_fns.iter()
+                    .find(|ef| ef.name == *effect_name)
+                    .map(|ef| ef.ret_ty.clone())
+                    .unwrap_or(IrType::Infer);
+                let result = self.builder.fresh_value();
+                self.builder.push_instr(IrInstr::CallExtern {
+                    result: Some(result),
+                    name: effect_name.clone(),
+                    args: lowered_args,
+                    ret_ty: ret_ty.clone(),
+                }, Some(ret_ty.clone()));
+                Ok((result, ret_ty))
+            }
         }
     }
 
@@ -2210,18 +3516,21 @@ impl<'m> Lowerer<'m> {
                 ty: param_ty,
             });
         }
-        // If the handler declares a resume continuation, add a leading block
-        // param to hold the continuation value. Use a type that maps to `ptr`
-        // in LLVM IR (WeakRef always maps to ptr).
-        if let Some(ref rp) = arm.resume_param {
-            lifted_params.insert(
-                0,
-                Param {
-                    name: rp.name.clone(),
-                    ty: IrType::WeakRef(Box::new(IrType::Infer)),
-                },
-            );
-        }
+        // Always add a leading block param for the continuation pointer.
+        // For has_resume arms, this is named after the resume param.
+        // For non-resume arms, this is an unnamed "__cont" param (ignored).
+        let cont_param_name = if let Some(ref rp) = arm.resume_param {
+            rp.name.clone()
+        } else {
+            "__cont".to_string()
+        };
+        lifted_params.insert(
+            0,
+            Param {
+                name: cont_param_name.clone(),
+                ty: IrType::WeakRef(Box::new(IrType::Infer)),
+            },
+        );
 
         let temp_ret_ty = IrType::Infer;
         let temp_builder = IrFunctionBuilder::new(&fn_name, lifted_params.clone(), temp_ret_ty);
@@ -2274,6 +3583,127 @@ impl<'m> Lowerer<'m> {
             num_args: arm.params.len(),
             has_resume: arm.resume_param.is_some(),
         })
+    }
+
+    /// Try to evaluate a `const def` function at compile time.
+    /// Returns `Some(result)` if all arguments are integer/float/bool literals
+    /// and the body is a simple expression (arithmetic, if/else, etc.).
+    /// Returns `None` if evaluation fails (non-literal args, unsupported body, etc.).
+    fn try_eval_const_fn(
+        &self,
+        func: &crate::parser::ast::AstFunction,
+        args: &[AstExpr],
+    ) -> Option<i64> {
+        // All arguments must be compile-time known literals.
+        let mut params: HashMap<String, i64> = HashMap::new();
+        for (param, arg) in func.params.iter().zip(args.iter()) {
+            let val = match arg {
+                AstExpr::IntLit { value, .. } => *value,
+                AstExpr::FloatLit { value, .. } => value.to_bits() as i64,
+                AstExpr::BoolLit { value, .. } => if *value { 1 } else { 0 },
+                _ => return None,
+            };
+            params.insert(param.name.name.clone(), val);
+        }
+
+        self.eval_const_block(&func.body.stmts, &params)
+    }
+
+    /// Evaluate a block of statements at compile time, returning the value of
+    /// the final expression statement.
+    fn eval_const_block(
+        &self,
+        stmts: &[crate::parser::ast::AstStmt],
+        params: &HashMap<String, i64>,
+    ) -> Option<i64> {
+        let mut locals: HashMap<String, i64> = params.clone();
+        for stmt in stmts {
+            match stmt {
+                crate::parser::ast::AstStmt::Let { name, init, .. } => {
+                    let val = self.eval_const_expr(init, &locals)?;
+                    locals.insert(name.name.clone(), val);
+                }
+                crate::parser::ast::AstStmt::Expr(expr) => {
+                    return self.eval_const_expr(expr, &locals);
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    /// Evaluate a simple expression at compile time.
+    fn eval_const_expr(
+        &self,
+        expr: &AstExpr,
+        locals: &HashMap<String, i64>,
+    ) -> Option<i64> {
+        match expr {
+            AstExpr::IntLit { value, .. } => Some(*value),
+            AstExpr::FloatLit { value, .. } => Some(value.to_bits() as i64),
+            AstExpr::BoolLit { value, .. } => Some(if *value { 1 } else { 0 }),
+            AstExpr::Ident(name) => locals.get(name.name.as_str()).copied(),
+            AstExpr::BinOp { op, lhs, rhs, .. } => {
+                let l = self.eval_const_expr(lhs, locals)?;
+                let r = self.eval_const_expr(rhs, locals)?;
+                match op {
+                    crate::parser::ast::AstBinOp::Add => Some(l.wrapping_add(r)),
+                    crate::parser::ast::AstBinOp::Sub => Some(l.wrapping_sub(r)),
+                    crate::parser::ast::AstBinOp::Mul => Some(l.wrapping_mul(r)),
+                    crate::parser::ast::AstBinOp::Div => {
+                        if r == 0 { return None; }
+                        Some(l.wrapping_div(r))
+                    }
+                    crate::parser::ast::AstBinOp::Mod => {
+                        if r == 0 { return None; }
+                        Some(l.wrapping_rem(r))
+                    }
+                    crate::parser::ast::AstBinOp::CmpEq => Some(if l == r { 1 } else { 0 }),
+                    crate::parser::ast::AstBinOp::CmpNe => Some(if l != r { 1 } else { 0 }),
+                    crate::parser::ast::AstBinOp::CmpLt => Some(if l < r { 1 } else { 0 }),
+                    crate::parser::ast::AstBinOp::CmpLe => Some(if l <= r { 1 } else { 0 }),
+                    crate::parser::ast::AstBinOp::CmpGt => Some(if l > r { 1 } else { 0 }),
+                    crate::parser::ast::AstBinOp::CmpGe => Some(if l >= r { 1 } else { 0 }),
+                    crate::parser::ast::AstBinOp::And => Some(if l != 0 && r != 0 { 1 } else { 0 }),
+                    crate::parser::ast::AstBinOp::Or => Some(if l != 0 || r != 0 { 1 } else { 0 }),
+                }
+            }
+            AstExpr::UnaryOp { op, expr, .. } => {
+                let v = self.eval_const_expr(expr, locals)?;
+                match op {
+                    crate::parser::ast::AstUnaryOp::Neg => Some(v.wrapping_neg()),
+                    crate::parser::ast::AstUnaryOp::Not => Some(if v == 0 { 1 } else { 0 }),
+                }
+            }
+            AstExpr::If { cond, then_block, else_block, .. } => {
+                let c = self.eval_const_expr(cond, locals)?;
+                if c != 0 {
+                    self.eval_const_block(&then_block.stmts, locals)
+                } else if let Some(eb) = else_block {
+                    self.eval_const_block(&eb.stmts, locals)
+                } else {
+                    None
+                }
+            }
+            AstExpr::Block(block) => {
+                let mut block_locals = locals.clone();
+                for stmt in &block.stmts {
+                    match stmt {
+                        crate::parser::ast::AstStmt::Let { name, init, .. } => {
+                            let val = self.eval_const_expr(init, &block_locals)?;
+                            block_locals.insert(name.name.clone(), val);
+                        }
+                        _ => return None,
+                    }
+                }
+                if let Some(ref result_expr) = block.tail {
+                    self.eval_const_expr(result_expr, &block_locals)
+                } else {
+                    Some(0)
+                }
+            }
+            _ => None,
+        }
     }
 
     /// Lowers a function call. Handles the built-in `einsum` intrinsic specially.
@@ -2339,6 +3769,42 @@ impl<'m> Lowerer<'m> {
             return Ok((dummy, dummy_ty));
         }
 
+        // Built-in: task_group() → TaskGroupNew
+        if callee.name == "task_group" {
+            let result = self.builder.fresh_value();
+            self.builder
+                .push_instr(IrInstr::TaskGroupNew { result }, Some(IrType::TaskGroup));
+            return Ok((result, IrType::TaskGroup));
+        }
+
+        // Built-in: task_group_join(tg) → TaskGroupJoin
+        if callee.name == "task_group_join" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "task_group_join() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (group_val, _) = self.lower_expr(&args[0])?;
+            self.builder
+                .push_instr(IrInstr::TaskGroupJoin { group: group_val }, None);
+            return Ok((self.builder.fresh_value(), IrType::Scalar(DType::I64)));
+        }
+
+        // Built-in: task_group_cancel(tg) → TaskGroupCancel
+        if callee.name == "task_group_cancel" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "task_group_cancel() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (group_val, _) = self.lower_expr(&args[0])?;
+            self.builder
+                .push_instr(IrInstr::TaskGroupCancel { group: group_val }, None);
+            return Ok((self.builder.fresh_value(), IrType::Scalar(DType::I64)));
+        }
+
         // Built-in: channel() → ChanNew
         if callee.name == "channel" {
             let elem_ty = if let Some(IrType::Chan(inner)) = &self.binding_ty {
@@ -2367,8 +3833,8 @@ impl<'m> Lowerer<'m> {
             return Ok((result, chan_ty));
         }
 
-        // Built-in: send(ch, v) → ChanSend (returns unit, use dummy i64 0)
-        if callee.name == "send" {
+        // Built-in: send(ch, v) / chan_send(ch, v) → ChanSend (returns unit, use dummy i64 0)
+        if callee.name == "send" || callee.name == "chan_send" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "send() requires exactly 2 arguments (channel, value)".into(),
@@ -3356,28 +4822,37 @@ impl<'m> Lowerer<'m> {
             return Ok((result, IrType::Str));
         }
 
-        // Built-in: list(elem_ty) → ListNew — create an empty list
-        // We infer the element type from the first push, or default to i64.
-        // Usage: list() creates list<i64> by default; type annotation determines actual type.
+        // Built-in: list() or list(a, b, c) → ListNew + optional ListPush
         if callee.name == "list" {
-            if !args.is_empty() {
-                return Err(LowerError::Unsupported {
-                    detail: "list() takes no arguments — it creates an empty dynamic list".into(),
-                    span,
-                });
-            }
-            // Use the declared binding type (from `val x: list<T> = list()`) if available.
-            // If no binding is provided, leave the element type as `Infer` so
-            // the HM inference pass can determine it from subsequent pushes.
+            // Determine element type from binding_ty annotation or first arg
             let elem_ty = if let Some(IrType::List(inner)) = &self.binding_ty {
                 *inner.clone()
+            } else if !args.is_empty() {
+                // Infer from first argument
+                let (_, first_ty) = self.lower_expr(&args[0])?;
+                first_ty
             } else {
                 IrType::Infer
             };
-            let result = self.builder.fresh_value();
+
             let list_ty = IrType::List(Box::new(elem_ty.clone()));
-            self.builder
-                .push_instr(IrInstr::ListNew { result, elem_ty }, Some(list_ty.clone()));
+
+            if args.is_empty() {
+                // Empty list
+                let result = self.builder.fresh_value();
+                self.builder.push_instr(IrInstr::ListNew { result, elem_ty }, Some(list_ty.clone()));
+                return Ok((result, list_ty));
+            }
+
+            // list(a, b, c) — create list and push each element
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(IrInstr::ListNew { result, elem_ty: elem_ty.clone() }, Some(list_ty.clone()));
+
+            for arg in args {
+                let (val, _) = self.lower_expr(arg)?;
+                self.builder.push_instr(IrInstr::ListPush { list: result, value: val }, None);
+            }
+
             return Ok((result, list_ty));
         }
 
@@ -3526,6 +5001,108 @@ impl<'m> Lowerer<'m> {
                 Some(elem_ty.clone()),
             );
             return Ok((result, elem_ty));
+        }
+
+        // Built-in: list_remove(lst, idx) → ListRemove → elem
+        if callee.name == "list_remove" {
+            if args.len() != 2 {
+                return Err(LowerError::Unsupported {
+                    detail: "list_remove() requires 2 arguments (list, index)".into(),
+                    span,
+                });
+            }
+            let (list, list_ty) = self.lower_expr(&args[0])?;
+            let (idx, _) = self.lower_expr(&args[1])?;
+            let elem_ty = if let IrType::List(inner) = &list_ty {
+                *inner.clone()
+            } else {
+                IrType::Scalar(DType::I64)
+            };
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::BuiltinCall {
+                    result,
+                    name: "list_remove".to_string(),
+                    args: vec![list, idx],
+                    result_ty: elem_ty.clone(),
+                },
+                Some(elem_ty.clone()),
+            );
+            return Ok((result, elem_ty));
+        }
+
+        // Built-in: list_insert(lst, idx, val) → ListInsert → i64 0 (side-effecting)
+        if callee.name == "list_insert" {
+            if args.len() != 3 {
+                return Err(LowerError::Unsupported {
+                    detail: "list_insert() requires 3 arguments (list, index, value)".into(),
+                    span,
+                });
+            }
+            let (list, _) = self.lower_expr(&args[0])?;
+            let (idx, _) = self.lower_expr(&args[1])?;
+            let (val, _) = self.lower_expr(&args[2])?;
+            let dummy_ty = IrType::Scalar(DType::I64);
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::BuiltinCall {
+                    result,
+                    name: "list_insert".to_string(),
+                    args: vec![list, idx, val],
+                    result_ty: dummy_ty.clone(),
+                },
+                Some(dummy_ty.clone()),
+            );
+            return Ok((result, dummy_ty));
+        }
+
+        // Built-in: array_to_list(arr) → convert [T; N] to list<T>
+        if callee.name == "array_to_list" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "array_to_list() requires exactly 1 argument (an array)".into(),
+                    span,
+                });
+            }
+            let (arr_val, arr_ty) = self.lower_expr(&args[0])?;
+            let (elem_ty, arr_len) = match &arr_ty {
+                IrType::Array { elem, len } => ((**elem).clone(), *len),
+                _ => {
+                    return Err(LowerError::Unsupported {
+                        detail: "array_to_list() requires an array argument".into(),
+                        span,
+                    });
+                }
+            };
+            let list_ty = IrType::List(Box::new(elem_ty.clone()));
+            let list = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::ListNew { result: list, elem_ty: elem_ty.clone() },
+                Some(list_ty.clone()),
+            );
+            for i in 0..arr_len {
+                let idx = self.builder.fresh_value();
+                let idx_ty = IrType::Scalar(DType::I64);
+                self.builder.push_instr(
+                    IrInstr::ConstInt { result: idx, value: i as i64, ty: idx_ty.clone() },
+                    Some(idx_ty.clone()),
+                );
+                let elem = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ArrayLoad {
+                        result: elem,
+                        array: arr_val,
+                        index: idx,
+                        elem_ty: elem_ty.clone(),
+                    },
+                    Some(elem_ty.clone()),
+                );
+                self.builder.push_instr(
+                    IrInstr::ListPush { list, value: elem },
+                    None,
+                );
+            }
+            return Ok((list, list_ty));
         }
 
         // Built-in: map() → MapNew — create an empty hash map (keys: str, values: i64 default)
@@ -4285,8 +5862,6 @@ impl<'m> Lowerer<'m> {
             );
             self.builder
                 .push_instr(IrInstr::Panic { msg: msg_val }, None);
-            self.builder
-                .push_instr(IrInstr::Return { values: vec![] }, None);
             // then_block: jump to merge
             self.builder.set_current_block(then_block);
             self.builder.push_instr(
@@ -5012,6 +6587,7 @@ impl<'m> Lowerer<'m> {
                 "regex_match" => Some(("regex_match", IrType::Scalar(DType::Bool))),
                 "regex_find_all" => Some(("regex_find_all", IrType::List(Box::new(IrType::Str)))),
                 "regex_replace" => Some(("regex_replace", IrType::Str)),
+                "regex_replace_all" => Some(("regex_replace_all", IrType::Str)),
                 // DateTime
                 "datetime_now" => Some(("datetime_now", IrType::Str)),
                 "datetime_timestamp" => Some(("datetime_timestamp", IrType::Scalar(DType::F64))),
@@ -5040,6 +6616,7 @@ impl<'m> Lowerer<'m> {
                 "select" => Some(("select", IrType::Scalar(DType::I64))),
                 "timeout" => Some(("timeout", IrType::Scalar(DType::Bool))),
                 "thread_count" => Some(("thread_count", IrType::Scalar(DType::I64))),
+                "par_map" => Some(("par_map", IrType::List(Box::new(IrType::Infer)))),
 
                 // ── Phase 105: Deque (double-ended queue) ──
                 "deque_new" => Some((
@@ -5209,6 +6786,17 @@ impl<'m> Lowerer<'m> {
                 "http_request" => Some(("http_request", IrType::Str)),
                 "http_post_json" => Some(("http_post_json", IrType::Str)),
 
+                // ── Weak references ──
+                "weak_ref" => Some(("weak_ref", IrType::WeakRef(Box::new(IrType::Infer)))),
+                "weak_alive" => Some(("weak_alive", IrType::Scalar(DType::Bool))),
+
+                // ── GC ──
+                "gc_stats" => Some(("gc_stats_map", IrType::Map(Box::new(IrType::Str), Box::new(IrType::Scalar(DType::I64))))),
+                "gc_collect" => Some(("gc_collect_call", IrType::Scalar(DType::Bool))),
+
+                // ── Map extras ──
+                "map_entries" => Some(("map_entries", IrType::List(Box::new(IrType::Str)))),
+
                 _ => None,
             };
 
@@ -5223,7 +6811,11 @@ impl<'m> Lowerer<'m> {
                 let (chan_val, chan_ty) = self.lower_expr(&args[0])?;
                 let elem_ty = match &chan_ty {
                     IrType::Chan(elem) => (**elem).clone(),
-                    _ => IrType::Infer,
+                    other => return Err(LowerError::TypeMismatch {
+                        expected: "channel".into(),
+                        found: format!("{}", other),
+                        span,
+                    }),
                 };
                 let ret_ty = IrType::Option(Box::new(elem_ty));
                 let result = self.builder.fresh_value();
@@ -5232,6 +6824,59 @@ impl<'m> Lowerer<'m> {
                         result,
                         name: "chan_try_recv".to_string(),
                         args: vec![chan_val],
+                        result_ty: ret_ty.clone(),
+                    },
+                    Some(ret_ty.clone()),
+                );
+                return Ok((result, ret_ty));
+            }
+
+            // Special handling: recv_timeout(ch, ms) — returns option<elem_ty>
+            if callee.name == "recv_timeout" {
+                if args.len() != 2 {
+                    return Err(LowerError::Unsupported {
+                        detail: "recv_timeout() requires 2 arguments (channel, timeout_ms)".into(),
+                        span,
+                    });
+                }
+                let (chan_val, chan_ty) = self.lower_expr(&args[0])?;
+                let (timeout_ms, _) = self.lower_expr(&args[1])?;
+                let elem_ty = self.chan_elem_types.get(&chan_val).cloned().unwrap_or_else(|| {
+                    match &chan_ty {
+                        IrType::Chan(elem) => (**elem).clone(),
+                        _ => IrType::Infer,
+                    }
+                });
+                let ret_ty = IrType::Option(Box::new(elem_ty));
+                let result = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::BuiltinCall {
+                        result,
+                        name: "recv_timeout".to_string(),
+                        args: vec![chan_val, timeout_ms],
+                        result_ty: ret_ty.clone(),
+                    },
+                    Some(ret_ty.clone()),
+                );
+                return Ok((result, ret_ty));
+            }
+
+            // Special handling: weak_upgrade(w) — returns option<Infer>
+            if callee.name == "weak_upgrade" {
+                if args.len() != 1 {
+                    return Err(LowerError::Unsupported {
+                        detail: "weak_upgrade() requires exactly 1 argument".into(),
+                        span,
+                    });
+                }
+                let (weak_val, _) = self.lower_expr(&args[0])?;
+                let ret_ty = IrType::Option(Box::new(IrType::Infer));
+                let result = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::BuiltinCall {
+                        result,
+                        name: "weak_upgrade".to_string(),
+                        args: vec![weak_val],
                         result_ty: ret_ty.clone(),
                     },
                     Some(ret_ty.clone()),
@@ -5259,6 +6904,44 @@ impl<'m> Lowerer<'m> {
             }
         }
 
+        // Const function call — evaluate at compile time if all args are literals.
+        if let Some(const_fn) = self.generic_fns.get(&callee_name).cloned() {
+            if const_fn.is_const {
+                if let Some(result_val) = self.try_eval_const_fn(&const_fn, args) {
+                    let ret_ty = self.resolve_ty(&const_fn.return_ty);
+                    match &ret_ty {
+                        IrType::Scalar(DType::I64) => {
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::ConstInt { result, value: result_val, ty: ret_ty.clone() },
+                                Some(ret_ty.clone()),
+                            );
+                            return Ok((result, ret_ty));
+                        }
+                        IrType::Scalar(DType::F64) => {
+                            let result = self.builder.fresh_value();
+                            let bits = result_val as u64;
+                            let float_val = f64::from_bits(bits);
+                            self.builder.push_instr(
+                                IrInstr::ConstFloat { result, value: float_val, ty: ret_ty.clone() },
+                                Some(ret_ty.clone()),
+                            );
+                            return Ok((result, ret_ty));
+                        }
+                        IrType::Scalar(DType::Bool) => {
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::ConstBool { result, value: result_val != 0 },
+                                Some(ret_ty.clone()),
+                            );
+                            return Ok((result, ret_ty));
+                        }
+                        _ => {} // Fall through to normal call for non-scalar return types
+                    }
+                }
+            }
+        }
+
         // Generic function call — monomorphize on demand.
         if let Some(generic_fn) = self.generic_fns.get(&callee_name).cloned() {
             // Lower each argument and collect concrete types.
@@ -5274,7 +6957,9 @@ impl<'m> Lowerer<'m> {
             // against the concrete argument type.  Only params whose type IS a
             // type parameter (e.g. `a: T`) contribute to the substitution;
             // params with concrete types (e.g. `cond: bool`) are skipped.
+            // Two-pass: Named first (direct params), then Generic (nested type args).
             let mut subs: HashMap<String, IrType> = HashMap::new();
+            // Pass 1: Direct Named type params (e.g. v: T).
             for (param, arg_ty) in generic_fn.params.iter().zip(arg_tys.iter()) {
                 if let crate::parser::ast::AstType::Named(n, _) = &param.ty {
                     let is_generic_param = generic_fn
@@ -5286,17 +6971,97 @@ impl<'m> Lowerer<'m> {
                     }
                 }
             }
-
-            // Resolve the concrete return type.
-            let resolve = |ty: &AstType| -> IrType {
-                if let AstType::Named(n, _) = ty {
-                    if let Some(c) = subs.get(n) {
-                        return c.clone();
+            // Pass 2: Extract type params from Generic AST types (e.g. h: MinHeap<T>).
+            // Only inserts if the type param wasn't already found in Pass 1.
+            for (param, arg_ty) in generic_fn.params.iter().zip(arg_tys.iter()) {
+                if let crate::parser::ast::AstType::Generic { name: gname, args: gargs, .. } = &param.ty {
+                    // Try matching from monomorphized struct name: "MinHeap__i64" → ["i64"]
+                    let concrete_name = match arg_ty {
+                        IrType::Struct { name, .. } => Some(name.as_str()),
+                        _ => None,
+                    };
+                    if let Some(s_name) = concrete_name {
+                        let suffix = format!("{}__", gname);
+                        if let Some(rest) = s_name.strip_prefix(&suffix) {
+                            let concrete_parts: Vec<&str> = rest.split('_').collect();
+                            for (ast_arg, concrete) in gargs.iter().zip(concrete_parts.iter()) {
+                                if let crate::parser::ast::AstType::Named(n, _) = ast_arg {
+                                    if subs.contains_key(n) { continue; }
+                                    let is_generic_param = generic_fn
+                                        .type_params
+                                        .iter()
+                                        .any(|p| matches!(p, crate::parser::ast::AstGenericParam::Type(name, _, _) | crate::parser::ast::AstGenericParam::Hkt(name, _, _, _) if name == n));
+                                    if is_generic_param {
+                                        let concrete_ir = lower_type_with_structs(
+                                            &crate::parser::ast::AstType::Named(concrete.to_string(), crate::parser::lexer::Span::at(0)),
+                                            self.module,
+                                        );
+                                        subs.insert(n.clone(), concrete_ir);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-                lower_type_with_structs(ty, self.module)
-            };
-            let mut concrete_ret = resolve(&generic_fn.return_ty);
+            }
+            // Fallback: walk AST param types recursively to extract type params.
+            // This handles cases where the struct name doesn't have a mangled suffix
+            // (e.g. arg is `Box { value: T_marker }` instead of `Box__i64`).
+            if subs.values().count() < generic_fn.type_params.len() {
+                fn extract_from_ast_type(
+                    ast_ty: &crate::parser::ast::AstType,
+                    concrete_ty: &IrType,
+                    type_params: &[String],
+                    subs: &mut HashMap<String, IrType>,
+                ) {
+                    match ast_ty {
+                        crate::parser::ast::AstType::Named(n, _) if type_params.contains(n) && !subs.contains_key(n) => {
+                            subs.insert(n.clone(), concrete_ty.clone());
+                        }
+                        crate::parser::ast::AstType::Generic { args: gargs, .. } => {
+                            if let IrType::Struct { fields, .. } = concrete_ty {
+                                for (garg, (_, fty)) in gargs.iter().zip(fields.iter()) {
+                                    extract_from_ast_type(garg, fty, type_params, subs);
+                                }
+                            }
+                        }
+                        crate::parser::ast::AstType::List(inner_ast, _) => {
+                            if let IrType::List(inner_concrete) = concrete_ty {
+                                extract_from_ast_type(inner_ast, inner_concrete, type_params, subs);
+                            }
+                        }
+                        crate::parser::ast::AstType::Map(k_ast, v_ast, _) => {
+                            if let IrType::Map(k_concrete, v_concrete) = concrete_ty {
+                                extract_from_ast_type(k_ast, k_concrete, type_params, subs);
+                                extract_from_ast_type(v_ast, v_concrete, type_params, subs);
+                            }
+                        }
+                        crate::parser::ast::AstType::Option(inner_ast, _) => {
+                            if let IrType::Option(inner_concrete) = concrete_ty {
+                                extract_from_ast_type(inner_ast, inner_concrete, type_params, subs);
+                            }
+                        }
+                        crate::parser::ast::AstType::Tuple(elems_ast, _) => {
+                            if let IrType::Tuple(elems_concrete) = concrete_ty {
+                                for (a, c) in elems_ast.iter().zip(elems_concrete.iter()) {
+                                    extract_from_ast_type(a, c, type_params, subs);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let type_param_names: Vec<String> = generic_fn.type_params.iter().filter_map(|p| {
+                    if let crate::parser::ast::AstGenericParam::Type(n, _, _) = p { Some(n.clone()) } else { None }
+                }).collect();
+                for (param2, arg_ty2) in generic_fn.params.iter().zip(arg_tys.iter()) {
+                    extract_from_ast_type(&param2.ty, arg_ty2, &type_param_names, &mut subs);
+                }
+            }
+
+            // Resolve the concrete return type using resolve_ast_type_with_subs
+            // which handles both Named("T") and Generic { name, args } with subs.
+            let mut concrete_ret = resolve_ast_type_with_subs(&generic_fn.return_ty, &subs, self.module);
             if generic_fn.is_async {
                 concrete_ret = IrType::Chan(Box::new(concrete_ret));
             }
@@ -5443,12 +7208,49 @@ impl<'m> Lowerer<'m> {
             });
         }
 
-        // Build argument list, filling in defaults for omitted trailing args.
+        // Build argument list, expanding splat args (`..expr`).
         let defaults = self.fn_defaults.get(&callee_name).cloned();
-        let mut arg_vals = Vec::with_capacity(args.len());
+        let mut arg_vals = Vec::new();
         for arg in args {
-            let (v, _) = self.lower_expr(arg)?;
-            arg_vals.push(v);
+            if let AstExpr::Splat { expr, .. } = arg {
+                let (arr_val, arr_ty) = self.lower_expr(expr)?;
+                let elem_ty;
+                let arr_len;
+                match &arr_ty {
+                    IrType::Array { elem, len } => {
+                        elem_ty = (**elem).clone();
+                        arr_len = *len;
+                    }
+                    _ => {
+                        return Err(LowerError::Unsupported {
+                            detail: "splat (`..expr`) requires an array expression with known size".into(),
+                            span: arg.span(),
+                        });
+                    }
+                }
+                for i in 0..arr_len {
+                    let idx_val = self.builder.fresh_value();
+                    let idx_ty = IrType::Scalar(DType::I64);
+                    self.builder.push_instr(
+                        IrInstr::ConstInt { result: idx_val, value: i as i64, ty: idx_ty.clone() },
+                        Some(idx_ty.clone()),
+                    );
+                    let elem_val = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::ArrayLoad {
+                            result: elem_val,
+                            array: arr_val,
+                            index: idx_val,
+                            elem_ty: elem_ty.clone(),
+                        },
+                        Some(elem_ty.clone()),
+                    );
+                    arg_vals.push(elem_val);
+                }
+            } else {
+                let (v, _) = self.lower_expr(arg)?;
+                arg_vals.push(v);
+            }
         }
         if let Some(ref defs) = defaults {
             for default_expr in defs.iter().skip(arg_vals.len()).flatten() {
@@ -5942,7 +7744,7 @@ impl<'m> Lowerer<'m> {
         // 3. Allocate one block per arm and a merge block.
         let mut arm_blocks: Vec<BlockId> = Vec::new();
         let mut default_block_opt: Option<BlockId> = None;
-        for arm in arms.iter() {
+        for (arm_idx, arm) in arms.iter().enumerate() {
             match &arm.pattern {
                 AstWhenPattern::Wildcard => {
                     // Wildcard becomes the default block
@@ -5961,8 +7763,20 @@ impl<'m> Lowerer<'m> {
                         ))),
                     );
                 }
+                AstWhenPattern::Or(_) => {
+                    // Or-pattern: allocate one shared body block
+                    arm_blocks.push(
+                        self.builder.create_block(Some(&format!(
+                            "when_or_{}",
+                            arm_idx
+                        ))),
+                    );
+                }
+                AstWhenPattern::Binding { .. } => {
+                    // Binding pattern: delegate to chain lowering
+                    return self.lower_when_as_chain(scrut_val, &scrut_ty, arms, span);
+                }
                 _ => {
-                    // This shouldn't happen - we filtered these out earlier
                     return Err(LowerError::Unsupported {
                         detail: format!("unexpected pattern in enum match: {:?}", arm.pattern),
                         span: arm.span,
@@ -5989,6 +7803,30 @@ impl<'m> Lowerer<'m> {
                                 span: arm.span,
                             })?;
                     switch_arms.push((variant_idx, arm_blocks[arm_idx]));
+                }
+                AstWhenPattern::Or(subs) => {
+                    // Or-pattern: each sub-pattern maps to the shared body block
+                    for sub in subs {
+                        if let AstWhenPattern::EnumVariant { variant_name, .. } = sub {
+                            let variant_idx =
+                                variants
+                                    .iter()
+                                    .position(|v| v == variant_name)
+                                    .ok_or_else(|| LowerError::Unsupported {
+                                        detail: format!(
+                                            "no variant '{}' in enum '{}'",
+                                            variant_name, enum_name
+                                        ),
+                                        span: arm.span,
+                                    })?;
+                            switch_arms.push((variant_idx, arm_blocks[arm_idx]));
+                        } else {
+                            return Err(LowerError::Unsupported {
+                                detail: format!("unsupported sub-pattern in or-pattern for enum match: {:?}", sub),
+                                span: arm.span,
+                            });
+                        }
+                    }
                 }
                 AstWhenPattern::Wildcard => {
                     // Skip - handled as default_block
@@ -6106,7 +7944,8 @@ impl<'m> Lowerer<'m> {
             .find(|a| matches!(a.pattern, AstWhenPattern::OptionSome { .. }));
         let none_arm = arms
             .iter()
-            .find(|a| matches!(a.pattern, AstWhenPattern::OptionNone));
+            .find(|a| matches!(a.pattern, AstWhenPattern::OptionNone))
+            .or_else(|| arms.iter().find(|a| matches!(a.pattern, AstWhenPattern::Wildcard)));
 
         if some_arm.is_none() && none_arm.is_none() {
             return Err(LowerError::Unsupported {
@@ -6288,7 +8127,8 @@ impl<'m> Lowerer<'m> {
             .find(|a| matches!(a.pattern, AstWhenPattern::ResultOk { .. }));
         let err_arm = arms
             .iter()
-            .find(|a| matches!(a.pattern, AstWhenPattern::ResultErr { .. }));
+            .find(|a| matches!(a.pattern, AstWhenPattern::ResultErr { .. }))
+            .or_else(|| arms.iter().find(|a| matches!(a.pattern, AstWhenPattern::Wildcard)));
 
         if ok_arm.is_none() && err_arm.is_none() {
             return Err(LowerError::Unsupported {
@@ -6739,6 +8579,55 @@ impl<'m> Lowerer<'m> {
         span: Span,
     ) -> Result<ValueId, LowerError> {
         match pattern {
+            AstWhenPattern::Binding { pattern: inner, .. } => {
+                self.emit_pattern_condition(scrut_val, scrut_ty, inner, enum_name_opt, enum_variants_opt, span)
+            }
+            AstWhenPattern::Struct { struct_name, fields, .. } => {
+                // Struct pattern: look up the struct def, extract field indices, check sub-patterns.
+                let bool_ty = IrType::Scalar(DType::Bool);
+                let def = self.module.struct_def(struct_name).ok_or_else(|| LowerError::Unsupported {
+                    detail: format!("unknown struct '{}' in pattern", struct_name),
+                    span,
+                })?;
+                let field_map: HashMap<String, (usize, IrType)> = def.iter().enumerate()
+                    .map(|(i, (n, t))| (n.clone(), (i, t.clone()))).collect();
+                let mut all_ok = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ConstBool { result: all_ok, value: true },
+                    Some(bool_ty.clone()),
+                );
+                for (field_name, sub_pat) in fields {
+                    let (field_idx, field_ty) = field_map.get(field_name).ok_or_else(|| LowerError::Unsupported {
+                        detail: format!("no field '{}' in struct '{}'", field_name, struct_name),
+                        span,
+                    })?;
+                    let field_val = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::GetField { result: field_val, base: scrut_val, field_index: *field_idx, result_ty: field_ty.clone() },
+                        Some(field_ty.clone()),
+                    );
+                    let sub_cond = match sub_pat {
+                        AstWhenPattern::EnumVariant { enum_name, .. } if enum_name.is_empty() => {
+                            let t = self.builder.fresh_value();
+                            self.builder.push_instr(IrInstr::ConstBool { result: t, value: true }, Some(bool_ty.clone()));
+                            t
+                        }
+                        AstWhenPattern::Wildcard => {
+                            let t = self.builder.fresh_value();
+                            self.builder.push_instr(IrInstr::ConstBool { result: t, value: true }, Some(bool_ty.clone()));
+                            t
+                        }
+                        other => self.emit_pattern_condition(field_val, field_ty, other, &None, &None, span)?,
+                    };
+                    let new_ok = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::BinOp { result: new_ok, op: BinOp::BitAnd, lhs: all_ok, rhs: sub_cond, ty: bool_ty.clone() },
+                        Some(bool_ty.clone()),
+                    );
+                    all_ok = new_ok;
+                }
+                Ok(all_ok)
+            }
             AstWhenPattern::Wildcard => {
                 // Always matches: emit `true`.
                 let result = self.builder.fresh_value();
@@ -6775,6 +8664,31 @@ impl<'m> Lowerer<'m> {
                 );
                 Ok(result)
             }
+            AstWhenPattern::FloatLit(f) => {
+                // scrutinee == f (float comparison)
+                let f64_ty = IrType::Scalar(DType::F64);
+                let lit_val = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ConstFloat {
+                        result: lit_val,
+                        value: *f,
+                        ty: f64_ty.clone(),
+                    },
+                    Some(f64_ty.clone()),
+                );
+                let result = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::BinOp {
+                        result,
+                        op: BinOp::CmpEq,
+                        lhs: scrut_val,
+                        rhs: lit_val,
+                        ty: f64_ty.clone(),
+                    },
+                    Some(IrType::Scalar(DType::Bool)),
+                );
+                Ok(result)
+            }
             AstWhenPattern::BoolLit(b) => {
                 // scrutinee == b
                 let lit_val = self.builder.fresh_value();
@@ -6792,7 +8706,7 @@ impl<'m> Lowerer<'m> {
                         op: BinOp::CmpEq,
                         lhs: scrut_val,
                         rhs: lit_val,
-                        ty: IrType::Scalar(DType::Bool),
+                        ty: scrut_ty.clone(),
                     },
                     Some(IrType::Scalar(DType::Bool)),
                 );
@@ -6975,7 +8889,16 @@ impl<'m> Lowerer<'m> {
                 );
                 Ok(result)
             }
-            AstWhenPattern::EnumVariant { variant_name, .. } => {
+            AstWhenPattern::EnumVariant { variant_name, enum_name, .. } => {
+                // If enum_name is empty, this is a plain identifier binding (always matches).
+                if enum_name.is_empty() {
+                    let result = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::ConstBool { result, value: true },
+                        Some(IrType::Scalar(DType::Bool)),
+                    );
+                    return Ok(result);
+                }
                 // GetVariantTag(scrutinee) == variant_idx_const
                 let variants =
                     enum_variants_opt
@@ -7121,16 +9044,143 @@ impl<'m> Lowerer<'m> {
                     res
                 }))
             }
-            AstWhenPattern::Slice { .. } => {
-                let res = self.builder.fresh_value();
+            AstWhenPattern::Slice { prefix, rest } => {
+                let bool_ty = IrType::Scalar(DType::Bool);
+                let i64_ty = IrType::Scalar(DType::I64);
+                let prefix_len = prefix.len() as i64;
+
+                // Get list length
+                let len_val = self.builder.fresh_value();
                 self.builder.push_instr(
-                    IrInstr::ConstBool {
-                        result: res,
-                        value: true,
-                    },
-                    Some(IrType::Scalar(DType::Bool)),
+                    IrInstr::ListLen { result: len_val, list: scrut_val },
+                    Some(i64_ty.clone()),
                 );
-                Ok(res)
+
+                // Check length: if no rest, len == prefix.len(); if rest, len >= prefix.len()
+                let prefix_len_val = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ConstInt {
+                        result: prefix_len_val,
+                        value: prefix_len,
+                        ty: i64_ty.clone(),
+                    },
+                    Some(i64_ty.clone()),
+                );
+                let len_check = if rest.is_some() {
+                    let cmp = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::BinOp {
+                            result: cmp,
+                            op: BinOp::CmpGe,
+                            lhs: len_val,
+                            rhs: prefix_len_val,
+                            ty: i64_ty.clone(),
+                        },
+                        Some(bool_ty.clone()),
+                    );
+                    cmp
+                } else {
+                    let cmp = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::BinOp {
+                            result: cmp,
+                            op: BinOp::CmpEq,
+                            lhs: len_val,
+                            rhs: prefix_len_val,
+                            ty: i64_ty.clone(),
+                        },
+                        Some(bool_ty.clone()),
+                    );
+                    cmp
+                };
+
+                // If no prefix elements, length check is the only condition
+                if prefix.is_empty() {
+                    return Ok(len_check);
+                }
+
+                // Restructure with CondBr: check length first, only then check elements.
+                // This avoids ListGet out-of-bounds panics when length is insufficient.
+                let check_elems_bb = self.builder.create_block(Some("check_elems"));
+                let no_match_bb = self.builder.create_block(Some("no_match"));
+                let merge_bb = self.builder.create_block(Some("merge"));
+
+                self.builder.push_instr(
+                    IrInstr::CondBr {
+                        cond: len_check,
+                        then_block: check_elems_bb,
+                        then_args: vec![],
+                        else_block: no_match_bb,
+                        else_args: vec![],
+                    },
+                    None,
+                );
+
+                // no_match: length was insufficient — false → merge
+                self.builder.set_current_block(no_match_bb);
+                let false_val = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ConstBool { result: false_val, value: false },
+                    Some(bool_ty.clone()),
+                );
+                self.builder.push_instr(
+                    IrInstr::Br { target: merge_bb, args: vec![false_val] },
+                    None,
+                );
+
+                // check_elems: length is sufficient — check each prefix element via ListGet
+                self.builder.set_current_block(check_elems_bb);
+                let elem_ty = match scrut_ty {
+                    IrType::List(inner) => (**inner).clone(),
+                    _ => IrType::Infer,
+                };
+
+                let mut all_ok = len_check;
+                for (i, sub) in prefix.iter().enumerate() {
+                    let idx_val = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::ConstInt {
+                            result: idx_val,
+                            value: i as i64,
+                            ty: i64_ty.clone(),
+                        },
+                        Some(i64_ty.clone()),
+                    );
+                    let elem_val = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::ListGet {
+                            result: elem_val,
+                            list: scrut_val,
+                            index: idx_val,
+                            elem_ty: elem_ty.clone(),
+                        },
+                        Some(elem_ty.clone()),
+                    );
+                    let sub_ok = self.emit_pattern_condition(
+                        elem_val, &elem_ty, sub, &None, &None, span,
+                    )?;
+                    let new_all = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::BinOp {
+                            result: new_all,
+                            op: BinOp::BitAnd,
+                            lhs: all_ok,
+                            rhs: sub_ok,
+                            ty: bool_ty.clone(),
+                        },
+                        Some(bool_ty.clone()),
+                    );
+                    all_ok = new_all;
+                }
+                self.builder.push_instr(
+                    IrInstr::Br { target: merge_bb, args: vec![all_ok] },
+                    None,
+                );
+
+                // merge: result = phi from no_match(false) or check_elems(all_ok)
+                let result = self.builder.add_block_param(merge_bb, Some("slice_match"), bool_ty.clone());
+                self.builder.set_current_block(merge_bb);
+                Ok(result)
             }
         }
     }
@@ -7145,6 +9195,10 @@ impl<'m> Lowerer<'m> {
         enum_variant_field_types: &[Vec<IrType>],
     ) -> Result<(), LowerError> {
         match pattern {
+            AstWhenPattern::Binding { name, pattern: inner, .. } => {
+                self.scope.insert(name.clone(), (scrut_val, scrut_ty.clone()));
+                self.bind_pattern_vars(scrut_val, scrut_ty, inner, enum_variants_opt, enum_variant_field_types)?;
+            }
             AstWhenPattern::OptionSome {
                 binding: Some(bind_name),
             } => {
@@ -7234,6 +9288,31 @@ impl<'m> Lowerer<'m> {
                     }
                 }
             }
+            AstWhenPattern::Struct { struct_name, fields, .. } => {
+                let def = self.module.struct_def(struct_name).cloned().unwrap_or_default();
+                let field_map: HashMap<String, (usize, IrType)> = def.into_iter().enumerate()
+                    .map(|(i, (n, t))| (n, (i, t))).collect();
+                for (field_name, sub_pat) in fields {
+                    if let Some((field_idx, field_ty)) = field_map.get(field_name) {
+                        let field_val = self.builder.fresh_value();
+                        self.builder.push_instr(
+                            IrInstr::GetField { result: field_val, base: scrut_val, field_index: *field_idx, result_ty: field_ty.clone() },
+                            Some(field_ty.clone()),
+                        );
+                        match sub_pat {
+                            AstWhenPattern::EnumVariant { enum_name, variant_name, .. } if enum_name.is_empty() => {
+                                self.scope.insert(variant_name.clone(), (field_val, field_ty.clone()));
+                            }
+                            AstWhenPattern::Binding { name, .. } => {
+                                self.scope.insert(name.clone(), (field_val, field_ty.clone()));
+                            }
+                            _ => {
+                                self.bind_pattern_vars(field_val, field_ty, sub_pat, enum_variants_opt, enum_variant_field_types)?;
+                            }
+                        }
+                    }
+                }
+            }
             // Tuple pattern: bind each element to its name (sub-patterns that are ident bindings).
             AstWhenPattern::Tuple(subs) => {
                 let tuple_elems = if let IrType::Tuple(ref elems) = scrut_ty {
@@ -7269,6 +9348,74 @@ impl<'m> Lowerer<'m> {
                     }
                 }
             }
+            // Slice pattern: bind prefix elements and optional rest sub-list.
+            AstWhenPattern::Slice { prefix, rest } => {
+                let i64_ty = IrType::Scalar(DType::I64);
+                let elem_ty = match scrut_ty {
+                    IrType::List(inner) => (**inner).clone(),
+                    _ => IrType::Infer,
+                };
+                // Bind each prefix element
+                for (i, sub) in prefix.iter().enumerate() {
+                    if let AstWhenPattern::EnumVariant {
+                        enum_name,
+                        variant_name,
+                        ..
+                    } = sub
+                    {
+                        if enum_name.is_empty() {
+                            let idx_val = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::ConstInt {
+                                    result: idx_val,
+                                    value: i as i64,
+                                    ty: i64_ty.clone(),
+                                },
+                                Some(i64_ty.clone()),
+                            );
+                            let elem_val = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::ListGet {
+                                    result: elem_val,
+                                    list: scrut_val,
+                                    index: idx_val,
+                                    elem_ty: elem_ty.clone(),
+                                },
+                                Some(elem_ty.clone()),
+                            );
+                            self.scope.insert(variant_name.clone(), (elem_val, elem_ty.clone()));
+                        }
+                    }
+                }
+                // Bind rest variable as sub-list via ListSlice(prefix.len, len)
+                if let Some(rest_name) = rest {
+                    let prefix_len_val = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::ConstInt {
+                            result: prefix_len_val,
+                            value: prefix.len() as i64,
+                            ty: i64_ty.clone(),
+                        },
+                        Some(i64_ty.clone()),
+                    );
+                    let len_val = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::ListLen { result: len_val, list: scrut_val },
+                        Some(i64_ty.clone()),
+                    );
+                    let rest_val = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::ListSlice {
+                            result: rest_val,
+                            list: scrut_val,
+                            start: prefix_len_val,
+                            end: len_val,
+                        },
+                        Some(scrut_ty.clone()),
+                    );
+                    self.scope.insert(rest_name.clone(), (rest_val, scrut_ty.clone()));
+                }
+            }
             // No bindings for wildcard, literals, none.
             _ => {}
         }
@@ -7280,6 +9427,7 @@ impl<'m> Lowerer<'m> {
         &mut self,
         cond: &AstExpr,
         body: &AstBlock,
+        label: &Option<String>,
         span: Span,
     ) -> Result<(), LowerError> {
         // Pre-scan body to find which variables get rebound.
@@ -7351,7 +9499,7 @@ impl<'m> Lowerer<'m> {
         self.builder.set_current_block(body_bb);
         let loop_var_names: Vec<String> = loop_vars.iter().map(|(n, _, _)| n.clone()).collect();
         self.loop_stack
-            .push((header_bb, merge_bb, loop_var_names.clone()));
+            .push((header_bb, merge_bb, header_bb, loop_var_names.clone(), label.clone(), false));
         let _ = self.lower_block(body)?;
         self.loop_stack.pop();
 
@@ -7396,6 +9544,8 @@ impl<'m> Lowerer<'m> {
         end: &AstExpr,
         body: &AstBlock,
         inclusive: bool,
+        step: Option<&AstExpr>,
+        label: &Option<String>,
         span: Span,
     ) -> Result<(), LowerError> {
         // 1. Evaluate start and end once in the current (pre-loop) block.
@@ -7509,7 +9659,7 @@ impl<'m> Lowerer<'m> {
         // 9. Body block.
         self.builder.set_current_block(body_bb);
         let loop_var_names: Vec<String> = loop_vars.iter().map(|(n, _, _)| n.clone()).collect();
-        self.loop_stack.push((header_bb, merge_bb, loop_var_names));
+        self.loop_stack.push((header_bb, merge_bb, header_bb, loop_var_names, label.clone(), true));
         // Use lower_block (not lower_block_stmts) so tail expressions like `print(x)` without `;`
         // are also evaluated as side-effecting statements.
         self.lower_block(body)?;
@@ -7522,22 +9672,27 @@ impl<'m> Lowerer<'m> {
                 .get(&var.name)
                 .map(|(v, _)| *v)
                 .unwrap_or(loop_var_param);
-            let one = self.builder.fresh_value();
-            self.builder.push_instr(
-                IrInstr::ConstInt {
-                    result: one,
-                    value: 1,
-                    ty: loop_var_ty.clone(),
-                },
-                Some(loop_var_ty.clone()),
-            );
+            let step_val = if let Some(step_expr) = step {
+                self.lower_expr(step_expr)?.0
+            } else {
+                let one = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::ConstInt {
+                        result: one,
+                        value: 1,
+                        ty: loop_var_ty.clone(),
+                    },
+                    Some(loop_var_ty.clone()),
+                );
+                one
+            };
             let incremented = self.builder.fresh_value();
             self.builder.push_instr(
                 IrInstr::BinOp {
                     result: incremented,
                     op: BinOp::Add,
                     lhs: cur_loop_var,
-                    rhs: one,
+                    rhs: step_val,
                     ty: loop_var_ty.clone(),
                 },
                 Some(loop_var_ty.clone()),
@@ -7729,7 +9884,7 @@ impl<'m> Lowerer<'m> {
 
         let loop_var_names: Vec<String> = loop_vars.iter().map(|(n, _, _)| n.clone()).collect();
         self.loop_stack
-            .push((header_bb, merge_bb, loop_var_names.clone()));
+            .push((header_bb, merge_bb, header_bb, loop_var_names.clone(), None, false));
         let _ = self.lower_block(body)?;
         self.loop_stack.pop();
 
@@ -12467,7 +14622,7 @@ impl<'m> Lowerer<'m> {
     }
 
     /// Lowers a `loop { body }` (infinite loop). `break` exits to merge_bb.
-    fn lower_loop(&mut self, body: &AstBlock, span: Span) -> Result<(), LowerError> {
+    fn lower_loop(&mut self, body: &AstBlock, label: &Option<String>, span: Span) -> Result<(), LowerError> {
         // Pre-scan body to find which variables get rebound inside the loop.
         let rebound = find_rebound_vars(body);
 
@@ -12519,18 +14674,18 @@ impl<'m> Lowerer<'m> {
             self.scope.insert(name.clone(), (param_val, ty.clone()));
         }
         self.builder.push_instr(
-            IrInstr::Br {
-                target: body_bb,
-                args: vec![],
-            },
-            None,
-        );
+                IrInstr::Br {
+                    target: body_bb,
+                    args: vec![],
+                },
+                None,
+            );
 
         // Lower body block.
         self.builder.set_current_block(body_bb);
         let loop_var_names: Vec<String> = loop_vars.iter().map(|(n, _, _)| n.clone()).collect();
         self.loop_stack
-            .push((header_bb, merge_bb, loop_var_names.clone()));
+            .push((header_bb, merge_bb, header_bb, loop_var_names.clone(), label.clone(), false));
         let _ = self.lower_block(body)?;
         self.loop_stack.pop();
 
@@ -12564,16 +14719,27 @@ impl<'m> Lowerer<'m> {
         Ok(())
     }
 
-    /// Lowers `break` — jumps to the merge block of the innermost loop.
-    fn lower_break(&mut self, span: Span) -> Result<(), LowerError> {
-        let (_, merge_bb, loop_var_names) =
+    /// Lowers `break [label]` — jumps to the merge block of the (optionally labeled) loop.
+    fn lower_break(&mut self, label: &Option<String>, span: Span) -> Result<(), LowerError> {
+        let (_, merge_bb, _, loop_var_names, _, _) = if let Some(target_label) = label {
+            self.loop_stack
+                .iter()
+                .rev()
+                .find(|(_, _, _, _, lbl, _)| lbl.as_ref() == Some(target_label))
+                .cloned()
+                .ok_or_else(|| LowerError::Unsupported {
+                    detail: format!("break with unknown label '{}'", target_label),
+                    span,
+                })?
+        } else {
             self.loop_stack
                 .last()
                 .cloned()
                 .ok_or_else(|| LowerError::Unsupported {
                     detail: "break outside of loop".into(),
                     span,
-                })?;
+                })?
+        };
 
         let mut args = Vec::with_capacity(loop_var_names.len());
         for name in &loop_var_names {
@@ -12596,35 +14762,82 @@ impl<'m> Lowerer<'m> {
         Ok(())
     }
 
-    /// Lowers `continue` — jumps to the header block of the innermost loop.
-    fn lower_continue(&mut self, span: Span) -> Result<(), LowerError> {
-        let (header_bb, _, loop_var_names) =
+    /// Lowers `continue [label]` — jumps to the continue target of the (optionally labeled) loop.
+    fn lower_continue(&mut self, label: &Option<String>, span: Span) -> Result<(), LowerError> {
+        let (header_bb, _, _, loop_var_names, _, is_for_range) = if let Some(target_label) = label {
+            self.loop_stack
+                .iter()
+                .rev()
+                .find(|(_, _, _, _, lbl, _)| lbl.as_ref() == Some(target_label))
+                .cloned()
+                .ok_or_else(|| LowerError::Unsupported {
+                    detail: format!("continue with unknown label '{}'", target_label),
+                    span,
+                })?
+        } else {
             self.loop_stack
                 .last()
                 .cloned()
                 .ok_or_else(|| LowerError::Unsupported {
                     detail: "continue outside of loop".into(),
                     span,
-                })?;
+                })?
+        };
 
-        let mut args = Vec::with_capacity(loop_var_names.len());
-        for name in &loop_var_names {
-            let Some((value, _)) = self.scope.get(name) else {
-                return Err(LowerError::Unsupported {
-                    detail: format!("missing loop variable '{}' in continue", name),
-                    span,
-                });
-            };
-            args.push(*value);
+        if is_for_range {
+            // For-range: increment the loop var inline, then branch to header with all
+            // updated values. Save and restore scope so the increment doesn't leak.
+            let saved_scope: Vec<_> = self.scope.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+
+            let (cur_loop_var, loop_var_ty) = self
+                .scope
+                .get(&loop_var_names[0])
+                .cloned()
+                .unwrap_or((ValueId(0), IrType::Scalar(DType::I64)));
+            let one = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::ConstInt { result: one, value: 1, ty: loop_var_ty.clone() },
+                Some(loop_var_ty.clone()),
+            );
+            let incremented = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::BinOp { result: incremented, op: BinOp::Add, lhs: cur_loop_var, rhs: one, ty: loop_var_ty.clone() },
+                Some(loop_var_ty.clone()),
+            );
+            self.scope.insert(loop_var_names[0].clone(), (incremented, loop_var_ty));
+
+            let mut args = Vec::with_capacity(loop_var_names.len());
+            for name in &loop_var_names {
+                let Some((value, _)) = self.scope.get(name) else {
+                    return Err(LowerError::Unsupported {
+                        detail: format!("missing loop variable '{}' in continue", name),
+                        span,
+                    });
+                };
+                args.push(*value);
+            }
+
+            // Restore scope so subsequent code isn't affected.
+            self.scope.clear();
+            for (k, v) in saved_scope {
+                self.scope.insert(k, v);
+            }
+
+            self.builder.push_instr(IrInstr::Br { target: header_bb, args }, None);
+        } else {
+            // While/loop: just pass current values of loop vars to header params.
+            let mut args = Vec::with_capacity(loop_var_names.len());
+            for name in &loop_var_names {
+                let Some((value, _)) = self.scope.get(name) else {
+                    return Err(LowerError::Unsupported {
+                        detail: format!("missing loop variable '{}' in continue", name),
+                        span,
+                    });
+                };
+                args.push(*value);
+            }
+            self.builder.push_instr(IrInstr::Br { target: header_bb, args }, None);
         }
-
-        self.builder.push_instr(
-            IrInstr::Br {
-                target: header_bb,
-                args,
-            },
-            None,
-        );
         Ok(())
     }
 
@@ -12660,8 +14873,8 @@ impl<'m> Lowerer<'m> {
             AstStmt::Expr(expr) => Some(expr.span().start.0),
             AstStmt::While { span, .. } => Some(span.start.0),
             AstStmt::Loop { span, .. } => Some(span.start.0),
-            AstStmt::Break { span } => Some(span.start.0),
-            AstStmt::Continue { span } => Some(span.start.0),
+            AstStmt::Break { span, .. } => Some(span.start.0),
+            AstStmt::Continue { span, .. } => Some(span.start.0),
             AstStmt::ForRange { span, .. } => Some(span.start.0),
             AstStmt::Assign { span, .. } => Some(span.start.0),
             AstStmt::LetTuple { span, .. } => Some(span.start.0),
@@ -12671,6 +14884,9 @@ impl<'m> Lowerer<'m> {
             AstStmt::ForEach { span, .. } => Some(span.start.0),
             AstStmt::MaskStmt { span, .. } => Some(span.start.0),
             AstStmt::HandleStmt { span, .. } => Some(span.start.0),
+            AstStmt::Defer { span, .. } => Some(span.start.0),
+            AstStmt::Select { span, .. } => Some(span.start.0),
+            AstStmt::Yield { span, .. } => Some(span.start.0),
         };
         if let Some(byte) = span_byte {
             self.builder.set_span_byte(byte);
@@ -12716,6 +14932,35 @@ impl<'m> Lowerer<'m> {
                 let (tuple_val, tuple_ty) = self.lower_expr(init)?;
                 let elem_types = match &tuple_ty {
                     IrType::Tuple(elems) => elems.clone(),
+                    IrType::Struct { fields, .. } => {
+                        // Struct destructuring by position: (a, b) = struct_val
+                        if names.len() != fields.len() {
+                            return Err(LowerError::Unsupported {
+                                detail: format!(
+                                    "struct has {} fields but destructuring binds {}",
+                                    fields.len(),
+                                    names.len()
+                                ),
+                                span: *span,
+                            });
+                        }
+                        for (i, name) in names.iter().enumerate() {
+                            let (_, elem_ty) = &fields[i];
+                            let elem_ty = elem_ty.clone();
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::GetField {
+                                    result,
+                                    base: tuple_val,
+                                    field_index: i,
+                                    result_ty: elem_ty.clone(),
+                                },
+                                Some(elem_ty.clone()),
+                            );
+                            self.scope.insert(name.name.clone(), (result, elem_ty));
+                        }
+                        return Ok(());
+                    }
                     _ => {
                         return Err(LowerError::Unsupported {
                             detail: format!("destructuring requires a tuple, got {}", tuple_ty),
@@ -12750,21 +14995,29 @@ impl<'m> Lowerer<'m> {
                 Ok(())
             }
             AstStmt::Expr(expr) => {
-                self.lower_expr(expr)?;
+                // If the expression is a block, lower it as a statement block (allow no tail).
+                // Otherwise, lower it as a normal expression.
+                if let AstExpr::Block(block) = expr.as_ref() {
+                    self.lower_block(block)?;
+                } else {
+                    self.lower_expr(expr)?;
+                }
                 Ok(())
             }
-            AstStmt::While { cond, body, span } => self.lower_while(cond, body, *span),
+            AstStmt::While { cond, body, span, label } => self.lower_while(cond, body, label, *span),
             AstStmt::ForRange {
                 var,
                 start,
                 end,
                 body,
                 inclusive,
+                step,
+                label,
                 span,
-            } => self.lower_for_range(var, start, end, body, *inclusive, *span),
-            AstStmt::Loop { body, span } => self.lower_loop(body, *span),
-            AstStmt::Break { span } => self.lower_break(*span),
-            AstStmt::Continue { span } => self.lower_continue(*span),
+            } => self.lower_for_range(var, start, end, body, *inclusive, step.as_deref(), label, *span),
+            AstStmt::Loop { body, span, label } => self.lower_loop(body, label, *span),
+            AstStmt::Break { label, span, .. } => self.lower_break(label, *span),
+            AstStmt::Continue { label, span, .. } => self.lower_continue(label, *span),
             AstStmt::Assign {
                 target,
                 op,
@@ -12938,6 +15191,11 @@ impl<'m> Lowerer<'m> {
                 } else {
                     vec![]
                 };
+                // Emit deferred expressions in reverse order (LIFO) before return.
+                let defers: Vec<_> = self.defer_stack.clone();
+                for expr in defers.iter().rev() {
+                    let _ = self.lower_expr(expr);
+                }
                 self.builder
                     .push_instr(IrInstr::Return { values: ret_values }, None);
                 // Create a new unreachable block so any subsequent instructions
@@ -13066,6 +15324,7 @@ impl<'m> Lowerer<'m> {
                 iter,
                 body,
                 span,
+                ..
             } => self.lower_foreach(var, iter, body, *span),
 
             AstStmt::ParFor {
@@ -13075,6 +15334,7 @@ impl<'m> Lowerer<'m> {
                 body,
                 inclusive,
                 span,
+                ..
             } => {
                 // Lambda-lift body into __par_body_N(var: i64, captures...) { body }.
                 let counter = self.lambda_counter.get();
@@ -13198,6 +15458,198 @@ impl<'m> Lowerer<'m> {
                 self.builder.push_instr(IrInstr::PopHandler, None);
 
                 let _ = return_ty;
+                Ok(())
+            }
+            AstStmt::Defer { expr, .. } => {
+                self.defer_stack.push(expr.as_ref().clone());
+                Ok(())
+            }
+            AstStmt::Yield { expr, .. } => {
+                self.lower_expr(&*expr)?;
+                Ok(())
+            }
+            AstStmt::Select { arms, default, .. } => {
+                let outer_scope = self.scope.clone();
+
+                // Collect rebound variable names from all arm bodies and default body.
+                let mut rebound_names: Vec<String> = Vec::new();
+                for arm in arms {
+                    collect_rebound_vars_in_block(&arm.body, &mut rebound_names, false);
+                }
+                if let Some(d) = default {
+                    collect_rebound_vars_in_block(d, &mut rebound_names, false);
+                }
+                rebound_names.retain(|name| outer_scope.contains_key(name));
+
+                let loop_bb = self.builder.create_block(Some("select_loop"));
+                let merge_bb = self.builder.create_block(Some("select_merge"));
+
+                // Add block params to merge_bb for rebound variables (phi merge).
+                let mut rebound_params: Vec<(String, ValueId, IrType)> = Vec::new();
+                for name in &rebound_names {
+                    let Some((_, ty)) = outer_scope.get(name) else { continue };
+                    let param = self.builder.add_block_param(merge_bb, Some(name), ty.clone());
+                    rebound_params.push((name.clone(), param, ty.clone()));
+                }
+
+                // Branch to the loop
+                self.builder.push_instr(
+                    IrInstr::Br { target: loop_bb, args: vec![] },
+                    None,
+                );
+
+                // -- loop_bb: call select(ch0, ch1, ...)
+                self.builder.set_current_block(loop_bb);
+                let channels: Vec<ValueId> = arms.iter().map(|arm| {
+                    let (v, _) = self.lower_expr(&arm.channel)?;
+                    Ok(v)
+                }).collect::<Result<Vec<_>, LowerError>>()?;
+
+                // Emit select(ch0, ch1, ...) builtin call
+                let select_result = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::BuiltinCall {
+                        result: select_result,
+                        name: "select".to_string(),
+                        args: channels.clone(),
+                        result_ty: IrType::Scalar(DType::I64),
+                    },
+                    Some(IrType::Scalar(DType::I64)),
+                );
+
+                // For each arm: check if idx == i, if so recv and execute
+                let next_check_bb = self.builder.create_block(Some("select_no_match"));
+                for (i, arm) in arms.iter().enumerate() {
+                    let idx_val = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::ConstInt {
+                            result: idx_val,
+                            value: i as i64,
+                            ty: IrType::Scalar(DType::I64),
+                        },
+                        Some(IrType::Scalar(DType::I64)),
+                    );
+                    let cmp_val = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::BinOp {
+                            result: cmp_val,
+                            op: BinOp::CmpEq,
+                            lhs: select_result,
+                            rhs: idx_val,
+                            ty: IrType::Scalar(DType::Bool),
+                        },
+                        Some(IrType::Scalar(DType::Bool)),
+                    );
+                    let arm_body_bb = self.builder.create_block(Some(&format!("select_arm_{}", i)));
+                    let fall_bb = if i < arms.len() - 1 {
+                        self.builder.create_block(Some(&format!("select_check_{}", i + 1)))
+                    } else {
+                        next_check_bb
+                    };
+                    self.builder.push_instr(
+                        IrInstr::CondBr {
+                            cond: cmp_val,
+                            then_block: arm_body_bb,
+                            else_block: fall_bb,
+                            then_args: vec![],
+                            else_args: vec![],
+                        },
+                        None,
+                    );
+
+                    // arm_body_bb: recv from channel and execute body
+                    self.builder.set_current_block(arm_body_bb);
+                    self.scope = outer_scope.clone();
+                    let recv_result = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::ChanRecv {
+                            result: recv_result,
+                            chan: channels[i],
+                            elem_ty: IrType::Infer,
+                        },
+                        Some(IrType::Infer),
+                    );
+                    // Bind the received value
+                    self.scope.insert(arm.binding.clone(), (recv_result, IrType::Infer));
+                    for stmt in &arm.body.stmts {
+                        self.lower_stmt(stmt)?;
+                    }
+                    if let Some(tail) = &arm.body.tail {
+                        self.lower_expr(tail)?;
+                    }
+                    if !self.builder.is_current_block_terminated() {
+                        let mut merge_args: Vec<ValueId> = Vec::new();
+                        for name in &rebound_names {
+                            let val = self.scope.get(name)
+                                .or_else(|| outer_scope.get(name))
+                                .map(|(v, _)| *v)
+                                .expect("rebound variable missing from select arm scope");
+                            merge_args.push(val);
+                        }
+                        self.builder.push_instr(
+                            IrInstr::Br { target: merge_bb, args: merge_args },
+                            None,
+                        );
+                    }
+
+                    // Set next check block
+                    if i < arms.len() - 1 {
+                        self.builder.set_current_block(fall_bb);
+                    }
+                }
+
+                // next_check_bb: no arm matched — check default
+                self.builder.set_current_block(next_check_bb);
+                self.scope = outer_scope.clone();
+                if let Some(default_block) = default {
+                    for stmt in &default_block.stmts {
+                        self.lower_stmt(stmt)?;
+                    }
+                    if let Some(tail) = &default_block.tail {
+                        self.lower_expr(tail)?;
+                    }
+                    if !self.builder.is_current_block_terminated() {
+                        let mut merge_args: Vec<ValueId> = Vec::new();
+                        for name in &rebound_names {
+                            let val = self.scope.get(name)
+                                .or_else(|| outer_scope.get(name))
+                                .map(|(v, _)| *v)
+                                .expect("rebound variable missing from select default scope");
+                            merge_args.push(val);
+                        }
+                        self.builder.push_instr(
+                            IrInstr::Br { target: merge_bb, args: merge_args },
+                            None,
+                        );
+                    }
+                } else {
+                    // No default: sleep(1) and loop back
+                    let ms_val = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::ConstInt {
+                            result: ms_val,
+                            value: 1,
+                            ty: IrType::Scalar(DType::I64),
+                        },
+                        Some(IrType::Scalar(DType::I64)),
+                    );
+                    let sleep_result = self.builder.fresh_value();
+                    self.builder.push_instr(
+                        IrInstr::SleepMs { result: sleep_result, ms: ms_val },
+                        Some(IrType::Scalar(DType::I64)),
+                    );
+                    self.builder.push_instr(
+                        IrInstr::Br { target: loop_bb, args: vec![] },
+                        None,
+                    );
+                }
+
+                // merge_bb: insert block params into scope for rebound variables
+                self.scope = outer_scope;
+                for (name, param, ty) in rebound_params {
+                    self.scope.insert(name, (param, ty));
+                }
+                self.builder.set_current_block(merge_bb);
                 Ok(())
             }
         }
@@ -13489,7 +15941,7 @@ fn lower_function_with_generics_and_subs(
         fn_sigs,
         lambda_counter,
         lifted_fns.clone(),
-        type_param_subs,
+        type_param_subs.clone(),
         generic_fns,
         mono_cache,
         mono_sigs,
@@ -13498,6 +15950,61 @@ fn lower_function_with_generics_and_subs(
         fn_defaults,
     );
     lowerer.current_return_ty = Some(return_ty.clone());
+
+    // Pre-register monomorphized struct defs for Generic types used in this function.
+    // Walk AST param types + return type, find Generic types, resolve with subs,
+    // and register the concrete struct def so field access works.
+    {
+        let mut local_defs = std::collections::HashMap::new();
+        // Helper: walk an AST type and register monomorphized struct defs.
+        fn register_generic_structs(
+            ast_ty: &crate::parser::ast::AstType,
+            subs: &HashMap<String, IrType>,
+            module: &IrModule,
+            local_defs: &mut HashMap<String, Vec<(String, IrType)>>,
+        ) {
+            if let crate::parser::ast::AstType::Generic { name, args, .. } = ast_ty {
+                let resolved_args: Vec<IrType> = args
+                    .iter()
+                    .map(|a| resolve_ast_type_with_subs(a, subs, module))
+                    .collect();
+                let mangled = format!("{}__{}", name, resolved_args.iter().map(mangle_ir_type).collect::<Vec<_>>().join("_"));
+                let resolved = resolve_brought_name(&mangled, module);
+                if module.struct_def(&resolved).is_none() && !local_defs.contains_key(&resolved) {
+                    // Compute concrete fields from the template.
+                    if let Some(template_fields) = module.struct_def(&resolve_brought_name(name, module)) {
+                        let concrete_fields: Vec<(String, IrType)> = template_fields
+                            .iter()
+                            .map(|(fn_, ft)| {
+                                let concrete_ft = resolve_concrete_field(ft, subs, module);
+                                (fn_.clone(), concrete_ft)
+                            })
+                            .collect();
+                        local_defs.insert(resolved, concrete_fields);
+                    }
+                }
+            }
+        }
+        for p in &func.params {
+            register_generic_structs(&p.ty, &type_param_subs, module, &mut local_defs);
+        }
+        register_generic_structs(&func.return_ty, &type_param_subs, module, &mut local_defs);
+        lowerer.local_struct_defs = local_defs;
+        // Also carry over defaults for any monomorphized structs registered above.
+        let mut local_defaults: HashMap<String, Vec<Option<crate::parser::ast::AstExpr>>> = HashMap::new();
+        for mangled_name in lowerer.local_struct_defs.keys() {
+            if module.struct_defaults.get(mangled_name).is_none() {
+                // Find the base name by matching known base names with __ suffix.
+                for (base_name, base_defaults) in &module.struct_defaults {
+                    if mangled_name == base_name || mangled_name.starts_with(&format!("{}__", base_name)) {
+                        local_defaults.insert(mangled_name.clone(), base_defaults.clone());
+                        break;
+                    }
+                }
+            }
+        }
+        lowerer.local_struct_defaults = local_defaults;
+    }
 
     // Register function parameters as entry block params.
     for (param, ir_param) in func.params.iter().zip(params.iter()) {
@@ -13519,6 +16026,11 @@ fn lower_function_with_generics_and_subs(
     let tail_val = lowerer.lower_block(&func.body)?;
 
     if !lowerer.builder.is_current_block_terminated() {
+        // Emit deferred expressions in reverse order (LIFO) before implicit return.
+        let defers: Vec<_> = lowerer.defer_stack.clone();
+        for expr in defers.iter().rev() {
+            let _ = lowerer.lower_expr(expr);
+        }
         let ret_values: Vec<ValueId> = match tail_val {
             Some((v, _)) => vec![v],
             None => vec![],
@@ -13533,6 +16045,7 @@ fn lower_function_with_generics_and_subs(
     let mut ir_func = lowerer.builder.build();
     // Propagate AST function attributes (e.g., "kernel", "differentiable") to IR.
     ir_func.attrs = func.attrs.iter().map(|a| ast_attr_to_ir_attr(a)).collect();
+    ir_func.is_const = func.is_const;
     let lifted = match std::rc::Rc::try_unwrap(lifted_fns) {
         Ok(cell) => cell.into_inner(),
         Err(rc) => rc.borrow().clone(),
@@ -13606,6 +16119,8 @@ pub fn lower_type(ty: &AstType) -> IrType {
             methods: Vec::new(),
         },
         AstType::MaskEffectType { .. } => IrType::Infer,
+        AstType::Ref(inner, _) => lower_type(inner),
+        AstType::RefMut(inner, _) => lower_type(inner),
     }
 }
 
@@ -13793,9 +16308,18 @@ pub fn lower_type_with_structs(ty: &AstType, module: &IrModule) -> IrType {
                     fields: fields.clone(),
                 }
             } else {
-                IrType::Struct {
-                    name: resolved_name,
-                    fields: Vec::new(),
+                // Fallback: use the generic struct template's registered field layout.
+                let resolved_base = resolve_brought_name(name, module);
+                if let Some(template_fields) = module.struct_def(&resolved_base) {
+                    IrType::Struct {
+                        name: resolved_name,
+                        fields: template_fields.clone(),
+                    }
+                } else {
+                    IrType::Struct {
+                        name: resolved_name,
+                        fields: Vec::new(),
+                    }
                 }
             }
         }
@@ -13812,6 +16336,8 @@ pub fn lower_type_with_structs(ty: &AstType, module: &IrModule) -> IrType {
             }
         }
         AstType::MaskEffectType { .. } => IrType::Infer,
+        AstType::Ref(inner, _) => lower_type_with_structs(inner, module),
+        AstType::RefMut(inner, _) => lower_type_with_structs(inner, module),
         other => lower_type(other),
     }
 }
@@ -14026,6 +16552,19 @@ fn collect_rebound_vars_in_stmt(stmt: &AstStmt, names: &mut Vec<String>, include
         }
         AstStmt::MaskStmt { body, .. } => collect_rebound_vars_in_block(body, names, false),
         AstStmt::HandleStmt { expr, .. } => collect_rebound_vars_in_expr(expr, names),
+        AstStmt::Defer { expr, .. } => collect_rebound_vars_in_expr(expr, names),
+        AstStmt::Yield { expr, .. } => {
+            collect_rebound_vars_in_expr(expr, names);
+        }
+        AstStmt::Select { arms, default, .. } => {
+            for arm in arms {
+                collect_rebound_vars_in_expr(&arm.channel, names);
+                collect_rebound_vars_in_block(&arm.body, names, false);
+            }
+            if let Some(d) = default {
+                collect_rebound_vars_in_block(d, names, false);
+            }
+        }
     }
 }
 
@@ -14071,9 +16610,12 @@ fn collect_rebound_vars_in_expr(expr: &AstExpr, names: &mut Vec<String>) {
                 collect_rebound_vars_in_expr(index, names);
             }
         }
-        AstExpr::StructLit { fields, .. } => {
+        AstExpr::StructLit { fields, spread, .. } => {
             for (_, value) in fields {
                 collect_rebound_vars_in_expr(value, names);
+            }
+            if let Some(s) = spread {
+                collect_rebound_vars_in_expr(s, names);
             }
         }
         AstExpr::FieldAccess { base, .. } | AstExpr::TupleIndex { base, .. } => {
@@ -14103,6 +16645,38 @@ fn collect_rebound_vars_in_expr(expr: &AstExpr, names: &mut Vec<String>) {
         }
         AstExpr::Mask { body, .. } => collect_rebound_vars_in_block(body, names, false),
         AstExpr::Handle { expr, .. } => collect_rebound_vars_in_expr(expr, names),
+        AstExpr::NullCoal { expr, default, .. } => {
+            collect_rebound_vars_in_expr(expr, names);
+            collect_rebound_vars_in_expr(default, names);
+        }
+        AstExpr::MapLiteral { entries, .. } => {
+            for (k, v) in entries {
+                collect_rebound_vars_in_expr(k, names);
+                collect_rebound_vars_in_expr(v, names);
+            }
+        }
+        AstExpr::Ref { expr, .. }
+        | AstExpr::RefMut { expr, .. }
+        | AstExpr::Deref { expr, .. }
+        | AstExpr::Move { expr, .. } => {
+            collect_rebound_vars_in_expr(expr, names);
+        }
+        AstExpr::Unsafe { body, .. } => collect_rebound_vars_in_expr(body, names),
+        AstExpr::Splat { expr, .. } => collect_rebound_vars_in_expr(expr, names),
+        AstExpr::MacroCall { args, .. } => {
+            for a in args {
+                collect_rebound_vars_in_expr(a, names);
+            }
+        }
+        AstExpr::TryCatch { body, catch_body, .. } => {
+            collect_rebound_vars_in_expr(body, names);
+            collect_rebound_vars_in_expr(catch_body, names);
+        }
+        AstExpr::Raise { args, .. } => {
+            for a in args {
+                collect_rebound_vars_in_expr(a, names);
+            }
+        }
     }
 }
 
@@ -14322,14 +16896,29 @@ pub fn resolve_ast_type_with_subs(
             let mangled_name = format!("{}__{}", base_name, resolved_args.iter().map(mangle_ir_type).collect::<Vec<_>>().join("_"));
             let resolved_name = resolve_brought_name(&mangled_name, module);
             if let Some(fields) = module.struct_def(&resolved_name) {
+                let resolved_fields: Vec<(String, IrType)> = fields.iter()
+                    .map(|(n, t)| (n.clone(), resolve_concrete_field(t, subs, module)))
+                    .collect();
                 IrType::Struct {
                     name: resolved_name,
-                    fields: fields.clone(),
+                    fields: resolved_fields,
                 }
             } else {
-                IrType::Struct {
-                    name: resolved_name,
-                    fields: Vec::new(),
+                // Fallback: use the generic struct template's registered field layout.
+                let resolved_base = resolve_brought_name(name, module);
+                if let Some(template_fields) = module.struct_def(&resolved_base) {
+                    let resolved_fields: Vec<(String, IrType)> = template_fields.iter()
+                        .map(|(n, t)| (n.clone(), resolve_concrete_field(t, subs, module)))
+                        .collect();
+                    IrType::Struct {
+                        name: resolved_name,
+                        fields: resolved_fields,
+                    }
+                } else {
+                    IrType::Struct {
+                        name: resolved_name,
+                        fields: Vec::new(),
+                    }
                 }
             }
         }
@@ -14347,6 +16936,32 @@ pub fn resolve_ast_type_with_subs(
         }
         AstType::MaskEffectType { .. } => IrType::Infer,
         other => lower_type(other),
+    }
+}
+
+pub(crate) fn resolve_concrete_field(ft: &IrType, subs: &HashMap<String, IrType>, module: &IrModule) -> IrType {
+    match ft {
+        IrType::List(inner) => IrType::List(Box::new(resolve_concrete_field(inner, subs, module))),
+        IrType::Map(k, v) => IrType::Map(
+            Box::new(resolve_concrete_field(k, subs, module)),
+            Box::new(resolve_concrete_field(v, subs, module)),
+        ),
+        IrType::Option(inner) => IrType::Option(Box::new(resolve_concrete_field(inner, subs, module))),
+        IrType::Chan(inner) => IrType::Chan(Box::new(resolve_concrete_field(inner, subs, module))),
+        IrType::Tuple(elems) => IrType::Tuple(
+            elems.iter().map(|e| resolve_concrete_field(e, subs, module)).collect(),
+        ),
+        IrType::Struct { name, fields } => {
+            if let Some(concrete) = subs.get(name) {
+                return concrete.clone();
+            }
+            let new_fields: Vec<(String, IrType)> = fields
+                .iter()
+                .map(|(n, t)| (n.clone(), resolve_concrete_field(t, subs, module)))
+                .collect();
+            IrType::Struct { name: name.clone(), fields: new_fields }
+        }
+        other => other.clone(),
     }
 }
 
@@ -14424,9 +17039,12 @@ pub fn collect_generic_apps_in_expr(expr: &AstExpr, apps: &mut std::collections:
             collect_generic_apps_in_expr(inner, apps);
             collect_generic_apps_in_type(ty, apps);
         }
-        AstExpr::StructLit { fields, .. } => {
+        AstExpr::StructLit { fields, spread, .. } => {
             for (_, f_expr) in fields {
                 collect_generic_apps_in_expr(f_expr, apps);
+            }
+            if let Some(s) = spread {
+                collect_generic_apps_in_expr(s, apps);
             }
         }
         AstExpr::FieldAccess { base, .. } => {
@@ -14477,6 +17095,38 @@ pub fn collect_generic_apps_in_expr(expr: &AstExpr, apps: &mut std::collections:
             collect_generic_apps_in_type(return_ty, apps);
             for arm in arms {
                 collect_generic_apps_in_expr(&arm.body, apps);
+            }
+        }
+        AstExpr::NullCoal { expr, default, .. } => {
+            collect_generic_apps_in_expr(expr, apps);
+            collect_generic_apps_in_expr(default, apps);
+        }
+        AstExpr::MapLiteral { entries, .. } => {
+            for (k, v) in entries {
+                collect_generic_apps_in_expr(k, apps);
+                collect_generic_apps_in_expr(v, apps);
+            }
+        }
+        AstExpr::Ref { expr, .. }
+        | AstExpr::RefMut { expr, .. }
+        | AstExpr::Deref { expr, .. }
+        | AstExpr::Move { expr, .. } => {
+            collect_generic_apps_in_expr(expr, apps);
+        }
+        AstExpr::Unsafe { body, .. } => collect_generic_apps_in_expr(body, apps),
+        AstExpr::Splat { expr, .. } => collect_generic_apps_in_expr(expr, apps),
+        AstExpr::MacroCall { args, .. } => {
+            for a in args {
+                collect_generic_apps_in_expr(a, apps);
+            }
+        }
+        AstExpr::TryCatch { body, catch_body, .. } => {
+            collect_generic_apps_in_expr(body, apps);
+            collect_generic_apps_in_expr(catch_body, apps);
+        }
+        AstExpr::Raise { args, .. } => {
+            for a in args {
+                collect_generic_apps_in_expr(a, apps);
             }
         }
     }
@@ -14541,6 +17191,21 @@ pub fn collect_generic_apps_in_stmt(stmt: &AstStmt, apps: &mut std::collections:
             collect_generic_apps_in_type(return_ty, apps);
             for arm in arms {
                 collect_generic_apps_in_expr(&arm.body, apps);
+            }
+        }
+        AstStmt::Defer { expr, .. } => {
+            collect_generic_apps_in_expr(expr, apps);
+        }
+        AstStmt::Yield { expr, .. } => {
+            collect_generic_apps_in_expr(expr, apps);
+        }
+        AstStmt::Select { arms, default, .. } => {
+            for arm in arms {
+                collect_generic_apps_in_expr(&arm.channel, apps);
+                collect_generic_apps_in_block(&arm.body, apps);
+            }
+            if let Some(d) = default {
+                collect_generic_apps_in_block(d, apps);
             }
         }
     }

@@ -39,6 +39,9 @@ pub enum Error {
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("{}", format_error_pretty("preprocessor error", _0))]
+    Preprocessor(String),
 }
 
 /// Formats a compiler error in a human-friendly style.
@@ -276,6 +279,7 @@ impl Error {
                 }
             }
             Error::Io(_) => "E0500",
+            Error::Preprocessor(_) => "E0501",
         }
     }
 }

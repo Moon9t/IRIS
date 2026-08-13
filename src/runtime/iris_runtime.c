@@ -362,6 +362,13 @@ void iris_panic(const char* msg) {
     abort();
 }
 
+void iris_bounds_check_abort(int64_t index, int64_t size) {
+    fprintf(stderr, "\x1b[1;31mbounds error\x1b[0m: index %ld out of bounds (size=%ld)\n",
+            (long)index, (long)size);
+    fflush(stderr);
+    abort();
+}
+
 /* iris_panic_at — like iris_panic but includes a compile-time source location
  * string (e.g. "in function 'foo'") embedded by the IRIS LLVM codegen. */
 void iris_panic_at(const char* msg, const char* location) {
@@ -414,6 +421,7 @@ char* iris_str_concat(const char* a, const char* b) {
 }
 
 int iris_str_eq(const char* a, const char* b)            { return strcmp(a, b) == 0; }
+int64_t iris_str_cmp(const char* a, const char* b)      { return (int64_t)strcmp(a, b); }
 int iris_str_contains(const char* s, const char* sub)    { return strstr(s, sub) != NULL; }
 int iris_str_starts_with(const char* s, const char* pfx) { return strncmp(s, pfx, strlen(pfx)) == 0; }
 int iris_str_ends_with(const char* s, const char* sfx) {
@@ -656,6 +664,67 @@ double  iris_clamp_f64(double x, double lo, double hi) {
 double  iris_pow_f64(double base, double exp) { return pow(base, exp); }
 double  iris_min_f64(double a, double b)     { return a < b ? a : b; }
 double  iris_max_f64(double a, double b)     { return a > b ? a : b; }
+
+// ---------------------------------------------------------------------------
+// Integer overflow-checked arithmetic
+// ---------------------------------------------------------------------------
+
+#if defined(__has_builtin) && __has_builtin(__builtin_add_overflow)
+
+int64_t iris_add_checked(int64_t a, int64_t b) {
+    int64_t result;
+    if (__builtin_add_overflow(a, b, &result)) {
+        fprintf(stderr, "iris: integer overflow in addition (%" PRId64 " + %" PRId64 ")\n", a, b);
+        abort();
+    }
+    return result;
+}
+int64_t iris_sub_checked(int64_t a, int64_t b) {
+    int64_t result;
+    if (__builtin_sub_overflow(a, b, &result)) {
+        fprintf(stderr, "iris: integer overflow in subtraction (%" PRId64 " - %" PRId64 ")\n", a, b);
+        abort();
+    }
+    return result;
+}
+int64_t iris_mul_checked(int64_t a, int64_t b) {
+    int64_t result;
+    if (__builtin_mul_overflow(a, b, &result)) {
+        fprintf(stderr, "iris: integer overflow in multiplication (%" PRId64 " * %" PRId64 ")\n", a, b);
+        abort();
+    }
+    return result;
+}
+
+#else
+
+#include <limits.h>
+
+int64_t iris_add_checked(int64_t a, int64_t b) {
+    if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) {
+        fprintf(stderr, "iris: integer overflow in addition\n");
+        abort();
+    }
+    return a + b;
+}
+int64_t iris_sub_checked(int64_t a, int64_t b) {
+    if ((b > 0 && a < INT64_MIN + b) || (b < 0 && a > INT64_MAX + b)) {
+        fprintf(stderr, "iris: integer overflow in subtraction\n");
+        abort();
+    }
+    return a - b;
+}
+int64_t iris_mul_checked(int64_t a, int64_t b) {
+    if (a == 0 || b == 0) return 0;
+    int64_t result = a * b;
+    if (a != result / b) {
+        fprintf(stderr, "iris: integer overflow in multiplication\n");
+        abort();
+    }
+    return result;
+}
+
+#endif
 
 // ---------------------------------------------------------------------------
 // Option
@@ -1425,6 +1494,45 @@ void iris_par_for(void (*fn)(int64_t, void*), int64_t start, int64_t end, void* 
     for (int64_t i = 0; i < n; i++) pthread_join(threads[i], NULL);
     free(threads);
 }
+
+typedef struct {
+    void* (*fn)(IrisVal*);
+    IrisVal* arg;
+    IrisVal* result;
+    pthread_mutex_t* mu;
+} ParMapArg;
+
+static void* par_map_worker(void* arg) {
+    ParMapArg* a = (ParMapArg*)arg;
+    a->result = a->fn(a->arg);
+    return NULL;
+}
+
+IrisList* iris_par_map(IrisList* list, void* (*fn)(IrisVal*)) {
+    int64_t n = iris_list_len(list);
+    IrisList* results = iris_list_new();
+    if (n <= 0) return results;
+    pthread_t* threads = xmalloc(sizeof(pthread_t) * (size_t)n);
+    ParMapArg* args = xmalloc(sizeof(ParMapArg) * (size_t)n);
+    /* Pre-size results list */
+    for (int64_t i = 0; i < n; i++) {
+        iris_list_push(results, iris_box_i64(0)); /* placeholder */
+    }
+    for (int64_t i = 0; i < n; i++) {
+        args[i].fn = fn;
+        args[i].arg = iris_list_get(list, i);
+        args[i].result = NULL;
+        pthread_create(&threads[i], NULL, par_map_worker, &args[i]);
+    }
+    for (int64_t i = 0; i < n; i++) {
+        pthread_join(threads[i], NULL);
+        /* Replace placeholder at index i with actual result */
+        ((IrisVal**)results->data)[i] = args[i].result;
+    }
+    free(threads);
+    free(args);
+    return results;
+}
 void iris_barrier(void) { /* no-op outside par_for; par_for already joins all */ }
 
 // ── TaskGroup ──────────────────────────────────────────────────────────
@@ -1476,6 +1584,7 @@ void iris_task_group_cancel(IrisTaskGroup* tg) {
 typedef struct {
     char* effect_name;
     char* fn_name;
+    void* handler_fn;
     int64_t num_args;
     int32_t has_resume;
 } HandlerArm;
@@ -1500,9 +1609,16 @@ void iris_push_handler_arm(const char* effect_name, const char* fn_name, int64_t
     HandlerFrame* frame = &handler_frames[handler_frame_count];
     frame->arms[handler_cur_narms].effect_name = strdup(effect_name);
     frame->arms[handler_cur_narms].fn_name = strdup(fn_name);
+    frame->arms[handler_cur_narms].handler_fn = NULL;
     frame->arms[handler_cur_narms].num_args = num_args;
     frame->arms[handler_cur_narms].has_resume = has_resume;
     handler_cur_narms++;
+}
+
+void iris_push_handler_fn(void* fn) {
+    if (handler_cur_narms == 0) return;
+    HandlerFrame* frame = &handler_frames[handler_frame_count];
+    frame->arms[handler_cur_narms - 1].handler_fn = fn;
 }
 
 void iris_push_handler_frame(void) {
@@ -1548,6 +1664,76 @@ void iris_resume_cont(Continuation* cont, int64_t value) {
     if (cont == NULL) return;
     cont->filled = 1;
     cont->value = value;
+}
+
+int32_t iris_handler_depth(void) {
+    return handler_frame_count;
+}
+
+void* iris_find_handler_fn(const char* name) {
+    HandlerArm* arm = find_handler_arm(name);
+    return arm ? arm->handler_fn : NULL;
+}
+
+int64_t iris_effect_dispatch_or_call(
+    const char* effect_name,
+    void* real_fn,
+    void* cont,
+    int nargs,
+    const int64_t* args)
+{
+    /* Fast path: no handlers active → call real extern directly. */
+    if (handler_frame_count == 0) goto call_real;
+
+    {
+        void* hfn = iris_find_handler_fn(effect_name);
+        if (hfn) {
+            /* Handler signature: i64 handler(void* cont, i64, i64, ...) */
+            typedef int64_t (*hfn_t)(void*, int64_t, int64_t, int64_t,
+                                     int64_t, int64_t, int64_t, int64_t);
+            hfn_t fn = (hfn_t)hfn;
+            int64_t r = 0;
+            switch (nargs) {
+                case 0: r = fn(cont, 0, 0, 0, 0, 0, 0, 0); break;
+                case 1: r = fn(cont, args[0], 0, 0, 0, 0, 0, 0); break;
+                case 2: r = fn(cont, args[0], args[1], 0, 0, 0, 0, 0); break;
+                case 3: r = fn(cont, args[0], args[1], args[2], 0, 0, 0, 0); break;
+                case 4: r = fn(cont, args[0], args[1], args[2], args[3], 0, 0, 0); break;
+                case 5: r = fn(cont, args[0], args[1], args[2], args[3], args[4], 0, 0); break;
+                case 6: r = fn(cont, args[0], args[1], args[2], args[3], args[4], args[5], 0); break;
+                default: r = fn(cont, args[0], args[1], args[2], args[3], args[4], args[5], args[6]); break;
+            }
+            /* If resume was triggered, return the continuation value. */
+            if (cont) {
+                Continuation* c = (Continuation*)cont;
+                if (c->filled) return c->value;
+            }
+            return r;
+        }
+    }
+
+call_real:
+    if (!real_fn) {
+        /* No handler and no real function — panic. */
+        fprintf(stderr, "error: no handler for effect '%s' and no real implementation\n", effect_name);
+        abort();
+    }
+    {
+        /* Real extern signature: i64 real_fn(i64, i64, i64, i64, i64, i64, i64) */
+        typedef int64_t (*efn_t)(int64_t, int64_t, int64_t, int64_t,
+                                 int64_t, int64_t, int64_t);
+        efn_t fn = (efn_t)real_fn;
+        switch (nargs) {
+            case 0: return fn(0, 0, 0, 0, 0, 0, 0);
+            case 1: return fn(args[0], 0, 0, 0, 0, 0, 0);
+            case 2: return fn(args[0], args[1], 0, 0, 0, 0, 0);
+            case 3: return fn(args[0], args[1], args[2], 0, 0, 0, 0);
+            case 4: return fn(args[0], args[1], args[2], args[3], 0, 0, 0);
+            case 5: return fn(args[0], args[1], args[2], args[3], args[4], 0, 0);
+            case 6: return fn(args[0], args[1], args[2], args[3], args[4], args[5], 0);
+            default: return fn(args[0], args[1], args[2], args[3], args[4], args[5], args[6]);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2673,49 +2859,112 @@ IRIS_EXPORT IrisList* iris_mlrt_onnx_run_multi(int64_t session, IrisList* inputs
     return iris_mlrt_run_multi(session, inputs_list, iris_onnx_session_run);
 }
 
-IRIS_EXPORT int64_t iris_mlrt_pytorch_load(const char* model_path) {
-#if defined(LIBTORCH_ENABLED)
-    return (int64_t)(intptr_t)iris_pytorch_load(model_path);
+/* ---------------------------------------------------------------------------
+ * LibTorch plugin (loaded at runtime).
+ *
+ * LibTorch exposes a C++ API, so unlike ONNX/TensorFlow it cannot be dlopen'd
+ * directly — the mangled symbols and C++ ABI make that impractical. Instead
+ * pytorch_shim.cpp (which already declares its entry points `extern "C"`) is
+ * built into a *separate* shared library that links LibTorch, and the core
+ * runtime resolves those four C symbols from it on first use.
+ *
+ * The upshot: iris_runtime.o never references LibTorch, so it stays identical
+ * whether or not the SDK is installed — which is what lets us ship one
+ * prebuilt runtime object per target.
+ * ------------------------------------------------------------------------- */
+
+typedef void*  (*fn_iris_pytorch_load)(const char*);
+typedef int    (*fn_iris_pytorch_run)(void*, IrisTensor**, size_t, IrisTensor***, size_t*);
+typedef void   (*fn_iris_pytorch_free)(void*);
+typedef double (*fn_iris_pytorch_train_step)(void*, IrisTensor**, size_t, IrisTensor**, size_t, double);
+
+static fn_iris_pytorch_load       p_iris_pytorch_load       = NULL;
+static fn_iris_pytorch_run        p_iris_pytorch_run        = NULL;
+static fn_iris_pytorch_free       p_iris_pytorch_free       = NULL;
+static fn_iris_pytorch_train_step p_iris_pytorch_train_step = NULL;
+
+/* Returns 1 when the LibTorch plugin is loaded and usable, 0 otherwise.
+ * Caches both outcomes so the warning is printed at most once. */
+static int iris_torch_available(void) {
+    static int state = -1; /* -1 unknown, 0 unavailable, 1 ready */
+    if (state >= 0) return state;
+
+    static const char* const candidates[] = {
+#ifdef _WIN32
+        "iris_torch_plugin.dll",
+#elif defined(__APPLE__)
+        "libiris_torch_plugin.dylib",
 #else
-    (void)model_path;
-    fprintf(stderr, "iris: libtorch support not enabled at build time\n");
-    return 0;
+        "libiris_torch_plugin.so",
 #endif
+    };
+
+    void* lib = NULL;
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
+#ifdef _WIN32
+        lib = (void*)LoadLibraryA(candidates[i]);
+#else
+        lib = dlopen(candidates[i], RTLD_LAZY);
+#endif
+        if (lib) break;
+    }
+
+    if (!lib) {
+        fprintf(stderr,
+                "iris: LibTorch plugin (iris_torch_plugin) not found. It must be "
+                "built once against your LibTorch install and placed next to the "
+                "binary or on the library search path. "
+                "See docs/ml-backends.md.\n");
+        state = 0;
+        return 0;
+    }
+
+#ifdef _WIN32
+#define IRIS_TORCH_SYM(n) (void*)GetProcAddress((HMODULE)lib, n)
+#else
+#define IRIS_TORCH_SYM(n) dlsym(lib, n)
+#endif
+    p_iris_pytorch_load       = (fn_iris_pytorch_load)      IRIS_TORCH_SYM("iris_pytorch_load");
+    p_iris_pytorch_run        = (fn_iris_pytorch_run)       IRIS_TORCH_SYM("iris_pytorch_run");
+    p_iris_pytorch_free       = (fn_iris_pytorch_free)      IRIS_TORCH_SYM("iris_pytorch_free");
+    p_iris_pytorch_train_step = (fn_iris_pytorch_train_step)IRIS_TORCH_SYM("iris_pytorch_train_step");
+#undef IRIS_TORCH_SYM
+
+    if (!p_iris_pytorch_load || !p_iris_pytorch_run ||
+        !p_iris_pytorch_free || !p_iris_pytorch_train_step) {
+        fprintf(stderr, "iris: LibTorch plugin is missing required symbols — "
+                        "rebuild it against this version of IRIS.\n");
+        state = 0;
+        return 0;
+    }
+
+    state = 1;
+    return 1;
+}
+
+IRIS_EXPORT int64_t iris_mlrt_pytorch_load(const char* model_path) {
+    if (!iris_torch_available()) return 0;
+    return (int64_t)(intptr_t)p_iris_pytorch_load(model_path);
 }
 
 IRIS_EXPORT int64_t iris_mlrt_pytorch_free(int64_t model) {
-#if defined(LIBTORCH_ENABLED)
-    iris_pytorch_free((void*)(intptr_t)model);
-#else
-    (void)model;
-#endif
+    if (!iris_torch_available()) return 0;
+    p_iris_pytorch_free((void*)(intptr_t)model);
     return 0;
 }
 
 IRIS_EXPORT IrisVal* iris_mlrt_pytorch_run(int64_t model, IrisVal* input) {
-#if defined(LIBTORCH_ENABLED)
-    return iris_mlrt_run_single(model, input, iris_pytorch_run);
-#else
-    (void)model;
-    (void)input;
-    fprintf(stderr, "iris: libtorch support not enabled at build time\n");
-    return iris_mlrt_empty_tensor_pair();
-#endif
+    if (!iris_torch_available()) return iris_mlrt_empty_tensor_pair();
+    return iris_mlrt_run_single(model, input, p_iris_pytorch_run);
 }
 
 IRIS_EXPORT IrisList* iris_mlrt_pytorch_run_multi(int64_t model, IrisList* inputs_list) {
-#if defined(LIBTORCH_ENABLED)
-    return iris_mlrt_run_multi(model, inputs_list, iris_pytorch_run);
-#else
-    (void)model;
-    (void)inputs_list;
-    fprintf(stderr, "iris: libtorch support not enabled at build time\n");
-    return iris_list_new();
-#endif
+    if (!iris_torch_available()) return iris_list_new();
+    return iris_mlrt_run_multi(model, inputs_list, p_iris_pytorch_run);
 }
 
 IRIS_EXPORT double iris_mlrt_pytorch_train_step(int64_t model, IrisList* inputs_list, IrisList* targets_list, double lr) {
-#if defined(LIBTORCH_ENABLED)
+    if (!iris_torch_available()) return 0.0;
     if (model == 0 || !inputs_list || !targets_list) {
         return 0.0;
     }
@@ -2733,7 +2982,7 @@ IRIS_EXPORT double iris_mlrt_pytorch_train_step(int64_t model, IrisList* inputs_
         targets_array[i] = iris_mlrt_tensor_from_pair(iris_list_get(targets_list, i));
     }
 
-    double loss = iris_pytorch_train_step((void*)(intptr_t)model, inputs_array, (size_t)n_inputs, targets_array, (size_t)n_targets, lr);
+    double loss = p_iris_pytorch_train_step((void*)(intptr_t)model, inputs_array, (size_t)n_inputs, targets_array, (size_t)n_targets, lr);
 
     for (int64_t i = 0; i < n_inputs; i++) {
         if (inputs_array[i]) iris_tensor_free(inputs_array[i]);
@@ -2745,11 +2994,6 @@ IRIS_EXPORT double iris_mlrt_pytorch_train_step(int64_t model, IrisList* inputs_
     free(targets_array);
 
     return loss;
-#else
-    (void)model; (void)inputs_list; (void)targets_list; (void)lr;
-    fprintf(stderr, "iris: libtorch support not enabled at build time\n");
-    return 0.0;
-#endif
 }
 
 IRIS_EXPORT int64_t iris_mlrt_tf_load(const char* model_path) {
@@ -3722,13 +3966,207 @@ IrisList* iris_set_to_list(IrisList* set) {
 /*  Regex (simple pattern matching — no external dependency)                */
 /* ======================================================================== */
 /* We implement a simple regex subset: exact match, ., *, +, ?, ^, $        */
+/* Extended: [...] char classes, (...) grouping, | alternation,              */
+/*           \d \w \s shorthand classes, [^...] negated classes             */
 /* For full regex, compiled code can use platform regex via FFI.             */
 
 static int simple_match(const char* pat, const char* str);
+static int match_here(const char* re, const char* text);
+
+static int match_char_class(const char* cc, char c, const char** end) {
+    /* cc points past the opening '['. Returns 1 if c matches, sets *end past ']'. */
+    int negated = 0;
+    if (*cc == '^') { negated = 1; cc++; }
+    int matched = 0;
+    while (*cc != '\0' && *cc != ']') {
+        char lo = *cc;
+        if (cc[1] == '-' && cc[2] != '\0' && cc[2] != ']') {
+            /* Range: lo-hi */
+            char hi = cc[2];
+            if (c >= lo && c <= hi) matched = 1;
+            cc += 3;
+            if (*cc == '-') { cc++; } /* skip trailing dash if present */
+        } else if (lo == '\\' && cc[1] != '\0') {
+            /* Escape inside class */
+            cc++;
+            char esc = *cc++;
+            if (esc == 'd' && isdigit((unsigned char)c)) matched = 1;
+            else if (esc == 'w' && (isalnum((unsigned char)c) || c == '_')) matched = 1;
+            else if (esc == 's' && (c == ' ' || c == '\t' || c == '\n' || c == '\r')) matched = 1;
+            else if (c == esc) matched = 1;
+        } else {
+            if (c == lo) matched = 1;
+            cc++;
+        }
+    }
+    if (*cc == ']') cc++;
+    *end = cc;
+    return negated ? !matched : matched;
+}
 
 static int match_here(const char* re, const char* text) {
     if (re[0] == '\0') return 1;
     if (re[0] == '$' && re[1] == '\0') return *text == '\0';
+
+    /* Grouping: (sub-pattern) */
+    if (re[0] == '(') {
+        /* Find matching ')' accounting for nested parens */
+        int depth = 1;
+        const char* p = re + 1;
+        while (*p != '\0' && depth > 0) {
+            if (*p == '(') depth++;
+            else if (*p == ')') depth--;
+            p++;
+        }
+        /* p now points past the matching ')' */
+        size_t group_len = (size_t)(p - re - 2); /* exclude parens */
+        char* group = (char*)xmalloc(group_len + 1);
+        memcpy(group, re + 1, group_len);
+        group[group_len] = '\0';
+
+        /* Check for alternation inside the group */
+        const char* alt = group;
+        int found_alt = 0;
+        int adepth = 0;
+        for (size_t i = 0; i < group_len; i++) {
+            if (group[i] == '(') adepth++;
+            else if (group[i] == ')') adepth--;
+            else if (group[i] == '|' && adepth == 0) {
+                found_alt = 1;
+                break;
+            }
+        }
+
+        if (found_alt) {
+            /* Split on | and try each alternative */
+            char* save = group;
+            char* alt_start = group;
+            int match_result = 0;
+            while (1) {
+                char* sep = NULL;
+                adepth = 0;
+                for (char* q = alt_start; *q != '\0'; q++) {
+                    if (*q == '(') adepth++;
+                    else if (*q == ')') adepth--;
+                    else if (*q == '|' && adepth == 0) { sep = q; break; }
+                }
+                if (sep) *sep = '\0';
+                /* Try matching alt_start then the rest of re */
+                /* Build combined pattern: alt + rest_of_re */
+                size_t alt_len = strlen(alt_start);
+                size_t rest_len = strlen(p);
+                char* combined = (char*)xmalloc(alt_len + rest_len + 1);
+                memcpy(combined, alt_start, alt_len);
+                memcpy(combined + alt_len, p, rest_len + 1);
+                if (simple_match(combined, text)) { match_result = 1; free(combined); break; }
+                free(combined);
+                if (sep) { alt_start = sep + 1; } else break;
+            }
+            free(save);
+            return match_result;
+        } else {
+            /* No alternation: try matching the group content then the rest */
+            size_t rest_len = strlen(p);
+            char* combined = (char*)xmalloc(group_len + rest_len + 1);
+            memcpy(combined, group, group_len);
+            memcpy(combined + group_len, p, rest_len + 1);
+            int result = simple_match(combined, text);
+            free(combined);
+            free(group);
+            return result;
+        }
+    }
+
+    /* Escape sequences: \d, \w, \s */
+    if (re[0] == '\\' && re[1] != '\0') {
+        char esc = re[1];
+        int match = 0;
+        if (esc == 'd') match = isdigit((unsigned char)*text);
+        else if (esc == 'w') match = (isalnum((unsigned char)*text) || *text == '_');
+        else if (esc == 's') match = (*text == ' ' || *text == '\t' || *text == '\n' || *text == '\r');
+        else match = (*text == esc);
+        const char* after_esc = re + 2;
+        if (after_esc[0] == '+' || after_esc[0] == '*' || after_esc[0] == '?') {
+            char q = after_esc[0];
+            after_esc++;
+            if (q == '+') {
+                /* One or more */
+                if (!match || *text == '\0') return 0;
+                text++;
+                /* Greedy: try matching rest first, then consume more */
+                do {
+                    if (match_here(after_esc, text)) return 1;
+                } while (*text != '\0' && ((esc == 'd' && isdigit((unsigned char)*text)) ||
+                                           (esc == 'w' && (isalnum((unsigned char)*text) || *text == '_')) ||
+                                           (esc == 's' && (*text == ' ' || *text == '\t' || *text == '\n' || *text == '\r')) ||
+                                           (esc != 'd' && esc != 'w' && esc != 's' && *text == esc)));
+                return 0;
+            } else if (q == '*') {
+                /* Zero or more */
+                do {
+                    if (match_here(after_esc, text)) return 1;
+                } while (*text != '\0' && ((esc == 'd' && isdigit((unsigned char)*text)) ||
+                                           (esc == 'w' && (isalnum((unsigned char)*text) || *text == '_')) ||
+                                           (esc == 's' && (*text == ' ' || *text == '\t' || *text == '\n' || *text == '\r')) ||
+                                           (esc != 'd' && esc != 'w' && esc != 's' && *text == esc)));
+                return 0;
+            } else {
+                /* ? : zero or one */
+                if (match && *text != '\0') {
+                    if (match_here(after_esc, text + 1)) return 1;
+                }
+                return match_here(after_esc, text);
+            }
+        }
+        if (match && text[0] != '\0')
+            return match_here(after_esc, text + 1);
+        return 0;
+    }
+
+    /* Character class: [...] */
+    if (re[0] == '[') {
+        const char* end;
+        int cm = match_char_class(re + 1, *text, &end);
+        if (*end == '+' || *end == '*' || *end == '?') {
+            char q = *end;
+            end++;
+            if (q == '+') {
+                /* One or more */
+                if (!cm || *text == '\0') return 0;
+                text++;
+                if (match_here(end, text)) return 1;
+                while (*text != '\0') {
+                    const char* dummy;
+                    if (match_char_class(re + 1, *text, &dummy)) {
+                        text++;
+                        if (match_here(end, text)) return 1;
+                    } else break;
+                }
+                return 0;
+            } else if (q == '*') {
+                /* Zero or more */
+                if (match_here(end, text)) return 1;
+                while (*text != '\0') {
+                    const char* dummy;
+                    if (match_char_class(re + 1, *text, &dummy)) {
+                        text++;
+                        if (match_here(end, text)) return 1;
+                    } else break;
+                }
+                return 0;
+            } else {
+                /* ? : zero or one */
+                if (cm && *text != '\0') {
+                    if (match_here(end, text + 1)) return 1;
+                }
+                return match_here(end, text);
+            }
+        }
+        if (cm && *text != '\0')
+            return match_here(end, text + 1);
+        return 0;
+    }
+
     if (re[1] == '*') {
         /* Match zero or more of re[0] */
         do {
@@ -3770,49 +4208,173 @@ int iris_regex_match(const char* pattern, const char* str) {
     return simple_match(pattern, str);
 }
 
+/*
+ * mpl: match prefix length — returns chars consumed, or -1.
+ */
+static int mpl(const char* re, const char* text) {
+    if (re[0] == '\0') return 0;
+    if (re[0] == '$' && re[1] == '\0') return (*text == '\0') ? 0 : -1;
+
+    /* Grouping: (sub-pattern) */
+    if (re[0] == '(') {
+        int depth = 1;
+        const char* p = re + 1;
+        while (*p != '\0' && depth > 0) {
+            if (*p == '(') depth++;
+            else if (*p == ')') { depth--; if (depth == 0) { p++; break; } }
+            p++;
+        }
+        size_t glen = (size_t)(p - re - 2);
+        char* group = (char*)xmalloc(glen + 1);
+        memcpy(group, re + 1, glen);
+        group[glen] = '\0';
+        const char* rest = p;
+
+        int found_alt = 0; int ad = 0;
+        for (size_t i = 0; i < glen; i++) {
+            if (group[i] == '(') ad++;
+            else if (group[i] == ')') ad--;
+            else if (group[i] == '|' && ad == 0) { found_alt = 1; break; }
+        }
+
+        int best = -1;
+        if (found_alt) {
+            char* save = group;
+            char* astart = group;
+            while (1) {
+                char* sep = NULL; ad = 0;
+                for (char* q = astart; *q != '\0'; q++) {
+                    if (*q == '(') ad++;
+                    else if (*q == ')') ad--;
+                    else if (*q == '|' && ad == 0) { sep = q; break; }
+                }
+                if (sep) *sep = '\0';
+                size_t al = strlen(astart); size_t rl = strlen(rest);
+                char* c = (char*)xmalloc(al + rl + 1);
+                memcpy(c, astart, al); memcpy(c + al, rest, rl + 1);
+                int r = mpl(c, text);
+                free(c);
+                if (r >= 0 && r > best) best = r;
+                if (sep) { *sep = '|'; astart = sep + 1; } else break;
+            }
+            free(save);
+        } else {
+            size_t rl = strlen(rest);
+            char* c = (char*)xmalloc(glen + rl + 1);
+            memcpy(c, group, glen); memcpy(c + glen, rest, rl + 1);
+            best = mpl(c, text);
+            free(c);
+            free(group);
+        }
+        return best;
+    }
+
+    /* Escape: \d, \w, \s */
+    if (re[0] == '\\' && re[1] != '\0') {
+        char esc = re[1]; const char* af = re + 2;
+        int m = 0;
+        if (esc == 'd') m = isdigit((unsigned char)*text);
+        else if (esc == 'w') m = (isalnum((unsigned char)*text) || *text == '_');
+        else if (esc == 's') m = (*text == ' ' || *text == '\t' || *text == '\n' || *text == '\r');
+        else m = (*text == esc);
+        /* helper macro for counting matching chars */
+        #define ESC_MATCH(ch) ((esc=='d' && isdigit((unsigned char)(ch))) || \
+            (esc=='w' && (isalnum((unsigned char)(ch)) || (ch)=='_')) || \
+            (esc=='s' && ((ch)==' '||(ch)=='\t'||(ch)=='\n'||(ch)=='\r')) || \
+            (esc!='d' && esc!='w' && esc!='s' && (ch)==esc))
+        if (af[0] == '+' || af[0] == '*' || af[0] == '?') {
+            char q = af[0]; const char* rest = af + 1;
+            if (q == '+') {
+                if (!m) return -1;
+                int cnt = 0; const char* t = text;
+                while (*t != '\0' && ESC_MATCH(*t)) { cnt++; t++; }
+                for (int i = cnt; i >= 1; i--) { int r = mpl(rest, text + i); if (r >= 0) return i + r; }
+                return -1;
+            } else if (q == '*') {
+                int cnt = 0; const char* t = text;
+                while (*t != '\0' && ESC_MATCH(*t)) { cnt++; t++; }
+                for (int i = cnt; i >= 0; i--) { int r = mpl(rest, text + i); if (r >= 0) return i + r; }
+                return -1;
+            } else {
+                if (m && *text != '\0') { int r = mpl(rest, text + 1); if (r >= 0) return 1 + r; }
+                return mpl(rest, text);
+            }
+        }
+        #undef ESC_MATCH
+        if (m && *text != '\0') { int r = mpl(af, text + 1); if (r >= 0) return 1 + r; }
+        return -1;
+    }
+
+    /* Character class: [...] */
+    if (re[0] == '[') {
+        const char* end;
+        int cm = match_char_class(re + 1, *text, &end);
+        if (*end == '+' || *end == '*' || *end == '?') {
+            char q = *end; const char* rest = end + 1;
+            if (q == '+') {
+                if (!cm) return -1;
+                int cnt = 0; const char* t = text;
+                while (*t != '\0') { const char* d; if (!match_char_class(re+1,*t,&d)) break; cnt++; t++; }
+                for (int i = cnt; i >= 1; i--) { int r = mpl(rest, text + i); if (r >= 0) return i + r; }
+                return -1;
+            } else if (q == '*') {
+                int cnt = 0; const char* t = text;
+                while (*t != '\0') { const char* d; if (!match_char_class(re+1,*t,&d)) break; cnt++; t++; }
+                for (int i = cnt; i >= 0; i--) { int r = mpl(rest, text + i); if (r >= 0) return i + r; }
+                return -1;
+            } else {
+                if (cm && *text != '\0') { int r = mpl(rest, text + 1); if (r >= 0) return 1 + r; }
+                return mpl(rest, text);
+            }
+        }
+        if (cm && *text != '\0') { int r = mpl(end, text + 1); if (r >= 0) return 1 + r; }
+        return -1;
+    }
+
+    /* Single char with quantifiers */
+    if (re[1] == '*') {
+        int cnt = 0; const char* t = text;
+        while (*t != '\0' && (re[0] == '.' || *t == re[0])) { cnt++; t++; }
+        for (int i = cnt; i >= 0; i--) { int r = mpl(re + 2, text + i); if (r >= 0) return i + r; }
+        return -1;
+    }
+    if (re[1] == '+') {
+        if (*text == '\0' || (re[0] != '.' && *text != re[0])) return -1;
+        int cnt = 0; const char* t = text;
+        while (*t != '\0' && (re[0] == '.' || *t == re[0])) { cnt++; t++; }
+        for (int i = cnt; i >= 1; i--) { int r = mpl(re + 2, text + i); if (r >= 0) return i + r; }
+        return -1;
+    }
+    if (re[1] == '?') {
+        if (*text != '\0' && (re[0] == '.' || *text == re[0])) {
+            int r = mpl(re + 2, text + 1); if (r >= 0) return 1 + r;
+        }
+        return mpl(re + 2, text);
+    }
+    if (*text != '\0' && (re[0] == '.' || *text == re[0])) {
+        int r = mpl(re + 1, text + 1); if (r >= 0) return 1 + r;
+    }
+    return -1;
+}
+
 IrisList* iris_regex_find_all(const char* pattern, const char* str) {
     IrisList* results = iris_list_new();
     if (!pattern || !str) return results;
-    /* For simple patterns, find all substrings matching */
-    size_t plen = strlen(pattern);
+    const char* pat = pattern;
+    if (pat[0] == '^') pat++;
     size_t slen = strlen(str);
-    /* Handle anchored patterns */
-    if (pattern[0] == '^') {
-        if (match_here(pattern + 1, str)) {
-            /* Find how many chars matched (greedy — take longest) */
-            for (size_t end = slen; end > 0; end--) {
-                char* sub = (char*)xmalloc(end + 1);
-                memcpy(sub, str, end); sub[end] = '\0';
-                if (match_here(pattern + 1, sub)) {
-                    iris_list_push(results, iris_box_str(sub));
-                    free(sub);
-                    break;
-                }
-                free(sub);
-            }
-        }
-        return results;
-    }
-    /* Unanchored: simple contains-based search for literal patterns */
-    /* For general patterns, find all non-overlapping occurrences */
-    for (size_t i = 0; i < slen; i++) {
-        if (match_here(pattern, str + i)) {
-            /* Find the end of the match */
-            size_t best_end = i + 1;
-            for (size_t end = slen; end > i; end--) {
-                /* Check if pattern matches str[i..end] */
-                char saved = 0;
-                char* mutable_str = (char*)(str + i);
-                /* Just take single char for now as simple heuristic */
-                best_end = i + 1;
-                break;
-            }
-            char* sub = (char*)xmalloc(best_end - i + 1);
-            memcpy(sub, str + i, best_end - i);
-            sub[best_end - i] = '\0';
-            iris_list_push(results, iris_box_str(sub));
-            free(sub);
-            i = best_end - 1; /* Skip past match */
+    size_t pos = 0;
+    while (pos < slen) {
+        int len = mpl(pat, str + pos);
+        if (len > 0) {
+            char* match = (char*)xmalloc(len + 1);
+            memcpy(match, str + pos, len);
+            match[len] = '\0';
+            iris_list_push(results, iris_box_str(match));
+            free(match);
+            pos += len;
+        } else {
+            pos++;
         }
     }
     return results;
@@ -3822,24 +4384,56 @@ char* iris_regex_replace(const char* pattern, const char* str, const char* repla
     if (!pattern || !str || !replacement) {
         char* e = (char*)xmalloc(1); e[0] = '\0'; return e;
     }
-    /* Simple implementation: use str_replace for literal patterns */
-    /* For regex, do character-by-character replacement of first match */
+    const char* pat = pattern[0] == '^' ? pattern + 1 : pattern;
     size_t slen = strlen(str);
     size_t rlen = strlen(replacement);
     size_t cap = slen + rlen + 64;
     char* out = (char*)xmalloc(cap);
     size_t olen = 0;
+    size_t pos = 0;
     int replaced = 0;
-    for (size_t i = 0; i < slen; i++) {
-        if (!replaced && match_here(pattern[0] == '^' ? pattern + 1 : pattern, str + i)) {
-            /* Replace at this position — skip one char of match, insert replacement */
+    while (pos < slen) {
+        if (!replaced) {
+            int len = mpl(pat, str + pos);
+            if (len > 0) {
+                while (olen + rlen + 1 > cap) { cap *= 2; out = (char*)realloc(out, cap); }
+                memcpy(out + olen, replacement, rlen);
+                olen += rlen;
+                pos += len;
+                replaced = 1;
+                continue;
+            }
+        }
+        if (olen + 2 > cap) { cap *= 2; out = (char*)realloc(out, cap); }
+        out[olen++] = str[pos];
+        pos++;
+    }
+    out[olen] = '\0';
+    return out;
+}
+
+char* iris_regex_replace_all(const char* pattern, const char* str, const char* replacement) {
+    if (!pattern || !str || !replacement) {
+        char* e = (char*)xmalloc(1); e[0] = '\0'; return e;
+    }
+    const char* pat = pattern[0] == '^' ? pattern + 1 : pattern;
+    size_t slen = strlen(str);
+    size_t rlen = strlen(replacement);
+    size_t cap = slen * 2 + rlen + 64;
+    char* out = (char*)xmalloc(cap);
+    size_t olen = 0;
+    size_t pos = 0;
+    while (pos < slen) {
+        int len = mpl(pat, str + pos);
+        if (len > 0) {
             while (olen + rlen + 1 > cap) { cap *= 2; out = (char*)realloc(out, cap); }
             memcpy(out + olen, replacement, rlen);
             olen += rlen;
-            replaced = 1;
+            pos += len;
         } else {
             if (olen + 2 > cap) { cap *= 2; out = (char*)realloc(out, cap); }
-            out[olen++] = str[i];
+            out[olen++] = str[pos];
+            pos++;
         }
     }
     out[olen] = '\0';
@@ -5994,5 +6588,91 @@ int32_t iris_task_group_join_timeout(IrisTaskGroup* tg, int64_t timeout_ms) {
     if (!tg) return 1;
     iris_task_group_join(tg);
     return 1;
+}
+
+// ---------------------------------------------------------------------------
+// New builtins (called via generic BuiltinCall codegen path)
+// ---------------------------------------------------------------------------
+
+int64_t iris_list_remove(IrisList* l, int64_t idx) {
+    if (idx < 0 || (size_t)idx >= l->len) {
+        fprintf(stderr, "iris: list_remove index %ld out of bounds (len=%zu)\n", (long)idx, l->len);
+        abort();
+    }
+    IrisVal* removed = l->data[idx];
+    for (size_t j = (size_t)idx; j + 1 < l->len; j++)
+        l->data[j] = l->data[j + 1];
+    l->len--;
+    return removed->i64;
+}
+
+int64_t iris_list_insert(IrisList* l, int64_t idx, IrisVal* val) {
+    if (idx < 0 || (size_t)idx > l->len) {
+        fprintf(stderr, "iris: list_insert index %ld out of bounds (len=%zu)\n", (long)idx, l->len);
+        abort();
+    }
+    if (l->len == l->cap) {
+        l->cap *= 2;
+        l->data = xrealloc(l->data, sizeof(IrisVal*) * l->cap);
+    }
+    for (size_t j = l->len; j > (size_t)idx; j--)
+        l->data[j] = l->data[j - 1];
+    if (val) iris_retain(val);
+    l->data[idx] = val;
+    l->len++;
+    return 0;
+}
+
+IrisVal* iris_map_entries(IrisVal* map_val) {
+    IrisMap* m = iris_unbox_map(map_val);
+    IrisList* entries = iris_list_new();
+    for (size_t b = 0; b < m->n_buckets; b++) {
+        for (IrisMapEntry* e = m->buckets[b]; e; e = e->next) {
+            IrisVal* key = iris_box_str(e->key);
+            IrisVal* pair = iris_make_struct(2, key, e->val);
+            iris_list_push(entries, pair);
+        }
+    }
+    return iris_box_list(entries);
+}
+
+IrisVal* iris_recv_timeout(IrisVal* chan_val, int64_t timeout_ms) {
+    IrisChannel* c = iris_unbox_chan(chan_val);
+    IrisOption* opt = iris_chan_recv_timeout(c, timeout_ms);
+    return (IrisVal*)opt;
+}
+
+void iris_chan_send_b(IrisVal* chan_val, IrisVal* val) {
+    IrisChannel* c = iris_unbox_chan(chan_val);
+    iris_chan_send(c, val);
+}
+
+IrisWeakRef* iris_weak_ref(IrisVal* val) {
+    return iris_weak_ref_new(val);
+}
+
+int32_t iris_weak_alive(IrisWeakRef* w) {
+    return iris_weak_ref_alive(w);
+}
+
+IrisVal* iris_weak_upgrade(IrisWeakRef* w) {
+    IrisOption* opt = iris_weak_ref_upgrade(w);
+    return (IrisVal*)opt;
+}
+
+IrisVal* iris_gc_stats_map(void) {
+    int64_t alloc = 0, freed = 0, cycles = 0, weak_inv = 0;
+    iris_gc_stats(&alloc, &freed, &cycles, &weak_inv);
+    IrisMap* m = iris_map_new();
+    iris_map_set(m, iris_box_str("allocated"),   iris_box_i64(alloc));
+    iris_map_set(m, iris_box_str("freed"),       iris_box_i64(freed));
+    iris_map_set(m, iris_box_str("cycles"),      iris_box_i64(cycles));
+    iris_map_set(m, iris_box_str("weak_invalidated"), iris_box_i64(weak_inv));
+    return iris_box_map(m);
+}
+
+int32_t iris_gc_collect_call(void) {
+    iris_gc_collect();
+    return 0;
 }
 

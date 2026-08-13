@@ -58,3 +58,8 @@ pub def is_empty(s: str) -> bool {
 pub def str_repeat(s: str, n: i64) -> str {
     repeat(s, n)
 }
+
+// Count non-overlapping occurrences of substring in a string.
+pub def count(s: str, sub: str) -> i64 {
+    str_count(s, sub)
+}

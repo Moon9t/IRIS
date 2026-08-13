@@ -231,10 +231,14 @@ pub struct TorchBackend;
 #[cfg(not(libtorch_enabled))]
 impl InferenceBackend for TorchBackend {
     fn load_model(_path: &Path) -> Result<Box<dyn InferenceBackend>, String> {
-        Err("LibTorch is not enabled at build time. Install SDK and set LIBTORCH_DIR.".to_owned())
+        Err("LibTorch is not linked into the compiler. It is loaded as a plugin \
+             at runtime — see docs/ml-backends.md."
+            .to_owned())
     }
     fn run(&self, _input: &[f32]) -> Result<Vec<f32>, String> {
-        Err("LibTorch is not enabled at build time.".to_owned())
+        Err("LibTorch is not linked into the compiler. It is loaded as a plugin \
+             at runtime — see docs/ml-backends.md."
+            .to_owned())
     }
 }
 

@@ -51,6 +51,8 @@ pub enum Token {
     // Reserved for future use
     Bring,
     When,
+    /// `match` keyword — alias for `when`
+    Match,
     Choice,
     /// `for` keyword in range loops
     For,
@@ -98,6 +100,33 @@ pub enum Token {
     /// `resume` keyword inside handler arms (`k(p) -> resume(v) => body`)
     Resume,
 
+    /// `defer` keyword — evaluate expression on scope exit (LIFO order)
+    Defer,
+
+    /// `try` keyword for try/catch error handling
+    Try,
+
+    /// `catch` keyword for try/catch error handling
+    Catch,
+
+    /// `raise` keyword for explicitly raising algebraic effects
+    Raise,
+
+    /// `move` keyword — explicit ownership transfer (affine type)
+    Move,
+
+    /// `unsafe` keyword — marks a block as unsafe (currently a regular block)
+    Unsafe,
+
+    /// `defmacro` keyword for macro definitions
+    DefMacro,
+
+    /// `select` keyword for channel multiplexing (`select! { ... }`)
+    Select,
+
+    /// `yield` keyword for generator functions — produces values into an accumulator list
+    Yield,
+
     // Type keywords
     F32,
     F64,
@@ -118,6 +147,8 @@ pub enum Token {
     FloatLit(f64),
     BoolLit(bool),
     StringLit(String),
+    /// Single-quoted character literal `'A'` or escape `'\n'`, stored as its byte value.
+    CharLit(i64),
     Ident(String),
 
     // Punctuation
@@ -170,11 +201,16 @@ pub enum Token {
     /// `..=` inclusive range used in range patterns
     DotDotEq,
 
+    /// `by` keyword for step in range loops: `0..10 by 2`
+    By,
+
     /// `=>` fat arrow used in `when` arms
     FatArrow,
 
     /// `&&` logical AND
     AmpAmp,
+    /// Single `&` for borrow / reference types
+    Amp,
     /// `||` logical OR
     PipePipe,
     /// `|` single pipe (for lambda parameter delimiters)
@@ -183,12 +219,18 @@ pub enum Token {
     /// `?` try / error-propagation operator
     Question,
 
+    /// `??` null coalescing operator
+    QuestionQuestion,
+
     /// `@` attribute sigil (e.g. `@differentiable`)
     At,
 
     /// `f"..."` string with `{ident}` interpolation placeholders.
     /// The payload is the raw content (with `{...}` markers preserved).
     FStringLit(String),
+
+    /// `/// doc comment text`
+    DocComment(String),
 
     Eof,
 }
@@ -215,6 +257,7 @@ impl std::fmt::Display for Token {
             Token::Mod => write!(f, "mod"),
             Token::Bring => write!(f, "bring"),
             Token::When => write!(f, "when"),
+            Token::Match => write!(f, "match"),
             Token::Choice => write!(f, "choice"),
             Token::For => write!(f, "for"),
             Token::In => write!(f, "in"),
@@ -233,6 +276,15 @@ impl std::fmt::Display for Token {
 
             Token::Dyn => write!(f, "dyn"),
             Token::Resume => write!(f, "resume"),
+            Token::Defer => write!(f, "defer"),
+            Token::Try => write!(f, "try"),
+            Token::Catch => write!(f, "catch"),
+            Token::Raise => write!(f, "raise"),
+            Token::Move => write!(f, "move"),
+            Token::Unsafe => write!(f, "unsafe"),
+            Token::DefMacro => write!(f, "defmacro"),
+            Token::Select => write!(f, "select"),
+            Token::Yield => write!(f, "yield"),
             Token::F32 => write!(f, "f32"),
             Token::F64 => write!(f, "f64"),
             Token::I32 => write!(f, "i32"),
@@ -249,6 +301,7 @@ impl std::fmt::Display for Token {
             Token::FloatLit(n) => write!(f, "{}", n),
             Token::BoolLit(b) => write!(f, "{}", b),
             Token::StringLit(s) => write!(f, "\"{}\"", s),
+            Token::CharLit(c) => write!(f, "'{}'", *c as u8 as char),
             Token::Ident(s) => write!(f, "{}", s),
             Token::LParen => write!(f, "("),
             Token::RParen => write!(f, ")"),
@@ -284,13 +337,17 @@ impl std::fmt::Display for Token {
             Token::Dot => write!(f, "."),
             Token::DotDot => write!(f, ".."),
             Token::DotDotEq => write!(f, "..="),
+            Token::By => write!(f, "by"),
             Token::FatArrow => write!(f, "=>"),
             Token::AmpAmp => write!(f, "&&"),
+            Token::Amp => write!(f, "&"),
             Token::PipePipe => write!(f, "||"),
             Token::Pipe => write!(f, "|"),
             Token::Question => write!(f, "?"),
+            Token::QuestionQuestion => write!(f, "??"),
             Token::At => write!(f, "@"),
             Token::FStringLit(s) => write!(f, "f\"{}\"", s),
+            Token::DocComment(s) => write!(f, "///{}", s),
             Token::Eof => write!(f, "<eof>"),
         }
     }
@@ -317,7 +374,18 @@ impl<'src> Lexer<'src> {
     pub fn tokenize(&mut self) -> Result<Vec<Spanned<Token>>, ParseError> {
         let mut tokens = Vec::new();
         loop {
-            self.skip_whitespace_and_comments();
+            let doc = self.skip_whitespace_and_comments();
+            if let Some(text) = doc {
+                let span = Span::new(
+                    (self.pos as u32).saturating_sub(text.len() as u32 + 3),
+                    self.pos as u32,
+                );
+                tokens.push(Spanned {
+                    node: Token::DocComment(text),
+                    span,
+                });
+                continue;
+            }
             if self.pos >= self.src.len() {
                 let end = self.pos as u32;
                 tokens.push(Spanned {
@@ -332,12 +400,35 @@ impl<'src> Lexer<'src> {
         Ok(tokens)
     }
 
-    fn skip_whitespace_and_comments(&mut self) {
+    fn skip_whitespace_and_comments(&mut self) -> Option<String> {
         loop {
             while self.pos < self.src.len() && self.src.as_bytes()[self.pos].is_ascii_whitespace() {
                 self.pos += 1;
             }
-            if self.src[self.pos..].starts_with("//") {
+            if self.src[self.pos..].starts_with("///") {
+                // Doc comment: capture the text and return it as a token.
+                self.pos += 3; // skip the three slashes
+                // Capture text until end of line, stripping leading whitespace.
+                let mut text = String::new();
+                let mut first_non_ws = true;
+                while self.pos < self.src.len() && self.src.as_bytes()[self.pos] != b'\n' {
+                    let ch = self.src[self.pos..].chars().next()?;
+                    if first_non_ws && ch.is_ascii_whitespace() {
+                        self.pos += ch.len_utf8();
+                        continue;
+                    }
+                    first_non_ws = false;
+                    text.push(ch);
+                    self.pos += ch.len_utf8();
+                }
+                // Trim trailing whitespace.
+                text = text.trim_end().to_string();
+                // Skip the newline if present.
+                if self.pos < self.src.len() && self.src.as_bytes()[self.pos] == b'\n' {
+                    self.pos += 1;
+                }
+                return Some(text);
+            } else if self.src[self.pos..].starts_with("//") {
                 // Line comment: skip to end of line.
                 while self.pos < self.src.len() && self.src.as_bytes()[self.pos] != b'\n' {
                     self.pos += 1;
@@ -358,7 +449,7 @@ impl<'src> Lexer<'src> {
                     }
                 }
             } else {
-                break;
+                return None;
             }
         }
     }
@@ -451,6 +542,14 @@ impl<'src> Lexer<'src> {
             self.pos += 2;
             return Ok(Spanned {
                 node: Token::AmpAmp,
+                span: Span::new(start, self.pos as u32),
+            });
+        }
+        // Single `&` — borrow/reference
+        if ch == b'&' {
+            self.pos += 1;
+            return Ok(Spanned {
+                node: Token::Amp,
                 span: Span::new(start, self.pos as u32),
             });
         }
@@ -551,7 +650,14 @@ impl<'src> Lexer<'src> {
             b'!' => Some(Token::Bang),
             b'.' => Some(Token::Dot),
             b'|' => Some(Token::Pipe),
-            b'?' => Some(Token::Question),
+            b'?' => {
+                if self.pos + 1 < self.src.len() && self.src.as_bytes()[self.pos + 1] == b'?' {
+                    self.pos += 1;
+                    Some(Token::QuestionQuestion)
+                } else {
+                    Some(Token::Question)
+                }
+            },
             b'@' => Some(Token::At),
             _ => None,
         };
@@ -567,11 +673,20 @@ impl<'src> Lexer<'src> {
             return self.lex_string(start);
         }
 
+        if ch == b'\'' {
+            return self.lex_char(start);
+        }
+
         if ch.is_ascii_digit() {
             return self.lex_number(start);
         }
 
         if ch.is_ascii_alphabetic() || ch == b'_' {
+            // Detect r"..." raw string prefix before normal identifier
+            if ch == b'r' && self.peek2() == Some(b'"') {
+                self.pos += 1; // consume 'r'
+                return self.lex_raw_string(start);
+            }
             // Detect f"..." string interpolation prefix before normal identifier
             if ch == b'f' && self.peek2() == Some(b'"') {
                 self.pos += 1; // consume 'f'
@@ -636,6 +751,70 @@ impl<'src> Lexer<'src> {
         }
         Ok(Spanned {
             node: Token::StringLit(s),
+            span: Span::new(start, self.pos as u32),
+        })
+    }
+
+    /// Lex a raw string literal `r"..."`. Contents are taken literally (no escape processing).
+    fn lex_raw_string(&mut self, start: u32) -> Result<Spanned<Token>, ParseError> {
+        self.advance(); // consume `"` after `r`
+        let mut s = String::new();
+        loop {
+            match self.peek() {
+                None => return Err(ParseError::UnterminatedString { pos: start }),
+                Some(b'"') => {
+                    self.advance();
+                    break;
+                }
+                Some(_) => {
+                    if let Some(ch) = self.advance_char() {
+                        s.push(ch);
+                    }
+                }
+            }
+        }
+        Ok(Spanned {
+            node: Token::StringLit(s),
+            span: Span::new(start, self.pos as u32),
+        })
+    }
+
+    fn lex_char(&mut self, start: u32) -> Result<Spanned<Token>, ParseError> {
+        self.advance(); // consume opening `'`
+        let ch = match self.peek() {
+            None => return Err(ParseError::UnterminatedString { pos: start }),
+            Some(b'\\') => {
+                self.advance();
+                match self.peek() {
+                    Some(b'n') => { self.advance(); b'\n' as i64 }
+                    Some(b't') => { self.advance(); b'\t' as i64 }
+                    Some(b'r') => { self.advance(); b'\r' as i64 }
+                    Some(b'\\') => { self.advance(); b'\\' as i64 }
+                    Some(b'\'') => { self.advance(); b'\'' as i64 }
+                    Some(b'0') => { self.advance(); 0i64 }
+                    other => {
+                        return Err(ParseError::InvalidEscape {
+                            ch: other.map(|b| b as char),
+                            pos: self.pos as u32,
+                        });
+                    }
+                }
+            }
+            Some(_c) => {
+                let val = self.advance_char().unwrap_or(' ') as i64;
+                val
+            }
+        };
+        if self.peek() != Some(b'\'') {
+            return Err(ParseError::UnexpectedToken {
+                expected: "'".to_owned(),
+                found: format!("{:?}", self.peek().map(|b| b as char)),
+                span: Span::new(start, self.pos as u32),
+            });
+        }
+        self.advance(); // consume closing `'`
+        Ok(Spanned {
+            node: Token::CharLit(ch),
             span: Span::new(start, self.pos as u32),
         })
     }
@@ -762,6 +941,7 @@ impl<'src> Lexer<'src> {
             "record" => Token::Record,
             "bring" => Token::Bring,
             "when" => Token::When,
+            "match" => Token::Match,
             "choice" => Token::Choice,
             "for" => Token::For,
             "in" => Token::In,
@@ -782,6 +962,17 @@ impl<'src> Lexer<'src> {
 
             "dyn" => Token::Dyn,
             "resume" => Token::Resume,
+            "defer" => Token::Defer,
+            "try" => Token::Try,
+            "catch" => Token::Catch,
+            "raise" => Token::Raise,
+            "move" => Token::Move,
+            "yield" => Token::Yield,
+            "select" => Token::Select,
+            "mod" => Token::Mod,
+            "unsafe" => Token::Unsafe,
+            "defmacro" => Token::DefMacro,
+            "by" => Token::By,
             // "layer", "input", "output" are contextual — parsed as Ident inside model blocks
             "f32" => Token::F32,
             "f64" => Token::F64,

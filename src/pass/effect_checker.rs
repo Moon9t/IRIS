@@ -138,6 +138,17 @@ impl EffectChecker {
                 self.collect_callees_expr(end, callees);
                 self.collect_callees_block(body, callees);
             }
+            AstStmt::Defer { expr, .. } => self.collect_callees_expr(expr, callees),
+            AstStmt::Yield { expr, .. } => self.collect_callees_expr(expr, callees),
+            AstStmt::Select { arms, default, .. } => {
+                for arm in arms {
+                    self.collect_callees_expr(&arm.channel, callees);
+                    self.collect_callees_block(&arm.body, callees);
+                }
+                if let Some(d) = default {
+                    self.collect_callees_block(d, callees);
+                }
+            }
         }
     }
 
@@ -204,9 +215,12 @@ impl EffectChecker {
                 }
             }
             AstExpr::Cast { expr, .. } => self.collect_callees_expr(expr, callees),
-            AstExpr::StructLit { fields, .. } => {
+            AstExpr::StructLit { fields, spread, .. } => {
                 for (_, v) in fields {
                     self.collect_callees_expr(v, callees);
+                }
+                if let Some(s) = spread {
+                    self.collect_callees_expr(s, callees);
                 }
             }
             AstExpr::Try { expr, .. } => self.collect_callees_expr(expr, callees),
@@ -214,6 +228,42 @@ impl EffectChecker {
             AstExpr::Ident(_) | AstExpr::IntLit { .. } | AstExpr::FloatLit { .. } |
             AstExpr::BoolLit { .. } | AstExpr::StringLit { .. } |
             AstExpr::TupleIndex { .. } => {}
+            AstExpr::NullCoal { expr, default, .. } => {
+                self.collect_callees_expr(expr, callees);
+                self.collect_callees_expr(default, callees);
+            }
+            AstExpr::MapLiteral { entries, .. } => {
+                for (k, v) in entries {
+                    self.collect_callees_expr(k, callees);
+                    self.collect_callees_expr(v, callees);
+                }
+            }
+            AstExpr::Ref { expr, .. }
+            | AstExpr::RefMut { expr, .. }
+            | AstExpr::Deref { expr, .. }
+            | AstExpr::Move { expr, .. } => {
+                self.collect_callees_expr(expr, callees);
+            }
+            AstExpr::Unsafe { body, .. } => {
+                self.collect_callees_expr(body, callees);
+            }
+            AstExpr::Splat { expr, .. } => {
+                self.collect_callees_expr(expr, callees);
+            }
+            AstExpr::TryCatch { body, catch_body, .. } => {
+                self.collect_callees_expr(body, callees);
+                self.collect_callees_expr(catch_body, callees);
+            }
+            AstExpr::Raise { args, .. } => {
+                for a in args {
+                    self.collect_callees_expr(a, callees);
+                }
+            }
+            AstExpr::MacroCall { args, .. } => {
+                for a in args {
+                    self.collect_callees_expr(a, callees);
+                }
+            }
         }
     }
 
@@ -425,6 +475,27 @@ impl EffectChecker {
                     self.verify_expr(caller, caller_row, &arm.body);
                 }
             }
+            AstStmt::Defer { expr, .. } => self.verify_expr(caller, caller_row, expr),
+            AstStmt::Yield { expr, .. } => self.verify_expr(caller, caller_row, expr),
+            AstStmt::Select { arms, default, .. } => {
+                for arm in arms {
+                    self.verify_expr(caller, caller_row, &arm.channel);
+                    for s in &arm.body.stmts {
+                        self.verify_stmt(caller, caller_row, s);
+                    }
+                    if let Some(e) = &arm.body.tail {
+                        self.verify_expr(caller, caller_row, e);
+                    }
+                }
+                if let Some(d) = default {
+                    for s in &d.stmts {
+                        self.verify_stmt(caller, caller_row, s);
+                    }
+                    if let Some(e) = &d.tail {
+                        self.verify_expr(caller, caller_row, e);
+                    }
+                }
+            }
         }
     }
 
@@ -506,9 +577,12 @@ impl EffectChecker {
                 }
             }
             AstExpr::Cast { expr, .. } => self.verify_expr(caller, caller_row, expr),
-            AstExpr::StructLit { fields, .. } => {
+            AstExpr::StructLit { fields, spread, .. } => {
                 for (_, v) in fields {
                     self.verify_expr(caller, caller_row, v);
+                }
+                if let Some(s) = spread {
+                    self.verify_expr(caller, caller_row, s);
                 }
             }
             AstExpr::Try { expr, .. } => self.verify_expr(caller, caller_row, expr),
@@ -517,7 +591,8 @@ impl EffectChecker {
             AstExpr::Ident(_) | AstExpr::IntLit { .. } | AstExpr::FloatLit { .. } |
             AstExpr::BoolLit { .. } | AstExpr::StringLit { .. } => {}
             AstExpr::Mask { effects, body, .. } => {
-                let inner_row = caller_row.union(&EffectRow::new(effects.clone()));
+                let masked_row = EffectRow::new(effects.clone());
+                let inner_row = caller_row.intersect(&masked_row);
                 for s in &body.stmts {
                     self.verify_stmt(caller, &inner_row, s);
                 }
@@ -531,6 +606,42 @@ impl EffectChecker {
                 self.verify_expr(caller, &inner_row, expr);
                 for arm in arms {
                     self.verify_expr(caller, caller_row, &arm.body);
+                }
+            }
+            AstExpr::NullCoal { expr, default, .. } => {
+                self.verify_expr(caller, caller_row, expr);
+                self.verify_expr(caller, caller_row, default);
+            }
+            AstExpr::MapLiteral { entries, .. } => {
+                for (k, v) in entries {
+                    self.verify_expr(caller, caller_row, k);
+                    self.verify_expr(caller, caller_row, v);
+                }
+            }
+            AstExpr::Ref { expr, .. }
+            | AstExpr::RefMut { expr, .. }
+            | AstExpr::Deref { expr, .. }
+            | AstExpr::Move { expr, .. } => {
+                self.verify_expr(caller, caller_row, expr);
+            }
+            AstExpr::Unsafe { body, .. } => {
+                self.verify_expr(caller, caller_row, body);
+            }
+            AstExpr::Splat { expr, .. } => {
+                self.verify_expr(caller, caller_row, expr);
+            }
+            AstExpr::TryCatch { body, catch_body, .. } => {
+                self.verify_expr(caller, caller_row, body);
+                self.verify_expr(caller, caller_row, catch_body);
+            }
+            AstExpr::Raise { args, .. } => {
+                for a in args {
+                    self.verify_expr(caller, caller_row, a);
+                }
+            }
+            AstExpr::MacroCall { args, .. } => {
+                for a in args {
+                    self.verify_expr(caller, caller_row, a);
                 }
             }
         }

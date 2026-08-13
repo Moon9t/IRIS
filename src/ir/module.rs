@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::parser::ast::AstExpr;
 use crate::ir::block::{BlockId, IrBlock};
 use crate::ir::function::{FunctionId, IrFunction, Param, SpanTable};
 use crate::ir::instr::{InstrId, IrInstr};
@@ -45,6 +46,9 @@ pub struct IrModule {
     /// Populated when `impl Trait for Type` is processed so codegen can build
     /// the per-concrete-type vtable global.
     pub(crate) trait_impl_methods: HashMap<String, Vec<(String, String, String)>>,
+    /// Default values for struct fields: struct_name → Vec<default_expr_or_none>.
+    /// Indexed in parallel with `struct_defs[name]`.
+    pub(crate) struct_defaults: HashMap<String, Vec<Option<AstExpr>>>,
 }
 
 impl IrModule {
@@ -59,6 +63,7 @@ impl IrModule {
             extern_fns: Vec::new(),
             trait_defs: HashMap::new(),
             trait_impl_methods: HashMap::new(),
+            struct_defaults: HashMap::new(),
         }
     }
 
@@ -79,6 +84,11 @@ impl IrModule {
     /// Looks up a struct definition by name.
     pub fn struct_def(&self, name: &str) -> Option<&Vec<(String, IrType)>> {
         self.struct_defs.get(name)
+    }
+
+    /// Looks up default values for struct fields by name.
+    pub fn struct_defaults(&self, name: &str) -> Option<&Vec<Option<AstExpr>>> {
+        self.struct_defaults.get(name)
     }
 
     /// Registers an enum definition. Returns `Err` if the name already exists.
@@ -218,6 +228,7 @@ impl IrFunctionBuilder {
             attrs: Vec::new(),
             span_table: SpanTable::default(),
             capture_count: 0,
+            is_const: false,
         };
         Self {
             func,
@@ -319,6 +330,17 @@ impl IrFunctionBuilder {
 
         self.func.blocks[block_id.0 as usize].instrs.push(instr);
         result
+    }
+
+    /// Returns the first block param of the current block, if any.
+    /// Useful when a block has no tail expression but has an incoming value
+    /// (e.g. from `?` unwrapping).
+    pub fn current_block_first_param(&self) -> Option<(ValueId, IrType)> {
+        let block_id = self.current_block?;
+        self.func.blocks[block_id.0 as usize]
+            .params
+            .first()
+            .map(|p| (p.id, p.ty.clone()))
     }
 
     /// Returns true if the current block already ends with a terminator.

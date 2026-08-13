@@ -232,27 +232,29 @@ fn test_file(path: &Path, filter: Option<&str>) -> Result<FileResult, String> {
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 /// Entry point for `iris test [file.iris] [--filter <s>] [--no-color]`.
-pub fn run_test_command(args: &[String]) -> Result<(), String> {
-    // Parse sub-arguments.
-    let mut paths: Vec<PathBuf> = vec![];
-    let mut filter: Option<String> = None;
-    let mut color = true;
-    let mut i = 2usize; // skip "iris" "test"
-    while i < args.len() {
-        match args[i].as_str() {
-            "--filter" | "-f" => {
-                i += 1;
-                filter = Some(args.get(i).ok_or("--filter requires an argument")?.clone());
-            }
-            "--no-color" => color = false,
-            arg if !arg.starts_with('-') => paths.push(PathBuf::from(arg)),
-            other => return Err(format!("unknown test option: '{}'", other)),
-        }
-        i += 1;
-    }
+pub fn run_test_command(
+    _args: &[String],
+    file: Option<PathBuf>,
+    filter: Option<String>,
+    no_color: bool,
+) -> Result<(), String> {
+    let color = !no_color;
 
-    // If no files given, discover *.iris in current directory.
-    if paths.is_empty() {
+    let mut paths: Vec<PathBuf> = vec![];
+    if let Some(f) = &file {
+        if f.is_dir() {
+            for entry in std::fs::read_dir(f).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let p = entry.path();
+                if p.extension().and_then(|e| e.to_str()) == Some("iris") {
+                    paths.push(p);
+                }
+            }
+            paths.sort();
+        } else {
+            paths.push(f.clone());
+        }
+    } else {
         let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
         for entry in std::fs::read_dir(&cwd).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;

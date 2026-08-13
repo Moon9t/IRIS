@@ -389,7 +389,7 @@ fn eval_binop(
 
         // Integer arithmetic
         (BinOp::Add, KnownVal::Int(a), KnownVal::Int(b)) => {
-            let v = a.wrapping_add(*b);
+            let v = a.checked_add(*b)?;
             Some((
                 IrInstr::ConstInt {
                     result,
@@ -400,7 +400,7 @@ fn eval_binop(
             ))
         }
         (BinOp::Sub, KnownVal::Int(a), KnownVal::Int(b)) => {
-            let v = a.wrapping_sub(*b);
+            let v = a.checked_sub(*b)?;
             Some((
                 IrInstr::ConstInt {
                     result,
@@ -411,7 +411,7 @@ fn eval_binop(
             ))
         }
         (BinOp::Mul, KnownVal::Int(a), KnownVal::Int(b)) => {
-            let v = a.wrapping_mul(*b);
+            let v = a.checked_mul(*b)?;
             Some((
                 IrInstr::ConstInt {
                     result,

@@ -150,6 +150,8 @@ const OP_TASK_GROUP_CANCEL: u8 = 0x78;
 const OP_MAKE_TRAIT_OBJECT: u8 = 0x79;
 const OP_DYN_CALL: u8 = 0x7A;
 const OP_RESUME_CONT: u8 = 0x7B;
+const OP_PUSH_HANDLER: u8 = 0x7C;
+const OP_POP_HANDLER: u8 = 0x7D;
 
 const MAGIC: &[u8; 4] = b"IRIS";
 const VERSION: u8 = 1;
@@ -1490,8 +1492,19 @@ impl Writer {
                 }
                 self.ty(result_ty);
             }
-            IrInstr::PushHandler { .. } => {}
-            IrInstr::PopHandler => {}
+            IrInstr::PushHandler { arms } => {
+                self.u8(OP_PUSH_HANDLER);
+                self.u8(arms.len() as u8);
+                for arm in arms {
+                    self.str(&arm.effect_name);
+                    self.str(&arm.func_name);
+                    self.u32(arm.num_args as u32);
+                    self.bool(arm.has_resume);
+                }
+            }
+            IrInstr::PopHandler => {
+                self.u8(OP_POP_HANDLER);
+            }
             IrInstr::ResumeCont { cont, value, result } => {
                 self.u8(OP_RESUME_CONT);
                 self.vid(*cont);
@@ -2244,6 +2257,24 @@ impl<'a> Reader<'a> {
                 let result = self.vid()?;
                 IrInstr::ResumeCont { cont, value, result }
             }
+            OP_PUSH_HANDLER => {
+                let narms = self.u8()? as usize;
+                let mut arms = Vec::with_capacity(narms);
+                for _ in 0..narms {
+                    let effect_name = self.str()?;
+                    let func_name = self.str()?;
+                    let num_args = self.u32()? as usize;
+                    let has_resume = self.bool()?;
+                    arms.push(crate::ir::instr::HandlerArm {
+                        effect_name,
+                        func_name,
+                        num_args,
+                        has_resume,
+                    });
+                }
+                IrInstr::PushHandler { arms }
+            }
+            OP_POP_HANDLER => IrInstr::PopHandler,
             OP_PAR_FOR => {
                 let var = self.vid()?;
                 let start = self.vid()?;
@@ -3035,5 +3066,6 @@ fn deserialize_function(r: &mut Reader) -> Result<IrFunction, String> {
         attrs: Vec::new(),
         span_table: SpanTable::default(),
         capture_count: 0,
+        is_const: false,
     })
 }

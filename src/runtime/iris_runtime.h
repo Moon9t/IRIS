@@ -101,6 +101,15 @@ extern "C" {
 #endif
 
 // ---------------------------------------------------------------------------
+// Integer arithmetic with overflow checking
+// ---------------------------------------------------------------------------
+#include <stdint.h>
+
+int64_t iris_add_checked(int64_t a, int64_t b);
+int64_t iris_sub_checked(int64_t a, int64_t b);
+int64_t iris_mul_checked(int64_t a, int64_t b);
+
+// ---------------------------------------------------------------------------
 // Tagged value type — used for boxed heap values (lists, maps, closures, etc.)
 // ---------------------------------------------------------------------------
 typedef enum {
@@ -292,6 +301,7 @@ void iris_print_bool(int v);
 void iris_print_str(const char* s);
 void iris_panic(const char* msg);
 void iris_panic_at(const char* msg, const char* location);
+void iris_bounds_check_abort(int64_t index, int64_t size);
 
 // ---------------------------------------------------------------------------
 // I/O
@@ -306,6 +316,7 @@ double  iris_read_f64(void);
 int64_t  iris_str_len(const char* s);
 char*    iris_str_concat(const char* a, const char* b);
 int      iris_str_eq(const char* a, const char* b);
+int64_t  iris_str_cmp(const char* a, const char* b);
 int      iris_str_contains(const char* s, const char* sub);
 int      iris_str_starts_with(const char* s, const char* prefix);
 int      iris_str_ends_with(const char* s, const char* suffix);
@@ -442,6 +453,7 @@ int64_t      iris_select(int64_t n, ...);
 int          iris_timeout(int64_t ms);
 void         iris_spawn_fn(void* fn, void* arg);
 void         iris_par_for(void (*fn)(int64_t, void*), int64_t start, int64_t end, void* arg);
+IrisList*    iris_par_map(IrisList* list, void* (*fn)(IrisVal*));
 void         iris_barrier(void);
 IrisTaskGroup* iris_task_group_new(void);
 void         iris_task_group_spawn(IrisTaskGroup* tg, void* fn, void* arg);
@@ -454,6 +466,18 @@ IrisWeakRef* iris_weak_ref_new(void* target);
 IrisOption*  iris_weak_ref_upgrade(IrisWeakRef* w);
 int32_t      iris_weak_ref_alive(IrisWeakRef* w);
 void         iris_gc_stats(int64_t* out_alloc, int64_t* out_freed, int64_t* out_cycles, int64_t* out_weak_inval);
+
+// ---- New builtins (called via generic BuiltinCall codegen path) ----
+int64_t      iris_list_remove(IrisList* list, int64_t idx);
+int64_t      iris_list_insert(IrisList* list, int64_t idx, IrisVal* val);
+IrisVal*     iris_map_entries(IrisVal* map);
+IrisVal*     iris_recv_timeout(IrisVal* chan, int64_t timeout_ms);
+void         iris_chan_send_b(IrisVal* chan, IrisVal* val);
+IrisWeakRef* iris_weak_ref(IrisVal* val);
+int32_t      iris_weak_alive(IrisWeakRef* w);
+IrisVal*     iris_weak_upgrade(IrisWeakRef* w);
+IrisVal*     iris_gc_stats_map(void);
+int32_t      iris_gc_collect_call(void);
 
 // ---------------------------------------------------------------------------
 // Effect handlers — thread-local handler stack with real dispatch
@@ -469,6 +493,8 @@ typedef struct {
 /// Push a handler arm onto the thread-local handler stack.
 /// fn_name is the handler function name (for interpreter dispatch).
 void         iris_push_handler_arm(const char* effect_name, const char* fn_name, int64_t num_args, int32_t has_resume);
+/// Store a native function pointer for the most recently pushed handler arm.
+void         iris_push_handler_fn(void* fn);
 void         iris_push_handler_frame(void);
 void         iris_pop_handler(void);
 
@@ -480,6 +506,24 @@ int32_t      iris_handler_has_resume(const char* name);
 
 /// Resume a continuation: fills the Continuation struct with the value.
 void         iris_resume_cont(Continuation* cont, int64_t value);
+
+/// Return the current handler stack depth (0 = no handlers active).
+int32_t      iris_handler_depth(void);
+
+/// Find the native function pointer for a handler arm matching `name`.
+/// Returns NULL if no handler matches.
+void*        iris_find_handler_fn(const char* name);
+
+/// Dispatch an effect call: if a handler is registered, call it; otherwise
+/// call the real extern function. All args are packed as int64_t (works for
+/// i64 and ptr on x86-64). cont is the Continuation* (NULL for non-resume).
+/// Returns the effective result as int64_t (caller casts to expected type).
+int64_t      iris_effect_dispatch_or_call(
+                 const char* effect_name,
+                 void* real_fn,
+                 void* cont,
+                 int nargs,
+                 const int64_t* args);
 
 // ---------------------------------------------------------------------------
 // Atomics and mutexes
@@ -728,6 +772,7 @@ IrisList* iris_set_to_list(IrisList* set);
 int       iris_regex_match(const char* pattern, const char* str);
 IrisList* iris_regex_find_all(const char* pattern, const char* str);
 char*     iris_regex_replace(const char* pattern, const char* str, const char* replacement);
+char*     iris_regex_replace_all(const char* pattern, const char* str, const char* replacement);
 
 // ---------------------------------------------------------------------------
 // DateTime

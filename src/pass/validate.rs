@@ -254,6 +254,7 @@ mod tests {
             attrs: vec![],
             span_table: crate::ir::function::SpanTable::default(),
             capture_count: 0,
+            is_const: false,
         };
         m.add_function(func).unwrap();
 

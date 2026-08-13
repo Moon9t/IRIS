@@ -180,7 +180,7 @@ fn structural_unify(t1: &IrType, t2: &IrType, errors: &mut Vec<String>) -> IrTyp
         }
         (IrType::Tuple(elems1), IrType::Tuple(elems2)) => {
             if elems1.len() != elems2.len() {
-                errors.push(format!("tuple length mismatch: {:?} vs {:?}", t1, t2));
+                errors.push(format!("tuple length mismatch: {} vs {}", t1, t2));
                 t1.clone()
             } else {
                 let merged = elems1.iter().zip(elems2.iter()).map(|(e1, e2)| structural_unify(e1, e2, errors)).collect();
@@ -198,7 +198,7 @@ fn structural_unify(t1: &IrType, t2: &IrType, errors: &mut Vec<String>) -> IrTyp
         }
         (IrType::Fn { params: p1, ret: r1 }, IrType::Fn { params: p2, ret: r2 }) => {
             if p1.len() != p2.len() {
-                errors.push(format!("fn param length mismatch: {:?} vs {:?}", t1, t2));
+                errors.push(format!("fn param length mismatch: {} vs {}", t1, t2));
                 t1.clone()
             } else {
                 let mp = p1.iter().zip(p2.iter()).map(|(e1, e2)| structural_unify(e1, e2, errors)).collect();
@@ -209,7 +209,7 @@ fn structural_unify(t1: &IrType, t2: &IrType, errors: &mut Vec<String>) -> IrTyp
         (IrType::Infer, other) | (other, IrType::Infer) => other.clone(),
         (a, b) => {
             if a != b {
-                errors.push(format!("type mismatch: {:?} vs {:?}", a, b));
+                errors.push(format!("type mismatch: {} vs {}", a, b));
             }
             a.clone()
         }
@@ -294,7 +294,7 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
                                 &mut errors,
                                 s_arg,
                                 s_param,
-                                &format!("Br arg {:?} to param {:?}", arg, param.id),
+                                &format!("Br arg {} to param {}", arg, param.id),
                             );
                         }
                     }
@@ -315,7 +315,7 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
                                 &mut errors,
                                 s_arg,
                                 s_param,
-                                &format!("CondBr then arg {:?} to param {:?}", arg, param.id),
+                                &format!("CondBr then arg {} to param {}", arg, param.id),
                             );
                         }
                     }
@@ -328,7 +328,7 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
                                 &mut errors,
                                 s_arg,
                                 s_param,
-                                &format!("CondBr else arg {:?} to param {:?}", arg, param.id),
+                                &format!("CondBr else arg {} to param {}", arg, param.id),
                             );
                         }
                     }
@@ -712,41 +712,9 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
     }
 
     if !errors.is_empty() {
-        // Append diagnostic info mapping slots -> resolved types to help debugging.
-        let mut diag = String::new();
-        diag.push_str("--- slot diagnostics ---\n");
-        for (vid, &s) in slots.iter() {
-            if let Some(ty) = uf.get_type(s) {
-                diag.push_str(&format!("Value {:?} -> slot {} => {:?}\n", vid, s, ty));
-            }
-        }
-        diag.push_str("--- list element slots ---\n");
-        for (vid, &s) in list_elem_slots.iter() {
-            if let Some(ty) = uf.get_type(s) {
-                diag.push_str(&format!(
-                    "List Value {:?} elem slot {} => {:?}\n",
-                    vid, s, ty
-                ));
-            } else {
-                diag.push_str(&format!(
-                    "List Value {:?} elem slot {} => <unknown>\n",
-                    vid, s
-                ));
-            }
-        }
-        diag.push_str("--- function blocks ---\n");
-        diag.push_str(&format!("{:?}\n", module.functions[fn_idx].blocks));
-        diag.push_str("--- value types ---\n");
-        for (vid, ty) in module.functions[fn_idx].value_types.iter() {
-            diag.push_str(&format!("Value {:?} => {:?}\n", vid, ty));
-        }
-        diag.push_str("--- closure captures ---\n");
-        for (vid, caps) in closure_captures.iter() {
-            diag.push_str(&format!("Closure {:?} captures {:?}\n", vid, caps));
-        }
         return Err(PassError::TypeError {
             func: module.functions[fn_idx].name.clone(),
-            detail: format!("{}\n{}", errors.join("; "), diag),
+            detail: errors.join("; "),
         });
     }
     // If any `IrType::Infer` remains in the function value types, report
@@ -759,31 +727,9 @@ fn infer_function(module: &mut IrModule, fn_idx: usize) -> Result<(), PassError>
     }
     if !unresolved.is_empty() {
         let mut detail = String::new();
-        detail.push_str("unresolved Infer for values:\n");
+        detail.push_str("unresolved Infer for values:");
         for v in unresolved.iter() {
-            detail.push_str(&format!(" - {:?}\n", v));
-            if let Some(&s) = slots.get(v) {
-                if let Some(ty) = uf.get_type(s) {
-                    detail.push_str(&format!("    slot {} => {:?}\n", s, ty));
-                }
-            }
-            if let Some(&es) = list_elem_slots.get(v) {
-                if let Some(ty) = uf.get_type(es) {
-                    detail.push_str(&format!("    elem slot {} => {:?}\n", es, ty));
-                } else {
-                    detail.push_str(&format!("    elem slot {} => <unknown>\n", es));
-                }
-            }
-        }
-        detail.push_str("--- function blocks ---\n");
-        detail.push_str(&format!("{:?}\n", module.functions[fn_idx].blocks));
-        detail.push_str("--- value types ---\n");
-        for (vid, ty) in module.functions[fn_idx].value_types.iter() {
-            detail.push_str(&format!("Value {:?} => {:?}\n", vid, ty));
-        }
-        detail.push_str("--- closure captures ---\n");
-        for (vid, caps) in closure_captures.iter() {
-            detail.push_str(&format!("Closure {:?} captures {:?}\n", vid, caps));
+            detail.push_str(&format!(" {}", v));
         }
         return Err(PassError::TypeError {
             func: module.functions[fn_idx].name.clone(),
@@ -820,7 +766,7 @@ fn try_unify(uf: &mut UnionFind, errors: &mut Vec<String>, a: usize, b: usize, c
     let tb = uf.get_type(b);
     if let (Some(ref ta2), Some(ref tb2)) = (ta.as_ref(), tb.as_ref()) {
         if ta2 != tb2 {
-            errors.push(format!("type mismatch: {:?} vs {:?} -- {}", ta2, tb2, ctx));
+            errors.push(format!("type mismatch: {} vs {} -- {}", ta2, tb2, ctx));
             return;
         }
     }
@@ -869,7 +815,7 @@ fn collect_constraints(
                 errors,
                 sl,
                 srs,
-                &format!("BinOp lhs {:?} rhs {:?}", lhs, rhs),
+                &format!("BinOp lhs {} rhs {}", lhs, rhs),
             );
             // For non-comparison ops, result type = operand type.
             if !is_cmp {
@@ -878,7 +824,7 @@ fn collect_constraints(
                     errors,
                     sr,
                     sl,
-                    &format!("BinOp result {:?} lhs {:?}", result, lhs),
+                    &format!("BinOp result {} lhs {}", result, lhs),
                 );
             }
         }
@@ -895,7 +841,7 @@ fn collect_constraints(
                 errors,
                 sr,
                 so,
-                &format!("UnaryOp result {:?} operand {:?}", result, operand),
+                &format!("UnaryOp result {} operand {}", result, operand),
             );
         }
         IrInstr::ConstInt { result, ty, .. } => {
@@ -933,7 +879,7 @@ fn collect_constraints(
                 errors,
                 elem_slot,
                 s_val,
-                &format!("ListPush list {:?} value {:?}", list, value),
+                &format!("ListPush list {} value {}", list, value),
             );
             let _ = get_or_create_slot(uf, slots, *list, None);
         }
@@ -947,7 +893,7 @@ fn collect_constraints(
                 errors,
                 s_res,
                 elem_slot,
-                &format!("ListGet result {:?} list {:?}", result, list),
+                &format!("ListGet result {} list {}", result, list),
             );
         }
         IrInstr::MakeClosure {
@@ -995,7 +941,7 @@ fn collect_constraints(
                                     errors,
                                     arg_slot,
                                     p_slot,
-                                    &format!("CallClosure arg {:?} param {}", arg, param_idx),
+                                    &format!("CallClosure arg {} param {}", arg, param_idx),
                                 );
                             }
                         }
@@ -1011,7 +957,7 @@ fn collect_constraints(
                                 errors,
                                 res_slot,
                                 rslot,
-                                &format!("CallClosure result {:?}", rid),
+                                &format!("CallClosure result {}", rid),
                             );
                         }
                     }
@@ -1042,7 +988,7 @@ fn collect_constraints(
                 errors,
                 lhs_slot,
                 rhs_slot,
-                &format!("ListConcat lhs {:?} rhs {:?}", lhs, rhs),
+                &format!("ListConcat lhs {} rhs {}", lhs, rhs),
             );
             // Result list shares the same element slot.
             list_elem_slots.insert(*result, lhs_slot);
@@ -1056,7 +1002,7 @@ fn collect_constraints(
         IrInstr::Return { values } => {
             for v in values {
                 let sv = get_or_create_slot(uf, slots, *v, None);
-                try_unify(uf, errors, sv, ret_slot, &format!("Return value {:?}", v));
+                try_unify(uf, errors, sv, ret_slot, &format!("Return value {}", v));
             }
         }
         // Everything else: if there's a result with a known result_ty, record it.

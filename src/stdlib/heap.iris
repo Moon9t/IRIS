@@ -1,56 +1,55 @@
-// src/stdlib/heap.iris -- IRIS standard min-heap (i64, sorted-list implementation)
+// src/stdlib/heap.iris -- IRIS standard min-heap (generic, sorted-list backend)
 //
-// Provides a priority queue / min-heap with O(log n) insertion and O(1) peek/pop
-// using a sorted list backend. Elements are stored in ascending order.
+// Elements are stored in sorted ascending order in a list.
+// O(n) insertion, O(1) peek, O(n) pop.
 
-/// A min-heap containing i64 elements.
-record MinHeap { data: list<i64> }
+/// A min-heap containing elements of type T.
+record MinHeap[T] { data: list<T> }
 
-/// Create a new empty min-heap.
-pub def heap_new() -> MinHeap {
-    MinHeap { data: list() }
+/// Create a new heap seeded with value v (used for type inference).
+pub def heap_new[T](v: T) -> MinHeap<T> {
+    var d: list<T> = list()
+    push(d, v);
+    MinHeap { data: d }
 }
 
 /// Return the number of elements in the heap.
-pub def heap_len(h: MinHeap) -> i64 {
+pub def heap_len[T](h: MinHeap<T>) -> i64 {
     list_len(h.data)
 }
 
-/// Return the minimum element (front of sorted list) without removing it.
-/// Panics if the heap is empty.
-pub def heap_peek(h: MinHeap) -> i64 {
-    list_get(h.data, 0)
+/// Return true if the heap has no elements.
+pub def heap_is_empty[T](h: MinHeap<T>) -> bool {
+    list_len(h.data) == 0
 }
 
 /// Return the minimum element without removing it.
-/// Panics if the heap is empty.
-pub def heap_pop_val(h: MinHeap) -> i64 {
+pub def heap_peek[T](h: MinHeap<T>) -> T {
     list_get(h.data, 0)
 }
 
-/// Return a new heap with the minimum element removed.
-/// Panics if the heap is empty.
-pub def heap_pop_heap(h: MinHeap) -> MinHeap {
-    var new_data: list<i64> = list()
+/// Remove and return the minimum element plus the updated heap.
+pub def heap_pop[T](h: MinHeap<T>) -> (T, MinHeap<T>) {
+    val v = list_get(h.data, 0)
+    var new_data: list<T> = list()
     var i = 1
     val n = list_len(h.data)
     while i < n {
         push(new_data, list_get(h.data, i));
         i = i + 1
     }
-    MinHeap { data: new_data }
+    (v, MinHeap { data: new_data })
 }
 
-/// Insert `v` into the heap maintaining sorted (ascending) order.
-/// Returns a new heap with the element inserted.
-pub def heap_push(h: MinHeap, v: i64) -> MinHeap {
-    var new_data: list<i64> = list()
+/// Insert v into the heap maintaining sorted order.
+pub def heap_push[T](h: MinHeap<T>, v: T) -> MinHeap<T> {
+    var new_data: list<T> = list()
     var inserted = 0
     var i = 0
     val n = list_len(h.data)
     while i < n {
         val cur = list_get(h.data, i)
-        val should_insert = if cur > v { if inserted == 0 { 1 } else { 0 } } else { 0 }
+        val should_insert = if v < cur { if inserted == 0 { 1 } else { 0 } } else { 0 }
         inserted = if should_insert == 1 { 1 } else { inserted }
         val _ = if should_insert == 1 { push(new_data, v); 0 } else { 0 }
         push(new_data, cur);
@@ -58,4 +57,40 @@ pub def heap_push(h: MinHeap, v: i64) -> MinHeap {
     }
     val _ = if inserted == 0 { push(new_data, v); 0 } else { 0 }
     MinHeap { data: new_data }
+}
+
+/// Build a heap from a list.
+pub def heap_from_list[T](lst: list<T>) -> MinHeap<T> {
+    var h: MinHeap<T> = heap_new(list_get(lst, 0))
+    var i = 1
+    val n = list_len(lst)
+    while i < n {
+        h = heap_push(h, list_get(lst, i));
+        i = i + 1
+    }
+    h
+}
+
+/// Return the elements as a sorted list.
+pub def heap_to_list[T](h: MinHeap<T>) -> list<T> {
+    var result: list<T> = list()
+    var i = 0
+    val n = list_len(h.data)
+    while i < n {
+        push(result, list_get(h.data, i));
+        i = i + 1
+    }
+    result
+}
+
+/// Merge two heaps into one.
+pub def heap_merge[T](a: MinHeap<T>, b: MinHeap<T>) -> MinHeap<T> {
+    var result: MinHeap<T> = a
+    var i = 0
+    val n = list_len(b.data)
+    while i < n {
+        result = heap_push(result, list_get(b.data, i));
+        i = i + 1
+    }
+    result
 }

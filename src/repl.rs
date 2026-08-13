@@ -252,8 +252,8 @@ impl ReplState {
             format!("def __eval_{n}() -> Infer {{\n    {ctx}\n    {expr}\n}}")
         };
         let src = self.full_source_for_eval(&eval_fn);
-        let ast = crate::compile_multi_to_ast(&[("repl", &src)], "repl")?;
-        let module = crate::compile_ast_to_module(&ast, "repl", None)?;
+        let mut ast = crate::compile_multi_to_ast(&[("repl", &src)], "repl")?;
+        let module = crate::compile_ast_to_module(&mut ast, "repl", None)?;
         let eval_name = format!("__eval_{n}");
         let func = module
             .functions()

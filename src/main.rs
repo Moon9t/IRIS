@@ -69,7 +69,13 @@ fn main() {
         .spawn(run)
         .expect("failed to spawn main thread with enlarged stack");
     if let Err(e) = handler.join() {
-        eprintln!("error: {:?}", e);
+        if let Some(msg) = e.downcast_ref::<&str>() {
+            eprintln!("error: {}", msg);
+        } else if let Some(msg) = e.downcast_ref::<String>() {
+            eprintln!("error: {}", msg);
+        } else {
+            eprintln!("error: thread panicked");
+        }
         process::exit(1);
     }
 }
@@ -113,8 +119,8 @@ fn run() {
                 process::exit(1);
             }
         }
-        Ok(ParseArgsResult::Test) => {
-            if let Err(e) = iris::test_runner::run_test_command(&args) {
+        Ok(ParseArgsResult::Test { file, filter, no_color }) => {
+            if let Err(e) = iris::test_runner::run_test_command(&args, file, filter, no_color) {
                 eprintln!("error: {}", e);
                 process::exit(1);
             }
@@ -144,10 +150,105 @@ fn run() {
                 process::exit(1);
             }
         }
+        Ok(ParseArgsResult::Install { url }) => {
+            if let Err(e) = iris::package_manager::run_install(
+                &url.into_iter().collect::<Vec<_>>(),
+            ) {
+                eprintln!("error: {}", e);
+                process::exit(1);
+            }
+        }
         Ok(ParseArgsResult::Setup) => {
             if let Err(e) = iris::setup::run_setup_command() {
                 eprintln!("error: {}", e);
                 process::exit(1);
+            }
+        }
+        Ok(ParseArgsResult::Docs { file, output }) => {
+            let path = match file {
+                Some(p) => p,
+                None => {
+                    eprintln!("error: docs requires an input file (e.g. `iris docs file.iris`)");
+                    process::exit(1);
+                }
+            };
+            let source = match std::fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("error: cannot read '{}': {}", path.display(), e);
+                    process::exit(1);
+                }
+            };
+            let filename = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("module.iris");
+            match iris::docs::generate_docs(&source, filename) {
+                Ok(html) => {
+                    if let Some(out_path) = output {
+                        if let Err(e) = std::fs::write(&out_path, &html) {
+                            eprintln!("error: cannot write '{}': {}", out_path.display(), e);
+                            process::exit(1);
+                        }
+                        eprintln!("wrote documentation: {}", out_path.display());
+                    } else {
+                        print!("{}", html);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    process::exit(1);
+                }
+            }
+        }
+        Ok(ParseArgsResult::Fmt { file, check }) => {
+            let options = iris::formatter::FormatOptions::default();
+            match file {
+                Some(path) => {
+                    match iris::formatter::format_file(&path, &options, check) {
+                        Ok(changed) => {
+                            if check && changed {
+                                eprintln!("would reformat: {}", path.display());
+                                process::exit(1);
+                            } else if !check && changed {
+                                eprintln!("formatted {}", path.display());
+                            } else if check {
+                                eprintln!("all files already formatted");
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("error: {}", e);
+                            process::exit(1);
+                        }
+                    }
+                }
+                None => {
+                    let dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                    match iris::formatter::format_directory(&dir, &options, check) {
+                        Ok((total, changed)) => {
+                            if check && changed > 0 {
+                                eprintln!(
+                                    "{} file(s) would be reformatted (of {} checked)",
+                                    changed, total
+                                );
+                                process::exit(1);
+                            } else if check {
+                                eprintln!("{} file(s) already formatted", total);
+                            } else if changed > 0 {
+                                eprintln!(
+                                    "formatted {} of {} file(s)",
+                                    changed, total
+                                );
+                            } else {
+                                eprintln!("{} file(s) already formatted", total);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("error: {}", e);
+                            process::exit(1);
+                        }
+                    }
+                }
             }
         }
         Ok(ParseArgsResult::Args(cli)) => {

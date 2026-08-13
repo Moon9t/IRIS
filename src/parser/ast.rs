@@ -1,6 +1,17 @@
 use crate::parser::lexer::Span;
 use crate::ir::instr::BinOp;
 
+/// A macro definition: `defmacro name(params) => body_expr`
+#[derive(Debug, Clone)]
+pub struct AstMacroDef {
+    pub name: Ident,
+    pub params: Vec<String>,
+    pub body: Box<AstExpr>,
+    pub span: Span,
+    /// Doc comment (`/// ...`) preceding this item, if any.
+    pub doc_comment: Option<String>,
+}
+
 /// An attribute annotation with optional arguments, e.g. `@adaptive(learning_rate=0.01)`.
 #[derive(Debug, Clone)]
 pub struct AstAttribute {
@@ -111,6 +122,10 @@ pub enum AstType {
         effects: Vec<String>,
         span: Span,
     },
+    /// `&T` immutable reference type.
+    Ref(Box<AstType>, Span),
+    /// `&mut T` mutable reference type.
+    RefMut(Box<AstType>, Span),
 }
 
 impl PartialEq for AstType {
@@ -149,6 +164,8 @@ impl PartialEq for AstType {
             (AstType::AssocType { base: b1, assoc_name: a1, .. }, AstType::AssocType { base: b2, assoc_name: a2, .. }) => b1 == b2 && a1 == a2,
             (AstType::DynTrait { trait_name: t1, .. }, AstType::DynTrait { trait_name: t2, .. }) => t1 == t2,
             (AstType::MaskEffectType { effects: e1, .. }, AstType::MaskEffectType { effects: e2, .. }) => e1 == e2,
+            (AstType::Ref(i1, _), AstType::Ref(i2, _)) => i1 == i2,
+            (AstType::RefMut(i1, _), AstType::RefMut(i2, _)) => i1 == i2,
             _ => false,
         }
     }
@@ -215,6 +232,8 @@ impl std::hash::Hash for AstType {
             }
             AstType::DynTrait { trait_name, .. } => trait_name.hash(state),
             AstType::MaskEffectType { effects, .. } => effects.hash(state),
+            AstType::Ref(inner, _) => inner.hash(state),
+            AstType::RefMut(inner, _) => inner.hash(state),
         }
     }
 }
@@ -243,6 +262,8 @@ impl AstType {
             AstType::DynTrait { span, .. } => *span,
             AstType::MaskEffectType { span, .. } => *span,
             AstType::WeakRef(_, s) => *s,
+            AstType::Ref(_, s) => *s,
+            AstType::RefMut(_, s) => *s,
         }
     }
 }
@@ -289,8 +310,12 @@ pub struct AstFunction {
     pub body: AstBlock,
     pub span: Span,
     pub is_async: bool,
+    /// Whether this function is `const def` — can be evaluated at compile time.
+    pub is_const: bool,
     /// Attribute annotations, e.g. `@adaptive(learning_rate=0.01)` for `@adaptive def f(...)`
     pub attrs: Vec<AstAttribute>,
+    /// Doc comment (`/// ...`) preceding this item, if any.
+    pub doc_comment: Option<String>,
 }
 
 /// A block of statements with an optional tail expression (the block's value).
@@ -315,26 +340,32 @@ pub enum AstStmt {
     /// An expression used for its side effects (followed by `;`).
     Expr(Box<AstExpr>),
     While {
+        label: Option<String>,
         cond: Box<AstExpr>,
         body: AstBlock,
         span: Span,
     },
     Loop {
+        label: Option<String>,
         body: AstBlock,
         span: Span,
     },
     Break {
+        label: Option<String>,
         span: Span,
     },
     Continue {
+        label: Option<String>,
         span: Span,
     },
     /// `for <var> in <start>..<end> { <body> }` or `for <var> in <start>..=<end> { <body> }` range loop (sugar over while).
     ForRange {
+        label: Option<String>,
         var: Ident,
         start: Box<AstExpr>,
         end: Box<AstExpr>,
         inclusive: bool,
+        step: Option<Box<AstExpr>>,
         body: AstBlock,
         span: Span,
     },
@@ -366,6 +397,7 @@ pub enum AstStmt {
     },
     /// `par for <var> in <start>..<end> { body }` or `par for <var> in <start>..=<end> { body }` — parallel range iteration.
     ParFor {
+        label: Option<String>,
         var: Ident,
         start: Box<AstExpr>,
         end: Box<AstExpr>,
@@ -375,6 +407,7 @@ pub enum AstStmt {
     },
     /// `for <var> in <list_expr> { body }` — foreach over a list.
     ForEach {
+        label: Option<String>,
         var: Ident,
         iter: Box<AstExpr>,
         body: AstBlock,
@@ -394,6 +427,22 @@ pub enum AstStmt {
         return_ty: Box<AstType>,
         span: Span,
     },
+    /// `defer <expr>` — evaluate expression on scope exit (LIFO order).
+    Defer {
+        expr: Box<AstExpr>,
+        span: Span,
+    },
+    /// `select! { msg = ch => { body }, ... default => { body } }` — channel multiplexing.
+    Select {
+        arms: Vec<SelectArm>,
+        default: Option<Box<AstBlock>>,
+        span: Span,
+    },
+    /// `yield <expr>` — produce a value in a generator function (desugars to list push).
+    Yield {
+        expr: Box<AstExpr>,
+        span: Span,
+    },
 }
 
 /// A handler arm: `k1(p1, p2) -> resume(v) => body`.
@@ -407,6 +456,18 @@ pub struct AstHandlerArm {
     pub resume_param: Option<Ident>,
     /// Handler body. Runs when effect `effect_name` is raised inside `expr`.
     pub body: Box<AstExpr>,
+    pub span: Span,
+}
+
+/// `select! { msg = ch => { body }, ... default => { body } }` — channel multiplexing arm.
+#[derive(Debug, Clone)]
+pub struct SelectArm {
+    /// Channel expression to receive from.
+    pub channel: AstExpr,
+    /// Binding name for the received value.
+    pub binding: String,
+    /// Body to execute if this channel fires.
+    pub body: AstBlock,
     pub span: Span,
 }
 
@@ -467,6 +528,7 @@ pub enum AstExpr {
     Call {
         callee: Ident,
         args: Vec<AstExpr>,
+        named_args: Vec<(String, AstExpr)>,
         span: Span,
     },
     /// `-x` or `!b` (prefix unary operators)
@@ -500,6 +562,7 @@ pub enum AstExpr {
     StructLit {
         name: String,
         fields: Vec<(String, AstExpr)>,
+        spread: Option<Box<AstExpr>>,
         span: Span,
     },
     /// `expr.field` field access
@@ -546,6 +609,12 @@ pub enum AstExpr {
         expr: Box<AstExpr>,
         span: Span,
     },
+    /// `expr ?? default` null coalescing: unwrap option/result or use default.
+    NullCoal {
+        expr: Box<AstExpr>,
+        default: Box<AstExpr>,
+        span: Span,
+    },
     /// `base.method(args...)` method call on a struct.
     MethodCall {
         base: Box<AstExpr>,
@@ -564,6 +633,61 @@ pub enum AstExpr {
         expr: Box<AstExpr>,
         arms: Vec<AstHandlerArm>,
         return_ty: Box<AstType>,
+        span: Span,
+    },
+    /// `{ key1: val1, key2: val2 }` map/dict literal.
+    MapLiteral {
+        entries: Vec<(AstExpr, AstExpr)>,
+        span: Span,
+    },
+    /// `&expr` — take an immutable reference to an expression.
+    Ref {
+        expr: Box<AstExpr>,
+        span: Span,
+    },
+    /// `&mut expr` — take a mutable reference to an expression.
+    RefMut {
+        expr: Box<AstExpr>,
+        span: Span,
+    },
+    /// `*expr` — dereference a reference.
+    Deref {
+        expr: Box<AstExpr>,
+        span: Span,
+    },
+    /// `try { body } catch e { handler }` — try/catch on result types.
+    /// Inside body, `?` on result types jumps to catch on Err instead of early-returning.
+    TryCatch {
+        body: Box<AstExpr>,
+        catch_param: String,
+        catch_body: Box<AstExpr>,
+        span: Span,
+    },
+    /// `raise effect_name(args)` — explicitly raise an algebraic effect.
+    Raise {
+        effect_name: String,
+        args: Vec<AstExpr>,
+        span: Span,
+    },
+    /// `move expr` — explicitly transfer ownership (marks value as consumed).
+    Move {
+        expr: Box<AstExpr>,
+        span: Span,
+    },
+    /// `unsafe { body }` — marks a block as unsafe (currently a regular block, syntactic sugar for future use).
+    Unsafe {
+        body: Box<AstExpr>,
+        span: Span,
+    },
+    /// `..expr` — splat expression: unpack array elements as individual arguments in a function call.
+    Splat {
+        expr: Box<AstExpr>,
+        span: Span,
+    },
+    /// `name!(args...)` — macro invocation
+    MacroCall {
+        name: Ident,
+        args: Vec<AstExpr>,
         span: Span,
     },
 }
@@ -592,18 +716,30 @@ impl AstExpr {
             AstExpr::Lambda { span, .. } => *span,
             AstExpr::Await { span, .. } => *span,
             AstExpr::Try { span, .. } => *span,
+            AstExpr::NullCoal { span, .. } => *span,
             AstExpr::MethodCall { span, .. } => *span,
             AstExpr::Mask { span, .. } => *span,
             AstExpr::Handle { span, .. } => *span,
+            AstExpr::MapLiteral { span, .. } => *span,
+            AstExpr::Ref { span, .. } => *span,
+            AstExpr::RefMut { span, .. } => *span,
+            AstExpr::Deref { span, .. } => *span,
+            AstExpr::TryCatch { span, .. } => *span,
+            AstExpr::Raise { span, .. } => *span,
+            AstExpr::Move { span, .. } => *span,
+            AstExpr::Unsafe { span, .. } => *span,
+            AstExpr::Splat { span, .. } => *span,
+            AstExpr::MacroCall { span, .. } => *span,
         }
     }
 }
 
-/// A struct field definition: `name: type`.
+/// A struct field definition: `name: type` optionally with `= default_expr`.
 #[derive(Debug, Clone)]
 pub struct AstFieldDef {
     pub name: Ident,
     pub ty: AstType,
+    pub default: Option<AstExpr>,
 }
 
 /// A struct definition: `record Name { field: type, ... }`.
@@ -615,6 +751,8 @@ pub struct AstStructDef {
     pub span: Span,
     /// Whether this struct is publicly exported (`pub record`).
     pub is_pub: bool,
+    /// Doc comment (`/// ...`) preceding this item, if any.
+    pub doc_comment: Option<String>,
 }
 
 /// A single enum variant, optionally carrying typed fields.
@@ -635,6 +773,8 @@ pub struct AstEnumDef {
     pub span: Span,
     /// Whether this enum is publicly exported (`pub choice`).
     pub is_pub: bool,
+    /// Doc comment (`/// ...`) preceding this item, if any.
+    pub doc_comment: Option<String>,
 }
 
 /// The pattern in a `when` arm.
@@ -658,6 +798,8 @@ pub enum AstWhenPattern {
     Wildcard,
     /// Integer literal pattern, e.g. `0` or `1`.
     IntLit(i64),
+    /// Float literal pattern, e.g. `1.0` or `3.14`.
+    FloatLit(f64),
     /// Bool literal pattern, e.g. `true` or `false`.
     BoolLit(bool),
     /// String literal pattern, e.g. `"hello"`.
@@ -673,6 +815,18 @@ pub enum AstWhenPattern {
     Slice {
         prefix: Vec<AstWhenPattern>,
         rest: Option<String>, // None = exact match, Some(name) = bind rest
+    },
+    /// Binding pattern: `name @ sub_pattern` — matches `sub_pattern` and binds the whole matched value to `name`.
+    Binding {
+        name: String,
+        pattern: Box<AstWhenPattern>,
+        span: Span,
+    },
+    /// Struct pattern: `StructName { field1: pat1, field2: pat2 }` — matches a record by field values.
+    Struct {
+        struct_name: String,
+        fields: Vec<(String, AstWhenPattern)>,
+        span: Span,
     },
 }
 
@@ -739,6 +893,8 @@ pub struct AstModel {
     pub layers: Vec<AstLayer>,
     pub outputs: Vec<AstModelOutput>,
     pub span: Span,
+    /// Doc comment (`/// ...`) preceding this item, if any.
+    pub doc_comment: Option<String>,
 }
 
 /// A global constant declaration: `const NAME: type = value` or `const NAME = value`.
@@ -751,6 +907,8 @@ pub struct AstConst {
     pub span: Span,
     /// Whether this const is publicly exported (`pub const`).
     pub is_pub: bool,
+    /// Doc comment (`/// ...`) preceding this item, if any.
+    pub doc_comment: Option<String>,
 }
 
 /// A type alias declaration: `type Name = Type`.
@@ -761,6 +919,8 @@ pub struct AstTypeAlias {
     pub span: Span,
     /// Whether this type alias is publicly exported (`pub type`).
     pub is_pub: bool,
+    /// Doc comment (`/// ...`) preceding this item, if any.
+    pub doc_comment: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -780,15 +940,20 @@ pub enum BringPath {
 #[derive(Debug, Clone)]
 pub struct AstBring {
     pub path: BringPath,
+    /// Optional selective items: `bring std.math.{gcd, lcm}` → items = Some(["gcd", "lcm"])
+    pub items: Option<Vec<String>>,
     pub span: Span,
+    /// Whether this bring is `pub bring` (re-exported to parent module).
+    pub is_pub: bool,
 }
 
-/// A method signature inside a trait definition (no body).
+/// A method signature inside a trait definition, with optional default body.
 #[derive(Debug, Clone)]
 pub struct AstTraitMethod {
     pub name: Ident,
     pub params: Vec<AstParam>,
     pub return_ty: AstType,
+    pub body: Option<AstBlock>,
     pub span: Span,
 }
 
@@ -806,20 +971,26 @@ pub struct AstTraitDef {
     pub assoc_types: Vec<AstAssocTypeDecl>,
     pub methods: Vec<AstTraitMethod>,
     pub span: Span,
+    /// Doc comment (`/// ...`) preceding this item, if any.
+    pub doc_comment: Option<String>,
 }
 
-/// An impl block: `impl TraitName for TypeName { type AssocType = Type; def method(params) -> type { body } }`.
+/// An impl block: `impl TraitName for TypeName { ... }` or `impl[T where T: Trait] TraitName for T { ... }`.
 #[derive(Debug, Clone)]
 pub struct AstImplDef {
     /// The trait being implemented.
     pub trait_name: String,
-    /// The type being implemented for (e.g. "i64", "Point").
+    /// The type being implemented for (e.g. "i64", "Point", or "T" for blanket impls).
     pub type_name: String,
+    /// Generic parameters (for blanket impls): `impl[T where T: Show] ...`.
+    pub generic_params: Vec<AstGenericParam>,
     /// Associated type bindings: `type AssocType = ConcreteType`.
     pub assoc_type_bindings: Vec<(String, AstType)>,
     /// Full method bodies.
     pub methods: Vec<AstFunction>,
     pub span: Span,
+    /// Doc comment (`/// ...`) preceding this item, if any.
+    pub doc_comment: Option<String>,
 }
 
 /// An extern function declaration: `extern "C" def name(params) -> ret_ty`.
@@ -834,6 +1005,8 @@ pub struct AstExternFn {
     pub abi: Option<String>,    // e.g. Some("C") or None for default
     pub link_lib: Option<String>, // e.g. Some("m") for -lm
     pub span: Span,
+    /// Doc comment (`/// ...`) preceding this item, if any.
+    pub doc_comment: Option<String>,
 }
 
 /// An operation signature within an algebraic effect: `def name(params) -> ret_ty`.
@@ -851,6 +1024,8 @@ pub struct AstEffectDef {
     pub name: Ident,
     pub operations: Vec<AstEffectOperation>,
     pub span: Span,
+    /// Doc comment (`/// ...`) preceding this item, if any.
+    pub doc_comment: Option<String>,
 }
 
 /// The top-level AST for an IRIS source file.
@@ -870,4 +1045,28 @@ pub struct AstModule {
     pub brings: Vec<AstBring>,
     /// Extern function declarations: `extern def name(params) -> type`.
     pub extern_fns: Vec<AstExternFn>,
+    /// Inline module definitions: `mod name { ... }`.
+    pub modules: Vec<AstModuleDef>,
+    /// Macro definitions: `defmacro name(params) => body`.
+    pub macros: Vec<AstMacroDef>,
+}
+
+/// An inline module definition: `mod name { ... }`.
+/// Contains the same item types as a top-level module, nested inside the current file.
+#[derive(Debug, Clone)]
+pub struct AstModuleDef {
+    pub name: Ident,
+    pub enums: Vec<AstEnumDef>,
+    pub structs: Vec<AstStructDef>,
+    pub functions: Vec<AstFunction>,
+    pub models: Vec<AstModel>,
+    pub consts: Vec<AstConst>,
+    pub type_aliases: Vec<AstTypeAlias>,
+    pub traits: Vec<AstTraitDef>,
+    pub impls: Vec<AstImplDef>,
+    pub effects: Vec<AstEffectDef>,
+    pub extern_fns: Vec<AstExternFn>,
+    pub modules: Vec<AstModuleDef>,
+    pub macros: Vec<AstMacroDef>,
+    pub span: Span,
 }

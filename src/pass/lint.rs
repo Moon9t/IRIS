@@ -118,6 +118,13 @@ fn stmt_uses_name(stmt: &AstStmt, name: &str) -> bool {
         AstStmt::Break { .. } | AstStmt::Continue { .. } => false,
         AstStmt::MaskStmt { body, .. } => block_uses_name(body, name),
         AstStmt::HandleStmt { expr, .. } => expr_uses_name(expr, name),
+        AstStmt::Defer { expr, .. } => expr_uses_name(expr, name),
+        AstStmt::Yield { expr, .. } => expr_uses_name(expr, name),
+        AstStmt::Select { arms, default, .. } => {
+            arms.iter().any(|arm| {
+                expr_uses_name(&arm.channel, name) || block_uses_name(&arm.body, name)
+            }) || default.as_ref().map_or(false, |d| block_uses_name(d, name))
+        }
     }
 }
 
@@ -158,12 +165,32 @@ fn expr_uses_name(expr: &AstExpr, name: &str) -> bool {
         AstExpr::ArrayLit { elems, .. } => elems.iter().any(|e| expr_uses_name(e, name)),
         AstExpr::Tuple { elements, .. } => elements.iter().any(|e| expr_uses_name(e, name)),
         AstExpr::Lambda { body, .. } => expr_uses_name(body, name),
-        AstExpr::StructLit { fields, .. } => fields.iter().any(|(_, v)| expr_uses_name(v, name)),
+        AstExpr::StructLit { fields, spread, .. } => {
+            fields.iter().any(|(_, v)| expr_uses_name(v, name))
+                || spread.as_ref().map_or(false, |s| expr_uses_name(s, name))
+        }
         AstExpr::MethodCall { base, args, .. } => {
             expr_uses_name(base, name) || args.iter().any(|a| expr_uses_name(a, name))
         }
         AstExpr::Mask { body, .. } => block_uses_name(body, name),
         AstExpr::Handle { expr, .. } => expr_uses_name(expr, name),
+        AstExpr::NullCoal { expr, default, .. } => {
+            expr_uses_name(expr, name) || expr_uses_name(default, name)
+        }
+        AstExpr::MapLiteral { entries, .. } => {
+            entries.iter().any(|(k, v)| expr_uses_name(k, name) || expr_uses_name(v, name))
+        }
+        AstExpr::Ref { expr, .. }
+        | AstExpr::RefMut { expr, .. }
+        | AstExpr::Deref { expr, .. }
+        | AstExpr::Move { expr, .. } => expr_uses_name(expr, name),
+        AstExpr::Unsafe { body, .. } => expr_uses_name(body, name),
+        AstExpr::Splat { expr, .. } => expr_uses_name(expr, name),
+        AstExpr::TryCatch { body, catch_body, .. } => {
+            expr_uses_name(body, name) || expr_uses_name(catch_body, name)
+        }
+        AstExpr::Raise { args, .. } => args.iter().any(|a| expr_uses_name(a, name)),
+        AstExpr::MacroCall { args, .. } => args.iter().any(|a| expr_uses_name(a, name)),
     }
 }
 
@@ -182,7 +209,7 @@ fn check_potential_infinite_loops(func: &AstFunction, warnings: &mut Vec<IrWarni
 fn check_infinite_loops_in_block(block: &AstBlock, func_name: &str, warnings: &mut Vec<IrWarning>) {
     for stmt in &block.stmts {
         match stmt {
-            AstStmt::While { cond, body, span } => {
+            AstStmt::While { cond, body, span, .. } => {
                 let cond_vars = collect_idents_in_expr(cond);
                 if !cond_vars.is_empty() {
                     let mutated = cond_vars.iter().any(|v| body_assigns_var(body, v));
@@ -237,6 +264,11 @@ fn collect_idents_recursive(expr: &AstExpr, out: &mut Vec<String>) {
         AstExpr::FieldAccess { base, .. }
         | AstExpr::TupleIndex { base, .. }
         | AstExpr::Index { base, .. } => collect_idents_recursive(base, out),
+        AstExpr::TryCatch { body, catch_body, .. } => {
+            collect_idents_recursive(body, out);
+            collect_idents_recursive(catch_body, out);
+        }
+        AstExpr::Raise { args, .. } => args.iter().for_each(|a| collect_idents_recursive(a, out)),
         _ => {}
     }
 }

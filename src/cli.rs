@@ -170,8 +170,29 @@ pub enum Command {
         #[arg(short = 'f', long = "force")]
         force: bool,
     },
+    /// Install a package or all dependencies from iris.toml
+    Install {
+        /// Git URL of the package to install (omit to install all from iris.toml)
+        url: Option<String>,
+    },
     /// Download and configure toolchain dependencies
     Setup,
+    /// Generate HTML documentation from doc comments
+    Docs {
+        /// Input file
+        file: Option<PathBuf>,
+        /// Write output to <file> instead of stdout
+        #[arg(short = 'o', long = "output")]
+        output: Option<PathBuf>,
+    },
+    /// Format IRIS source files
+    Fmt {
+        /// Input file (optional — formats all *.iris in current directory)
+        file: Option<PathBuf>,
+        /// Check if formatting is needed without modifying files (exit 1 if changes needed)
+        #[arg(short = 'c', long = "check")]
+        check: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -208,10 +229,26 @@ pub enum ParseArgsResult {
     },
     Bench,
     Profile,
-    Test,
+    Test {
+        /// Input file (optional — scans current directory)
+        file: Option<PathBuf>,
+        /// Filter tests by substring
+        filter: Option<String>,
+        /// Disable colored output
+        no_color: bool,
+    },
     Explain(Option<String>),
     Upgrade { check: bool, yes: bool, force: bool },
+    Install { url: Option<String> },
     Setup,
+    Fmt {
+        file: Option<PathBuf>,
+        check: bool,
+    },
+    Docs {
+        file: Option<PathBuf>,
+        output: Option<PathBuf>,
+    },
 }
 
 /// Parses command-line arguments.
@@ -306,30 +343,17 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
                 Ok(ParseArgsResult::Profile)
             }
         }
-        Some(Command::Test { file, .. }) => {
-            if file.is_some() {
-                let path = file.unwrap();
-                Ok(ParseArgsResult::Args(CliArgs {
-                    emit: EmitKind::Eval,
-                    path,
-                    output: cli.output,
-                    run_after_build: false,
-                    target: cli.target,
-                    dump_ir_after: cli.dump_ir_after,
-                    max_steps: cli.max_steps,
-                    max_depth: cli.max_depth,
-                    no_cache: cli.no_cache,
-                    sandbox: cli.sandbox,
-                }))
-            } else {
-                Ok(ParseArgsResult::Test)
-            }
+        Some(Command::Test { file, filter, no_color }) => {
+            Ok(ParseArgsResult::Test { file, filter, no_color })
         }
         Some(Command::Explain { code }) => Ok(ParseArgsResult::Explain(code)),
         Some(Command::Upgrade { check, yes, force }) => {
             Ok(ParseArgsResult::Upgrade { check, yes, force })
         }
         Some(Command::Setup) => Ok(ParseArgsResult::Setup),
+        Some(Command::Install { url }) => Ok(ParseArgsResult::Install { url }),
+        Some(Command::Fmt { file, check }) => Ok(ParseArgsResult::Fmt { file, check }),
+        Some(Command::Docs { file, output }) => Ok(ParseArgsResult::Docs { file, output }),
         None => {
             // No subcommand — treat as direct compilation request
             let path = cli.file.ok_or_else(|| "no input file specified".to_owned())?;
@@ -425,14 +449,17 @@ pub fn help_text() -> &'static str {
        build                 Build native binary (same as --emit binary)\n\
        run                   Build and run the binary\n\
        test [file.iris]      Discover and run test_ functions (--filter <substr> --no-color)\n\
+       install [url]         Install dependencies or a package from a Git URL\n\
+       fmt [file.iris]       Format source files (--check to verify without modifying)\n\
        repl                  Start an interactive REPL session\n\
        lsp                   Start the LSP server (JSON-RPC on stdin/stdout)\n\
        dap                   Start the DAP debug adapter (JSON-RPC on stdin/stdout)\n\
        pkg <cmd>             Package manager (init, add, remove, install, list, build, run)\n\
        bench <file.iris>     Run performance benchmarks on a file\n\
        explain [code]        Show detailed explanation for an error code (e.g. E0100)\n\
-       upgrade               Self-upgrade the IRIS compiler to the latest version\n\
-       setup                 Download and configure toolchain dependencies\n\
+        upgrade               Self-upgrade the IRIS compiler to the latest version\n\
+        setup                 Download and configure toolchain dependencies\n\
+        docs [file.iris]      Generate HTML documentation from doc comments\n\
      \n\
      Options:\n\
      --emit <kind>         Output kind: ir (default), llvm, llvm-complete, cuda, cuda-ptx, simd,\n\

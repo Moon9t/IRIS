@@ -61,6 +61,8 @@ pub struct CompletionItem {
     /// LSP CompletionItemKind.
     pub kind: u8,
     pub detail: Option<String>,
+    pub filter_text: Option<String>,
+    pub sort_text: Option<String>,
 }
 
 /// Persistent LSP server state: one entry per open document.
@@ -208,6 +210,7 @@ static STATIC_COMPLETIONS: &[&str] = &[
     "regex_match",
     "regex_find_all",
     "regex_replace",
+    "regex_replace_all",
     "datetime_now",
     "datetime_timestamp",
     "datetime_format",
@@ -352,6 +355,410 @@ static STATIC_COMPLETIONS: &[&str] = &[
     "std.tensorx",
     "std.http_server",
 ];
+
+// ---------------------------------------------------------------------------
+// Context-aware completion
+// ---------------------------------------------------------------------------
+
+/// Detected context for smart completion filtering.
+#[derive(Debug)]
+enum CompletionContext {
+    /// `obj.` — dot access on an identifier.
+    DotAccess { target: String },
+    /// After `bring ` — suggest module names.
+    Bring,
+    /// After `:` in a type annotation — suggest type names.
+    TypeAnnotation,
+    /// After `dyn ` keyword — suggest trait names.
+    DynKeyword,
+    /// Default: everything.
+    Default,
+}
+
+/// Detects the completion context from the source text and cursor position.
+fn detect_completion_context(source: &str, line: usize, character: usize) -> CompletionContext {
+    let Some(line_text) = source.lines().nth(line) else {
+        return CompletionContext::Default;
+    };
+    let byte_offset = utf16_to_byte_offset(line_text, character);
+    let before_cursor = &line_text[..byte_offset.min(line_text.len())];
+    let trimmed = before_cursor.trim_end();
+
+    // 1. Dot access: line ends with `.`
+    if trimmed.ends_with('.') {
+        let without_dot = &trimmed[..trimmed.len() - 1];
+        let ident_end = without_dot.len();
+        let ident_start = without_dot
+            .rfind(|c: char| !c.is_alphanumeric() && c != '_')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let target = without_dot[ident_start..ident_end].trim().to_owned();
+        if !target.is_empty() {
+            return CompletionContext::DotAccess { target };
+        }
+    }
+
+    // 2. Bring context: after `bring ` with no dot yet
+    let stripped = trimmed.trim_start();
+    if stripped.starts_with("bring") {
+        let after = &stripped["bring".len()..];
+        let after = after.trim_start();
+        if after.is_empty() || (!after.contains('.') && !after.contains('{') && !after.contains(';'))
+        {
+            return CompletionContext::Bring;
+        }
+    }
+
+    // 3. Dyn keyword (check before TypeAnnotation since `val x: dyn` has a colon)
+    if trimmed.ends_with("dyn ") || trimmed.ends_with("dyn") {
+        return CompletionContext::DynKeyword;
+    }
+
+    // 4. Type annotation: after `:` in val/var/param context
+    if let Some(last_colon) = trimmed.rfind(':') {
+        let before_colon = trimmed[..last_colon].trim_end();
+        if before_colon.ends_with("->") {
+            return CompletionContext::TypeAnnotation;
+        }
+        let before_ident = {
+            let is = before_colon
+                .rfind(|c: char| !c.is_alphanumeric() && c != '_')
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            before_colon[..is].trim_end()
+        };
+        if before_ident.ends_with("val")
+            || before_ident.ends_with("var")
+            || before_ident.ends_with(',')
+            || before_ident.ends_with('(')
+        {
+            return CompletionContext::TypeAnnotation;
+        }
+    }
+
+    CompletionContext::Default
+}
+
+/// Converts a LSP UTF-16 character offset to a byte offset within a line.
+fn utf16_to_byte_offset(line_text: &str, utf16_pos: usize) -> usize {
+    let mut byte_pos = 0;
+    let mut remaining = utf16_pos;
+    for ch in line_text.chars() {
+        let ch_len = ch.len_utf16();
+        if remaining < ch_len {
+            break;
+        }
+        remaining -= ch_len;
+        byte_pos += ch.len_utf8();
+    }
+    byte_pos
+}
+
+/// Resolves dot-access completions: returns struct fields or module functions.
+fn resolve_dot_access_completions(
+    target: &str,
+    ast: Option<&crate::parser::ast::AstModule>,
+    items: &mut Vec<CompletionItem>,
+) {
+    let Some(ast) = ast else { return };
+
+    // Try to find the type of the target identifier.
+    if let Some(ty_name) = find_type_of_ident(ast, target) {
+        // Look up struct fields
+        for s in &ast.structs {
+            if s.name.name == ty_name {
+                for field in &s.fields {
+                    items.push(CompletionItem {
+                        label: field.name.name.clone(),
+                        kind: 5,
+                        detail: Some(format!("{}: {}", ty_name, ast_type_str(&field.ty))),
+                        filter_text: None,
+                        sort_text: Some(format!("0_{}", field.name.name)),
+                    });
+                }
+                return;
+            }
+        }
+        // Look up enum variants
+        for e in &ast.enums {
+            if e.name.name == ty_name {
+                for variant in &e.variants {
+                    let detail = if variant.fields.is_empty() {
+                        format!("variant of {}", e.name.name)
+                    } else {
+                        let tys: Vec<String> = variant.fields.iter().map(ast_type_str).collect();
+                        format!("variant {}({})", variant.name.name, tys.join(", "))
+                    };
+                    items.push(CompletionItem {
+                        label: variant.name.name.clone(),
+                        kind: 20,
+                        detail: Some(detail),
+                        filter_text: None,
+                        sort_text: Some(format!("0_{}", variant.name.name)),
+                    });
+                }
+                return;
+            }
+        }
+    }
+
+    // Fallback: check if target is a brought module alias
+    for bring in &ast.brings {
+        let module_path = match &bring.path {
+            crate::parser::ast::BringPath::Stdlib(name) => {
+                format!("std.{}", name)
+            }
+            _ => continue,
+        };
+        let alias = module_path.rsplit('.').next().unwrap_or(&module_path);
+        if target == alias || target == module_path {
+            let prefix = format!("{}.", module_path);
+            for &item_label in STATIC_COMPLETIONS {
+                if item_label.starts_with(&prefix) {
+                    let func_name = &item_label[prefix.len()..];
+                    items.push(CompletionItem {
+                        label: func_name.to_owned(),
+                        kind: 3,
+                        detail: Some(format!("from {}", module_path)),
+                        filter_text: None,
+                        sort_text: Some(format!("0_{}", func_name)),
+                    });
+                }
+            }
+            if !items.is_empty() {
+                return;
+            }
+        }
+    }
+}
+
+/// Finds the type name of an identifier from the AST.
+fn find_type_of_ident(ast: &crate::parser::ast::AstModule, target: &str) -> Option<String> {
+    // Check function params
+    for func in &ast.functions {
+        for param in &func.params {
+            if param.name.name == target {
+                return Some(ast_type_str(&param.ty));
+            }
+        }
+        if let Some(ty) = find_type_in_block_for_completion(&func.body, target) {
+            return Some(ty);
+        }
+    }
+    // Check impl method params and bodies
+    for imp in &ast.impls {
+        for method in &imp.methods {
+            for param in &method.params {
+                if param.name.name == target {
+                    return Some(ast_type_str(&param.ty));
+                }
+            }
+            if let Some(ty) = find_type_in_block_for_completion(&method.body, target) {
+                return Some(ty);
+            }
+        }
+    }
+    // Check extern function params
+    for ef in &ast.extern_fns {
+        for param in &ef.params {
+            if param.name.name == target {
+                return Some(ast_type_str(&param.ty));
+            }
+        }
+    }
+    None
+}
+
+/// Searches a block for a val/var binding and returns its inferred type.
+fn find_type_in_block_for_completion(
+    block: &crate::parser::ast::AstBlock,
+    target: &str,
+) -> Option<String> {
+    use crate::parser::ast::AstStmt;
+    for stmt in &block.stmts {
+        match stmt {
+            AstStmt::Let { name, ty, init, .. } => {
+                if name.name == target {
+                    if let Some(t) = ty {
+                        return Some(ast_type_str(t));
+                    }
+                    return infer_ast_expr_type(init.as_ref());
+                }
+            }
+            AstStmt::LetTuple { names, init, .. } => {
+                for (i, n) in names.iter().enumerate() {
+                    if n.name == target {
+                        if let crate::parser::ast::AstExpr::Tuple { elements, .. } = init.as_ref()
+                        {
+                            if let Some(el) = elements.get(i) {
+                                return infer_ast_expr_type(el);
+                            }
+                        }
+                    }
+                }
+            }
+            AstStmt::ForRange { var, body, .. } | AstStmt::ParFor { var, body, .. } => {
+                if var.name == target {
+                    return Some("i64".to_owned());
+                }
+                if let Some(ty) = find_type_in_block_for_completion(body, target) {
+                    return Some(ty);
+                }
+            }
+            AstStmt::ForEach { body, .. } => {
+                if let Some(ty) = find_type_in_block_for_completion(body, target) {
+                    return Some(ty);
+                }
+            }
+            AstStmt::While { body, .. } | AstStmt::Loop { body, .. } => {
+                if let Some(ty) = find_type_in_block_for_completion(body, target) {
+                    return Some(ty);
+                }
+            }
+            AstStmt::Spawn { body, .. } => {
+                for sub in body {
+                    if let AstStmt::Let { name, ty, init, .. } = sub {
+                        if name.name == target {
+                            if let Some(t) = ty {
+                                return Some(ast_type_str(t));
+                            }
+                            return infer_ast_expr_type(init.as_ref());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Collects stdlib module names for the `bring` context.
+fn collect_bring_completions(items: &mut Vec<CompletionItem>) {
+    for &label in STATIC_COMPLETIONS {
+        if label.starts_with("std.") {
+            items.push(CompletionItem {
+                label: label.to_owned(),
+                kind: 9,
+                detail: completion_detail_for(label).map(str::to_owned),
+                filter_text: None,
+                sort_text: Some(format!("0_{}", label)),
+            });
+        }
+    }
+}
+
+/// Collects type names for type annotation context.
+fn collect_type_completions(
+    ast: Option<&crate::parser::ast::AstModule>,
+    items: &mut Vec<CompletionItem>,
+) {
+    let type_names = [
+        "i64", "i32", "i8", "u8", "u32", "u64", "usize", "f64", "f32", "bool", "str", "list",
+        "map", "option", "result", "chan", "tensor", "atomic", "mutex", "grad", "sparse",
+    ];
+    for ty in &type_names {
+        items.push(CompletionItem {
+            label: ty.to_string(),
+            kind: 7,
+            detail: Some("type".to_owned()),
+            filter_text: None,
+            sort_text: Some(format!("0_{}", ty)),
+        });
+    }
+    if let Some(ast) = ast {
+        for s in &ast.structs {
+            items.push(CompletionItem {
+                label: s.name.name.clone(),
+                kind: 22,
+                detail: Some(format!("record {}", s.name.name)),
+                filter_text: None,
+                sort_text: Some(format!("1_{}", s.name.name)),
+            });
+        }
+        for e in &ast.enums {
+            items.push(CompletionItem {
+                label: e.name.name.clone(),
+                kind: 13,
+                detail: Some(format!("choice {}", e.name.name)),
+                filter_text: None,
+                sort_text: Some(format!("1_{}", e.name.name)),
+            });
+        }
+        for ta in &ast.type_aliases {
+            items.push(CompletionItem {
+                label: ta.name.clone(),
+                kind: 7,
+                detail: Some(format!("type = {}", ast_type_str(&ta.ty))),
+                filter_text: None,
+                sort_text: Some(format!("1_{}", ta.name)),
+            });
+        }
+    }
+}
+
+/// Collects trait names for `dyn` keyword context.
+fn collect_trait_completions(
+    ast: Option<&crate::parser::ast::AstModule>,
+    items: &mut Vec<CompletionItem>,
+) {
+    if let Some(ast) = ast {
+        for tr in &ast.traits {
+            items.push(CompletionItem {
+                label: tr.name.name.clone(),
+                kind: 8,
+                detail: Some(format!("trait {}", tr.name.name)),
+                filter_text: None,
+                sort_text: Some(format!("0_{}", tr.name.name)),
+            });
+        }
+    }
+}
+
+/// Collects the default (full) completion list.
+fn collect_default_completions(
+    source: &str,
+    uri: &str,
+    ast: Option<&crate::parser::ast::AstModule>,
+    items: &mut Vec<CompletionItem>,
+) {
+    for &label in STATIC_COMPLETIONS {
+        let kind = completion_kind_for(label);
+        let sort_prefix = match kind {
+            6 => "0_",
+            3 => "1_",
+            14 => "2_",
+            7 => "3_",
+            _ => "4_",
+        };
+        items.push(CompletionItem {
+            label: label.to_owned(),
+            kind,
+            detail: completion_detail_for(label).map(str::to_owned),
+            filter_text: None,
+            sort_text: Some(format!("{}{}", sort_prefix, label)),
+        });
+    }
+
+    if let Some(ast) = ast {
+        collect_completion_items_from_ast(ast, items, None);
+    }
+
+    let module_name = uri_to_module_name(uri);
+    if let Ok(module) = crate::compile_to_module(source, &module_name) {
+        for func in module.functions() {
+            let bare = func.name.split("__").next().unwrap_or(&func.name);
+            if !bare.starts_with("__") {
+                push_completion(
+                    items,
+                    bare.to_owned(),
+                    3,
+                    Some(format!("def {}(...)", bare)),
+                );
+            }
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // LspState implementation
@@ -572,51 +979,52 @@ impl LspState {
             return Some(kw);
         }
 
+        // 5. Field access (obj.field) — only when the cursor is past a dot
+        if let Some(ast) = parse_source(source) {
+            if let Some(info) = hover_field_access(source, &ast, line, character) {
+                return Some(info);
+            }
+        }
+
         None
     }
 
     /// Returns completion candidates for the given position.
-    pub fn completions(&self, uri: &str) -> Vec<String> {
-        self.completion_items(uri)
+    pub fn completions(&self, uri: &str, line: usize, character: usize) -> Vec<String> {
+        self.completion_items(uri, line, character)
             .into_iter()
             .map(|item| item.label)
             .collect()
     }
 
-    /// Returns rich completion candidates for the given document.
-    pub fn completion_items(&self, uri: &str) -> Vec<CompletionItem> {
-        let mut items: Vec<CompletionItem> = STATIC_COMPLETIONS
-            .iter()
-            .map(|label| CompletionItem {
-                label: (*label).to_owned(),
-                kind: completion_kind_for(label),
-                detail: completion_detail_for(label).map(str::to_owned),
-            })
-            .collect();
+    /// Returns rich completion candidates for the given document and position.
+    pub fn completion_items(&self, uri: &str, line: usize, character: usize) -> Vec<CompletionItem> {
+        let Some(source) = self.documents.get(uri) else {
+            return Vec::new();
+        };
 
-        if let Some(source) = self.documents.get(uri) {
-            let module_name = uri_to_module_name(uri);
-            let module = crate::compile_to_module(source, &module_name).ok();
+        let context = detect_completion_context(source, line, character);
+        let (ast, _errors) = crate::compile_with_recovery(source);
+        let mut items: Vec<CompletionItem> = Vec::new();
 
-            if let Some(ast) = parse_source(source) {
-                collect_completion_items_from_ast(&ast, &mut items, module.as_ref());
+        match context {
+            CompletionContext::DotAccess { ref target } => {
+                resolve_dot_access_completions(target, Some(&ast), &mut items);
             }
-
-            if let Some(ref m) = module {
-                for func in m.functions() {
-                    let bare = func.name.split("__").next().unwrap_or(&func.name);
-                    if !bare.starts_with("__") {
-                        push_completion(
-                            &mut items,
-                            bare.to_owned(),
-                            3,
-                            Some(format!("def {}(...)", bare)),
-                        );
-                    }
-                }
+            CompletionContext::Bring => {
+                collect_bring_completions(&mut items);
+            }
+            CompletionContext::TypeAnnotation => {
+                collect_type_completions(Some(&ast), &mut items);
+            }
+            CompletionContext::DynKeyword => {
+                collect_trait_completions(Some(&ast), &mut items);
+            }
+            CompletionContext::Default => {
+                collect_default_completions(source, uri, Some(&ast), &mut items);
             }
         }
-        items.sort_by(|a, b| a.label.cmp(&b.label));
+
         items.dedup_by(|a, b| a.label == b.label);
         items
     }
@@ -642,7 +1050,19 @@ impl LspState {
             return Some((uri.to_owned(), start_line, start_char, start_line, end_char));
         }
 
-        // 2. Search each brought file.
+        // 2. Search function parameters (def foo(x: i64) — click on x).
+        if let Some((start_byte, end_byte)) = find_param_definition(&ast, ident) {
+            let (sl, sc) = byte_to_lsp_pos(source, start_byte);
+            let (el, ec) = byte_to_lsp_pos(source, end_byte);
+            return Some((uri.to_owned(), sl, sc, el, ec));
+        }
+
+        // 3. Search local variable bindings (val/var in function bodies).
+        if let Some(loc) = find_local_definition(&ast, ident, uri, source) {
+            return Some(loc);
+        }
+
+        // 4. Search each brought file.
         let base_path = uri_to_fs_path(uri);
         let base_dir = base_path
             .as_deref()
@@ -799,7 +1219,11 @@ impl LspState {
     /// Returns a formatted version of the document source.
     pub fn format(&self, uri: &str) -> Option<String> {
         let source = self.documents.get(uri)?;
-        Some(format_iris(source))
+        Some(crate::formatter::format_source(
+            source,
+            &crate::formatter::FormatOptions::default(),
+        )
+        .unwrap_or_else(|_| source.to_owned()))
     }
 
     // ------------------------------------------------------------------
@@ -1733,7 +2157,7 @@ mod tests {
     #[test]
     fn completions_includes_keywords() {
         let s = state_with("def main() -> i64 { 0 }");
-        let items = s.completions(URI);
+        let items = s.completions(URI, 0, 0);
         assert!(items.contains(&"def".to_owned()));
         assert!(items.contains(&"val".to_owned()));
         assert!(items.contains(&"for".to_owned()));
@@ -1742,7 +2166,7 @@ mod tests {
     #[test]
     fn completions_includes_builtins() {
         let s = state_with("def main() -> i64 { 0 }");
-        let items = s.completions(URI);
+        let items = s.completions(URI, 0, 0);
         assert!(items.contains(&"print".to_owned()));
         assert!(items.contains(&"sqrt".to_owned()));
     }
@@ -1750,17 +2174,86 @@ mod tests {
     #[test]
     fn completions_includes_user_functions() {
         let s = state_with("def my_custom_fn() -> i64 { 0 }");
-        let items = s.completions(URI);
+        let items = s.completions(URI, 0, 0);
         assert!(items.contains(&"my_custom_fn".to_owned()));
     }
 
     #[test]
     fn completions_no_duplicates() {
         let s = state_with("def main() -> i64 { 0 }");
-        let items = s.completions(URI);
+        let items = s.completions(URI, 0, 0);
         let mut sorted = items.clone();
         sorted.dedup();
         assert_eq!(items.len(), sorted.len(), "completions contain duplicates");
+    }
+
+    #[test]
+    fn completions_bring_context_returns_modules_only() {
+        let s = state_with("def main() -> i64 {\n    bring \n}");
+        let items = s.completion_items(URI, 1, 9);
+        assert!(
+            items.iter().all(|i| i.label.starts_with("std.")),
+            "bring context should only return std.* modules, got: {:?}",
+            items.iter().map(|i| &i.label).collect::<Vec<_>>()
+        );
+        assert!(items.iter().any(|i| i.label == "std.math"));
+        assert!(items.iter().any(|i| i.label == "std.string"));
+    }
+
+    #[test]
+    fn completions_type_annotation_returns_types_only() {
+        let s = state_with("def main() -> i64 {\n    val x: \n}");
+        let items = s.completion_items(URI, 1, 10);
+        assert!(
+            items.iter().all(|i| i.kind == 7 || i.kind == 22 || i.kind == 13),
+            "type context should return types/structs/enums, got: {:?}",
+            items.iter()
+                .map(|i| (&i.label, i.kind))
+                .collect::<Vec<_>>()
+        );
+        assert!(items.iter().any(|i| i.label == "i64"));
+        assert!(items.iter().any(|i| i.label == "str"));
+        assert!(items.iter().any(|i| i.label == "bool"));
+    }
+
+    #[test]
+    fn completions_dot_access_returns_struct_fields() {
+        let s = state_with(
+            "record Point { x: i64, y: i64 }\ndef main() -> i64 {\n    val p = Point { x: 1, y: 2 }\n    p.\n}",
+        );
+        let items = s.completion_items(URI, 3, 6);
+        assert!(
+            items.iter().any(|i| i.label == "x"),
+            "dot access on Point should suggest field 'x', got: {:?}",
+            items.iter().map(|i| &i.label).collect::<Vec<_>>()
+        );
+        assert!(
+            items.iter().any(|i| i.label == "y"),
+            "dot access on Point should suggest field 'y'"
+        );
+        assert!(
+            items.iter().all(|i| i.kind == 5),
+            "dot access completions should be kind=5 (field), got: {:?}",
+            items.iter().map(|i| (&i.label, i.kind)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn completions_dyn_keyword_returns_traits() {
+        let s = state_with(
+            "trait Show { }\ndef main() -> i64 {\n    val x: dyn \n    0\n}",
+        );
+        let items = s.completion_items(URI, 2, 14);
+        assert!(
+            items.iter().any(|i| i.label == "Show"),
+            "dyn context should suggest trait 'Show', got: {:?}",
+            items.iter().map(|i| (&i.label, i.kind)).collect::<Vec<_>>()
+        );
+        assert!(
+            items.iter().all(|i| i.kind == 8),
+            "dyn context should only return traits (kind=8), got: {:?}",
+            items.iter().map(|i| (&i.label, i.kind)).collect::<Vec<_>>()
+        );
     }
 
     // ── document symbols ─────────────────────────────────────────────────────
@@ -1945,7 +2438,7 @@ mod tests {
         // After close, hover/completions should return nothing
         assert!(s.hover(URI, 0, 0).is_none());
         assert!(
-            s.completions(URI).iter().all(|c| c != "f"),
+            s.completions(URI, 0, 0).iter().all(|c| c != "f"),
             "user-defined fn should be gone after close"
         );
     }
@@ -2035,6 +2528,8 @@ fn push_completion(
             label,
             kind,
             detail,
+            filter_text: None,
+            sort_text: None,
         });
     }
 }
@@ -2391,6 +2886,371 @@ fn collect_completion_items_from_stmts(
     }
 }
 
+/// Searches function parameters for a matching name.
+/// Returns `(start_byte, end_byte)` of the parameter name if found.
+fn find_param_definition(ast: &crate::parser::ast::AstModule, name: &str) -> Option<(u32, u32)> {
+    for func in &ast.functions {
+        for param in &func.params {
+            if param.name.name == name {
+                return Some((param.name.span.start.0, param.name.span.end.0));
+            }
+        }
+    }
+    for imp in &ast.impls {
+        for method in &imp.methods {
+            for param in &method.params {
+                if param.name.name == name {
+                    return Some((param.name.span.start.0, param.name.span.end.0));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Recursively search statements for a local variable binding matching `name`.
+/// Returns `(start_byte, end_byte)` of the binding name if found.
+/// Depth-first search so innermost (most recently shadowed) binding wins.
+fn find_local_in_stmts(
+    stmts: &[crate::parser::ast::AstStmt],
+    name: &str,
+) -> Option<(u32, u32)> {
+    use crate::parser::ast::AstStmt;
+    for stmt in stmts {
+        match stmt {
+            AstStmt::Let {
+                name: ident, init, ..
+            } => {
+                if ident.name == name {
+                    return Some((ident.span.start.0, ident.span.end.0));
+                }
+                if let Some(found) = find_local_in_expr(init, name) {
+                    return Some(found);
+                }
+            }
+            AstStmt::LetTuple { names, init, .. } => {
+                for n in names {
+                    if n.name == name {
+                        return Some((n.span.start.0, n.span.end.0));
+                    }
+                }
+                if let Some(found) = find_local_in_expr(init, name) {
+                    return Some(found);
+                }
+            }
+            AstStmt::ForRange {
+                var, start, end, body, ..
+            }
+            | AstStmt::ParFor {
+                var, start, end, body, ..
+            } => {
+                if var.name == name {
+                    return Some((var.span.start.0, var.span.end.0));
+                }
+                if let Some(found) = find_local_in_expr(start, name) {
+                    return Some(found);
+                }
+                if let Some(found) = find_local_in_expr(end, name) {
+                    return Some(found);
+                }
+                if let Some(found) = find_local_in_stmts(&body.stmts, name) {
+                    return Some(found);
+                }
+            }
+            AstStmt::ForEach { var, iter, body, .. } => {
+                if var.name == name {
+                    return Some((var.span.start.0, var.span.end.0));
+                }
+                if let Some(found) = find_local_in_expr(iter, name) {
+                    return Some(found);
+                }
+                if let Some(found) = find_local_in_stmts(&body.stmts, name) {
+                    return Some(found);
+                }
+            }
+            AstStmt::While { cond, body, .. } => {
+                if let Some(found) = find_local_in_expr(cond, name) {
+                    return Some(found);
+                }
+                if let Some(found) = find_local_in_stmts(&body.stmts, name) {
+                    return Some(found);
+                }
+            }
+            AstStmt::Loop { body, .. } => {
+                if let Some(found) = find_local_in_stmts(&body.stmts, name) {
+                    return Some(found);
+                }
+            }
+            AstStmt::Spawn { body, .. } => {
+                if let Some(found) = find_local_in_stmts(body, name) {
+                    return Some(found);
+                }
+            }
+            AstStmt::Expr(expr) => {
+                if let Some(found) = find_local_in_expr(expr, name) {
+                    return Some(found);
+                }
+            }
+            AstStmt::Assign { target, value, .. } => {
+                if let Some(found) = find_local_in_expr(target, name) {
+                    return Some(found);
+                }
+                if let Some(found) = find_local_in_expr(value, name) {
+                    return Some(found);
+                }
+            }
+            AstStmt::Return { value, .. } => {
+                if let Some(v) = value {
+                    if let Some(found) = find_local_in_expr(v, name) {
+                        return Some(found);
+                    }
+                }
+            }
+            AstStmt::MaskStmt { body, .. } => {
+                if let Some(found) = find_local_in_stmts(&body.stmts, name) {
+                    return Some(found);
+                }
+            }
+            AstStmt::HandleStmt { expr, .. } => {
+                if let Some(found) = find_local_in_expr(expr, name) {
+                    return Some(found);
+                }
+            }
+            AstStmt::Defer { expr, .. } => {
+                if let Some(found) = find_local_in_expr(expr, name) {
+                    return Some(found);
+                }
+            }
+            AstStmt::Yield { expr, .. } => {
+                return find_local_in_expr(expr, name);
+            }
+            AstStmt::Select { arms, default, .. } => {
+                for arm in arms {
+                    if let Some(found) = find_local_in_expr(&arm.channel, name) {
+                        return Some(found);
+                    }
+                    if let Some(found) = find_local_in_stmts(&arm.body.stmts, name) {
+                        return Some(found);
+                    }
+                }
+                if let Some(d) = default {
+                    if let Some(found) = find_local_in_stmts(&d.stmts, name) {
+                        return Some(found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Recursively search expressions for local variable bindings (e.g. in if/block expressions).
+fn find_local_in_expr(
+    expr: &crate::parser::ast::AstExpr,
+    name: &str,
+) -> Option<(u32, u32)> {
+    use crate::parser::ast::AstExpr;
+    match expr {
+        AstExpr::Block(block) => find_local_in_stmts(&block.stmts, name),
+        AstExpr::If {
+            then_block,
+            else_block,
+            cond,
+            ..
+        } => {
+            if let Some(found) = find_local_in_expr(cond, name) {
+                return Some(found);
+            }
+            if let Some(found) = find_local_in_stmts(&then_block.stmts, name) {
+                return Some(found);
+            }
+            if let Some(else_b) = else_block {
+                if let Some(found) = find_local_in_stmts(&else_b.stmts, name) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        AstExpr::Lambda { params, body, .. } => {
+            for param in params {
+                if param.name.name == name {
+                    return Some((param.name.span.start.0, param.name.span.end.0));
+                }
+            }
+            find_local_in_expr(body, name)
+        }
+        AstExpr::When { scrutinee, arms, .. } => {
+            if let Some(found) = find_local_in_expr(scrutinee, name) {
+                return Some(found);
+            }
+            for arm in arms {
+                if let Some(found) = find_local_in_expr(&arm.body, name) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        AstExpr::TryCatch {
+            body, catch_body, ..
+        } => {
+            if let Some(found) = find_local_in_expr(body, name) {
+                return Some(found);
+            }
+            // catch_param is a string, not a binding with span — skip
+            find_local_in_expr(catch_body, name)
+        }
+        AstExpr::BinOp { lhs, rhs, .. } => {
+            if let Some(found) = find_local_in_expr(lhs, name) {
+                return Some(found);
+            }
+            find_local_in_expr(rhs, name)
+        }
+        AstExpr::UnaryOp { expr, .. } => find_local_in_expr(expr, name),
+        AstExpr::Call { args, .. } => {
+            for arg in args {
+                if let Some(found) = find_local_in_expr(arg, name) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        AstExpr::Index { base, indices, .. } => {
+            if let Some(found) = find_local_in_expr(base, name) {
+                return Some(found);
+            }
+            for idx in indices {
+                if let Some(found) = find_local_in_expr(idx, name) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        AstExpr::Cast { expr, .. } => find_local_in_expr(expr, name),
+        AstExpr::StructLit { fields, spread, .. } => {
+            for (_, val) in fields {
+                if let Some(found) = find_local_in_expr(val, name) {
+                    return Some(found);
+                }
+            }
+            if let Some(s) = spread {
+                find_local_in_expr(s, name)
+            } else {
+                None
+            }
+        }
+        AstExpr::FieldAccess { base, .. } => find_local_in_expr(base, name),
+        AstExpr::Tuple { elements, .. } => {
+            for elem in elements {
+                if let Some(found) = find_local_in_expr(elem, name) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        AstExpr::TupleIndex { base, .. } => find_local_in_expr(base, name),
+        AstExpr::ArrayLit { elems, .. } => {
+            for elem in elems {
+                if let Some(found) = find_local_in_expr(elem, name) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        AstExpr::MethodCall { base, args, .. } => {
+            if let Some(found) = find_local_in_expr(base, name) {
+                return Some(found);
+            }
+            for arg in args {
+                if let Some(found) = find_local_in_expr(arg, name) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        AstExpr::MapLiteral { entries, .. } => {
+            for (k, v) in entries {
+                if let Some(found) = find_local_in_expr(k, name) {
+                    return Some(found);
+                }
+                if let Some(found) = find_local_in_expr(v, name) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        AstExpr::Mask { body, .. } => find_local_in_stmts(&body.stmts, name),
+        AstExpr::Handle { expr, .. } => find_local_in_expr(expr, name),
+        AstExpr::NullCoal { expr, default, .. } => {
+            if let Some(found) = find_local_in_expr(expr, name) {
+                return Some(found);
+            }
+            find_local_in_expr(default, name)
+        }
+        AstExpr::Await { expr, .. } => find_local_in_expr(expr, name),
+        AstExpr::Try { expr, .. } => find_local_in_expr(expr, name),
+        AstExpr::Ref { expr, .. }
+        | AstExpr::RefMut { expr, .. }
+        | AstExpr::Deref { expr, .. }
+        | AstExpr::Move { expr, .. } => find_local_in_expr(expr, name),
+        AstExpr::Unsafe { body, .. } => find_local_in_expr(body, name),
+        AstExpr::Raise { args, .. } => {
+            for a in args {
+                if let Some(found) = find_local_in_expr(a, name) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Searches the AST for a local variable binding (val/var) with the given name.
+/// Returns `(uri, range)` if found, where range is `(start_line, start_char, end_line, end_char)`.
+/// Depth-first search ensures the innermost (most recently shadowed) binding wins.
+fn find_local_definition(
+    ast: &crate::parser::ast::AstModule,
+    name: &str,
+    uri: &str,
+    source: &str,
+) -> Option<(String, u32, u32, u32, u32)> {
+    // Search function bodies (innermost-first via depth-first traversal)
+    for func in &ast.functions {
+        if let Some((start_byte, end_byte)) = find_local_in_stmts(&func.body.stmts, name) {
+            let (sl, sc) = byte_to_lsp_pos(source, start_byte);
+            let (el, ec) = byte_to_lsp_pos(source, end_byte);
+            return Some((uri.to_owned(), sl, sc, el, ec));
+        }
+        // Also check tail expression
+        if let Some(tail) = &func.body.tail {
+            if let Some((start_byte, end_byte)) = find_local_in_expr(tail, name) {
+                let (sl, sc) = byte_to_lsp_pos(source, start_byte);
+                let (el, ec) = byte_to_lsp_pos(source, end_byte);
+                return Some((uri.to_owned(), sl, sc, el, ec));
+            }
+        }
+    }
+    // Search impl method bodies
+    for imp in &ast.impls {
+        for method in &imp.methods {
+            if let Some((start_byte, end_byte)) = find_local_in_stmts(&method.body.stmts, name) {
+                let (sl, sc) = byte_to_lsp_pos(source, start_byte);
+                let (el, ec) = byte_to_lsp_pos(source, end_byte);
+                return Some((uri.to_owned(), sl, sc, el, ec));
+            }
+            if let Some(tail) = &method.body.tail {
+                if let Some((start_byte, end_byte)) = find_local_in_expr(tail, name) {
+                    let (sl, sc) = byte_to_lsp_pos(source, start_byte);
+                    let (el, ec) = byte_to_lsp_pos(source, end_byte);
+                    return Some((uri.to_owned(), sl, sc, el, ec));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Finds the byte offset of the definition of `name` in the AST.
 fn definition_byte_of(ast: &crate::parser::ast::AstModule, name: &str) -> Option<u32> {
     for func in &ast.functions {
@@ -2543,6 +3403,8 @@ fn ast_type_str(ty: &crate::parser::ast::AstType) -> String {
         AstType::WeakRef(t, _) => format!("weak_ref<{}>", ast_type_str(t)),
         AstType::DynTrait { trait_name, .. } => format!("dyn {}", trait_name),
         AstType::MaskEffectType { effects, .. } => format!("with {}", effects.join(", ")),
+        AstType::Ref(inner, _) => format!("&{}", ast_type_str(inner)),
+        AstType::RefMut(inner, _) => format!("&mut {}", ast_type_str(inner)),
     }
 }
 
@@ -2968,9 +3830,10 @@ fn builtin_hover(name: &str) -> Option<String> {
         "http_get"           => "def http_get(url: str) -> str\nHTTP GET request, returns response body",
         "http_post"          => "def http_post(url: str, body: str) -> str\nHTTP POST request, returns response body",
         "json_stringify"     => "def json_stringify(value: any) -> str\nSerialize value to JSON string",
-        "regex_match"        => "def regex_match(pattern: str, text: str) -> bool\nTest if text matches regex pattern (. * + ? ^ $)",
+        "regex_match"        => "def regex_match(pattern: str, text: str) -> bool\nTest if text matches regex pattern (. * + ? ^ $ [a-z] \\d \\w \\s (...|..))",
         "regex_find_all"     => "def regex_find_all(pattern: str, text: str) -> list<str>\nFind all matches of pattern in text",
-        "regex_replace"      => "def regex_replace(pattern: str, text: str, replacement: str) -> str\nReplace pattern matches with replacement",
+        "regex_replace"      => "def regex_replace(pattern: str, text: str, replacement: str) -> str\nReplace first match of pattern with replacement",
+        "regex_replace_all"  => "def regex_replace_all(pattern: str, text: str, replacement: str) -> str\nReplace all matches of pattern with replacement",
         "datetime_now"       => "def datetime_now() -> str\nCurrent UTC date-time in ISO 8601 format",
         "datetime_timestamp" => "def datetime_timestamp() -> f64\nCurrent Unix timestamp in seconds",
         "datetime_format"    => "def datetime_format(fmt: str) -> str\nFormat current time (%Y %m %d %H %M %S)",
@@ -2993,6 +3856,7 @@ fn builtin_hover(name: &str) -> Option<String> {
         "select"             => "def select(ch1, ch2, ...) -> i64\nReturn index of first ready channel, or -1",
         "timeout"            => "def timeout(ms: i64) -> bool\nSleep for ms milliseconds, returns true",
         "thread_count"       => "def thread_count() -> i64\nNumber of available CPU threads",
+        "par_map"            => "def par_map(list: list<T>, f: (T) -> U) -> list<U>\nApply f to each element in parallel, return new list",
         "deque_new"          => "def deque_new() -> deque<T>\nCreate an empty double-ended queue",
         "deque_push_front"   => "def deque_push_front(dq, val) -> deque<T>\nPush value to front of deque",
         "deque_push_back"    => "def deque_push_back(dq, val) -> deque<T>\nPush value to back of deque",
@@ -3120,321 +3984,7 @@ fn keyword_hover(name: &str) -> Option<String> {
     Some(info.to_owned())
 }
 
-// ---------------------------------------------------------------------------
-// Simple formatter
-// ---------------------------------------------------------------------------
 
-/// Token-stream based IRIS formatter. Normalises indentation and spacing.
-fn format_iris(source: &str) -> String {
-    use crate::parser::lexer::{Lexer, Token};
-
-    let spanned_tokens = match Lexer::new(source).tokenize() {
-        Ok(t) => t,
-        Err(_) => return source.to_owned(),
-    };
-
-    let mut out = String::with_capacity(source.len() + 64);
-    let mut indent = 0usize;
-    let mut at_line_start = true;
-    let mut prev_was_newline = false;
-    let mut blank_lines = 0usize;
-    let mut prev_tok_was_pub = false;
-
-    // Helper: emit current indentation.
-    let indent_str = |depth: usize| "    ".repeat(depth);
-
-    // Top-level item starters that get a blank line before them.
-    let is_top_level_kw = |t: &Token| {
-        matches!(
-            t,
-            Token::Def
-                | Token::Record
-                | Token::Choice
-                | Token::Model
-                | Token::Const
-                | Token::Type
-                | Token::Extern
-                | Token::Trait
-                | Token::Impl
-                | Token::Pub
-        )
-    };
-
-    // Keywords that begin a new statement inside a block body.
-    let is_stmt_kw = |t: &Token| {
-        matches!(
-            t,
-            Token::Val
-                | Token::Var
-                | Token::For
-                | Token::While
-                | Token::Loop
-                | Token::Return
-                | Token::Break
-                | Token::Continue
-                | Token::Spawn
-                | Token::Par
-        )
-    };
-
-    for (idx, spanned) in spanned_tokens.iter().enumerate() {
-        let tok = &spanned.node;
-        let tok_str = token_to_str(tok, source);
-        if tok_str.is_empty() {
-            continue;
-        }
-
-        // Emit blank line before top-level keywords (except at very start,
-        // and never between `pub` and `def`).
-        if is_top_level_kw(tok)
-            && indent == 0
-            && !out.is_empty()
-            && blank_lines == 0
-            && !at_line_start
-            && !(matches!(tok, Token::Def) && prev_tok_was_pub)
-        {
-            out.push('\n');
-            blank_lines = 1;
-        }
-
-        // Inside a block body, force a new line before statement-starting keywords
-        // so that `val a = expr val b = expr2` is emitted as two separate lines.
-        if indent > 0 && !at_line_start && is_stmt_kw(tok) {
-            out.push('\n');
-            at_line_start = true;
-        }
-
-        // Newlines and indentation.
-        if at_line_start {
-            let ind = indent_str(indent);
-            out.push_str(&ind);
-            at_line_start = false;
-        }
-
-        // Opening brace: emit, then newline + increase indent.
-        if tok_str == "{" {
-            // Space before `{` if not at line start.
-            if !out.ends_with(' ') && !out.ends_with('\n') {
-                out.push(' ');
-            }
-            out.push('{');
-            indent += 1;
-            out.push('\n');
-            at_line_start = true;
-            blank_lines = 0;
-            prev_was_newline = true;
-            continue;
-        }
-
-        // Closing brace: decrease indent, then emit on its own line.
-        if tok_str == "}" {
-            indent = indent.saturating_sub(1);
-            if !out.ends_with('\n') {
-                out.push('\n');
-            }
-            out.push_str(&indent_str(indent));
-            out.push('}');
-            out.push('\n');
-            at_line_start = true;
-            blank_lines = 0;
-            prev_was_newline = true;
-            continue;
-        }
-
-        // Semicolons and angle brackets for generics — pass through.
-        if tok_str == ";" {
-            out.push(';');
-            out.push('\n');
-            at_line_start = true;
-            blank_lines = 0;
-            prev_was_newline = false;
-            continue;
-        }
-
-        // Commas — no leading space, one trailing space.
-        if tok_str == "," {
-            // Remove trailing space before comma.
-            if out.ends_with(' ') {
-                out.pop();
-            }
-            out.push(',');
-            out.push(' ');
-            prev_was_newline = false;
-            continue;
-        }
-
-        // Operators that need surrounding spaces.
-        let needs_space = matches!(
-            tok_str.as_str(),
-            "=" | "=="
-                | "!="
-                | "<="
-                | ">="
-                | "+"
-                | "-"
-                | "*"
-                | "/"
-                | "%"
-                | "&&"
-                | "||"
-                | "->"
-                | "=>"
-                | ".."
-                | "..="
-                | ":"
-                | "to"
-        );
-
-        if needs_space {
-            if !out.ends_with(' ') && !out.ends_with('\n') {
-                out.push(' ');
-            }
-            out.push_str(&tok_str);
-            out.push(' ');
-        } else if tok_str == "(" || tok_str == "[" || tok_str == "<" {
-            // No space before open paren/bracket (function calls, indexing, generics).
-            out.push_str(&tok_str);
-        } else if tok_str == ")" || tok_str == "]" || tok_str == ">" {
-            if out.ends_with(' ') {
-                out.pop();
-            }
-            out.push_str(&tok_str);
-        } else {
-            // Default: keyword or identifier — space between tokens unless at line start.
-            let last = out.chars().last();
-            let needs_sep = matches!(last, Some(c) if c.is_alphanumeric() || c == '_' || c == '"');
-            if needs_sep && !tok_str.starts_with(['.', '(', '[']) {
-                out.push(' ');
-            }
-            out.push_str(&tok_str);
-        }
-
-        let _ = (idx, prev_was_newline, spanned.span); // suppress unused warnings
-        prev_was_newline = false;
-        blank_lines = 0;
-        prev_tok_was_pub = matches!(tok, Token::Pub);
-    }
-
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out
-}
-
-/// Returns the source text for a token (for formatting).
-fn token_to_str(tok: &crate::parser::lexer::Token, _source: &str) -> String {
-    use crate::parser::lexer::Token;
-    match tok {
-        Token::Def => "def".into(),
-        Token::Val => "val".into(),
-        Token::Var => "var".into(),
-        Token::Let => "let".into(),
-        Token::If => "if".into(),
-        Token::Else => "else".into(),
-        Token::When => "when".into(),
-        Token::For => "for".into(),
-        Token::While => "while".into(),
-        Token::Loop => "loop".into(),
-        Token::Break => "break".into(),
-        Token::Continue => "continue".into(),
-        Token::Return => "return".into(),
-        Token::Record => "record".into(),
-        Token::Choice => "choice".into(),
-        Token::Model => "model".into(),
-        Token::Layer => "layer".into(),
-        Token::Input => "input".into(),
-        Token::Output => "output".into(),
-        Token::Const => "const".into(),
-        Token::Type => "type".into(),
-        Token::Extern => "extern".into(),
-        Token::Trait => "trait".into(),
-        Token::Impl => "impl".into(),
-        Token::Mod => "mod".into(),
-        Token::Pub => "pub".into(),
-        Token::Bring => "bring".into(),
-        Token::Async => "async".into(),
-        Token::Await => "await".into(),
-        Token::Spawn => "spawn".into(),
-        Token::Par => "par".into(),
-        Token::In => "in".into(),
-        Token::To => "to".into(),
-        Token::BoolLit(b) => {
-            if *b {
-                "true".into()
-            } else {
-                "false".into()
-            }
-        }
-        // Type keywords
-        Token::I64 => "i64".into(),
-        Token::I32 => "i32".into(),
-        Token::I8 => "i8".into(),
-        Token::U8 => "u8".into(),
-        Token::U32 => "u32".into(),
-        Token::U64 => "u64".into(),
-        Token::Usize => "usize".into(),
-        Token::F64 => "f64".into(),
-        Token::F32 => "f32".into(),
-        Token::Bool => "bool".into(),
-        Token::Str => "str".into(),
-        Token::Tensor => "tensor".into(),
-        Token::LBrace => "{".into(),
-        Token::RBrace => "}".into(),
-        Token::LParen => "(".into(),
-        Token::RParen => ")".into(),
-        Token::LBracket => "[".into(),
-        Token::RBracket => "]".into(),
-        Token::LAngle => "<".into(),
-        Token::RAngle => ">".into(),
-        Token::Comma => ",".into(),
-        Token::Semi => ";".into(),
-        Token::Colon => ":".into(),
-        Token::DoubleColon => "::".into(),
-        Token::Dot => ".".into(),
-        Token::DotDot => "..".into(),
-        Token::DotDotEq => "..=".into(),
-        Token::Arrow => "->".into(),
-        Token::FatArrow => "=>".into(),
-        Token::Eq => "=".into(),
-        Token::EqEq => "==".into(),
-        Token::NotEq => "!=".into(),
-        Token::LtGt => "<>".into(),
-        Token::LtEq => "<=".into(),
-        Token::GtEq => ">=".into(),
-        Token::PlusEq => "+=".into(),
-        Token::MinusEq => "-=".into(),
-        Token::StarEq => "*=".into(),
-        Token::SlashEq => "/=".into(),
-        Token::PercentEq => "%=".into(),
-        Token::Plus => "+".into(),
-        Token::Minus => "-".into(),
-        Token::Star => "*".into(),
-        Token::Slash => "/".into(),
-        Token::Percent => "%".into(),
-        Token::Pipe => "|".into(),
-        Token::AmpAmp => "&&".into(),
-        Token::PipePipe => "||".into(),
-        Token::Bang => "!".into(),
-        Token::At => "@".into(),
-        Token::Question => "?".into(),
-        Token::Ident(s) => s.clone(),
-        Token::IntLit(n) => n.to_string(),
-        Token::FloatLit(f) => {
-            if f.fract() == 0.0 {
-                format!("{:.1}", f)
-            } else {
-                f.to_string()
-            }
-        }
-        Token::StringLit(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
-        Token::FStringLit(s) => format!("f\"{}\"", s),
-        Token::Eof => String::new(),
-        Token::Effect => "effect".to_owned(),
-        Token::With => "with".to_owned(),
-        Token::Dyn => "dyn".to_owned(),
-        Token::Resume => "resume".to_owned(),
-    }
-}
 
 // ---------------------------------------------------------------------------
 // LSP protocol server (JSON-RPC over stdin/stdout)
@@ -3613,8 +4163,10 @@ pub fn run_lsp_server() -> std::io::Result<()> {
                     .as_str()
                     .unwrap_or("")
                     .to_owned();
+                let line = params["position"]["line"].as_u64().unwrap_or(0) as usize;
+                let character = params["position"]["character"].as_u64().unwrap_or(0) as usize;
                 let items: Vec<serde_json::Value> = state
-                    .completion_items(&uri)
+                    .completion_items(&uri, line, character)
                     .into_iter()
                     .map(|item| {
                         let mut value = serde_json::json!({
@@ -3623,6 +4175,12 @@ pub fn run_lsp_server() -> std::io::Result<()> {
                         });
                         if let Some(detail) = item.detail {
                             value["detail"] = serde_json::json!(detail);
+                        }
+                        if let Some(filter_text) = item.filter_text {
+                            value["filterText"] = serde_json::json!(filter_text);
+                        }
+                        if let Some(sort_text) = item.sort_text {
+                            value["sortText"] = serde_json::json!(sort_text);
                         }
                         value
                     })
@@ -4080,6 +4638,21 @@ pub fn run_lsp_server() -> std::io::Result<()> {
                                     AstStmt::HandleStmt { expr, .. } => {
                                         collect_all_calls_in_expr(expr, calls, source);
                                     }
+                                    AstStmt::Defer { expr, .. } => {
+                                        collect_all_calls_in_expr(expr, calls, source);
+                                    }
+                                    AstStmt::Yield { expr, .. } => {
+                                        collect_all_calls_in_expr(expr, calls, source);
+                                    }
+                                    AstStmt::Select { arms, default, .. } => {
+                                        for arm in arms {
+                                            collect_all_calls_in_expr(&arm.channel, calls, source);
+                                            collect_all_calls_in_block(&arm.body, calls, source);
+                                        }
+                                        if let Some(d) = default {
+                                            collect_all_calls_in_block(d, calls, source);
+                                        }
+                                    }
                                 }
                             }
 
@@ -4136,9 +4709,12 @@ pub fn run_lsp_server() -> std::io::Result<()> {
                                     AstExpr::Cast { expr, .. } => {
                                         collect_all_calls_in_expr(expr, calls, source)
                                     }
-                                    AstExpr::StructLit { fields, .. } => {
+                                    AstExpr::StructLit { fields, spread, .. } => {
                                         for (_, val) in fields {
                                             collect_all_calls_in_expr(val, calls, source);
+                                        }
+                                        if let Some(s) = spread {
+                                            collect_all_calls_in_expr(s, calls, source);
                                         }
                                     }
                                     AstExpr::FieldAccess { base, .. } => {
@@ -4188,6 +4764,54 @@ pub fn run_lsp_server() -> std::io::Result<()> {
                                     }
                                     AstExpr::Handle { expr, .. } => {
                                         collect_all_calls_in_expr(expr, calls, source);
+                                    }
+                                    AstExpr::NullCoal { expr, default, .. } => {
+                                        collect_all_calls_in_expr(expr, calls, source);
+                                        collect_all_calls_in_expr(default, calls, source);
+                                    }
+                                    AstExpr::MapLiteral { entries, .. } => {
+                                        for (k, v) in entries {
+                                            collect_all_calls_in_expr(k, calls, source);
+                                            collect_all_calls_in_expr(v, calls, source);
+                                        }
+                                    }
+                                    AstExpr::Ref { expr, .. }
+                                    | AstExpr::RefMut { expr, .. }
+                                    | AstExpr::Deref { expr, .. }
+                                    | AstExpr::Move { expr, .. } => {
+                                        collect_all_calls_in_expr(expr, calls, source);
+                                    }
+                                    AstExpr::Unsafe { body, .. } => {
+                                        collect_all_calls_in_expr(body, calls, source);
+                                    }
+                                    AstExpr::Splat { expr, .. } => {
+                                        collect_all_calls_in_expr(expr, calls, source);
+                                    }
+                                    AstExpr::TryCatch { body, catch_body, .. } => {
+                                        collect_all_calls_in_expr(body, calls, source);
+                                        collect_all_calls_in_expr(catch_body, calls, source);
+                                    }
+                                    AstExpr::Raise { effect_name, args, span, .. } => {
+                                        let (sl, sc) = byte_to_lsp_pos(source, span.start.0);
+                                        let (el, ec) = byte_to_lsp_pos(source, span.end.0);
+                                        calls
+                                            .entry(effect_name.clone())
+                                            .or_default()
+                                            .push((sl, sc, el, ec));
+                                        for a in args {
+                                            collect_all_calls_in_expr(a, calls, source);
+                                        }
+                                    }
+                                    AstExpr::MacroCall { name, args, .. } => {
+                                        let (sl, sc) = byte_to_lsp_pos(source, name.span.start.0);
+                                        let (el, ec) = byte_to_lsp_pos(source, name.span.end.0);
+                                        calls
+                                            .entry(name.name.clone())
+                                            .or_default()
+                                            .push((sl, sc, el, ec));
+                                        for a in args {
+                                            collect_all_calls_in_expr(a, calls, source);
+                                        }
                                     }
                                 }
                             }
@@ -4376,6 +5000,156 @@ fn ident_at_byte(source: &str, byte: u32) -> Option<&str> {
     } else {
         None
     }
+}
+
+/// Returns true if `c` is a valid IRIS identifier character.
+fn is_ident_char_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_'
+}
+
+/// Attempt to resolve the type name of an identifier by searching the AST for
+/// `val name: Type` or `val name = StructLit { ... }` bindings.
+fn resolve_ident_type(
+    ast: &crate::parser::ast::AstModule,
+    name: &str,
+) -> Option<String> {
+    for func in &ast.functions {
+        if let Some(ty) = resolve_ident_in_block(&func.body, name) {
+            return Some(ty);
+        }
+    }
+    None
+}
+
+fn resolve_ident_in_block(
+    block: &crate::parser::ast::AstBlock,
+    name: &str,
+) -> Option<String> {
+    for stmt in &block.stmts {
+        match stmt {
+            crate::parser::ast::AstStmt::Let {
+                name: binding, ty, init, ..
+            } => {
+                if binding.name == name {
+                    if let Some(annotated) = ty {
+                        return Some(ast_type_str(annotated));
+                    }
+                    return infer_ast_expr_type(init);
+                }
+            }
+            crate::parser::ast::AstStmt::Expr(expr) => {
+                if let Some(ty) = resolve_ident_in_expr(expr, name) {
+                    return Some(ty);
+                }
+            }
+            crate::parser::ast::AstStmt::While { body, .. }
+            | crate::parser::ast::AstStmt::Loop { body, .. }
+            | crate::parser::ast::AstStmt::ForEach { body, .. } => {
+                if let Some(ty) = resolve_ident_in_block(body, name) {
+                    return Some(ty);
+                }
+            }
+            crate::parser::ast::AstStmt::ForRange { body, .. } => {
+                if let Some(ty) = resolve_ident_in_block(body, name) {
+                    return Some(ty);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn resolve_ident_in_expr(
+    expr: &crate::parser::ast::AstExpr,
+    name: &str,
+) -> Option<String> {
+    match expr {
+        crate::parser::ast::AstExpr::Block(block) => {
+            for stmt in &block.stmts {
+                match stmt {
+                    crate::parser::ast::AstStmt::Let {
+                        name: binding, ty, init, ..
+                    } => {
+                        if binding.name == name {
+                            if let Some(annotated) = ty {
+                                return Some(ast_type_str(&annotated));
+                            }
+                            return infer_ast_expr_type(&init);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(tail) = &block.tail {
+                resolve_ident_in_expr(tail, name)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Attempt hover for `obj.field` access patterns.
+///
+/// When the cursor sits on an identifier that follows a `.`, resolve the
+/// object's struct type from the AST and return the field's type.
+fn hover_field_access(
+    source: &str,
+    ast: &crate::parser::ast::AstModule,
+    line: u32,
+    character: u32,
+) -> Option<String> {
+    let lines: Vec<&str> = source.lines().collect();
+    let line_text = lines.get(line as usize)?;
+    let bytes = line_text.as_bytes();
+
+    let pos = character as usize;
+    if pos >= bytes.len() || !is_ident_char_byte(bytes[pos]) {
+        return None;
+    }
+
+    // Find the full identifier the cursor is on.
+    let mut end = pos;
+    while end < bytes.len() && is_ident_char_byte(bytes[end]) {
+        end += 1;
+    }
+    let mut start = pos;
+    while start > 0 && is_ident_char_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    let field_name = &line_text[start..end];
+
+    // There must be a `.` immediately before this identifier.
+    if start == 0 || bytes[start - 1] != b'.' {
+        return None;
+    }
+
+    // Walk backwards past the dot to find the object name.
+    let mut obj_end = start - 1;
+    while obj_end > 0 && is_ident_char_byte(bytes[obj_end - 1]) {
+        obj_end -= 1;
+    }
+    let obj_name = &line_text[obj_end..start - 1];
+    if obj_name.is_empty() {
+        return None;
+    }
+
+    // Resolve the object's type from the AST.
+    let obj_type = resolve_ident_type(ast, obj_name)?;
+
+    // Look up the struct definition for that type.
+    let struct_def = ast.structs.iter().find(|s| s.name.name == obj_type)?;
+
+    // Find the field within the struct.
+    let field_def = struct_def.fields.iter().find(|f| f.name.name == field_name)?;
+    let field_type = ast_type_str(&field_def.ty);
+
+    Some(format!(
+        "**{}**: `{}`\nField of `{}`",
+        field_name, field_type, obj_type
+    ))
 }
 
 fn clamp_to_char_boundary(source: &str, byte: usize) -> usize {
@@ -4775,9 +5549,12 @@ fn find_calls_in_expr(
         AstExpr::Cast { expr, .. } => {
             find_calls_in_expr(expr, target_name, ranges, source);
         }
-        AstExpr::StructLit { fields, .. } => {
+        AstExpr::StructLit { fields, spread, .. } => {
             for (_, val) in fields {
                 find_calls_in_expr(val, target_name, ranges, source);
+            }
+            if let Some(s) = spread {
+                find_calls_in_expr(s, target_name, ranges, source);
             }
         }
         AstExpr::FieldAccess { base, .. } => {
@@ -4827,6 +5604,42 @@ fn find_calls_in_expr(
         }
         AstExpr::Handle { expr, .. } => {
             find_calls_in_expr(expr, target_name, ranges, source);
+        }
+        AstExpr::NullCoal { expr, default, .. } => {
+            find_calls_in_expr(expr, target_name, ranges, source);
+            find_calls_in_expr(default, target_name, ranges, source);
+        }
+        AstExpr::MapLiteral { entries, .. } => {
+            for (k, v) in entries {
+                find_calls_in_expr(k, target_name, ranges, source);
+                find_calls_in_expr(v, target_name, ranges, source);
+            }
+        }
+        AstExpr::Ref { expr, .. }
+        | AstExpr::RefMut { expr, .. }
+        | AstExpr::Deref { expr, .. }
+        | AstExpr::Move { expr, .. } => {
+            find_calls_in_expr(expr, target_name, ranges, source);
+        }
+        AstExpr::Unsafe { body, .. } => {
+            find_calls_in_expr(body, target_name, ranges, source);
+        }
+        AstExpr::Splat { expr, .. } => {
+            find_calls_in_expr(expr, target_name, ranges, source);
+        }
+        AstExpr::TryCatch { body, catch_body, .. } => {
+            find_calls_in_expr(body, target_name, ranges, source);
+            find_calls_in_expr(catch_body, target_name, ranges, source);
+        }
+        AstExpr::Raise { effect_name: _, args, .. } => {
+            for a in args {
+                find_calls_in_expr(a, target_name, ranges, source);
+            }
+        }
+        AstExpr::MacroCall { args, .. } => {
+            for a in args {
+                find_calls_in_expr(a, target_name, ranges, source);
+            }
         }
     }
 }
@@ -4906,6 +5719,21 @@ fn find_calls_in_stmt(
         }
         AstStmt::HandleStmt { expr, .. } => {
             find_calls_in_expr(expr, target_name, ranges, source);
+        }
+        AstStmt::Defer { expr, .. } => {
+            find_calls_in_expr(expr, target_name, ranges, source);
+        }
+        AstStmt::Yield { expr, .. } => {
+            find_calls_in_expr(expr, target_name, ranges, source);
+        }
+        AstStmt::Select { arms, default, .. } => {
+            for arm in arms {
+                find_calls_in_expr(&arm.channel, target_name, ranges, source);
+                find_calls_in_block(&arm.body, target_name, ranges, source);
+            }
+            if let Some(d) = default {
+                find_calls_in_block(d, target_name, ranges, source);
+            }
         }
     }
 }

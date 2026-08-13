@@ -85,6 +85,18 @@ impl AstExhaustivenessPass {
             AstStmt::Break { .. } | AstStmt::Continue { .. } => Ok(()),
             AstStmt::MaskStmt { body, .. } => self.check_block(body, fn_name),
             AstStmt::HandleStmt { expr, .. } => self.check_expr(expr, fn_name),
+            AstStmt::Defer { expr, .. } => self.check_expr(expr, fn_name),
+            AstStmt::Yield { expr, .. } => self.check_expr(expr, fn_name),
+            AstStmt::Select { arms, default, .. } => {
+                for arm in arms {
+                    self.check_expr(&arm.channel, fn_name)?;
+                    self.check_block(&arm.body, fn_name)?;
+                }
+                if let Some(d) = default {
+                    self.check_block(d, fn_name)?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -130,9 +142,12 @@ impl AstExhaustivenessPass {
                 }
                 Ok(())
             }
-            AstExpr::StructLit { fields, .. } => {
+            AstExpr::StructLit { fields, spread, .. } => {
                 for (_, e) in fields {
                     self.check_expr(e, fn_name)?;
+                }
+                if let Some(s) = spread {
+                    self.check_expr(s, fn_name)?;
                 }
                 Ok(())
             }
