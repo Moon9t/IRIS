@@ -2104,9 +2104,30 @@ fn emit_instr_ir(
                     (BinOp::Sub, true) => format!("fsub {} {}, {}", ty_s, lv, rv),
                     (BinOp::Mul, true) => format!("fmul {} {}, {}", ty_s, lv, rv),
                     (BinOp::Div, true) => format!("fdiv {} {}, {}", ty_s, lv, rv),
-                    (BinOp::Add, false) => format!("call i64 @iris_add_checked(i64 {}, i64 {})", lv, rv),
-                    (BinOp::Sub, false) => format!("call i64 @iris_sub_checked(i64 {}, i64 {})", lv, rv),
-                    (BinOp::Mul, false) => format!("call i64 @iris_mul_checked(i64 {}, i64 {})", lv, rv),
+                    // The overflow-checked runtime helpers are i64-only. They were
+                    // being used for every integer width, emitting
+                    // `call i64 @iris_add_checked(i64 %a, ...)` where `%a` was an
+                    // i32 or i8 parameter and assigning the i64 result to a
+                    // narrower value — invalid IR that clang rejected, so any
+                    // program doing arithmetic on i32/i8/u8/u32 failed to build.
+                    //
+                    // Narrower widths therefore use native LLVM arithmetic. Plain
+                    // wrapping, without nsw/nuw: those assert no-wrap and make
+                    // overflow undefined behaviour, which would be a worse answer
+                    // than the wrap. Limit to state plainly: overflow is checked
+                    // at i64 and wraps at narrower widths.
+                    (BinOp::Add, false) if ty_s == "i64" => {
+                        format!("call i64 @iris_add_checked(i64 {}, i64 {})", lv, rv)
+                    }
+                    (BinOp::Sub, false) if ty_s == "i64" => {
+                        format!("call i64 @iris_sub_checked(i64 {}, i64 {})", lv, rv)
+                    }
+                    (BinOp::Mul, false) if ty_s == "i64" => {
+                        format!("call i64 @iris_mul_checked(i64 {}, i64 {})", lv, rv)
+                    }
+                    (BinOp::Add, false) => format!("add {} {}, {}", ty_s, lv, rv),
+                    (BinOp::Sub, false) => format!("sub {} {}, {}", ty_s, lv, rv),
+                    (BinOp::Mul, false) => format!("mul {} {}, {}", ty_s, lv, rv),
                     (BinOp::Div, false) | (BinOp::FloorDiv, _) => {
                         format!("sdiv {} {}, {}", ty_s, lv, rv)
                     }
