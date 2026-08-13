@@ -328,7 +328,57 @@ pub fn compile_ast_to_module(
 }
 
 /// Internal: compile a pre-built `AstModule` through the full pipeline.
+/// Size of the stack the compiler pipeline runs on.
+///
+/// 64 MiB. Lowering, monomorphisation and the AST passes all recurse over
+/// program structure, and on real inputs that goes deeper than a small stack
+/// allows. The effect was that the *same program* compiled from the CLI, whose
+/// main thread gets 8 MiB, and crashed with STATUS_STACK_OVERFLOW inside a Rust
+/// test thread, whose default is far smaller — so a defect appeared or vanished
+/// depending on who called the compiler. Anyone embedding `iris::compile` from a
+/// worker thread hit the same cliff.
+const COMPILER_STACK_BYTES: usize = 64 * 1024 * 1024;
+
+/// Runs the compiler pipeline on a thread with a guaranteed stack.
+///
+/// rustc does the same thing for the same reason. This makes available stack
+/// depth a property of the compiler rather than of the caller; reducing the
+/// recursion itself is still worthwhile, but no longer load-bearing for
+/// correctness.
+///
+/// A scoped thread is used so the closure can borrow its arguments, and a panic
+/// is re-raised on the calling thread so behaviour is unchanged.
+fn with_compiler_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|scope| {
+        // `spawn_scoped` consumes the closure, so a failed spawn leaves no way to
+        // run it inline. Spawning a thread only fails when the OS is out of
+        // resources, which nothing here could recover from anyway.
+        let handle = std::thread::Builder::new()
+            .stack_size(COMPILER_STACK_BYTES)
+            .name("iris-compile".to_owned())
+            .spawn_scoped(scope, f)
+            .expect("iris: could not spawn the compiler thread");
+        match handle.join() {
+            Ok(value) => value,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    })
+}
+
 fn compile_ast(
+    ast_module: &mut crate::parser::ast::AstModule,
+    module_name: &str,
+    emit: EmitKind,
+    max_steps: usize,
+    max_depth: usize,
+    dump_ir_after: Option<&str>,
+) -> Result<String, Error> {
+    with_compiler_stack(|| {
+        compile_ast_inner(ast_module, module_name, emit, max_steps, max_depth, dump_ir_after)
+    })
+}
+
+fn compile_ast_inner(
     ast_module: &mut crate::parser::ast::AstModule,
     module_name: &str,
     emit: EmitKind,
