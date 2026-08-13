@@ -2,5 +2,19 @@
   "iris.executablePath": "C:\\Users\\Moon\\Desktop\\Projects\\IRIS\\target\\debug\\iris.exe",
   "iris.formatOnSave": true,
   "iris.trace.server": "off",
-  "git.ignoreLimitWarning": true
+  "git.ignoreLimitWarning": true,
+
+  // Give rust-analyzer its own target directory.
+  //
+  // By default it runs `cargo check --workspace --all-targets` against the same
+  // target/ as a manual `cargo build`/`cargo test`. The two then contend for the
+  // build lock — a check in flight blocks the test run outright — and because the
+  // flag sets differ they invalidate each other's fingerprints, causing full
+  // rebuilds that look spontaneous. A separate directory costs disk space and
+  // buys back the incremental build.
+  "rust-analyzer.cargo.targetDir": true,
+
+  // Surface clippy findings without a second flag set fighting the check above.
+  "rust-analyzer.check.command": "check",
+  "rust-analyzer.check.allTargets": true
 }

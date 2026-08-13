@@ -19,6 +19,88 @@
     "body": ["choice ${1:Name} {", "\t${2:Variant1},", "\t${3:Variant2}", "}"],
     "description": "Define a choice (enum) type"
   },
+  "Trait": {
+    "prefix": "trait",
+    "body": ["trait ${1:Name} { def ${2:method}(${3:self}) -> ${4:type} }"],
+    "description": "Declare a trait"
+  },
+  "Impl block": {
+    "prefix": "impl",
+    "body": [
+      "impl ${1:Trait} for ${2:Type} {",
+      "\tdef ${3:method}(self${4:, other: ${2:Type}}) -> ${5:type} {",
+      "\t\t$0",
+      "\t}",
+      "}"
+    ],
+    "description": "Implement a trait for a type"
+  },
+  "Extern effect operation": {
+    "prefix": "effectop",
+    "body": ["extern def ${1:op}(${2:s: str}) -> ${3:str}"],
+    "description": "Declare an extern function usable as an interceptable effect operation"
+  },
+  "Handle block": {
+    "prefix": "handle",
+    "body": [
+      "val ${1:result} = handle {",
+      "\t${2:op}(${3:arg})",
+      "} with {",
+      "\t${2:op}(${4:x}) => $0",
+      "};"
+    ],
+    "description": "Handle an effect operation, replacing its result"
+  },
+  "Handle block with resume": {
+    "prefix": "handleresume",
+    "body": [
+      "val ${1:result} = handle {",
+      "\t${2:op}(${3:arg})",
+      "} with {",
+      "\t${2:op}(${4:x}) -> resume(${5:k}) => ${5:k}($0)",
+      "};"
+    ],
+    "description": "Handle an effect operation and resume the continuation"
+  },
+  "Defer": {
+    "prefix": "defer",
+    "body": ["defer { $0 };"],
+    "description": "Run a block when the enclosing scope exits"
+  },
+  "Select": {
+    "prefix": "select",
+    "body": [
+      "select {",
+      "\trecv(${1:ch}) => $0",
+      "}"
+    ],
+    "description": "Select over channel operations"
+  },
+  "Labeled for loop": {
+    "prefix": "labeledfor",
+    "body": [
+      "for ${1:outer} ${2:i} in ${3:0}..${4:n} {",
+      "\t$0",
+      "\tbreak ${1:outer};",
+      "}"
+    ],
+    "description": "Labelled for loop — the label follows the keyword, and break/continue can target it"
+  },
+  "Labeled loop": {
+    "prefix": "labeledloop",
+    "body": [
+      "loop ${1:name} {",
+      "\t$0",
+      "\tbreak ${1:name};",
+      "}"
+    ],
+    "description": "Labelled infinite loop with a targeted break"
+  },
+  "Assert": {
+    "prefix": "assert",
+    "body": ["assert(${1:condition});"],
+    "description": "Assert a condition — every test and example should assert its results"
+  },
   "Val binding": {
     "prefix": "val",
     "body": ["val ${1:name} = $0"],

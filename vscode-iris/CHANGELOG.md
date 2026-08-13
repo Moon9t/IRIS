@@ -1,5 +1,48 @@
 # IRIS Language Extension Changelog
 
+## 1.0.3
+
+### Bug Fixes
+
+- **Language server no longer fails with an opaque "exited with code 1".** The
+  extension picked its executable by checking only that a file existed, so a
+  stale global install at `~/.iris/bin/iris.exe` was chosen even though it could
+  not load — an older build still statically imported `onnxruntime.dll`,
+  `tensorflow.dll`, `c10.dll` and `torch_cpu.dll`, so Windows failed it at image
+  load with `STATUS_DLL_NOT_FOUND` (0xC0000135) before `main` ran. Candidates are
+  now probed with `--version` and the loader status is decoded and reported.
+- **A workspace build is now preferred** over a global install, so working on the
+  compiler uses the binary matching the sources being edited.
+- **`$iris` problem matcher was referenced by every task but never declared**, so
+  compiler errors from tasks never reached the Problems panel. It is now defined
+  against the real diagnostic format (`error[E0005]: …` / ` --> file:line:col`).
+- **`TaskGroup.Run` does not exist** in the VS Code API; the run task set its
+  group to `undefined`. esbuild does not typecheck, which is how this shipped.
+- **Run/build no longer go through a shell**, so paths containing spaces are
+  passed verbatim instead of being re-parsed.
+- **Settings now take effect.** `iris.executablePath` and the `iris.inlayHints.*`
+  flags are only read at server startup, and the change handler was an empty
+  stub; both now trigger a restart.
+
+### New Features
+
+- **Syntax highlighting completed against `src/parser/lexer.rs`.** Added the 23
+  reserved words the grammar was missing: `match`, `let`, `mod`, `by`, `effect`,
+  `handle`, `resume`, `with`, `raise`, `try`, `catch`, `defer`, `select`, `yield`,
+  `move`, `unsafe`, `dyn`, `defmacro`. Removed `and`, `or` and `not`, which are
+  not IRIS keywords, and `layer`, `input`, `output` and `where`, which are
+  contextual identifiers rather than reserved words and so mis-coloured ordinary
+  variables. Loop labels are now highlighted in `break`/`continue`.
+- **New commands**: Explain Error Code (seeded from the diagnostic under the
+  cursor), Check Formatting, Run Tests in File, Run Benchmarks, Generate
+  Documentation, Package Manager, Diagnose Toolchain, and Show Compiler Output
+  for all eleven text emit kinds (`graph`, `cuda`, `cuda-ptx`, `simd`,
+  `llvm-complete`, `onnx`, `tensorrt`, `pgo-*`) — previously only `ir` and `llvm`
+  were reachable.
+- **New settings**: `iris.sandbox`, `iris.noCache`, `iris.target`.
+- **New snippets** for `trait`, `impl`, effect operations, `handle` blocks with
+  and without `resume`, `defer`, `select`, labelled loops, and `assert`.
+
 ## 1.0.2
 
 ### New Features

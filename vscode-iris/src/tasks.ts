@@ -19,7 +19,8 @@ export class IrisTaskProvider implements vscode.TaskProvider {
             new vscode.ProcessExecution(this.getIrisExe(), ['run', '${file}']),
             '$iris'
         );
-        runTask.group = vscode.TaskGroup.Run;
+        // No group: VS Code's TaskGroup has only Clean, Build, Rebuild and Test,
+        // so a run task stays ungrouped.
         tasks.push(runTask);
 
         // 2. Build task

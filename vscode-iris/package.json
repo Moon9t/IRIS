@@ -2,7 +2,7 @@
   "name": "iris-lang",
   "displayName": "IRIS Language",
   "description": "IRIS compiler: syntax highlighting, LSP, debugging, and REPL — Go-like developer experience",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "publisher": "iris-lang",
   "engines": {
     "vscode": "^1.85.0"
@@ -102,6 +102,28 @@
       ]
       }
     ],
+    "problemMatchers": [
+      {
+        "name": "iris",
+        "owner": "iris",
+        "source": "iris",
+        "fileLocation": ["autoDetect", "${workspaceFolder}"],
+        "pattern": [
+          {
+            "regexp": "^(error|warning)(?:\\[([A-Z]\\d+)\\])?:\\s+(.*)$",
+            "severity": 1,
+            "code": 2,
+            "message": 3
+          },
+          {
+            "regexp": "^\\s*-->\\s+(.+):(\\d+):(\\d+)\\s*$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          }
+        ]
+      }
+    ],
     "taskDefinitions": [
       {
         "type": "iris",
@@ -167,6 +189,61 @@
         "command": "iris.showVersion",
         "title": "IRIS: Show Version Info",
         "icon": "$(info)"
+      },
+      {
+        "command": "iris.showEmit",
+        "title": "IRIS: Show Compiler Output...",
+        "icon": "$(file-binary)"
+      },
+      {
+        "command": "iris.showGraph",
+        "title": "IRIS: Show Graph Output",
+        "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "iris.showCuda",
+        "title": "IRIS: Show CUDA Output",
+        "icon": "$(chip)"
+      },
+      {
+        "command": "iris.showSimd",
+        "title": "IRIS: Show SIMD Output",
+        "icon": "$(symbol-array)"
+      },
+      {
+        "command": "iris.explainError",
+        "title": "IRIS: Explain Error Code",
+        "icon": "$(question)"
+      },
+      {
+        "command": "iris.checkFormat",
+        "title": "IRIS: Check Formatting",
+        "icon": "$(check)"
+      },
+      {
+        "command": "iris.runTests",
+        "title": "IRIS: Run Tests in File",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "iris.runBench",
+        "title": "IRIS: Run Benchmarks",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "iris.generateDocs",
+        "title": "IRIS: Generate Documentation",
+        "icon": "$(book)"
+      },
+      {
+        "command": "iris.pkg",
+        "title": "IRIS: Package Manager...",
+        "icon": "$(package)"
+      },
+      {
+        "command": "iris.diagnostics",
+        "title": "IRIS: Diagnose Toolchain",
+        "icon": "$(tools)"
       }
     ],
     "menus": {
@@ -214,6 +291,47 @@
         },
         {
           "command": "iris.showVersion"
+        },
+        {
+          "command": "iris.showEmit",
+          "when": "resourceExtname == .iris"
+        },
+        {
+          "command": "iris.showGraph",
+          "when": "resourceExtname == .iris"
+        },
+        {
+          "command": "iris.showCuda",
+          "when": "resourceExtname == .iris"
+        },
+        {
+          "command": "iris.showSimd",
+          "when": "resourceExtname == .iris"
+        },
+        {
+          "command": "iris.explainError"
+        },
+        {
+          "command": "iris.checkFormat",
+          "when": "resourceExtname == .iris"
+        },
+        {
+          "command": "iris.runTests",
+          "when": "resourceExtname == .iris"
+        },
+        {
+          "command": "iris.runBench",
+          "when": "resourceExtname == .iris"
+        },
+        {
+          "command": "iris.generateDocs",
+          "when": "resourceExtname == .iris"
+        },
+        {
+          "command": "iris.pkg"
+        },
+        {
+          "command": "iris.diagnostics"
         }
       ]
     },
@@ -273,6 +391,22 @@
           "type": "boolean",
           "default": true,
           "description": "Show elapsed compile+run time in the output channel."
+        },
+        "iris.sandbox": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pass --sandbox when running or building, denying filesystem, network, FFI and process access."
+        },
+        "iris.noCache": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pass --no-cache to disable incremental compilation."
+        },
+        "iris.target": {
+          "type": "string",
+          "default": "",
+          "description": "Target preset or triple used by IRIS: Build Binary (e.g. linux-arm64). Empty means the host target.",
+          "scope": "machine-overridable"
         }
       }
     },
