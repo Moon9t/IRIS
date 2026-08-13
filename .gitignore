@@ -88,6 +88,41 @@ test_results.txt
 tests/_all_tests.txt
 
 # ────────────────────────────────────────────────────────────
+# Ad-hoc debug dumps at the repo root
+# ────────────────────────────────────────────────────────────
+#
+# Redirecting a build or test run to a file at the repo root is a normal way to
+# capture output, but 25 such files had accumulated untracked and would have
+# shipped in a source tarball. These patterns are deliberately anchored to the
+# root with a leading slash so a legitimately tracked file of the same name
+# deeper in the tree is unaffected.
+/dump_*.txt
+/nf_*.txt
+/tmp_*.txt
+/stdout*.txt
+/stderr*.txt
+/test_err.txt
+/test_out.txt
+/full_test_*.txt
+/llvm_out.txt
+/llvm_err.txt
+/build_errors.txt
+/wasm_test_output.txt
+
+# Scratch directory for one-off reproductions.
+/tmp/
+
+# ────────────────────────────────────────────────────────────
+# Local build configuration
+# ────────────────────────────────────────────────────────────
+#
+# .cargo/config.toml here pins a machine-specific linker (lld-link) and other
+# host-tuned build settings. Committing it breaks a fresh clone on any machine
+# without that toolchain, which is exactly the portability problem the release
+# work is removing, so it stays local.
+/.cargo/
+
+# ────────────────────────────────────────────────────────────
 # Environment / secrets
 # ────────────────────────────────────────────────────────────
 *.env
