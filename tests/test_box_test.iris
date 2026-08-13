@@ -1,0 +1,56 @@
+// Full HKT test: F[_] inference from arg types and binding_ty
+
+record Box[T] {
+    item: T,
+}
+
+// HKT: F[_] inferred from arg type
+def container_count[F[_], T](container: F<T>) -> i64 {
+    1
+}
+
+// HKT: F[_] in both arg and return — F inferred from arg, return type resolved
+def passthrough[F[_], T](container: F<T>) -> F<T> {
+    container
+}
+
+// HKT: F[_] return type inferred from binding_ty
+def wrap_in[T](x: T) -> Box<T> {
+    Box { item: x }
+}
+
+def test_hkt_multi_container() -> i64 {
+    // container_count with list — F = list
+    val nums: list<i64> = list();
+    list_push(nums, 1);
+    list_push(nums, 2);
+    list_push(nums, 3);
+    val r1 = container_count(nums);
+
+    // container_count with option — F = option
+    val opt: option<i64> = some(42);
+    val r2 = container_count(opt);
+
+    // passthrough with list — F = list, T = i64
+    val lst: list<i64> = list();
+    list_push(lst, 10);
+    list_push(lst, 20);
+    val r3 = passthrough(lst);
+    val r4 = list_get(r3, 0);
+
+    // passthrough with option — F = option, T = str
+    val s: option<str> = some("hi");
+    val r5 = passthrough(s);
+
+    // wrap_in — Box<T> return from binding_ty
+    val b: Box<i64> = wrap_in(7);
+    val r6 = b.item;
+
+    println("HKT multi-container PASSED");
+    r1 + r2 + r4 + r6
+}
+
+def main() -> i64 {
+    test_hkt_multi_container();
+    0
+}

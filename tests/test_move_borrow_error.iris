@@ -1,0 +1,14 @@
+// Test borrow-after-move error detection
+// This file should FAIL to compile with a borrow error.
+
+def test_borrow_after_move() -> i64 {
+    val x: i64 = 10;
+    val y = move x;
+    // x is moved, borrowing it should be an error
+    val r: &i64 = &x;
+    return y
+}
+
+def main() -> i64 {
+    return test_borrow_after_move()
+}

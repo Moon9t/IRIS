@@ -1,0 +1,14 @@
+def main() -> i64 {
+    val a = "apple"
+    val b = "banana"
+    val c = "cherry"
+    val r1 = if a < b { 1 } else { 0 };
+    val r2 = if b < c { 1 } else { 0 };
+    val r3 = if a > b { 1 } else { 0 };
+    val r4 = if "apple" > "x" { 1 } else { 0 };
+    println(to_str(r1));
+    println(to_str(r2));
+    println(to_str(r3));
+    println(to_str(r4));
+    r1 + r2 + r3 + r4
+}

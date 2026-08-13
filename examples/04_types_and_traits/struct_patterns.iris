@@ -1,0 +1,74 @@
+// struct_patterns.iris — Destructuring records in `when`.
+//
+// In a pattern, a bare field name BINDS and `field: value` TESTS. Mixing the
+// two in one pattern is what makes struct patterns worth using.
+
+record Point { x: i64, y: i64 }
+
+// Arms are tried top to bottom, so specific patterns must come before general
+// ones — otherwise the general arm would shadow them.
+def classify(p: Point) -> str {
+    when p {
+        // Both fields tested: matches exactly one point.
+        Point { x: 0, y: 0 } => "origin",
+        // x tested, y bound: the whole vertical axis.
+        Point { x: 0, y } => "on y-axis at " + to_str(y),
+        // y tested, x bound: the whole horizontal axis.
+        Point { x, y: 0 } => "on x-axis at " + to_str(x),
+        // Both bound, plus a guard. Guards run AFTER binding, which is why
+        // x and y can be compared here.
+        Point { x, y } if x == y => "on the diagonal",
+        _ => "general position",
+    }
+}
+
+// Or-patterns share one arm. Every alternative must bind the same names —
+// here none of them bind, so the arm body needs nothing from the pattern.
+choice Quadrant { First, Second, Third, Fourth }
+
+def is_upper(q: Quadrant) -> bool {
+    when q {
+        Quadrant.First | Quadrant.Second => true,
+        Quadrant.Third | Quadrant.Fourth => false,
+    }
+}
+
+// Range patterns match numeric spans inclusively.
+def magnitude(n: i64) -> str {
+    when n {
+        0 => "zero",
+        1..=9 => "single digit",
+        10..=99 => "double digit",
+        _ => "large",
+    }
+}
+
+def main() -> i64 {
+    println("--- struct patterns ---");
+    println(classify(Point { x: 0, y: 0 }));
+    println(classify(Point { x: 0, y: 7 }));
+    println(classify(Point { x: 4, y: 0 }));
+    println(classify(Point { x: 3, y: 3 }));
+    println(classify(Point { x: 2, y: 9 }));
+
+    println("");
+    println("--- or-patterns ---");
+    println("First is upper?  " + to_str(is_upper(Quadrant.First)));
+    println("Fourth is upper? " + to_str(is_upper(Quadrant.Fourth)));
+
+    println("");
+    println("--- range patterns ---");
+    println("0   -> " + magnitude(0));
+    println("7   -> " + magnitude(7));
+    println("42  -> " + magnitude(42));
+    println("500 -> " + magnitude(500));
+
+    // Exhaustiveness is checked at compile time: dropping an arm from
+    // is_upper's `when` is a compile error, not a runtime surprise. That is
+    // what makes `choice` safer than integer constants — adding a variant
+    // surfaces every place that must be updated.
+
+    println("");
+    println("all pattern checks passed");
+    0
+}

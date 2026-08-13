@@ -1,0 +1,45 @@
+// Feature 23: Named keyword arguments
+def main() -> i64 {
+    // Test 1: Basic named args (in order)
+    val t1: i64 = add(a=3, b=4);
+    println("t1=" + to_str(t1));
+
+    // Test 2: Named args out of order
+    val t2: i64 = add(b=10, a=5);
+    println("t2=" + to_str(t2));
+
+    // Test 3: Mix positional and named
+    val t3: i64 = add(2, b=8);
+    println("t3=" + to_str(t3));
+
+    // Test 4: Named args with 3 params
+    val t4: i64 = triply(x=4);
+    println("t4=" + to_str(t4));
+
+    // Test 5: Positional only (backward compat)
+    val t5: i64 = add(7, 3);
+    println("t5=" + to_str(t5));
+
+    // Test 6: All named with 3 params
+    val t6: i64 = scale(x=3, y=5, z=2);
+    println("t6=" + to_str(t6));
+
+    // Test 7: All named
+    val t7: i64 = add(a=100, b=200);
+    println("t7=" + to_str(t7));
+
+    println("All named arg tests passed!");
+    return 0
+}
+
+def add(a: i64, b: i64) -> i64 {
+    return a + b
+}
+
+def triply(x: i64) -> i64 {
+    return add(x, add(x, x))
+}
+
+def scale(x: i64, y: i64, z: i64) -> i64 {
+    return x * y * z
+}

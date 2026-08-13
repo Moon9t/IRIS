@@ -1,0 +1,7 @@
+bring std.math
+
+def main() -> i64 {
+    val g = gcd(12, 8);
+    println("gcd=" + to_str(g));
+    0
+}

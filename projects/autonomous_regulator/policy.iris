@@ -1,0 +1,93 @@
+// policy.iris — Decision policies ("Plan" in MAPE-K).
+//
+// Two interchangeable controllers behind one trait. Keeping the policy behind
+// a trait is the point: swapping control strategy must not require touching
+// perception, the world model, or the safety layer.
+
+bring "types.iris"
+bring "world_model.iris"
+
+// A control policy maps a Belief to a desired temperature correction.
+// Positive delta means "add heat".
+pub trait Policy {
+    def decide(self, b: Belief) -> f64
+    def name(self) -> str
+}
+
+// ─── Proportional controller ──────────────────────────────────────────────
+// Correction proportional to error. Simple, and adequate once the world model
+// has already removed most of the sensor noise.
+pub record Proportional {
+    gain: f64
+}
+
+impl Policy for Proportional {
+    def decide(self, b: Belief) -> f64 {
+        val err = error_from_setpoint(b);
+        // Negate: positive error (too hot) must produce negative delta.
+        0.0 - err * self.gain
+    }
+
+    def name(self) -> str {
+        "proportional"
+    }
+}
+
+// ─── Deadband controller ──────────────────────────────────────────────────
+// Does nothing inside a tolerance band, then applies a fixed step. Trades
+// steady-state precision for far less actuator wear — usually the right call
+// on real hardware with a mechanical relay.
+pub record Deadband {
+    band_c: f64,
+    step_c: f64
+}
+
+impl Policy for Deadband {
+    def decide(self, b: Belief) -> f64 {
+        val err = error_from_setpoint(b);
+        if abs(err) < self.band_c {
+            return 0.0;
+        };
+        if err > 0.0 {
+            return 0.0 - self.step_c;
+        };
+        self.step_c
+    }
+
+    def name(self) -> str {
+        "deadband"
+    }
+}
+
+// ─── Mode classification ──────────────────────────────────────────────────
+// Derived from the action actually chosen, not from raw error, so the reported
+// mode can never disagree with what the actuator was told to do.
+pub def classify(delta_c: f64) -> Mode {
+    if delta_c > 0.05 {
+        return Mode.Heating;
+    };
+    if delta_c < 0.0 - 0.05 {
+        return Mode.Cooling;
+    };
+    Mode.Idle
+}
+
+// NOTE: written as an if/else chain rather than `when`. A `when` expression
+// whose arms are string literals currently infers i64 and fails codegen with
+// "defined with type 'i64' but expected 'ptr'". See docs/known-issues.md.
+pub def mode_name(m: Mode) -> str {
+    val s: str = if m == Mode.Heating {
+        "heating"
+    } else {
+        if m == Mode.Cooling {
+            "cooling"
+        } else {
+            if m == Mode.Fault {
+                "fault"
+            } else {
+                "idle"
+            }
+        }
+    };
+    s
+}

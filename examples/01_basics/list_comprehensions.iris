@@ -1,0 +1,43 @@
+// list_comprehensions.iris — Declarative list construction
+//
+// List comprehensions create new lists by transforming and filtering
+// elements from existing collections in a single expression.
+//
+// Run: iris run examples/01_basics/list_comprehensions.iris
+
+// Manual approach: build a list with loops
+def doubles_manual(n: i64) -> list<i64> {
+    var result: list<i64> = list();
+    var i = 0;
+    while i < n {
+        list_push(result, i * 2);
+        i = i + 1;
+    }
+    result
+}
+
+def main() -> i64 {
+    print("=== List Comprehensions ===");
+    print("");
+
+    // Basic: create list from range
+    val squares = [x * x for x in 0..5];
+    print("squares = [0,1,4,9,16]: " + to_str(list_get(squares, 0)) + ", "
+        + to_str(list_get(squares, 1)) + ", "
+        + to_str(list_get(squares, 2)) + ", "
+        + to_str(list_get(squares, 3)) + ", "
+        + to_str(list_get(squares, 4)));
+
+    // Transform existing list
+    val names = list("alice", "bob", "charlie");
+    val upper = [to_upper(s) for s in names];
+    print("uppercased: " + to_str(len(upper)));
+
+    // Manual loop equivalent
+    val manual = doubles_manual(5);
+    print("manual doubles: " + to_str(len(manual)));
+
+    print("");
+    print("list comprehension example complete.");
+    0
+}

@@ -1,0 +1,29 @@
+// math_helpers.iris — Helper module for pub use re-exports example
+//
+// This module defines utility functions that can be re-exported.
+
+/// Square a number
+pub def square(x: i64) -> i64 {
+    x * x
+}
+
+/// Cube a number
+pub def cube(x: i64) -> i64 {
+    x * x * x
+}
+
+/// Check if a number is even
+pub def is_even(n: i64) -> bool {
+    n % 2 == 0
+}
+
+/// Factorial (iterative)
+pub def factorial(n: i64) -> i64 {
+    var result = 1;
+    var i = 2;
+    while i <= n {
+        result = result * i;
+        i = i + 1;
+    }
+    result
+}

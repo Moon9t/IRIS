@@ -1,0 +1,9 @@
+bring std.math.{gcd, lcm}
+
+def main() -> i64 {
+    val g = gcd(12, 8);
+    println("gcd=" + to_str(g));
+    val l = lcm(12, 8);
+    println("lcm=" + to_str(l));
+    g + l
+}

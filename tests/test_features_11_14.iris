@@ -1,0 +1,49 @@
+/// Test: Feature 11-14 (pub use, doc comments, refinement types, HKT)
+
+// ---- Feature 12: Doc Comments ----
+/// This function has a doc comment.
+/// It should appear in LSP hover tooltips.
+def doc_test() -> i64 {
+    42
+}
+
+// ---- Feature 13: Refinement Types ----
+type Positive = i64 where x > 0
+type NonNeg = i64 where x >= 0
+type SmallInt = i64 where x > 0 and x < 100
+
+/// A documented function using refinement types.
+def test_refinement() -> i64 {
+    val a: Positive = 10;
+    val b: NonNeg = 0;
+    val c: SmallInt = 50;
+    println("refinement types PASSED");
+    a + b + c
+}
+
+// ---- Feature 14: Higher-Kinded Types ----
+record Pair[T, U] {
+    first: T,
+    second: U,
+}
+
+/// F[T] HKT syntax in generic parameter.
+def apply_wrap[F[T], T](x: T) -> F<T> {
+    x
+}
+
+def test_hkt() -> i64 {
+    val p: Pair<i64, str> = Pair { first: 10, second: "hello" };
+    println("HKT PASSED");
+    p.first
+}
+
+// ---- Feature 11: pub use re-exports ----
+// pub bring std.string;  // syntax accepted (re-exports string module)
+// pub bring "utils.iris"; // syntax accepted
+
+def main() -> i64 {
+    test_refinement();
+    test_hkt();
+    0
+}

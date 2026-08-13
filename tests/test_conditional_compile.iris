@@ -1,0 +1,29 @@
+// tests/test_conditional_compile.iris -- Verify preprocessor directives
+
+#define VERSION 1
+#define BUILD "alpha"
+
+#ifdef WINDOWS
+def platform() -> str {
+    "windows"
+}
+#else
+def platform() -> str {
+    "unix"
+}
+#endif
+
+#ifndef DEBUG
+def is_debug() -> bool {
+    false
+}
+#else
+def is_debug() -> bool {
+    true
+}
+#endif
+
+def main() -> i64 {
+    println("platform = " + platform());
+    0
+}

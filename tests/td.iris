@@ -1,0 +1,12 @@
+bring std.heap
+def main() -> i64 {
+    val pairs: list<(str, i64)> = list();
+    list_push(pairs, ("a", 1));
+    list_push(pairs, ("b", 2));
+    var result: str = "";
+    for (letter, num) in pairs {
+        result = result + letter + to_str(num);
+    }
+    if result != "a1b2" { return 1 }
+    0
+}

@@ -1,0 +1,55 @@
+// refinement_types.iris — Type-level constraints on values
+//
+// Refinement types add predicates to basic types, creating types like
+// `Positive` (i64 where x > 0) or `SmallInt` (i64 where 0 < x < 100).
+// The compiler inserts runtime checks at binding sites.
+//
+// Run: iris run examples/04_types_and_traits/refinement_types.iris
+
+// Define refinement types
+type Positive = i64 where x > 0
+type NonNeg = i64 where x >= 0
+type SmallInt = i64 where x > 0 and x < 100
+type UnderThousand = i64 where x > 0 and x < 1000
+
+/// Safe division that only accepts positive divisors
+def safe_div(a: i64, b: Positive) -> i64 {
+    a / b
+}
+
+/// Clamp a value to a small integer range
+def small_add(a: SmallInt, b: SmallInt) -> i64 {
+    a + b
+}
+
+def main() -> i64 {
+    print("=== Refinement Types ===");
+    print("");
+
+    // Positive values
+    val p: Positive = 42;
+    print("positive(42) = " + to_str(p));
+
+    // Non-negative
+    val z: NonNeg = 0;
+    print("nonneg(0) = " + to_str(z));
+
+    // SmallInt — bounded 1..99
+    val s: SmallInt = 50;
+    print("small(50) = " + to_str(s));
+
+    // Use refined types in functions
+    val result = safe_div(100, 4);
+    print("safe_div(100, 4) = " + to_str(result));
+
+    val sum = small_add(30, 40);
+    print("small_add(30, 40) = " + to_str(sum));
+
+    // UnderThousand refinement
+    val big: UnderThousand = 999;
+    print("under_thousand(999) = " + to_str(big));
+
+    print("");
+    print("refinement types example complete.");
+    0
+}

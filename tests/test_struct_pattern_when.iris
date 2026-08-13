@@ -1,0 +1,46 @@
+record Point { x: f64, y: f64 }
+record Pair { a: i64, b: i64 }
+
+def test_simple() -> i64 {
+    val p = Point { x: 1.0, y: 2.0 }
+    when p {
+        Point { x: 1.0, y } => { print("x is 1.0, y = " + to_str(y)); 1 }
+        Point { x, y } => { print("x = " + to_str(x) + ", y = " + to_str(y)); 2 }
+        _ => { print("other"); 0 }
+    }
+}
+
+def test_second_arm() -> i64 {
+    val q = Point { x: 5.0, y: 7.0 }
+    when q {
+        Point { x: 1.0, y } => { print("x is 1.0, y = " + to_str(y)); 1 }
+        Point { x, y } => { print("x = " + to_str(x) + ", y = " + to_str(y)); 2 }
+        _ => { print("other"); 0 }
+    }
+}
+
+def test_field_lit() -> i64 {
+    val pr = Pair { a: 3, b: 4 }
+    when pr {
+        Pair { a: 0, b } => { print("a is zero, b = " + to_str(b)); 1 }
+        Pair { a, b: 4 } => { print("a = " + to_str(a) + ", and b is 4"); 2 }
+        _ => { print("no match"); 0 }
+    }
+}
+
+def test_wildcard() -> i64 {
+    val pr = Pair { a: 9, b: 9 }
+    when pr {
+        Pair { a: 0, b } => { print("a is zero, b = " + to_str(b)); 1 }
+        Pair { a, b: 4 } => { print("a = " + to_str(a) + ", and b is 4"); 2 }
+        _ => { print("no match"); 0 }
+    }
+}
+
+def main() -> i64 {
+    test_simple();
+    test_second_arm();
+    test_field_lit();
+    test_wildcard();
+    0
+}

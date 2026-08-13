@@ -1,0 +1,20 @@
+record Pair {
+    first: str,
+    second: i64,
+}
+
+def main() -> i64 {
+    val pairs: list<Pair> = list();
+    list_push(pairs, Pair { first: "a", second: 1 });
+    list_push(pairs, Pair { first: "b", second: 2 });
+    list_push(pairs, Pair { first: "c", second: 3 });
+    val result: str = "";
+    for (letter, num) in pairs {
+        result = result + letter + to_str(num);
+    }
+    println("Result: " + result);
+    if result != "a1b2c3" { return 1 };
+
+    println("ALL PASS");
+    0
+}

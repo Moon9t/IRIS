@@ -1,0 +1,11 @@
+record Box[T] { value: T }
+
+def get_val[T](b: Box<T>) -> T {
+    b.value
+}
+
+def main() -> i64 {
+    var b = Box { value: 42 }
+    val x = get_val(b)
+    x
+}

@@ -1,0 +1,59 @@
+// Test try/catch on Result types.
+
+def safe_divide(a: i64, b: i64) -> result<i64, str> {
+    if b == 0 {
+        err("division by zero")
+    } else {
+        ok(a / b)
+    }
+}
+
+def check(b: bool) -> i64 {
+    if b { 0 } else { 1 }
+}
+
+def main() -> i64 {
+    // Test 1: try/catch where body succeeds (no ? triggers catch)
+    val r1: i64 = try {
+        val v: i64 = safe_divide(10, 2)?;
+        v
+    } catch e {
+        -999
+    };
+    val t1: i64 = check(r1 == 5);
+    println("try/catch success case: " + to_str(r1));
+
+    // Test 2: try/catch where body fails (catch receives error)
+    val r2: i64 = try {
+        val v: i64 = safe_divide(10, 0)?;
+        v
+    } catch e {
+        println("caught error: " + to_str(e));
+        -1
+    };
+    val t2: i64 = check(r2 == -1);
+    println("try/catch error case: " + to_str(r2));
+
+    // Test 3: nested try/catch
+    val r3: i64 = try {
+        val outer: i64 = try {
+            val v: i64 = safe_divide(1, 0)?;
+            v
+        } catch inner {
+            0
+        };
+        outer
+    } catch outer_err {
+        -999
+    };
+    val t3: i64 = check(r3 == 0);
+    println("nested try/catch: " + to_str(r3));
+
+    // Test 4: no catch (normal ? early return behavior)
+    val r4 = safe_divide(20, 4)?;
+    val t4: i64 = check(r4 == 5);
+    println("normal ? works: " + to_str(r4));
+
+    println("t1=" + to_str(t1) + " t2=" + to_str(t2) + " t3=" + to_str(t3) + " t4=" + to_str(t4));
+    t1 + t2 + t3 + t4
+}

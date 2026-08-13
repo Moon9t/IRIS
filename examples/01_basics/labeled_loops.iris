@@ -1,0 +1,49 @@
+// labeled_loops.iris — Breaking out of nested loops by name.
+//
+// Without labels, escaping an outer loop from inside an inner one needs a
+// sentinel flag checked at every level. Labels say it directly.
+
+def main() -> i64 {
+    // A label on `loop`: the name goes right after the keyword.
+    var x = 0;
+    loop counting {
+        x = x + 1;
+        if x == 5 { break counting; };
+    };
+    println("loop ran until x = " + to_str(x));
+
+    // The payoff: `break outer` exits BOTH loops at once.
+    // Inner j reaches 5 on the first outer pass, so sum stops at 4.
+    var sum = 0;
+    for outer i in 1..10 {
+        for j in 1..10 {
+            if j == 5 { break outer; };
+            sum = sum + 1;
+        };
+    };
+    println("nested break stopped at sum = " + to_str(sum));
+
+    // `while` takes a label between the keyword and the condition.
+    var y = 0;
+    while guard y < 10 {
+        y = y + 1;
+        if y == 3 { break guard; };
+    };
+    println("labeled while stopped at y = " + to_str(y));
+
+    // `continue` targets a label too — here it skips the even numbers,
+    // so only the odd ones (1,3,5,7,9) are counted.
+    var odds = 0;
+    for scan i in 1..10 {
+        if i % 2 == 0 { continue scan; };
+        odds = odds + 1;
+    };
+    println("odd numbers counted = " + to_str(odds));
+
+    assert(x == 5);
+    assert(sum == 4);
+    assert(y == 3);
+    assert(odds == 5);
+    println("all labeled-loop checks passed");
+    0
+}

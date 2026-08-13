@@ -1,0 +1,38 @@
+def main() -> i64 {
+    // Simple labeled loop break
+    var x = 0;
+    loop myLoop {
+        x = x + 1;
+        if x == 5 { break myLoop; };
+    };
+    assert(x == 5);
+
+    // Labeled break from nested for loops
+    var sum = 0;
+    for outer i in 1..10 {
+        for j in 1..10 {
+            if j == 5 { break outer; };
+            sum = sum + 1;
+        };
+    };
+    assert(sum == 4);
+
+    // Labeled break from while
+    var y = 0;
+    while counter y < 10 {
+        y = y + 1;
+        if y == 3 { break counter; };
+    };
+    assert(y == 3);
+
+    // Labeled continue in for loop
+    var even_sum = 0;
+    for outer2 i in 1..10 {
+        if i % 2 == 0 { continue outer2; };
+        even_sum = even_sum + 1;
+    };
+    assert(even_sum == 5);
+
+    println("All labeled break/continue tests passed!");
+    0
+}

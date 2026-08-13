@@ -1,0 +1,11 @@
+mod math {
+    val x: i64 = 42
+}
+
+use math
+
+def main() {
+    println(to_str(x))
+}
+
+main()

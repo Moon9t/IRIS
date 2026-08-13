@@ -1,0 +1,33 @@
+// Test for loop step/by clause
+def main() -> i64 {
+    // by 2: 0, 2, 4, 6, 8
+    val result1: str = "";
+    for i in 0..10 by 2 {
+        result1 = result1 + to_str(i) + " ";
+    }
+    println("0..10 by 2: " + result1);
+
+    // by 3: 0, 3, 6, 9
+    val result2: str = "";
+    for i in 0..10 by 3 {
+        result2 = result2 + to_str(i) + " ";
+    }
+    println("0..10 by 3: " + result2);
+
+    // inclusive with by 5: 0, 5, 10
+    val result3: str = "";
+    for i in 0..=10 by 5 {
+        result3 = result3 + to_str(i) + " ";
+    }
+    println("0..=10 by 5: " + result3);
+
+    // by 1 (same as default)
+    val result4: str = "";
+    for i in 0..3 by 1 {
+        result4 = result4 + to_str(i) + " ";
+    }
+    println("0..3 by 1: " + result4);
+
+    println("ALL PASS");
+    0
+}

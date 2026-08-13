@@ -1,0 +1,31 @@
+def cleanup(name: str) -> i64 {
+    println("cleanup: " + name);
+    0
+}
+
+def test_return() -> i64 {
+    println("before defer");
+    defer cleanup("first");
+    println("about to return");
+    defer cleanup("second");
+    return 42
+}
+
+def main() -> i64 {
+    val r = test_return();
+    println("returned: " + to_str(r));
+
+    // Test with tail expression (no return keyword)
+    val r2 = test_tail();
+    println("tail: " + to_str(r2));
+
+    println("All defer tests passed!");
+    0
+}
+
+def test_tail() -> i64 {
+    println("tail before defer");
+    defer cleanup("tail-cleanup");
+    println("tail after defer");
+    99
+}

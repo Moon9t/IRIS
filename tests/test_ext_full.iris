@@ -1,0 +1,34 @@
+// Extension methods: module-level functions callable as methods
+def negate(x: i64) -> i64 {
+    0 - x
+}
+
+def wrap_str(s: str) -> str {
+    "[" + s + "]"
+}
+
+def main() -> i64 {
+    // Test: negate as extension on i64
+    val n = 10.negate();
+    println("10.negate() = " + to_str(n));
+
+    // Test: wrap_str as extension on str
+    val w = "hello".wrap_str();
+    println("wrap_str: " + w);
+
+    // Test: multi-arg extension method
+    val val2 = "world".add_prefix("hello ");
+    println("add_prefix: " + val2);
+
+    if n == -10 && w == "[hello]" {
+        println("All extension method tests passed!");
+        0
+    } else {
+        println("FAILED");
+        1
+    }
+}
+
+def add_prefix(s: str, prefix: str) -> str {
+    prefix + s
+}

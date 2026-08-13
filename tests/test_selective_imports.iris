@@ -1,0 +1,17 @@
+bring std.math.{gcd, lcm}
+
+def main() -> i64 {
+    val g = gcd(12, 8);
+    val l = lcm(12, 8);
+    if g == 4 {
+        if l == 24 {
+            0
+        } else {
+            println("bad lcm=" + to_str(l));
+            1
+        }
+    } else {
+        println("bad gcd=" + to_str(g));
+        1
+    }
+}

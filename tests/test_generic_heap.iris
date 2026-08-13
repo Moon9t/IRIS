@@ -1,0 +1,82 @@
+// tests/test_generic_heap.iris -- Tests for generic MinHeap[T]
+//
+// Test 1: MinHeap<i64> — push, peek, pop, len
+// Test 2: MinHeap<i64> — from_list, to_list, sorted order
+// Test 3: MinHeap<i64> — merge two heaps
+// Test 4: MinHeap<i64> — is_empty
+// Test 5: MinHeap<str> — string heap push/pop/sorted
+
+bring std.heap
+
+def main() -> i64 {
+    // Test 1: MinHeap<i64> basic operations (heap_new(0) seeds with 0)
+    var h = heap.heap_new(0)
+    h = heap.heap_push(h, 5);
+    h = heap.heap_push(h, 3);
+    h = heap.heap_push(h, 7);
+    h = heap.heap_push(h, 1);
+    val len1 = heap.heap_len(h)
+    if len1 != 5 { return 1 }
+    val peek1 = heap.heap_peek(h)
+    if peek1 != 0 { return 2 }
+    val (popped1, h6) = heap.heap_pop(h)
+    if popped1 != 0 { return 3 }
+    val peek2 = heap.heap_peek(h6)
+    if peek2 != 1 { return 4 }
+
+    // Test 2: MinHeap<i64> from_list, to_list
+    var lst: list<i64> = list()
+    push(lst, 10);
+    push(lst, 3);
+    push(lst, 7);
+    push(lst, 1);
+    push(lst, 5);
+    val h7 = heap.heap_from_list(lst)
+    val sorted = heap.heap_to_list(h7)
+    // sorted should be [1, 3, 5, 7, 10]
+    if list_len(sorted) != 5 { return 5 }
+    if list_get(sorted, 0) != 1 { return 6 }
+    if list_get(sorted, 1) != 3 { return 7 }
+    if list_get(sorted, 4) != 10 { return 8 }
+
+    // Test 3: MinHeap<i64> merge
+    var lst2: list<i64> = list()
+    push(lst2, 2);
+    push(lst2, 8);
+    push(lst2, 4);
+    val h8 = heap.heap_from_list(lst2)
+    val h9 = heap.heap_merge(h7, h8)
+    val merged_len = heap.heap_len(h9)
+    if merged_len != 8 { return 9 }
+    val first_merged = heap.heap_peek(h9)
+    if first_merged != 1 { return 10 }
+
+    // Test 4: MinHeap<i64> is_empty
+    var single = heap.heap_new(42)
+    val is_e1 = heap.heap_is_empty(single)
+    if is_e1 != false { return 11 }
+    val (_, empty_h) = heap.heap_pop(single)
+    val is_e2 = heap.heap_is_empty(empty_h)
+    if is_e2 != true { return 12 }
+
+    // Test 5: MinHeap<str> — string heap push/pop/sorted
+    var sh = heap.heap_new("mango")
+    sh = heap.heap_push(sh, "apple");
+    sh = heap.heap_push(sh, "cherry");
+    sh = heap.heap_push(sh, "banana");
+    sh = heap.heap_push(sh, "mango")
+    val slen = heap.heap_len(sh)
+    if slen != 5 { return 13 }
+    val smin = heap.heap_peek(sh)
+    if smin != "apple" { return 14 }
+    val (spop1, sh2) = heap.heap_pop(sh)
+    if spop1 != "apple" { return 15 }
+    val (spop2, sh3) = heap.heap_pop(sh2)
+    if spop2 != "banana" { return 16 }
+    val (spop3, sh4) = heap.heap_pop(sh3)
+    if spop3 != "cherry" { return 17 }
+    val (spop4, _) = heap.heap_pop(sh4)
+    if spop4 != "mango" { return 18 }
+
+    0
+}

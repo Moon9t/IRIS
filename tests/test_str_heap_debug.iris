@@ -1,0 +1,19 @@
+bring std.heap
+
+def main() -> i64 {
+    val sh1 = heap.heap_new("x")
+    val sh2 = heap.heap_push(sh1, "cherry")
+    val sh3 = heap.heap_push(sh2, "apple")
+    val sh4 = heap.heap_push(sh3, "banana")
+    val peek_s = heap.heap_peek(sh4)
+    println("peek=" + peek_s);
+    val hdata = sh4.data
+    val n = heap.heap_len(sh4)
+    println("len=" + to_str(n));
+    var i = 0
+    while i < n {
+        println(to_str(i) + "=" + list_get(hdata, i));
+        i = i + 1
+    }
+    0
+}

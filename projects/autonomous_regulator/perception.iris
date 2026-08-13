@@ -1,0 +1,88 @@
+// perception.iris — Sensor simulation and confidence-weighted fusion.
+//
+// This is the "Monitor" stage of the MAPE-K loop. It turns a noisy sensor
+// sweep into a single Observation the rest of the agent can reason about.
+
+bring "types.iris"
+
+pub const SENSOR_COUNT: i64 = 5
+
+// Quality below this contributes nothing — the reading is noise.
+pub const QUALITY_FLOOR: f64 = 0.15
+
+// Simulate one sensor reading of a plant whose true temperature is `true_c`.
+//
+// Sensor 0 is modelled as intermittently degraded so the fusion logic has a
+// realistic failure to cope with; without a bad sensor in the mix, weighted
+// fusion is indistinguishable from a plain mean.
+pub def read_sensor(sensor_id: i64, true_c: f64, tick: i64) -> Sample {
+    val drift = to_f64(sensor_id) * 0.15;
+    val noise = (random() - 0.5) * 0.8;
+
+    var quality = 0.9;
+    if sensor_id == 0 {
+        // Degrade on a fixed cadence rather than randomly, so runs reproduce.
+        if tick % 4 == 0 {
+            quality = 0.05;
+        };
+    };
+
+    Sample {
+        sensor_id: sensor_id,
+        temperature_c: true_c + drift + noise,
+        quality: quality
+    }
+}
+
+// Sweep every sensor once.
+pub def sweep(true_c: f64, tick: i64) -> list<Sample> {
+    val samples: list<Sample> = list();
+    var i = 0;
+    while i < SENSOR_COUNT {
+        list_push(samples, read_sensor(i, true_c, tick));
+        i = i + 1;
+    };
+    samples
+}
+
+// Fuse a sweep into one estimate, weighting each sample by its quality.
+//
+// Returns confidence 0.0 when every sensor is below the floor. Callers must
+// treat that as "no information this tick" rather than "temperature is zero" —
+// which is exactly why confidence is carried in the Observation instead of
+// being dropped.
+pub def fuse(samples: list<Sample>, tick: i64) -> Observation {
+    val n = list_len(samples);
+    var weighted_sum = 0.0;
+    var weight_total = 0.0;
+    var used = 0;
+
+    var i = 0;
+    while i < n {
+        val s = list_get(samples, i);
+        if s.quality > QUALITY_FLOOR {
+            weighted_sum = weighted_sum + s.temperature_c * s.quality;
+            weight_total = weight_total + s.quality;
+            used = used + 1;
+        };
+        i = i + 1;
+    };
+
+    if weight_total <= 0.0 {
+        return Observation {
+            tick: tick,
+            fused_temp_c: 0.0,
+            confidence: 0.0,
+            sensors_used: 0
+        };
+    };
+
+    // Confidence is the share of total possible quality actually observed.
+    val max_possible = to_f64(n);
+    Observation {
+        tick: tick,
+        fused_temp_c: weighted_sum / weight_total,
+        confidence: weight_total / max_possible,
+        sensors_used: used
+    }
+}

@@ -53,8 +53,8 @@ def main() -> i64 {
 }
 "#;
     let tokens = iris::parser::lexer::Lexer::new(src).tokenize().expect("lex");
-    let ast = iris::parser::parse::Parser::new(&tokens).parse_module().expect("parse");
-    let module = iris::compile_ast_to_module(&ast, "select_native", None).expect("compile to module");
+    let mut ast = iris::parser::parse::Parser::new(&tokens).parse_module().expect("parse");
+    let module = iris::compile_ast_to_module(&mut ast, "select_native", None).expect("compile to module");
     
     let out = std::env::temp_dir().join(format!("iris_test_select_{}", std::process::id()));
     let out_path = if std::env::consts::EXE_SUFFIX.is_empty() {

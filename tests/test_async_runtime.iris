@@ -1,0 +1,76 @@
+// Test: Async Runtime (CRITICAL 3)
+// Tests: async def, await, spawn+channels, Future type
+
+def check(b: bool) -> i64 { if b { 0 } else { 1 } }
+
+async def compute(x: i64) -> i64 {
+    return x * 2
+}
+
+async def heavy_math(a: i64, b: i64) -> i64 {
+    val product: i64 = a * b;
+    val sum: i64 = a + b;
+    return product + sum
+}
+
+async def nested(x: i64) -> i64 {
+    val inner: i64 = await compute(x);
+    return inner + 1
+}
+
+def main() -> i64 {
+    // Test 1: Basic async/await
+    val r1: i64 = await compute(42);
+    println(to_str(r1));
+    val t1: i64 = check(r1 == 84);
+
+    // Test 2: Async with multiple params
+    val r3: i64 = await heavy_math(3, 4);
+    println(to_str(r3));
+    val t3: i64 = check(r3 == 19);
+
+    // Test 3: Sequential awaits
+    val r4a: i64 = await compute(10);
+    val r4b: i64 = await compute(20);
+    println(to_str(r4a + r4b));
+    val t4: i64 = check(r4a + r4b == 60);
+
+    // Test 4: Nested async (async calling async)
+    val r5: i64 = await nested(5);
+    println(to_str(r5));
+    val t5: i64 = check(r5 == 11);
+
+    // Test 5: Spawn with channels + async
+    val ch: chan<i64> = channel(-1);
+    spawn {
+        val v: i64 = await compute(99);
+        send(ch, v)
+    };
+    val r8: i64 = recv(ch);
+    println(to_str(r8));
+    val t8: i64 = check(r8 == 198);
+
+    // Test 6: Multiple concurrent async tasks
+    val ch2: chan<i64> = channel(-1);
+    val ch3: chan<i64> = channel(-1);
+    spawn {
+        val v: i64 = await compute(10);
+        send(ch2, v)
+    };
+    spawn {
+        val v: i64 = await compute(20);
+        send(ch3, v)
+    };
+    val r9a: i64 = recv(ch2);
+    val r9b: i64 = recv(ch3);
+    println(to_str(r9a + r9b));
+    val t9: i64 = check(r9a + r9b == 60);
+
+    // Test 7: Async in expressions
+    val r10: i64 = await compute(5) + await compute(6);
+    println(to_str(r10));
+    val t10: i64 = check(r10 == 22);
+
+    println("All async runtime tests passed!");
+    return t1 + t3 + t4 + t5 + t8 + t9 + t10
+}

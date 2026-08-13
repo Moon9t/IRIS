@@ -1,0 +1,115 @@
+// Feature 1: Binding patterns (x @ pattern)
+
+choice Shape {
+    Circle(f64),
+    Rect(f64, f64),
+}
+
+def test_binding_pattern_enum() -> i64 {
+    val s = Shape.Circle(3.0)
+    when s {
+        c @ Shape.Circle(r) => {
+            // r is bound to the inner field, c is bound to the whole value
+            1
+        }
+        _ => 0,
+    }
+}
+
+def test_binding_pattern_literal() -> i64 {
+    val x = 3
+    when x {
+        n @ 1..=5 => {
+            // n should be 3, matches the range
+            1
+        }
+        _ => 0,
+    }
+}
+
+def test_binding_pattern_option() -> i64 {
+    val x: option<i64> = some(42)
+    when x {
+        v @ some(n) => {
+            // v binds to the whole option, n binds to the inner value
+            1
+        }
+        _ => 0,
+    }
+}
+
+// Feature 2: Glob imports
+bring std.math.*
+
+def test_glob_import() -> i64 {
+    val r = abs(-5)
+    r
+}
+
+// Feature 3: Unsafe blocks
+def test_unsafe_block() -> i64 {
+    val result = unsafe {
+        val x = 10
+        val y = 20
+        x + y
+    }
+    result
+}
+
+def test_unsafe_nested() -> i64 {
+    val x = unsafe {
+        val a = 5
+        unsafe {
+            a + a
+        }
+    }
+    x
+}
+
+def main() -> i64 {
+    var total = 0
+
+    // Test binding pattern with enum
+    val r1 = test_binding_pattern_enum()
+    if r1 == 1 {
+        total = total + 1
+    }
+
+    // Test binding pattern with literal range
+    val r2 = test_binding_pattern_literal()
+    if r2 == 1 {
+        total = total + 1
+    }
+
+    // Test binding pattern with option
+    val r3 = test_binding_pattern_option()
+    if r3 == 1 {
+        total = total + 1
+    }
+
+    // Test unsafe block
+    val r4 = test_unsafe_block()
+    if r4 == 30 {
+        total = total + 1
+    }
+
+    // Test nested unsafe
+    val r5 = test_unsafe_nested()
+    if r5 == 10 {
+        total = total + 1
+    }
+
+    // Test glob import (bring std.math.*)
+    val r6 = test_glob_import()
+    if r6 == 5 {
+        total = total + 1
+    }
+
+    // Expected: 6 (all tests pass)
+    print(to_str(total));
+    if total == 6 {
+        0
+    } else {
+        1
+    }
+}

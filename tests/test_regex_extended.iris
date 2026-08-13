@@ -1,0 +1,31 @@
+def main() -> i64 {
+    // Character classes
+    print("--- Character classes ---");
+    print("digit 5: " + to_str(regex_match("[0-9]+", "abc123def")));
+    print("letter: " + to_str(regex_match("[a-z]+", "hello")));
+    print("not digit: " + to_str(regex_match("[^0-9]+", "hello")));
+    print("mixed class: " + to_str(regex_match("[a-zA-Z0-9]+", "abc123")));
+
+    // Shorthand classes
+    print("--- Shorthand classes ---");
+    print("\\d match: " + to_str(regex_match("\\d+", "abc123")));
+    print("\\w match: " + to_str(regex_match("\\w+", "hello_123")));
+    print("\\s match: " + to_str(regex_match("\\s+", "  ")));
+
+    // Grouping and alternation
+    print("--- Grouping ---");
+    print("group: " + to_str(regex_match("(abc)+", "abcabc")));
+    print("alternation: " + to_str(regex_match("(cat|dog)", "I have a dog")));
+
+    // find_all with character classes
+    print("--- find_all ---");
+    val digits = regex_find_all("\\d+", "abc 12 def 34 ghi 56");
+    print("digits found: " + to_str(list_len(digits)));
+
+    // replace_all
+    print("--- replace_all ---");
+    val replaced = regex_replace_all("\\d+", "abc 123 def 456", "NUM");
+    print("replaced: " + replaced);
+
+    0
+}

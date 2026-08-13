@@ -1,0 +1,12 @@
+mod math {
+    pub def add(a: i64, b: i64) -> i64 {
+        return a + b
+    }
+}
+
+def main() {
+    val sum = math::add(2, 3)
+    println(to_str(sum))
+}
+
+main()

@@ -1,0 +1,36 @@
+/// Compute the greatest common divisor of two integers.
+/// Uses the Euclidean algorithm.
+def gcd(a: i64, b: i64) -> i64 {
+    if b == 0 {
+        return a
+    }
+    gcd(b, a % b)
+}
+
+/// A 2D point with x and y coordinates.
+record Point {
+    x: f64,
+    y: f64
+}
+
+/// An error that can occur during processing.
+choice ProcessError {
+    NotFound,
+    PermissionDenied(str)
+}
+
+/// A trait for types that can be displayed.
+trait Show {
+    def show(self) -> str
+}
+
+/// The maximum allowed count.
+const MAX_COUNT: i64 = 100
+
+/// A type alias for numeric values.
+type Numeric = f64
+
+/// Add two numbers together.
+pub def add(a: i64, b: i64) -> i64 {
+    a + b
+}

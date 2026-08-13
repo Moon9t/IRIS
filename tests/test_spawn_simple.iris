@@ -1,7 +1,7 @@
 def main() -> i64 {
     spawn {
         println("hello from spawn")
-    }
-    println("done")
+    };
+    println("done");
     0
 }

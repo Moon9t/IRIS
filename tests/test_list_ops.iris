@@ -1,0 +1,58 @@
+// Test: list_remove and list_insert builtins
+
+def check(b: bool) -> i64 { if b { 0 } else { 1 } }
+
+def main() -> i64 {
+    // Test list_remove
+    val lst1: list<i64> = list(10, 20, 30, 40, 50);
+    val removed: i64 = list_remove(lst1, 2);
+    println("removed = " + to_str(removed));
+    val t1: i64 = check(removed == 30);
+
+    // Verify list after removal
+    val len1: i64 = len(lst1);
+    println("len after remove = " + to_str(len1));
+    val t2: i64 = check(len1 == 4);
+
+    // Verify elements shifted
+    val v1: i64 = list_get(lst1, 0);
+    val v2: i64 = list_get(lst1, 1);
+    val v3: i64 = list_get(lst1, 2);
+    val v4: i64 = list_get(lst1, 3);
+    println(to_str(v1) + " " + to_str(v2) + " " + to_str(v3) + " " + to_str(v4));
+    val t3: i64 = check(v1 == 10 && v2 == 20 && v3 == 40 && v4 == 50);
+
+    // Test list_remove first element
+    val lst2: list<i64> = list(1, 2, 3);
+    val first: i64 = list_remove(lst2, 0);
+    println("first removed = " + to_str(first));
+    val t4: i64 = check(first == 1 && len(lst2) == 2);
+
+    // Test list_insert
+    val lst3: list<i64> = list(10, 20, 30);
+    list_insert(lst3, 1, 15);
+    println("after insert:");
+    val i0: i64 = list_get(lst3, 0);
+    val i1: i64 = list_get(lst3, 1);
+    val i2: i64 = list_get(lst3, 2);
+    val i3: i64 = list_get(lst3, 3);
+    println(to_str(i0) + " " + to_str(i1) + " " + to_str(i2) + " " + to_str(i3));
+    val t5: i64 = check(i0 == 10 && i1 == 15 && i2 == 20 && i3 == 30);
+
+    // Test list_insert at beginning
+    val lst4: list<i64> = list(2, 3, 4);
+    list_insert(lst4, 0, 1);
+    val h: i64 = list_get(lst4, 0);
+    println("inserted at 0 = " + to_str(h));
+    val t6: i64 = check(h == 1 && len(lst4) == 4);
+
+    // Test list_insert at end
+    val lst5: list<i64> = list(1, 2, 3);
+    list_insert(lst5, 3, 4);
+    val e: i64 = list_get(lst5, 3);
+    println("inserted at end = " + to_str(e));
+    val t7: i64 = check(e == 4 && len(lst5) == 4);
+
+    println("All list_remove/list_insert tests passed!");
+    return t1 + t2 + t3 + t4 + t5 + t6 + t7
+}

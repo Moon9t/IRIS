@@ -1,0 +1,92 @@
+// tests/test_tier2.iris — Tier 2 language feature tests
+
+// ─── Feature 1: Default trait methods ───────────────────────
+trait Greet {
+    def greet(self) -> str
+    def farewell(self) -> str { "goodbye" }
+}
+
+record Person { name: str }
+
+impl Greet for Person {
+    def greet(self) -> str { "hello " + self.name }
+}
+
+// ─── Feature 2: Comparison operator overloading ────────────
+record Vec2 { x: i64, y: i64 }
+
+impl Eq for Vec2 {
+    def eq(self, other: Vec2) -> bool {
+        if self.x == other.x { self.y == other.y } else { false }
+    }
+    def ne(self, other: Vec2) -> bool {
+        if self.x == other.x { !(self.y == other.y) } else { true }
+    }
+}
+
+impl Ord for Vec2 {
+    def lt(self, other: Vec2) -> bool { self.x < other.x }
+    def le(self, other: Vec2) -> bool { self.x <= other.x }
+    def gt(self, other: Vec2) -> bool { self.x > other.x }
+    def ge(self, other: Vec2) -> bool { self.x >= other.x }
+}
+
+// ─── Feature 14: char/byte iteration ───────────────────────
+def sum_bytes(s: str) -> i64 {
+    var total = 0;
+    for b in s {
+        total = total + b
+    }
+    total
+}
+
+def main() -> i64 {
+    // Feature 1: Default trait methods
+    val p = Person { name: "Alice" };
+    val g = p.greet();
+    val f = p.farewell();
+    println("greet: " + g);
+    println("farewell: " + f);
+    if g != "hello Alice" { println("FAIL: greet"); return 1 }
+    if f != "goodbye" { println("FAIL: farewell default"); return 1 }
+
+    // Feature 2: Comparison operator overloading
+    val a = Vec2 { x: 1, y: 2 };
+    val b = Vec2 { x: 1, y: 2 };
+    val c = Vec2 { x: 1, y: 3 };
+    val d = Vec2 { x: 2, y: 1 };
+    if !(a == b) { println("FAIL: eq same"); return 1 }
+    if a == c { println("FAIL: eq diff"); return 1 }
+    if a != b { println("FAIL: ne same"); return 1 }
+    if !(a != c) { println("FAIL: ne diff"); return 1 }
+    if !(a < d) { println("FAIL: lt"); return 1 }
+    if !(a <= c) { println("FAIL: le"); return 1 }
+    if !(d > a) { println("FAIL: gt"); return 1 }
+    if !(d >= a) { println("FAIL: ge"); return 1 }
+    println("comparison overloading OK");
+
+    // Feature 14: char/byte iteration
+    val bytes_sum = sum_bytes("AB");
+    println("bytes sum: " + to_str(bytes_sum));
+    if bytes_sum != 131 { println("FAIL: byte iteration"); return 1 }
+
+    // Feature 13: array_to_list
+    val arr: [i64; 3] = [10, 20, 30];
+    val lst = array_to_list(arr);
+    println("array_to_list len: " + to_str(list_len(lst)));
+    if list_len(lst) != 3 { println("FAIL: array_to_list"); return 1 }
+    if list_get(lst, 0) != 10 { println("FAIL: array_to_list[0]"); return 1 }
+    if list_get(lst, 2) != 30 { println("FAIL: array_to_list[2]"); return 1 }
+
+    // Feature 17: Extension methods
+    val neg = 10.negate();
+    println("negate: " + to_str(neg));
+    if neg != -10 { println("FAIL: extension negate"); return 1 }
+
+    println("All Tier 2 tests passed!");
+    0
+}
+
+def negate(x: i64) -> i64 {
+    0 - x
+}

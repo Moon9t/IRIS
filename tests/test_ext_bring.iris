@@ -1,0 +1,19 @@
+// Test extension methods from brought modules
+bring std.math
+
+def double(x: i64) -> i64 {
+    x * 2
+}
+
+def main() -> i64 {
+    // Extension method on i64 from local function
+    val d = 21.double();
+    println("21.double() = " + to_str(d));
+
+    if d == 42 {
+        println("Extension methods from brought modules pass!");
+        0
+    } else {
+        1
+    }
+}

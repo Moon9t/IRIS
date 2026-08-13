@@ -1,0 +1,78 @@
+// extensions_and_defaults.iris — Call-site ergonomics.
+//
+// Two features that remove ceremony without adding machinery: extension
+// methods and default record fields.
+//
+// NOTE: named arguments (`f(a=1, b=2)`) are deliberately NOT demonstrated
+// here. They are parsed and accepted, but currently evaluate to 0 — see
+// docs/known-issues.md. This file only shows behaviour verified to be correct.
+
+// ─── Extension methods ────────────────────────────────────────────────────
+// Any module-level function whose FIRST parameter is of type T can be called
+// as a method on a T. No impl block is needed, and it works on built-in types.
+def double(x: i64) -> i64 {
+    x * 2
+}
+
+def add_prefix(s: str, prefix: str) -> str {
+    prefix + s
+}
+
+record Point { x: i64, y: i64 }
+
+def distance_sq(a: Point, b: Point) -> i64 {
+    val dx = a.x - b.x;
+    val dy = a.y - b.y;
+    dx * dx + dy * dy
+}
+
+// ─── Default record fields ────────────────────────────────────────────────
+// A literal need only mention what differs. Adding a defaulted field later
+// does not break existing literals, which makes this the preferred way to
+// grow a configuration type.
+record Config {
+    host: str = "localhost",
+    port: i64 = 8080,
+    debug: bool = false,
+}
+
+def describe(c: Config) -> str {
+    c.host + ":" + to_str(c.port)
+}
+
+def main() -> i64 {
+    println("--- extension methods ---");
+    // 21.double() and double(21) are the same call.
+    println("double(21)              = " + to_str(double(21)));
+    println("21.double()             = " + to_str(21.double()));
+    // Extra arguments follow the receiver.
+    println("\"world\".add_prefix(..)  = " + "world".add_prefix("hello "));
+    // The method form chains left-to-right, which reads better than nesting.
+    println("3.double().double()     = " + to_str(3.double().double()));
+    // Works on your own records too.
+    val origin = Point { x: 0, y: 0 };
+    val target = Point { x: 3, y: 4 };
+    println("origin.distance_sq(..)  = " + to_str(origin.distance_sq(target)));
+
+    println("");
+    println("--- default record fields ---");
+    val c1: Config = Config { };                        // every default
+    val c2: Config = Config { port: 443 };              // override one
+    val c3: Config = Config { host: "example.com", port: 80, debug: true };
+    println("Config { }              -> " + describe(c1));
+    println("Config { port: 443 }    -> " + describe(c2));
+    println("fully specified         -> " + describe(c3));
+
+    // Assertions, not just prints — a test that only prints cannot fail.
+    assert(21.double() == 42);
+    assert(3.double().double() == 12);
+    assert(origin.distance_sq(target) == 25);
+    assert(c1.port == 8080);
+    assert(c2.host == "localhost");
+    assert(c2.port == 443);
+    assert(c3.debug == true);
+
+    println("");
+    println("all ergonomics checks passed");
+    0
+}

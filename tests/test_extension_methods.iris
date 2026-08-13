@@ -1,0 +1,43 @@
+// Test extension methods: module-level functions callable as methods.
+def double(x: i64) -> i64 {
+    x * 2
+}
+
+def add_prefix(s: str, prefix: str) -> str {
+    prefix + s
+}
+
+record Point {
+    x: i64,
+    y: i64,
+}
+
+def distance_to(a: Point, b: Point) -> i64 {
+    val dx = a.x - b.x;
+    val dy = a.y - b.y;
+    dx * dx + dy * dy
+}
+
+def main() -> i64 {
+    // Test 1: extension method on i64
+    val d = 21.double();
+    println("21.double() = " + to_str(d));
+
+    // Test 2: extension method on str with extra args
+    val s = "world".add_prefix("hello ");
+    println("add_prefix: " + s);
+
+    // Test 3: extension method on struct type (not using impl)
+    val p1 = Point { x: 0, y: 0 };
+    val p2 = Point { x: 3, y: 4 };
+    val dist = p1.distance_to(p2);
+    println("distance = " + to_str(dist));
+
+    if d == 42 && s == "hello world" && dist == 25 {
+        println("Extension method tests passed!");
+        0
+    } else {
+        println("FAILED: d=" + to_str(d) + " dist=" + to_str(dist));
+        1
+    }
+}

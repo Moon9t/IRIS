@@ -1,0 +1,18 @@
+def main() -> i64 {
+    val scores: map<str, i64> = { "alice": 95, "bob": 87, "charlie": 92 };
+    val n = map_len(scores);
+    println(f"len={n}");
+
+    val alice_val = map_get(scores, "alice").unwrap_or(0);
+    val bob_val = map_get(scores, "bob").unwrap_or(0);
+    val charlie_val = map_get(scores, "charlie").unwrap_or(0);
+    println(f"alice: {alice_val}");
+    println(f"bob: {bob_val}");
+    println(f"charlie: {charlie_val}");
+
+    // Test single-entry dict
+    val single: map<str, i64> = { "x": 42 };
+    println(f"single len: {map_len(single)}");
+
+    0
+}

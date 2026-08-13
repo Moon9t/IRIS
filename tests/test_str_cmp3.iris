@@ -1,0 +1,28 @@
+def main() -> i64 {
+    var lst: list<str> = list()
+    push(lst, "cherry");
+    push(lst, "x");
+    val c = list_get(lst, 0)
+    val d = list_get(lst, 1)
+
+    // Test what list_get actually returns
+    val eq_same = c == "cherry"
+    println("c == 'cherry' = " + to_str(eq_same));
+    val eq_diff = c == "x"
+    println("c == 'x' = " + to_str(eq_diff));
+    val lt_result = c < d
+    println("c < d = " + to_str(lt_result));
+
+    // Compare c to literal
+    val lt_literal = c < "z"
+    println("c < 'z' = " + to_str(lt_literal));
+
+    val lt_literal2 = "cherry" < "z"
+    println("'cherry' < 'z' = " + to_str(lt_literal2));
+
+    // Check if the issue is with the variable
+    val lt_same = c < "cherry"
+    println("c < 'cherry' = " + to_str(lt_same));
+
+    0
+}

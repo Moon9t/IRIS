@@ -1,0 +1,62 @@
+// world_model.iris — State estimation ("Analyse" in MAPE-K).
+//
+// Folds a stream of Observations into a Belief. The filter is deliberately a
+// confidence-gated exponential moving average rather than a full Kalman filter:
+// it is the smallest thing that correctly ignores a bad tick, and it stays
+// legible to a reviewer.
+
+bring "types.iris"
+
+// Base smoothing factor. Higher tracks faster but admits more noise.
+pub const BASE_ALPHA: f64 = 0.35
+
+// A plant within this band of setpoint, with a flat trend, is "settled".
+pub const SETTLE_BAND_C: f64 = 0.4
+pub const SETTLE_TREND_C: f64 = 0.08
+
+pub def initial_belief(seed_c: f64) -> Belief {
+    Belief {
+        estimate_c: seed_c,
+        trend_c: 0.0,
+        confidence: 0.0,
+        settled: false
+    }
+}
+
+// Incorporate one observation.
+//
+// The smoothing factor is scaled by the observation's confidence, so a
+// low-confidence tick moves the estimate very little and a zero-confidence
+// tick leaves it untouched. That is what stops the degraded sensor in
+// perception.iris from yanking the estimate every fourth cycle.
+pub def update(prior: Belief, obs: Observation) -> Belief {
+    if obs.confidence <= 0.0 {
+        // No usable sensors. Hold the estimate, but decay confidence so a
+        // prolonged blackout is visible to the safety layer.
+        return Belief {
+            estimate_c: prior.estimate_c,
+            trend_c: prior.trend_c,
+            confidence: prior.confidence * 0.5,
+            settled: false
+        };
+    };
+
+    val alpha = BASE_ALPHA * obs.confidence;
+    val estimate = prior.estimate_c + alpha * (obs.fused_temp_c - prior.estimate_c);
+    val trend = estimate - prior.estimate_c;
+
+    val error = abs(estimate - SETPOINT_C);
+    val settled = error < SETTLE_BAND_C && abs(trend) < SETTLE_TREND_C;
+
+    Belief {
+        estimate_c: estimate,
+        trend_c: trend,
+        confidence: obs.confidence,
+        settled: settled
+    }
+}
+
+// How far the plant is from where it should be. Positive means too hot.
+pub def error_from_setpoint(b: Belief) -> f64 {
+    b.estimate_c - SETPOINT_C
+}

@@ -1,0 +1,7 @@
+bring std.heap
+
+def main() -> i64 {
+    var h = heap.heap_new(0)
+    var h2 = heap.heap_push(h, 5)
+    heap.heap_len(h2)
+}

@@ -1,0 +1,30 @@
+// Test recv_timeout — should not block forever
+def main() -> i64 {
+    val ch = channel();
+    
+    // recv_timeout on empty channel — should return after timeout
+    val result = recv_timeout(ch, 50);
+    when result {
+        some(v) => { println("FAIL: got value from empty channel"); 1 },
+        none => { println("recv_timeout correctly returned none after timeout"); 0 }
+    };
+    
+    // recv_timeout on channel with data — should return immediately
+    send(ch, 42);
+    val result2 = recv_timeout(ch, 5000);
+    when result2 {
+        some(v) => {
+            if v == 42 {
+                println("recv_timeout got value: " + to_str(v));
+                0
+            } else {
+                println("FAIL: expected 42 got " + to_str(v));
+                1
+            }
+        },
+        none => { println("FAIL: should have gotten value"); 1 }
+    };
+    
+    println("recv_timeout tests passed!");
+    0
+}

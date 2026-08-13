@@ -1,0 +1,11 @@
+def main() -> i64 {
+    val pairs: list<(str, i64)> = list();
+    list_push(pairs, ("a", 1));
+    list_push(pairs, ("b", 2));
+    val result = 0
+    for (letter, num) in pairs {
+        val _ = letter
+        val _ = num
+    }
+    0
+}

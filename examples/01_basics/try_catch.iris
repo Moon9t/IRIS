@@ -1,0 +1,62 @@
+// try_catch.iris — Error handling with try/catch for Result types
+//
+// Demonstrates try/catch blocks that catch errors from `?` operator
+// on Result values, providing clean error recovery.
+//
+// Run: iris run examples/01_basics/try_catch.iris
+
+// A function that can fail
+def safe_divide(a: i64, b: i64) -> result<i64, str> {
+    if b == 0 { return err("division by zero") };
+    return ok(a / b)
+}
+
+// Try/catch recovers from errors gracefully
+def divide_safe(a: i64, b: i64) -> i64 {
+    val result: i64 = try {
+        val v = safe_divide(a, b)?;
+        v
+    } catch e {
+        print(concat("Error: ", e));
+        -1
+    };
+    result
+}
+
+// Nested try/catch for layered error recovery
+def nested_demo(x: i64) -> i64 {
+    val outer: i64 = try {
+        val inner: i64 = try {
+            safe_divide(100, x)?;
+        } catch e {
+            print(concat("Inner catch: ", e));
+            -10
+        };
+        // Use inner result — if it was -10, propagate differently
+        safe_divide(inner * 10, 2)?
+    } catch e {
+        print(concat("Outer catch: ", e));
+        -20
+    };
+    outer
+}
+
+def main() -> i64 {
+    print("=== try/catch for Result ===");
+    print("");
+
+    // Successful division
+    print("10 / 2 = " + to_str(divide_safe(10, 2)));
+
+    // Division by zero — caught!
+    print("10 / 0 = " + to_str(divide_safe(10, 0)));
+
+    // Nested error recovery
+    print("nested_demo(0)  = " + to_str(nested_demo(0)));
+    print("nested_demo(5)  = " + to_str(nested_demo(5)));
+    print("nested_demo(25) = " + to_str(nested_demo(25)));
+
+    print("");
+    print("try/catch example complete.");
+    0
+}

@@ -1,0 +1,70 @@
+// splat_multi_return.iris — Splat operator and multi-return values
+//
+// The `..xs` splat operator spreads an array/list into individual
+// arguments at a function call site. Multi-return functions produce
+// tuples that can be destructured.
+//
+// Run: iris run examples/01_basics/splat_multi_return.iris
+
+// Function that takes exactly 3 args
+def add3(a: i64, b: i64, c: i64) -> i64 {
+    a + b + c
+}
+
+// Function returning a tuple
+def min_max(data: list<i64>) -> (i64, i64) {
+    var mn = list_get(data, 0);
+    var mx = list_get(data, 0);
+    var i = 1;
+    while i < len(data) {
+        val v = list_get(data, i);
+        if v < mn { mn = v };
+        if v > mx { mx = v };
+        i = i + 1;
+    }
+    (mn, mx)
+}
+
+// Function that returns 3 values
+def stats(data: list<i64>) -> (i64, i64, i64) {
+    var total = 0;
+    var mn = list_get(data, 0);
+    var mx = list_get(data, 0);
+    var i = 0;
+    while i < len(data) {
+        val v = list_get(data, i);
+        total = total + v;
+        if v < mn { mn = v };
+        if v > mx { mx = v };
+        i = i + 1;
+    }
+    (total, mn, mx)
+}
+
+def main() -> i64 {
+    print("=== Splat & Multi-Return ===");
+    print("");
+
+    // --- Splat operator ---
+    val args = [10, 20, 30];
+    val sum = add3(..args);
+    print("add3(..[10,20,30]) = " + to_str(sum));
+
+    // Partial splat
+    val rest = [200, 300];
+    val sum2 = add3(100, ..rest);
+    print("add3(100, ..[200,300]) = " + to_str(sum2));
+
+    // --- Multi-return tuples ---
+    val data = list(3, 1, 4, 1, 5, 9, 2, 6);
+    val (mn, mx) = min_max(data);
+    print("min_max([3,1,4,1,5,9,2,6]) = (" + to_str(mn) + ", " + to_str(mx) + ")");
+
+    // Triple return
+    val (total, low, high) = stats(data);
+    print("stats => sum=" + to_str(total) + " min=" + to_str(low) + " max=" + to_str(high));
+
+    print("");
+    print("splat & multi-return example complete.");
+    0
+}

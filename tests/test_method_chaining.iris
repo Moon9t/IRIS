@@ -1,0 +1,94 @@
+def main() -> i64 {
+    // Str methods
+    val s = "  Hello, World!  "
+    val trimmed = s.trim();
+    println(f"trim: '{trimmed}'");
+
+    val upper = "hello".to_upper();
+    println(f"to_upper: '{upper}'");
+
+    val lower = "HELLO".to_lower();
+    println(f"to_lower: '{lower}'");
+
+    val ln = "hello".len();
+    println(f"len: {ln}");
+
+    val empty = "".is_empty();
+    println(f"is_empty: {empty}");
+
+    val has = "hello world".contains("world");
+    println(f"contains: {has}");
+
+    val sw = "hello".starts_with("hel");
+    println(f"starts_with: {sw}");
+
+    val ew = "hello".ends_with("llo");
+    println(f"ends_with: {ew}");
+
+    val replaced = "hello world".replace("world", "IRIS");
+    println(f"replace: '{replaced}'");
+
+    val idx = "hello world".find("world");
+    println(f"find: {idx}");
+
+    val parts = "a,b,c".split(",");
+    println(f"split len: {list_len(parts)}");
+
+    val repeated = "ab".repeat(3);
+    println(f"repeat: '{repeated}'");
+
+    // Option methods
+    val opt_some: option<i64> = some(42);
+    val opt_none: option<i64> = none;
+
+    val v1 = opt_some.unwrap();
+    println(f"unwrap some: {v1}");
+
+    val v2 = opt_none.unwrap_or(0);
+    println(f"unwrap_or none: {v2}");
+
+    val v3 = opt_some.unwrap_or(0);
+    println(f"unwrap_or some: {v3}");
+
+    val s1 = opt_some.is_some();
+    println(f"is_some some: {s1}");
+
+    val s2 = opt_none.is_some();
+    println(f"is_some none: {s2}");
+
+    val n1 = opt_none.is_none();
+    println(f"is_none none: {n1}");
+
+    val n2 = opt_some.is_none();
+    println(f"is_none some: {n2}");
+
+    // Result methods
+    val res_ok: result<i64, str> = ok(99);
+    val res_err: result<i64, str> = err("fail");
+
+    val r1 = res_ok.unwrap();
+    println(f"unwrap ok: {r1}");
+
+    val r2 = res_err.unwrap_or(-1);
+    println(f"unwrap_or err: {r2}");
+
+    val r3 = res_ok.unwrap_or(-1);
+    println(f"unwrap_or ok: {r3}");
+
+    val ok1 = res_ok.is_ok();
+    println(f"is_ok ok: {ok1}");
+
+    val ok2 = res_err.is_ok();
+    println(f"is_ok err: {ok2}");
+
+    val err1 = res_err.is_err();
+    println(f"is_err err: {err1}");
+
+    val err2 = res_ok.is_err();
+    println(f"is_err ok: {err2}");
+
+    val errval = res_err.unwrap_err();
+    println(f"unwrap_err: '{errval}'");
+
+    0
+}

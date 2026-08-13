@@ -1,0 +1,77 @@
+// Test: Borrow Checker — Opt-In Block-Level References (CRITICAL 4)
+// Tests: &T, &mut T, deref *, references in function params, block scoping
+
+def add_ref(a: &i64, b: &i64) -> i64 {
+    return a + b;
+}
+
+def modify_ref(a: &mut i64) -> i64 {
+    return a + 1
+}
+
+def sum_list(data: &list<i64>) -> i64 {
+    var total: i64 = 0;
+    var i: i64 = 0;
+    while i < len(data) {
+        total = total + list_get(data, i);
+        i = i + 1
+    }
+    return total
+}
+
+def main() -> i64 {
+    // Test 1: Immutable references in function params
+    val x: i64 = 10;
+    val y: i64 = 20;
+    val r1: &i64 = &x;
+    val r2: &i64 = &y;
+    val sum: i64 = add_ref(r1, r2);
+    println(f"sum = {sum}");
+
+    // Test 2: Multiple immutable borrows (allowed)
+    val a: i64 = 42;
+    val rb1: &i64 = &a;
+    val rb2: &i64 = &a;
+    val rb3: &i64 = &a;
+    println(f"multi-borrow = {rb1 + rb2 - rb3}");
+
+    // Test 3: Dereference
+    val deref_val: i64 = *r1;
+    println(f"deref r1 = {deref_val}");
+
+    // Test 4: Mutable references
+    val m1: i64 = 100;
+    val rm1: &mut i64 = &mut m1;
+    val result: i64 = modify_ref(rm1);
+    println(f"modified = {result}");
+
+    // Test 5: Block-level borrow scoping
+    val v: i64 = 55;
+    val block_result: i64 = {
+        val rv: &i64 = &v;
+        rv + 1
+    };
+    println(f"in block = {block_result}");
+    val v2: i64 = v + 1;
+    println(f"after block = {v2}");
+
+    // Test 6: Reference to list
+    val lst: list<i64> = list(10, 20, 30, 40, 50);
+    val total: i64 = sum_list(&lst);
+    println(f"list sum = {total}");
+
+    // Test 7: Reference in expressions
+    val p: i64 = 7;
+    val rp: &i64 = &p;
+    val q: i64 = *rp + 3;
+    println(f"expr deref = {q}");
+
+    // Test 8: Reference chain (ref to ref to val)
+    val base: i64 = 99;
+    val ref1: &i64 = &base;
+    val ref2: &i64 = ref1;
+    println(f"chain = {ref1 + ref2}");
+
+    println("All borrow checker tests passed!");
+    return 0
+}

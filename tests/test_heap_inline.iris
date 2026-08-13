@@ -1,0 +1,14 @@
+// tests/test_heap_inline.iris -- inline generic MinHeap test
+record MinHeap[T] { data: list<T> }
+
+pub def heap_new[T](v: T) -> MinHeap<T> {
+    var d: list<T> = list()
+    push(d, v);
+    MinHeap { data: d }
+}
+
+def main() -> i64 {
+    val h = heap_new(42)
+    val v = list_get(h.data, 0)
+    v
+}

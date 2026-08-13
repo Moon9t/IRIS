@@ -30,7 +30,7 @@ def test_multiple_tasks() -> i64 {
         send(ch, 3)
     };
     task_group_join(tg);
-    val results = list();
+    val results: list<i64> = list();
     list_push(results, recv(ch));
     list_push(results, recv(ch));
     list_push(results, recv(ch));

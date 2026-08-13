@@ -1,0 +1,54 @@
+bring std.collections
+bring std.string
+
+def main() -> i64 {
+    // Test 1: list_remove_val
+    val lst1 = list();
+    push(lst1, 10);
+    push(lst1, 20);
+    push(lst1, 30);
+    push(lst1, 20);
+    val removed = collections.list_remove_val(lst1, 20);
+    println("removed: " + to_str(removed));
+    println("len after: " + to_str(list_len(lst1)));
+
+    // Test 2: list_fill
+    val filled = collections.list_fill(5, 42);
+    println("filled[0]: " + to_str(list_get(filled, 0)));
+    println("filled[4]: " + to_str(list_get(filled, 4)));
+    println("filled len: " + to_str(list_len(filled)));
+
+    // Test 3: map_get_or
+    val m: map<str, i64> = map();
+    map_set(m, "x", 10);
+    val v1 = collections.map_get_or(m, "x", 0);
+    val v2 = collections.map_get_or(m, "missing", 99);
+    println("map_get_or existing: " + to_str(v1));
+    println("map_get_or default: " + to_str(v2));
+
+    // Test 4: map_merge
+    val a: map<str, i64> = map();
+    map_set(a, "a", 1);
+    map_set(a, "b", 2);
+    val b: map<str, i64> = map();
+    map_set(b, "b", 99);
+    map_set(b, "c", 3);
+    val merged: map<str, i64> = collections.map_merge(a, b);
+    val va = map_get(merged, "a").unwrap_or(0);
+    val vb = map_get(merged, "b").unwrap_or(0);
+    val vc = map_get(merged, "c").unwrap_or(0);
+    println("merged a: " + to_str(va));
+    println("merged b: " + to_str(vb));
+    println("merged c: " + to_str(vc));
+
+    // Test 5: count
+    val c1 = string.count("hello world hello", "hello");
+    val c2 = string.count("aaaa", "aa");
+    val c3 = string.count("abc", "xyz");
+    println("count hello: " + to_str(c1));
+    println("count aa: " + to_str(c2));
+    println("count xyz: " + to_str(c3));
+
+    println("All quick wins tests passed!");
+    0
+}

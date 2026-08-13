@@ -1,0 +1,123 @@
+// doc_comments.iris — Documentation comments and LSP integration
+//
+// Triple-slash comments (///) attach documentation to functions, records,
+// and other declarations. They appear in LSP hover tooltips and can be
+// queried programmatically.
+//
+// Run: iris run examples/04_types_and_traits/doc_comments.iris
+
+/// A 2D point with x and y coordinates.
+record Point {
+    x: f64,
+    y: f64,
+}
+
+/// Calculate the Euclidean distance between two points.
+///
+/// Uses the formula: sqrt((x2-x1)^2 + (y2-y1)^2)
+def distance(a: Point, b: Point) -> f64 {
+    val dx = b.x - a.x;
+    val dy = b.y - a.y;
+    sqrt(dx * dx + dy * dy)
+}
+
+/// Linearly interpolate between two points.
+///
+/// t=0.0 returns a, t=1.0 returns b.
+def lerp(a: Point, b: Point, t: f64) -> Point {
+    Point {
+        x: a.x + (b.x - a.x) * t,
+        y: a.y + (b.y - a.y) * t,
+    }
+}
+
+/// Compute the midpoint of two points.
+def midpoint(a: Point, b: Point) -> Point {
+    lerp(a, b, 0.5)
+}
+
+/// Get a formatted string representation of a point.
+def point_str(p: Point) -> str {
+    concat("(", concat(to_str(p.x), concat(", ", concat(to_str(p.y), ")"))))
+}
+
+/// Compute the sum of all values in a list.
+def list_sum(data: list<f64>) -> f64 {
+    var total = 0.0;
+    var i = 0;
+    while i < len(data) {
+        total = total + list_get(data, i);
+        i = i + 1;
+    }
+    total
+}
+
+/// Find the maximum value in a list.
+def list_max(data: list<f64>) -> f64 {
+    var mx = list_get(data, 0);
+    var i = 1;
+    while i < len(data) {
+        val v = list_get(data, i);
+        if v > mx { mx = v };
+        i = i + 1;
+    }
+    mx
+}
+
+/// A simple moving average over the last `window` elements.
+def moving_average(data: list<f64>, window: i64) -> list<f64> {
+    var result: list<f64> = list();
+    var i = window - 1;
+    while i < len(data) {
+        var sum = 0.0;
+        var j = 0;
+        while j < window {
+            sum = sum + list_get(data, i - j);
+            j = j + 1;
+        }
+        list_push(result, sum / to_f64(window));
+        i = i + 1;
+    }
+    result
+}
+
+def main() -> i64 {
+    print("=== Doc Comments & LSP Integration ===");
+    print("");
+
+    // Create points with documentation visible in LSP
+    val origin = Point { x: 0.0, y: 0.0 };
+    val target = Point { x: 3.0, y: 4.0 };
+
+    print("origin = " + point_str(origin));
+    print("target = " + point_str(target));
+    print("distance = " + to_str(distance(origin, target)));
+
+    // Lerp
+    val mid = midpoint(origin, target);
+    print("midpoint = " + point_str(mid));
+
+    val quarter = lerp(origin, target, 0.25);
+    print("lerp(0.25) = " + point_str(quarter));
+
+    // Moving average
+    var temps: list<f64> = list();
+    list_push(temps, 20.0);
+    list_push(temps, 22.0);
+    list_push(temps, 21.0);
+    list_push(temps, 25.0);
+    list_push(temps, 23.0);
+
+    val ma = moving_average(temps, 3);
+    print("temperatures: 20, 22, 21, 25, 23");
+    print("moving avg (window=3):");
+    var mi = 0;
+    while mi < len(ma) {
+        print("  [" + to_str(mi) + "] = " + to_str(list_get(ma, mi)));
+        mi = mi + 1;
+    }
+
+    print("");
+    print("doc comments example complete.");
+    0
+}

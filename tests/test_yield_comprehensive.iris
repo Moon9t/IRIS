@@ -1,0 +1,130 @@
+// Test yield edge cases — comprehensive
+
+// Basic yield in while
+def gen_while(n: i64) -> list<i64> {
+    var i = 0;
+    while i < n {
+        yield i;
+        i = i + 1;
+    }
+}
+
+// Yield in for loop
+def gen_for() -> list<i64> {
+    var i = 0;
+    for i in 0..5 {
+        yield i * 10;
+    }
+}
+
+// Yield with string expressions
+def gen_strings() -> list<str> {
+    var i = 0;
+    while i < 3 {
+        yield concat("item_", to_str(i));
+        i = i + 1;
+    }
+}
+
+// Yield from if/else branches
+def gen_conditional(flag: i64) -> list<i64> {
+    var i = 0;
+    while i < 5 {
+        if flag > 0 {
+            yield i;
+        } else {
+            yield i * 2;
+        }
+        i = i + 1;
+    }
+}
+
+// Yield in nested loop
+def gen_nested() -> list<i64> {
+    var i = 0;
+    while i < 3 {
+        var j = 0;
+        while j < 2 {
+            yield i * 2 + j;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+}
+
+// Yield in if without else
+def gen_if_only(n: i64) -> list<i64> {
+    var i = 0;
+    while i < 10 {
+        if i < n {
+            yield i;
+        }
+        i = i + 1;
+    }
+}
+
+def main() -> i64 {
+    var failures = 0;
+
+    // Test gen_while
+    val w = gen_while(3);
+    if len(w) != 3 { println("gen_while len FAIL"); failures = failures + 1 };
+    if len(w) == 3 {
+        if list_get(w, 0) != 0 { println("gen_while[0] FAIL"); failures = failures + 1 };
+        if list_get(w, 2) != 2 { println("gen_while[2] FAIL"); failures = failures + 1 };
+    };
+
+    // Test gen_for
+    val f = gen_for();
+    if len(f) != 5 { println("gen_for len FAIL"); failures = failures + 1 };
+    if len(f) == 5 {
+        if list_get(f, 0) != 0 { println("gen_for[0] FAIL"); failures = failures + 1 };
+        if list_get(f, 4) != 40 { println("gen_for[4] FAIL"); failures = failures + 1 };
+    };
+
+    // Test gen_strings
+    val s = gen_strings();
+    if len(s) != 3 { println("gen_strings len FAIL"); failures = failures + 1 };
+    if len(s) == 3 {
+        if list_get(s, 0) != "item_0" { println("gen_strings[0] FAIL"); failures = failures + 1 };
+        if list_get(s, 2) != "item_2" { println("gen_strings[2] FAIL"); failures = failures + 1 };
+    };
+
+    // Test gen_conditional (positive flag)
+    val cp = gen_conditional(1);
+    if len(cp) != 5 { println("gen_cond(+) len FAIL"); failures = failures + 1 };
+    if len(cp) == 5 {
+        if list_get(cp, 0) != 0 { println("gen_cond(+)[0] FAIL"); failures = failures + 1 };
+        if list_get(cp, 4) != 4 { println("gen_cond(+)[4] FAIL"); failures = failures + 1 };
+    };
+
+    // Test gen_conditional (zero flag)
+    val cn = gen_conditional(0);
+    if len(cn) != 5 { println("gen_cond(-) len FAIL"); failures = failures + 1 };
+    if len(cn) == 5 {
+        if list_get(cn, 0) != 0 { println("gen_cond(-)[0] FAIL"); failures = failures + 1 };
+        if list_get(cn, 4) != 8 { println("gen_cond(-)[4] FAIL"); failures = failures + 1 };
+    };
+
+    // Test gen_nested
+    val n = gen_nested();
+    if len(n) != 6 { println("gen_nested len FAIL"); failures = failures + 1 };
+    if len(n) == 6 {
+        if list_get(n, 0) != 0 { println("gen_nested[0] FAIL"); failures = failures + 1 };
+        if list_get(n, 1) != 1 { println("gen_nested[1] FAIL"); failures = failures + 1 };
+        if list_get(n, 2) != 2 { println("gen_nested[2] FAIL"); failures = failures + 1 };
+        if list_get(n, 5) != 5 { println("gen_nested[5] FAIL"); failures = failures + 1 };
+    };
+
+    // Test gen_if_only
+    val io = gen_if_only(5);
+    if len(io) != 5 { println("gen_if_only len FAIL"); failures = failures + 1 };
+    if len(io) == 5 {
+        if list_get(io, 0) != 0 { println("gen_if_only[0] FAIL"); failures = failures + 1 };
+        if list_get(io, 4) != 4 { println("gen_if_only[4] FAIL"); failures = failures + 1 };
+    };
+
+    if failures == 0 { println("ALL YIELD TESTS PASSED") };
+    if failures != 0 { println(concat(to_str(failures), " yield test(s) FAILED")) };
+    failures
+}

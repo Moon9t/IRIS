@@ -1,7 +1,7 @@
 def test_basic_join() -> i64 {
     val tg = task_group()
     spawn(tg) { 0 };
-    task_group_join(tg);;
+    task_group_join(tg);
     0
 }
 

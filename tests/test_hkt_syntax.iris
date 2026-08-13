@@ -1,0 +1,13 @@
+/// Test: Higher-Kinded Types
+///
+/// Tests F[T] HKT syntax in generic parameter position.
+/// This is the key HKT feature: abstracting over type constructors.
+
+def apply_wrap[F[T], T](x: T) -> F<T> {
+    x
+}
+
+def main() -> i64 {
+    println("HKT F[T] syntax parsed OK");
+    0
+}

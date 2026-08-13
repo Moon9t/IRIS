@@ -1,0 +1,37 @@
+defmacro double(x) => x * 2
+defmacro add3(a, b, c) => a + b + c
+defmacro when_checked(cond, msg) => { if cond { println(msg) } else { println("FAIL: " + msg) } }
+defmacro wrap_expr(e, msg) => { println(msg); e }
+defmacro answer() => 42
+
+def test_macros_basic() -> i64 {
+    val x: i64 = double!(21);
+    val y: i64 = add3!(10, 20, 30);
+    val z: i64 = double!(add3!(1, 2, 3));
+
+    if x != 42 { println("FAIL: x = " + to_str(x)); return 1 }
+    if y != 60 { println("FAIL: y = " + to_str(y)); return 1 }
+    if z != 12 { println("FAIL: z = " + to_str(z)); return 1 }
+    0
+}
+
+def test_macros_checked() -> i64 {
+    when_checked!(1 + 1 == 2, "math works");
+    0
+}
+
+def test_macros_nested() -> i64 {
+    val result: i64 = double!(add3!(5, 5, 5));
+    if result != 30 { println("FAIL: nested macro = " + to_str(result)); return 1 }
+    0
+}
+
+def test_macros_in_condition() -> i64 {
+    if double!(3) == 6 { 0 } else { println("FAIL: macro in condition"); 1 }
+}
+
+def test_macros_no_args() -> i64 {
+    val x: i64 = answer!();
+    if x != 42 { println("FAIL: no-arg macro = " + to_str(x)); return 1 }
+    0
+}

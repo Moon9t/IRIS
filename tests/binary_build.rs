@@ -18,8 +18,8 @@ def main() -> i64 {
 }
 "#;
     let tokens = Lexer::new(src).tokenize().expect("lex");
-    let ast = Parser::new(&tokens).parse_module().expect("parse");
-    let module = iris::compile_ast_to_module(&ast, "hello", None).expect("compile to module");
+    let mut ast = Parser::new(&tokens).parse_module().expect("parse");
+    let module = iris::compile_ast_to_module(&mut ast, "hello", None).expect("compile to module");
 
     assert!(
         module

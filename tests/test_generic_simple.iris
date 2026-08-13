@@ -1,0 +1,6 @@
+record Box[T] { value: T }
+
+def main() -> i64 {
+    val b: Box<i64> = Box { value: 42 }
+    b.value
+}

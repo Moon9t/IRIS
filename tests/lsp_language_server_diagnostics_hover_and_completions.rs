@@ -89,7 +89,7 @@ fn test_lsp_hover_function_signature() {
 fn test_lsp_completions_include_keywords() {
     let mut lsp = LspState::new();
     lsp.open_document(URI, "def f() -> i64 { 0 }");
-    let completions = lsp.completions(URI);
+    let completions = lsp.completions(URI, 0, 0);
     assert!(
         completions.contains(&"def".to_string()),
         "completions should include 'def'"
@@ -111,7 +111,7 @@ fn test_lsp_completions_include_user_fn() {
     let mut lsp = LspState::new();
     let src = "def my_custom_fn(x: i64) -> i64 { x + 1 }";
     lsp.open_document(URI, src);
-    let completions = lsp.completions(URI);
+    let completions = lsp.completions(URI, 0, 0);
     assert!(
         completions.contains(&"my_custom_fn".to_string()),
         "completions should include user-defined function 'my_custom_fn'"
@@ -158,7 +158,7 @@ fn test_lsp_hover_and_completions_local_bindings() {
     assert!(hover_a.contains("Immutable local binding"));
 
     // Completions detail checks
-    let completions = lsp.completion_items(URI);
+    let completions = lsp.completion_items(URI, 0, 0);
     let x_comp = completions
         .iter()
         .find(|c| c.label == "x")

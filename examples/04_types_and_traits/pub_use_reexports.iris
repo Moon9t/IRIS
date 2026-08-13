@@ -1,0 +1,26 @@
+// pub_use_reexports.iris — Re-exporting modules with pub bring
+//
+// Use `pub bring` to import a module AND re-export all its public
+// symbols through the current file. Other files that bring this
+// module will see the re-exported symbols.
+//
+// Run: iris run examples/04_types_and_traits/pub_use_reexports.iris
+
+// Re-export math_helpers so callers of this module get its symbols
+pub bring "math_helpers.iris"
+
+def main() -> i64 {
+    print("=== pub use Re-Exports ===");
+    print("");
+
+    // Use re-exported functions directly
+    print("square(5) = " + to_str(square(5)));
+    print("cube(3) = " + to_str(cube(3)));
+    print("is_even(4) = " + to_str(is_even(4)));
+    print("is_even(7) = " + to_str(is_even(7)));
+    print("factorial(6) = " + to_str(factorial(6)));
+
+    print("");
+    print("pub use re-exports example complete.");
+    0
+}

@@ -1,0 +1,9 @@
+/// Test: refinement type failure (should panic)
+
+type Positive = i64 where x > 0
+
+def main() -> i64 {
+    val x: Positive = -1;   // should panic: -1 is not > 0
+    println("should not reach here");
+    0
+}

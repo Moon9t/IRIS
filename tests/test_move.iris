@@ -1,0 +1,50 @@
+// Test linear/affine types: move keyword
+// All tests should compile and run successfully.
+
+def test_basic_move() -> i64 {
+    val a: list<i64> = list(1, 2, 3);
+    val b = move a;
+    val sum: i64 = list_len(b);
+    return sum
+}
+
+def test_move_and_use() -> str {
+    val msg: str = "hello";
+    val greeting = move msg;
+    return greeting
+}
+
+def test_move_in_block() -> i64 {
+    val x: i64 = 42;
+    val y = move x;
+    val z = move y;
+    return z
+}
+
+def test_move_chain() -> str {
+    val s: str = "world";
+    val a = move s;
+    val b = move a;
+    val c = move b;
+    return c
+}
+
+def main() -> i64 {
+    val t1 = test_basic_move();
+    val t2 = test_move_and_use();
+    val t3 = test_move_in_block();
+    val t4 = test_move_chain();
+
+    println("t1 = " + to_str(t1));
+    println("t2 = " + t2);
+    println("t3 = " + to_str(t3));
+    println("t4 = " + t4);
+
+    if t1 == 3 && t2 == "hello" && t3 == 42 && t4 == "world" {
+        println("ALL MOVE TESTS PASSED")
+    } else {
+        println("SOME TESTS FAILED");
+        process.exit(1)
+    };
+    return 0
+}

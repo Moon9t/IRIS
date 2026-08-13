@@ -1,0 +1,29 @@
+def test_select_default() -> i64 {
+    val ch: chan<i64> = channel();
+    var received = 0;
+    select! {
+        msg = ch => {
+            received = msg
+        },
+        default => {
+            received = -1
+        }
+    };
+    if received == -1 {
+        0
+    } else {
+        println("FAIL: select default got " + to_str(received) + ", expected -1");
+        1
+    }
+}
+
+def main() -> i64 {
+    var fails = 0;
+    fails = fails + test_select_default();
+    if fails == 0 {
+        println("All select tests passed")
+    } else {
+        println(to_str(fails) + " test(s) failed")
+    };
+    fails
+}

@@ -1,0 +1,10 @@
+// This should trigger a borrow error: mutable borrow while immutable borrow is alive
+def main() -> i64 {
+    val x: i64 = 10;
+
+    val r1: &i64 = &x;
+    val m: &mut i64 = &mut x;
+    println(f"deref = {*r1}");
+
+    return 0;
+}

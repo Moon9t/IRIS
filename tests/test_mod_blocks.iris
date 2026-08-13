@@ -1,0 +1,40 @@
+mod math {
+    pub def add(a: i64, b: i64) -> i64 {
+        a + b
+    }
+    pub def mul(a: i64, b: i64) -> i64 {
+        a * b
+    }
+}
+
+mod greeting {
+    pub def hello() -> str {
+        "hello"
+    }
+}
+
+def main() -> i64 {
+    val sum = math__add(2, 3);
+    println("math.add = " + to_str(sum));
+
+    val prod = math__mul(4, 5);
+    println("math.mul = " + to_str(prod));
+
+    val g = greeting__hello();
+    println("greeting.hello = " + g);
+
+    if sum == 5 {
+        if prod == 20 {
+            if g == "hello" {
+                println("All module tests passed!");
+                0
+            } else {
+                1
+            }
+        } else {
+            1
+        }
+    } else {
+        1
+    }
+}

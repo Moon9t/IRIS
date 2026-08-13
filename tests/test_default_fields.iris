@@ -1,0 +1,47 @@
+// Test default record field values
+record Config {
+    host: str = "localhost",
+    port: i64 = 8080,
+    debug: bool = false,
+}
+
+record Server {
+    name: str = "default-server",
+    max_connections: i64 = 100,
+}
+
+def main() -> i64 {
+    // All defaults: Config { } should use all default values
+    val c1: Config = Config { };
+    println("c1.host = " + c1.host);
+    println("c1.port = " + to_str(c1.port));
+    if c1.host != "localhost" { return 1 };
+    if c1.port != 8080 { return 2 };
+    if c1.debug != false { return 3 };
+
+    // Override one field - others should use defaults
+    val c2: Config = Config { port: 443 };
+    println("c2.host = " + c2.host);
+    println("c2.port = " + to_str(c2.port));
+    if c2.host != "localhost" { return 4 };
+    if c2.port != 443 { return 5 };
+
+    // Override all fields
+    val c3: Config = Config { host: "example.com", port: 80, debug: true };
+    println("c3.host = " + c3.host);
+    if c3.host != "example.com" { return 6 };
+    if c3.port != 80 { return 7 };
+    if c3.debug != true { return 8 };
+
+    // Server with defaults
+    val s1: Server = Server { };
+    if s1.name != "default-server" { return 9 };
+    if s1.max_connections != 100 { return 10 };
+
+    val s2: Server = Server { max_connections: 50 };
+    if s2.name != "default-server" { return 11 };
+    if s2.max_connections != 50 { return 12 };
+
+    println("ALL PASS");
+    0
+}

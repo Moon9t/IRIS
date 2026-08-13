@@ -1,0 +1,40 @@
+record Point { x: i64, y: i64 }
+
+def match_point(p: Point) -> i64 {
+    when p {
+        Point { x: 1, y: 2 } => {
+            print("exact match: x=1, y=2");
+            1
+        }
+        Point { x: 1, y } => {
+            print("x is 1, y = " + to_str(y));
+            2
+        }
+        Point { x, y: 5 } => {
+            print("y is 5, x = " + to_str(x));
+            3
+        }
+        _ => {
+            print("other");
+            0
+        }
+    }
+}
+
+def main() -> i64 {
+    val p1 = Point { x: 1, y: 2 }
+    val p2 = Point { x: 1, y: 9 }
+    val p3 = Point { x: 3, y: 5 }
+    val p4 = Point { x: 7, y: 8 }
+
+    val r1 = match_point(p1)
+    val r2 = match_point(p2)
+    val r3 = match_point(p3)
+    val r4 = match_point(p4)
+
+    print("r1 = " + to_str(r1));
+    print("r2 = " + to_str(r2));
+    print("r3 = " + to_str(r3));
+    print("r4 = " + to_str(r4));
+    r1 + r2 + r3 + r4
+}

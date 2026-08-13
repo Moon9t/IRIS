@@ -1,0 +1,22 @@
+def main() -> i64 {
+    val a = "cherry"
+    val b = "x"
+    val r1 = if a < b { 1 } else { 0 };
+    println("literal: cherry < x = " + to_str(r1));
+
+    var lst: list<str> = list()
+    push(lst, "cherry");
+    push(lst, "x");
+    val c = list_get(lst, 0)
+    val d = list_get(lst, 1)
+    val r2 = if c < d { 1 } else { 0 };
+    println("from list: cherry < x = " + to_str(r2));
+
+    val r3 = if c == d { 1 } else { 0 };
+    println("from list: cherry == x = " + to_str(r3));
+
+    val r4 = if "cherry" < "x" { 1 } else { 0 };
+    println("direct literal: cherry < x = " + to_str(r4));
+
+    0
+}

@@ -1,0 +1,40 @@
+// Test arithmetic operator overloading via traits
+record Vec2 { x: i64, y: i64 }
+
+impl Add for Vec2 {
+    def add(self, other: Vec2) -> Vec2 {
+        Vec2 { x: self.x + other.x, y: self.y + other.y }
+    }
+}
+
+impl Sub for Vec2 {
+    def sub(self, other: Vec2) -> Vec2 {
+        Vec2 { x: self.x - other.x, y: self.y - other.y }
+    }
+}
+
+impl Mul for Vec2 {
+    def mul(self, other: Vec2) -> Vec2 {
+        Vec2 { x: self.x * other.x, y: self.y * other.y }
+    }
+}
+
+def main() -> i64 {
+    val a = Vec2 { x: 1, y: 2 };
+    val b = Vec2 { x: 3, y: 4 };
+    
+    val sum = a + b;
+    println("add: " + to_str(sum.x) + ", " + to_str(sum.y));
+    if sum.x != 4 || sum.y != 6 { println("FAIL: add"); return 1 }
+    
+    val diff = b - a;
+    println("sub: " + to_str(diff.x) + ", " + to_str(diff.y));
+    if diff.x != 2 || diff.y != 2 { println("FAIL: sub"); return 1 }
+    
+    val prod = a * b;
+    println("mul: " + to_str(prod.x) + ", " + to_str(prod.y));
+    if prod.x != 3 || prod.y != 8 { println("FAIL: mul"); return 1 }
+    
+    println("All arithmetic operator overloading tests passed!");
+    0
+}

@@ -1,0 +1,12 @@
+/// This function tests that doc comments work.
+def foo() -> i64 {
+    /// This is inside a body — should be ignored.
+    42
+}
+
+def bar() -> i64 {
+    val x = 10
+    // This is a regular comment
+    /// This is a doc comment inside a body
+    x + 1
+}

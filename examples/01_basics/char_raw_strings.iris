@@ -1,0 +1,61 @@
+// char_raw_strings.iris — Character literals and raw strings
+//
+// Character literals ('A', '\n', etc.) represent single byte values (u8).
+// Raw strings (r"...") preserve backslashes literally — no escape processing.
+//
+// Run: iris run examples/01_basics/char_raw_strings.iris
+
+def main() -> i64 {
+    print("=== Character & Raw String Literals ===");
+    print("");
+
+    // --- Character literals are u8 values ---
+    val letter_a: u8 = 'A';
+    val newline: u8 = '\n';
+    val tab: u8 = '\t';
+    val zero: u8 = '0';
+
+    print("'A'  = " + to_str(letter_a));   // 65
+    print("'\\n' = " + to_str(newline));   // 10
+    print("'\\t' = " + to_str(tab));       // 9
+    print("'0'  = " + to_str(zero));       // 48
+
+    // Char comparisons work with == and !=
+    if letter_a == 65 {
+        print("'A' == 65: true");
+    }
+
+    val b: u8 = 'B';
+    if letter_a != b {
+        print("'A' != 'B': true");
+    }
+
+    // --- Raw strings preserve backslashes ---
+    val raw_path = r"C:\Users\test\file.txt";
+    print("raw path: " + raw_path);
+
+    val raw_regex = r"\d+\.\d+";
+    print("raw regex: " + raw_regex);
+
+    val raw_no_escape = r"no\escape\nneeded";
+    print("raw no-escape: " + raw_no_escape);
+
+    // Regular string needs double backslash
+    val normal_path = "C:\\Users\\test\\file.txt";
+    print("normal path: " + normal_path);
+
+    // Verify raw string matches escaped equivalent
+    val raw = r"hello\nworld";
+    val escaped = "hello\\nworld";
+    if raw == escaped {
+        print("raw string equals escaped string: true");
+    }
+
+    // Verify raw string length (includes backslash as one char)
+    print("raw len: " + to_str(len(r"a\b")));       // 3
+    print("normal len: " + to_str(len("a\\b")));     // 3
+
+    print("");
+    print("char & raw string example complete.");
+    0
+}

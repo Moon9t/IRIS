@@ -1,0 +1,60 @@
+// Test tail-call optimization (TCO) in the interpreter.
+// Deep recursion that would overflow the stack without TCO.
+
+def factorial(n: i64, acc: i64) -> i64 {
+    if n <= 1 {
+        acc
+    } else {
+        factorial(n - 1, acc * n)
+    }
+}
+
+def sum_to(n: i64, acc: i64) -> i64 {
+    if n == 0 {
+        acc
+    } else {
+        sum_to(n - 1, acc + n)
+    }
+}
+
+def gcd_tco(a: i64, b: i64) -> i64 {
+    if b == 0 {
+        a
+    } else {
+        gcd_tco(b, a % b)
+    }
+}
+
+def count_down(n: i64) -> i64 {
+    if n == 0 {
+        0
+    } else {
+        count_down(n - 1)
+    }
+}
+
+def main() -> i64 {
+    // Test 1: factorial(12) = 479001600 (fits in i64)
+    val f = factorial(12, 1);
+    println("factorial(12) = " + to_str(f));
+
+    // Test 2: sum_to(50000, 0) = 1250025000 (fits in i64)
+    val s = sum_to(50000, 0);
+    println("sum_to(50000) = " + to_str(s));
+
+    // Test 3: gcd with large values
+    val g = gcd_tco(462, 1071);
+    println("gcd(462, 1071) = " + to_str(g));
+
+    // Test 4: Deep recursion without return value (stress test TCO)
+    count_down(500000);
+    println("count_down(500000) completed");
+
+    if f == 479001600 && s == 1250025000 && g == 21 {
+        println("All TCO tests passed!");
+        0
+    } else {
+        println("TCO tests FAILED");
+        1
+    }
+}

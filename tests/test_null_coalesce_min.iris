@@ -1,0 +1,7 @@
+def main() -> i64 {
+    val a: i64 = some(42) ?? 0;
+    val b: i64 = none ?? 99;
+    if b != 99 { return 1 };
+    println("ALL PASS");
+    0
+}

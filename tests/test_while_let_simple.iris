@@ -1,0 +1,8 @@
+def main() -> i64 {
+    var x = some(10);
+    while let some(v) = x {
+        println(v);
+        x = none()
+    };
+    0
+}

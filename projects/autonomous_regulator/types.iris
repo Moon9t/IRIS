@@ -1,0 +1,77 @@
+// types.iris — Shared vocabulary for the autonomous regulator.
+//
+// Every other module depends on this one and on nothing else, so the
+// dependency graph stays acyclic:
+//
+//   types <- perception <- world_model <- policy <- safety <- main
+
+// ─── Operating envelope ───────────────────────────────────────────────────
+// Physical limits of the regulated plant. Exceeding these is a safety fault,
+// not a control error, so they live beside the types rather than in policy.
+pub const TEMP_MIN_C: f64 = 4.0
+pub const TEMP_MAX_C: f64 = 85.0
+pub const SETPOINT_C: f64 = 21.5
+
+// Largest actuator step permitted in a single control cycle. Rate limiting is
+// what keeps a proportional controller from slamming the hardware.
+pub const MAX_DELTA_PER_TICK: f64 = 2.5
+
+// ─── Sensing ──────────────────────────────────────────────────────────────
+
+// One raw sample from one sensor. `quality` is the sensor's own confidence in
+// [0,1]; the fusion stage weights by it rather than discarding outright, so a
+// degraded sensor still contributes what it can.
+pub record Sample {
+    sensor_id: i64,
+    temperature_c: f64,
+    quality: f64
+}
+
+// Result of fusing a full sweep of sensors into a single estimate.
+pub record Observation {
+    tick: i64,
+    fused_temp_c: f64,
+    confidence: f64,
+    sensors_used: i64
+}
+
+// ─── Belief ───────────────────────────────────────────────────────────────
+
+// The agent's running estimate of plant state. `trend_c` is the per-tick
+// derivative, which lets the policy act on where the plant is heading rather
+// than only where it is.
+pub record Belief {
+    estimate_c: f64,
+    trend_c: f64,
+    confidence: f64,
+    settled: bool
+}
+
+// ─── Action ───────────────────────────────────────────────────────────────
+
+pub choice Mode {
+    Idle,
+    Heating,
+    Cooling,
+    Fault
+}
+
+pub record Command {
+    mode: Mode,
+    delta_c: f64,
+    reason: str
+}
+
+// ─── Diagnostics ──────────────────────────────────────────────────────────
+
+// One line of the agent's audit trail. An autonomous system that cannot
+// explain a decision after the fact is not deployable, so every cycle emits
+// one of these regardless of outcome.
+pub record CycleReport {
+    tick: i64,
+    observed_c: f64,
+    estimate_c: f64,
+    applied_c: f64,
+    mode_name: str,
+    note: str
+}

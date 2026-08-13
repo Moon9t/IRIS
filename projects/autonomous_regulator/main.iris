@@ -1,0 +1,144 @@
+// main.iris — Autonomous thermal regulator.
+//
+// A full MAPE-K agent loop over a simulated plant:
+//
+//   Monitor  -> perception.sweep + perception.fuse
+//   Analyse  -> world_model.update
+//   Plan     -> policy.decide
+//   Execute  -> safety.gate (may refuse)
+//   Knowledge-> the Belief carried across ticks
+//
+// The plant is simulated in-process so the whole thing runs deterministically
+// enough to demonstrate, without needing hardware attached.
+
+bring "types.iris"
+bring "perception.iris"
+bring "world_model.iris"
+bring "policy.iris"
+bring "safety.iris"
+
+const TICKS: i64 = 24
+
+// Ambient pulls the plant back toward this whenever the actuator is idle.
+const AMBIENT_C: f64 = 12.0
+const AMBIENT_PULL: f64 = 0.12
+
+// ─── Plant simulation ─────────────────────────────────────────────────────
+// Applies the actuator command and ambient drift to the true temperature.
+// The agent never sees this value directly — only through its sensors.
+def step_plant(true_c: f64, applied_c: f64) -> f64 {
+    val drift = (AMBIENT_C - true_c) * AMBIENT_PULL;
+    true_c + applied_c + drift
+}
+
+// ─── One control cycle ────────────────────────────────────────────────────
+// Returns the report; the caller threads belief and plant state forward.
+def run_cycle(tick: i64, true_c: f64, prior: Belief, gain: f64) -> CycleReport {
+    // Monitor
+    val samples = sweep(true_c, tick);
+    val obs = fuse(samples, tick);
+
+    // Analyse
+    val belief = update(prior, obs);
+
+    // Plan
+    val controller = Proportional { gain: gain };
+    val proposed = controller.decide(belief);
+    val mode = classify(proposed);
+
+    // Execute — the gate may refuse, and refusal is a normal outcome.
+    // `when` is used as an expression so each arm produces the whole report;
+    // that keeps the two outcomes total and avoids mutating shared state.
+    val decision = gate(belief, proposed, mode);
+
+    when decision {
+        ok(cmd) => CycleReport {
+            tick: tick,
+            observed_c: obs.fused_temp_c,
+            estimate_c: belief.estimate_c,
+            applied_c: cmd.delta_c,
+            mode_name: mode_name(mode),
+            note: "authorised"
+        },
+        err(reason) => CycleReport {
+            tick: tick,
+            observed_c: obs.fused_temp_c,
+            estimate_c: belief.estimate_c,
+            applied_c: 0.0,
+            mode_name: mode_name(Mode.Idle),
+            note: reason
+        },
+    }
+}
+
+def print_header() -> i64 {
+    print("tick |  observed |  estimate |  applied | mode     | note");
+    print("-----+-----------+-----------+----------+----------+----------------------------");
+    0
+}
+
+def print_report(r: CycleReport) -> i64 {
+    print(concat(
+        concat(
+            concat(to_str(r.tick), concat("    | ", concat(to_str(r.observed_c), "  | "))),
+            concat(to_str(r.estimate_c), concat("  |  ", to_str(r.applied_c)))
+        ),
+        concat(concat("  | ", r.mode_name), concat("  | ", r.note))
+    ));
+    0
+}
+
+def main() -> i64 {
+    print("=== IRIS Autonomous Thermal Regulator ===");
+    print("");
+    print(concat("setpoint: ", concat(to_str(SETPOINT_C), " C")));
+    print(concat("sensors:  ", to_str(SENSOR_COUNT)));
+    print(concat("ticks:    ", to_str(TICKS)));
+    print("");
+
+    print_header();
+
+    // Plant starts cold and well away from setpoint.
+    var true_c = 9.0;
+    var belief = initial_belief(true_c);
+
+    var refusals = 0;
+    var settled_ticks = 0;
+
+    var tick = 0;
+    while tick < TICKS {
+        val report = run_cycle(tick, true_c, belief, 0.55);
+
+        // Rebuild the belief for the next cycle from this cycle's observation.
+        val samples = sweep(true_c, tick);
+        val obs = fuse(samples, tick);
+        belief = update(belief, obs);
+
+        if belief.settled {
+            settled_ticks = settled_ticks + 1;
+        };
+        if report.note != "authorised" {
+            refusals = refusals + 1;
+        };
+
+        print_report(report);
+
+        true_c = step_plant(true_c, report.applied_c);
+        tick = tick + 1;
+    };
+
+    print("");
+    print("=== Summary ===");
+    print(concat("final true temperature: ", to_str(true_c)));
+    print(concat("final estimate:         ", to_str(belief.estimate_c)));
+    print(concat("safety refusals:        ", to_str(refusals)));
+    print(concat("settled cycles:         ", to_str(settled_ticks)));
+
+    if belief.settled {
+        print("status: CONVERGED — plant held at setpoint");
+    } else {
+        print("status: still converging");
+    };
+
+    0
+}

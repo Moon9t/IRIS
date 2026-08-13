@@ -1,0 +1,93 @@
+const def square(x: i64) -> i64 {
+    x * x
+}
+
+const def add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+const def abs_diff(a: i64, b: i64) -> i64 {
+    if a > b {
+        a - b
+    } else {
+        b - a
+    }
+}
+
+const def clamp(v: i64, lo: i64, hi: i64) -> i64 {
+    if v < lo {
+        lo
+    } else if v > hi {
+        hi
+    } else {
+        v
+    }
+}
+
+def test_square() -> i64 {
+    val r = square(5)
+    if r == 25 {
+        0
+    } else {
+        println("FAIL: square(5) = " + to_str(r) + ", expected 25");
+        1
+    }
+}
+
+def test_add() -> i64 {
+    val r = add(3, 4)
+    if r == 7 {
+        0
+    } else {
+        println("FAIL: add(3,4) = " + to_str(r) + ", expected 7");
+        1
+    }
+}
+
+def test_abs_diff() -> i64 {
+    val r1 = abs_diff(10, 3)
+    val r2 = abs_diff(3, 10)
+    if r1 == 7 && r2 == 7 {
+        0
+    } else {
+        println("FAIL: abs_diff " + to_str(r1) + ", " + to_str(r2));
+        1
+    }
+}
+
+def test_clamp() -> i64 {
+    val r1 = clamp(5, 0, 10)
+    val r2 = clamp(-5, 0, 10)
+    val r3 = clamp(15, 0, 10)
+    if r1 == 5 && r2 == 0 && r3 == 10 {
+        0
+    } else {
+        println("FAIL: clamp " + to_str(r1) + ", " + to_str(r2) + ", " + to_str(r3));
+        1
+    }
+}
+
+def test_nested() -> i64 {
+    val r = add(square(3), square(4))
+    if r == 25 {
+        0
+    } else {
+        println("FAIL: add(square(3),square(4)) = " + to_str(r) + ", expected 25");
+        1
+    }
+}
+
+def main() -> i64 {
+    var fails = 0;
+    fails = fails + test_square();
+    fails = fails + test_add();
+    fails = fails + test_abs_diff();
+    fails = fails + test_clamp();
+    fails = fails + test_nested();
+    if fails == 0 {
+        println("All const fn tests passed")
+    } else {
+        println(to_str(fails) + " test(s) failed")
+    };
+    fails
+}

@@ -1,0 +1,14 @@
+record Point {
+    x: i64,
+    y: i64,
+}
+
+def main() -> i64 {
+    val p1 = Point { x: 10, y: 20 }
+    val p2: Point = Point { ..p1, x: 5 }
+    println(p2.x)
+    println(p2.y)
+    assert(p2.x == 5)
+    assert(p2.y == 20)
+    0
+}

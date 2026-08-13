@@ -1,0 +1,43 @@
+record Point {
+    x: i64,
+    y: i64,
+    label: str,
+}
+
+record Person {
+    name: str,
+    age: i64,
+    city: str,
+}
+
+def main() -> i64 {
+    val p1 = Point { x: 10, y: 20, label: "origin" };
+    val p2: Point = Point { ..p1, x: 5 };
+
+    println(p2.x);
+    println(p2.y);
+    println(p2.label);
+
+    assert(p2.x == 5);
+    assert(p2.y == 20);
+    assert(p2.label == "origin");
+
+    val p3: Point = Point { ..p1, x: 99, y: 88 };
+    assert(p3.x == 99);
+    assert(p3.y == 88);
+    assert(p3.label == "origin");
+
+    val p4: Point = Point { ..p1 };
+    assert(p4.x == 10);
+    assert(p4.y == 20);
+    assert(p4.label == "origin");
+
+    val person1 = Person { name: "Alice", age: 30, city: "NYC" };
+    val person2: Person = Person { ..person1, age: 31 };
+    assert(person2.name == "Alice");
+    assert(person2.age == 31);
+    assert(person2.city == "NYC");
+
+    println("all struct update tests passed");
+    0
+}

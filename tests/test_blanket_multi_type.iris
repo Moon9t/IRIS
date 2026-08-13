@@ -1,0 +1,61 @@
+// Edge case: multiple concrete types all covered by the same blanket impl.
+
+trait Show {
+    def show(self) -> str
+}
+
+trait Printable {
+    def printable(self) -> str
+}
+
+record Dog {
+    name: str
+}
+
+record Cat {
+    name: str
+    color: str
+}
+
+// Direct Show impls for two different types.
+impl Show for Dog {
+    def show(self) -> str {
+        "Dog:" + self.name
+    }
+}
+
+impl Show for Cat {
+    def show(self) -> str {
+        "Cat:" + self.name + "(" + self.color + ")"
+    }
+}
+
+// Blanket impl: any Show type is also Printable.
+impl[T where T: Show] Printable for T {
+    def printable(self) -> str {
+        "[" + self.show() + "]"
+    }
+}
+
+def main() -> i64 {
+    val d = Dog { name: "Rex" };
+    val c = Cat { name: "Whiskers", color: "black" };
+
+    // Test 1: Direct Show on Dog.
+    val s1 = d.show();
+    if s1 != "Dog:Rex" { return 1 }
+
+    // Test 2: Blanket Printable on Dog.
+    val s2 = d.printable();
+    if s2 != "[Dog:Rex]" { return 2 }
+
+    // Test 3: Direct Show on Cat.
+    val s3 = c.show();
+    if s3 != "Cat:Whiskers(black)" { return 3 }
+
+    // Test 4: Blanket Printable on Cat.
+    val s4 = c.printable();
+    if s4 != "[Cat:Whiskers(black)]" { return 4 }
+
+    0
+}

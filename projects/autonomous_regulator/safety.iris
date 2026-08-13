@@ -1,0 +1,74 @@
+// safety.iris — The constraint layer ("Execute" gate in MAPE-K).
+//
+// Nothing reaches the actuator without passing through here. The policy is
+// free to propose anything; this module decides what is allowed to happen.
+// Errors are values (`result<T, str>`), so a rejected command is an ordinary
+// return the caller must handle — not a panic that takes the agent down.
+
+bring "types.iris"
+bring "world_model.iris"
+
+// Reject any command issued on a belief we do not trust.
+pub const MIN_ACTIONABLE_CONFIDENCE: f64 = 0.25
+
+// Clamp a proposed correction to the per-tick rate limit.
+//
+// Rate limiting is applied before envelope checking because a large proposal
+// that clamps into a safe range is normal operation, not a fault.
+pub def rate_limit(delta_c: f64) -> f64 {
+    if delta_c > MAX_DELTA_PER_TICK {
+        return MAX_DELTA_PER_TICK;
+    };
+    if delta_c < 0.0 - MAX_DELTA_PER_TICK {
+        return 0.0 - MAX_DELTA_PER_TICK;
+    };
+    delta_c
+}
+
+// Would applying `delta_c` drive the plant outside its physical envelope?
+pub def within_envelope(estimate_c: f64, delta_c: f64) -> bool {
+    val projected = estimate_c + delta_c;
+    projected > TEMP_MIN_C && projected < TEMP_MAX_C
+}
+
+// Validate a proposed correction against the current belief.
+//
+// Returns the correction actually permitted, or an explanation of the refusal.
+// The three refusal cases are deliberately distinct strings: an operator
+// reading the audit trail needs to tell "I couldn't see" apart from
+// "I could see, and refused".
+pub def authorise(b: Belief, proposed_c: f64) -> result<f64, str> {
+    if b.confidence < MIN_ACTIONABLE_CONFIDENCE {
+        return err("insufficient sensor confidence — holding");
+    };
+
+    val limited = rate_limit(proposed_c);
+
+    if !within_envelope(b.estimate_c, limited) {
+        return err("projected state leaves safe envelope — refused");
+    };
+
+    ok(limited)
+}
+
+// Full gate: authorise, then package into a Command.
+//
+// Uses `?` so an authorisation failure short-circuits straight out to the
+// caller with its message intact, rather than being re-checked here.
+pub def gate(b: Belief, proposed_c: f64, mode: Mode) -> result<Command, str> {
+    val allowed = authorise(b, proposed_c)?;
+    ok(Command {
+        mode: mode,
+        delta_c: allowed,
+        reason: "authorised"
+    })
+}
+
+// A command that is always safe, for when the gate refuses.
+pub def hold_command(reason: str) -> Command {
+    Command {
+        mode: Mode.Idle,
+        delta_c: 0.0,
+        reason: reason
+    }
+}

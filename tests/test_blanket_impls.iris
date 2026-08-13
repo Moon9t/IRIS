@@ -1,0 +1,39 @@
+// Test blanket impls: impl[T where T: Trait] OtherTrait for T
+
+trait Show {
+    def show(self: Self) -> str
+}
+
+record Point { x: i64, y: i64 }
+
+impl Show for Point {
+    def show(self: Self) -> str {
+        "Point"
+    }
+}
+
+trait Describable {
+    def describe(self: Self) -> str
+}
+
+// Blanket impl: every Show type is also Describable.
+impl[T where T: Show] Describable for T {
+    def describe(self: Self) -> str {
+        "Described: " + self.show()
+    }
+}
+
+def check(b: bool) -> i64 {
+    if b { 0 } else { 1 }
+}
+
+def main() -> i64 {
+    // Test blanket impl on Point
+    val p = Point { x: 10, y: 20 };
+    val d1 = p.describe();
+    println("Point describe: " + d1);
+    val t1: i64 = check(d1 == "Described: Point");
+
+    println("t1=" + to_str(t1));
+    t1
+}

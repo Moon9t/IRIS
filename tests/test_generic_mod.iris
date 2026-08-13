@@ -1,0 +1,11 @@
+bring std.heap
+
+def main() -> i64 {
+    var h = heap.heap_new(0)
+    h = heap.heap_push(h, 5);
+    h = heap.heap_push(h, 3);
+    h = heap.heap_push(h, 7);
+    val len = heap.heap_len(h)
+    val peek = heap.heap_peek(h)
+    len + peek
+}

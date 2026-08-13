@@ -1,0 +1,16 @@
+mod math {
+    pub def add(a: i64, b: i64) -> i64 {
+        a + b
+    }
+    pub def mul(a: i64, b: i64) -> i64 {
+        a * b
+    }
+}
+
+bring math.{add}
+
+def main() -> i64 {
+    val sum = add(2, 3);
+    println("add = " + to_str(sum));
+    sum
+}

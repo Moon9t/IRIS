@@ -1,0 +1,20 @@
+def main() -> i64 {
+    val m = map();
+    map_set(m, "a", 1);
+    map_set(m, "b", 2);
+    map_set(m, "c", 3);
+
+    val entries = map_entries(m);
+    val count = list_len(entries);
+    println("entries count: " + to_str(count));
+
+    val first = list_get(entries, 0);
+    println("first entry: " + to_str(first));
+
+    val t1 = check(count == 3);
+
+    println("All map_entries tests passed!");
+    return t1
+}
+
+def check(b: bool) -> i64 { if b { 0 } else { 1 } }

@@ -1,0 +1,18 @@
+// Minimal yield failure test
+def gen_conditional(flag: i64) -> list<i64> {
+    var i = 0;
+    while i < 5 {
+        if flag > 0 {
+            yield i;
+        } else {
+            yield i * 2;
+        }
+        i = i + 1;
+    }
+}
+
+def main() -> i64 {
+    val r = gen_conditional(1);
+    println(to_str(len(r)));
+    0
+}
