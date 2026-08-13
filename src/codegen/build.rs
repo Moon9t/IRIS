@@ -194,6 +194,8 @@ pub(crate) fn run_binary_for_eval_entry_capture(
         build_binary_for_eval_with_target(module, &temp_eval_binary_path(), target)?
     };
     let run_path = std::fs::canonicalize(&bin_path).unwrap_or(bin_path.clone());
+    // Removed on every exit path, including the timeout below.
+    let _exe_guard = TempExeGuard(run_path.clone());
     // Run the native binary with a timeout. Programs that use spawn/TCP may hang
     // indefinitely in the native runtime, so we fall back to the interpreter.
     //
@@ -209,7 +211,6 @@ pub(crate) fn run_binary_for_eval_entry_capture(
                 timeout_secs
             ),
         })?;
-    let _ = std::fs::remove_file(&run_path);
     Ok(output)
 }
 
@@ -297,8 +298,8 @@ pub(crate) fn run_native_test_capture(
         link_libs,
     )?;
     let run_path = std::fs::canonicalize(&bin_path).unwrap_or(bin_path.clone());
+    let _exe_guard = TempExeGuard(run_path.clone());
     let output = Command::new(&run_path).output().map_err(CodegenError::Io)?;
-    let _ = std::fs::remove_file(&run_path);
     Ok(output)
 }
 
@@ -810,6 +811,24 @@ impl Drop for BuildDirGuard {
     }
 }
 
+/// Removes a temporary executable when it goes out of scope.
+///
+/// The eval path deleted its binary only after a successful run, so every
+/// timeout or runtime failure left one behind — the same early-return leak as
+/// the build directories, and the reason 34 stray executables survived a single
+/// suite run. Honours `IRIS_KEEP_BUILD_DIR` for consistency with the directory
+/// guard, since inspecting a failing binary is the same debugging task.
+struct TempExeGuard(PathBuf);
+
+impl Drop for TempExeGuard {
+    fn drop(&mut self) {
+        if std::env::var("IRIS_KEEP_BUILD_DIR").is_ok() {
+            return;
+        }
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Build a WASM binary using the WASI sysroot (wasi-libc + compiler-rt).
 fn build_wasm_binary_impl(
     llvm_ir: &str,
@@ -835,6 +854,8 @@ fn build_wasm_binary_impl(
         backend: "wasm".into(),
         detail: format!("failed to create temp dir '{}': {}", tmp_dir.display(), e),
     })?;
+    // Same leak as the native path had; see BuildDirGuard.
+    let _build_dir_guard = BuildDirGuard(tmp_dir.clone());
 
     let clang = find_clang();
 
