@@ -103,7 +103,7 @@ You should have received a copy of the GNU General Public License along with thi
   - [6.3 Generic Functions](#63-generic-functions)
   - [6.4 Trait Constraints (`where`)](#64-trait-constraints-where)
   - [Try It Yourself](#try-it-yourself)
-- [Chapter 7: Traits and Generics](#chapter-7-traits-and-generics)
+- [Chapter 7: Pattern Matching in Depth](#chapter-7-pattern-matching-in-depth)
   - [7.1 Trait Declarations](#71-trait-declarations)
   - [7.2 Implementing Traits](#72-implementing-traits)
   - [7.3 Generic Functions](#73-generic-functions)
@@ -221,7 +221,7 @@ You should have received a copy of the GNU General Public License along with thi
   - [18.6 Performance Profiling](#186-performance-profiling)
   - [18.7 A Key-Value Store Server](#187-a-key-value-store-server)
   - [Try It Yourself](#try-it-yourself)
-- [Chapter 19: Package Manager](#chapter-19-package-manager)
+- [Chapter 19: Metaprogramming, Effects, and Ergonomics](#chapter-19-metaprogramming-effects-and-ergonomics)
   - [19.1 Initializing a Project](#191-initializing-a-project)
   - [19.2 The `iris.toml` Manifest](#192-the-iristoml-manifest)
   - [19.3 Managing Dependencies](#193-managing-dependencies)
@@ -1716,88 +1716,270 @@ def print_item[T where T: Printable](x: T) -> i64 {
 
 
 
-## Chapter 7: Traits and Generics
+## Chapter 7: Pattern Matching in Depth
 
-IRIS features a robust type system that supports traits and generics, allowing for clean code reuse, static polymorphism, and generic programming.
+Chapter 4 introduced `when` for simple matching. This chapter covers the full
+pattern language: destructuring records, matching several shapes at once, binding
+parts of a list, and the `if let` / `while let` forms that make single-case
+matches readable.
 
-### 7.1 Trait Declarations
+Every example here is taken from the compiler's own test suite.
 
-A **trait** defines a contract or interface of method signatures that types must satisfy:
+### 7.1 Struct Patterns
 
-```iris
-trait Printable {
-    def to_string(self: Self) -> str
-}
-
-trait Comparable {
-    def compare(self: Self, other: Self) -> i64
-}
-```
-
-The keyword `Self` (capitalized) inside a trait definition represents the type that will implement the trait.
-
-### 7.2 Implementing Traits
-
-Use the `impl` keyword to implement a trait for a concrete record type:
+A record can be destructured directly in a `when` arm. Fields may be matched
+against literals, bound to names, or both:
 
 ```iris
-record Point {
-    x: f64,
-    y: f64,
-}
+record Point { x: i64, y: i64 }
 
-impl Printable for Point {
-    def to_string(self: Point) -> str {
-        format("({}, {})", self.x, self.y)
+def match_point(p: Point) -> i64 {
+    when p {
+        Point { x: 1, y: 2 } => {
+            print("exact match: x=1, y=2");
+            1
+        }
+        Point { x: 1, y } => {
+            print("x is 1, y = " + to_str(y));
+            2
+        }
+        Point { x, y: 5 } => {
+            print("y is 5, x = " + to_str(x));
+            3
+        }
+        _ => {
+            print("other");
+            0
+        }
     }
 }
 ```
 
-Once a trait is implemented, its methods can be called on instances of that type:
+Arms are tried top to bottom, so order the specific patterns before the general
+ones. `Point { x: 1, y: 2 }` matches only that one point; `Point { x: 1, y }`
+matches any point on the line `x = 1` and binds `y`.
+
+A bare field name binds; `field: value` tests. Mixing them in one pattern, as in
+`Point { x, y: 5 }`, is what makes struct patterns worth reaching for.
+
+### 7.2 Or-Patterns
+
+Several shapes can share one arm with `|`:
+
+```iris
+choice Color { Red, Green, Blue }
+
+def is_warm(c: Color) -> bool {
+    when c {
+        Color.Red | Color.Green => true,
+        Color.Blue => false,
+    }
+}
+```
+
+Or-patterns work with enum variants, literals, tuples and ranges. Every
+alternative in a single arm must bind the same set of names — otherwise the arm
+body would see different variables depending on which alternative matched.
+
+### 7.3 Range Patterns
+
+Inclusive ranges match numeric spans:
+
+```iris
+def classify(n: i64) -> str {
+    when n {
+        0 => "zero",
+        1..=9 => "single digit",
+        10..=99 => "double digit",
+        _ => "large",
+    }
+}
+```
+
+### 7.4 Guards
+
+A guard adds a condition that must also hold for the arm to be taken:
+
+```iris
+def describe(p: Point) -> str {
+    when p {
+        Point { x, y } if x == y => "on the diagonal",
+        Point { x, y } if x > y => "below the diagonal",
+        _ => "above the diagonal",
+    }
+}
+```
+
+Guards run *after* the pattern matches and its bindings are available, which is
+why `x` and `y` can be compared. Note that the exhaustiveness checker cannot see
+inside a guard, so a set of guarded arms usually still needs a `_` fallback.
+
+### 7.5 Slice Patterns
+
+Lists can be matched by shape, with an optional rest binding:
+
+```iris
+def summarise(xs: list<i64>) -> str {
+    when xs {
+        [] => "empty",
+        [a] => "one element: " + to_str(a),
+        [a, b] => "two elements",
+        [first, ..rest] => "starts with " + to_str(first),
+    }
+}
+```
+
+`..rest` binds everything after the listed prefix. Use `..` alone to ignore the
+remainder.
+
+### 7.6 Option and Result Patterns
+
+`option<T>` and `result<T, E>` have dedicated patterns:
+
+```iris
+def unwrap_or_zero(o: option<i64>) -> i64 {
+    when o {
+        some(v) => v,
+        none => 0,
+    }
+}
+
+def report(r: result<i64, str>) -> str {
+    when r {
+        ok(v) => "ok: " + to_str(v),
+        err(e) => "failed: " + e,
+    }
+}
+```
+
+Both are checked for exhaustiveness — omitting `none` or `err` is a compile-time
+error, not a runtime surprise.
+
+### 7.7 `if let` and `while let`
+
+When only one case is interesting, a full `when` is noise. `if let` matches a
+single pattern:
+
+```iris
+val maybe_port: option<i64> = some(8080);
+
+if let some(p) = maybe_port {
+    println("port = " + to_str(p));
+} else {
+    println("no port configured");
+}
+```
+
+`while let` loops for as long as the pattern keeps matching, which is the natural
+way to drain an optional-producing source:
 
 ```iris
 def main() -> i64 {
-    val p = Point { x: 3.5, y: -2.0 };
-    print(p.to_string());
+    var counter = some(3)
+    while let some(v) = counter {
+        if v == 1 {
+            counter = none()
+        } else {
+            counter = some(v - 1)
+        }
+    }
+    println("done");
     0
 }
 ```
 
-### 7.3 Generic Functions
+The loop ends when `counter` becomes `none()` and the pattern stops matching.
 
-Generic functions declare type parameters inside square brackets `[T]`:
+### 7.8 Refutable `let`
+
+A pattern that might not match can be used in a binding directly. If it fails,
+the program panics with a clear message:
 
 ```iris
-def identity[T](x: T) -> T {
-    x
-}
+val some(port) = lookup_port();   // panics if lookup_port() returns none
+```
 
-def my_max[T](a: T, b: T) -> T {
-    if a >= b { a } else { b }
+Use this only where failure genuinely is a bug. Where absence is expected,
+prefer `if let` or a `when`.
+
+### 7.9 Exhaustiveness
+
+The compiler checks that `when` covers every case for enums, `option` and
+`result`. This omission is rejected at compile time:
+
+```iris
+choice Mode { Idle, Heating, Cooling }
+
+// error: non-exhaustive match — Mode.Cooling is not covered
+def name(m: Mode) -> str {
+    when m {
+        Mode.Idle => "idle",
+        Mode.Heating => "heating",
+    }
 }
 ```
 
-Generics in IRIS are **monomorphized** at compile time, generating efficient concrete implementations for each type used.
+Adding a variant to a `choice` therefore surfaces every place that needs
+updating, rather than failing at run time on the one path nobody tested. This is
+the main reason to prefer `choice` over integer constants.
 
-### 7.4 Trait Constraints (`where`)
+### 7.10 Labelled Loops
 
-You can constrain generic parameters using the `where` keyword, enforcing that types must implement specific traits:
+Patterns often appear inside nested loops, where breaking out of the *outer* loop
+from an inner one is otherwise awkward. IRIS supports loop labels on `loop`,
+`for` and `while`:
 
 ```iris
-def print_item[T where T: Printable](x: T) -> i64 {
-    print(x.to_string());
+def main() -> i64 {
+    // A label on `loop`
+    var x = 0;
+    loop myLoop {
+        x = x + 1;
+        if x == 5 { break myLoop; };
+    };
+
+    // Breaking out of nested `for` loops
+    var sum = 0;
+    for outer i in 1..10 {
+        for j in 1..10 {
+            if j == 5 { break outer; };
+            sum = sum + 1;
+        };
+    };
+
+    // A label on `while`
+    var y = 0;
+    while counter y < 10 {
+        y = y + 1;
+        if y == 3 { break counter; };
+    };
+
+    // `continue` takes a label too
+    var odd_count = 0;
+    for outer2 i in 1..10 {
+        if i % 2 == 0 { continue outer2; };
+        odd_count = odd_count + 1;
+    };
+
     0
 }
 ```
 
-### Try It Yourself
+The label goes immediately after the loop keyword — `loop myLoop`, `for outer i in
+…`, `while counter cond` — and `break`/`continue` name it directly. Without
+labels the same logic needs a sentinel flag checked at every level, which is both
+slower and easier to get wrong.
 
-1. Define a trait `Area` with a method `area(self: Self) -> f64`.
-2. Implement `Area` for `record Circle { radius: f64 }` and `record Rectangle { width: f64, height: f64 }`.
-3. Write a generic function `print_area[T where T: Area](shape: T)` that calls `area` and prints the result.
+### Summary
 
-
-
+- Struct patterns destructure records; bare names bind, `field: value` tests.
+- `|` shares one arm across alternatives that bind the same names.
+- `1..=9` matches inclusive ranges; `if` guards add conditions after binding.
+- `[a, ..rest]` matches lists by shape.
+- `option` and `result` have `some`/`none` and `ok`/`err` patterns, both checked
+  for exhaustiveness.
+- `if let` and `while let` handle the single-case forms.
+- Loop labels let `break` and `continue` target an enclosing loop.
 
 ## Chapter 8: Closures and Higher-Order Functions
 
@@ -4235,68 +4417,273 @@ def main() -> i64 {
 
 
 
-## Chapter 19: Package Manager
+## Chapter 19: Metaprogramming, Effects, and Ergonomics
 
-IRIS includes a production-grade package manager and build tool built directly into the CLI as the `iris pkg` subcommand.
+This chapter covers the features that let you shape the language around your
+program rather than the other way round: macros, compile-time evaluation,
+conditional compilation, algebraic effects, and the call-site conveniences
+(named arguments, default fields, extension methods, `defer`).
 
-### 19.1 Initializing a Project
+Every example is drawn from the compiler's test suite.
 
-Create a new structured IRIS package with:
+### 19.1 Macros
 
-```bash
-iris pkg init my_project
+A macro is declared with `defmacro` and expanded at the AST level before any
+other pass runs. Invocation uses a trailing `!`:
+
+```iris
+defmacro double(x) => x * 2
+defmacro add3(a, b, c) => a + b + c
+defmacro answer() => 42
+
+def main() -> i64 {
+    val x: i64 = double!(21);        // 42
+    val y: i64 = add3!(10, 20, 30);  // 60
+    val z: i64 = double!(add3!(1, 2, 3));  // 12 — macros nest
+    x + y + z
+}
 ```
 
-This creates the standard project layout:
-```text
-my_project/
-├── iris.toml     # Manifest file
-├── iris.lock     # Lockfile (generated on build)
-└── src/
-    └── main.iris # Entry point
+A macro body can be a block, which makes control-flow macros practical:
+
+```iris
+defmacro when_checked(cond, msg) => {
+    if cond { println(msg) } else { println("FAIL: " + msg) }
+}
+
+defmacro wrap_expr(e, msg) => { println(msg); e }
 ```
 
-### 19.2 The `iris.toml` Manifest
+Because expansion is substitution on the AST, arguments are inserted as
+expressions — so `double!(1 + 2)` expands to `(1 + 2) * 2`, not `1 + 2 * 2`.
+Macros may invoke other macros; expansion recurses until no `!` calls remain.
 
-The manifest defines package metadata and third-party dependencies:
+### 19.2 Compile-Time Functions (`const def`)
 
-```toml
-[package]
-name = "my_project"
-version = "1.0.0-rc1"
-authors = ["Moon9t"]
+Marking a function `const def` makes it callable at compile time, so its result
+can initialise a constant:
 
-[dependencies]
-http_utils = { git = "https://github.com/iris-lang/http_utils.git", tag = "v1.2.0" }
-json_helper = { path = "../json_helper" }
+```iris
+const def square(x: i64) -> i64 {
+    x * x
+}
+
+const def clamp(v: i64, lo: i64, hi: i64) -> i64 {
+    if v < lo {
+        lo
+    } else if v > hi {
+        hi
+    } else {
+        v
+    }
+}
+
+const BUFFER: i64 = square(16);   // evaluated during compilation
 ```
 
-### 19.3 Managing Dependencies
+A `const def` may call other `const def`s and use ordinary control flow, but it
+cannot perform effects — no I/O, no allocation-dependent behaviour. The same
+function remains callable at run time, so marking it `const` costs nothing.
 
-Add dependencies easily using the CLI:
+### 19.3 Conditional Compilation
 
-```bash
-iris pkg add http_utils --git https://github.com/iris-lang/http_utils.git
+IRIS has a preprocessor for build-time configuration:
+
+```iris
+#define VERSION 1
+#define BUILD "alpha"
+
+#ifdef WINDOWS
+def platform() -> str {
+    "windows"
+}
+#else
+def platform() -> str {
+    "unix"
+}
+#endif
+
+#ifndef DEBUG
+def is_debug() -> bool {
+    false
+}
+#else
+def is_debug() -> bool {
+    true
+}
+#endif
 ```
 
-This automatically downloads, validates, and adds the dependency to your `iris.toml`. 
+`#define`, `#ifdef`, `#ifndef`, `#else` and `#endif` behave as they do in C.
+Excluded branches are removed before lexing, so they need not even parse — which
+is what makes platform-specific code practical.
 
-### 19.4 Package Subcommands
+### 19.4 Algebraic Effects and Handlers
 
-- **`iris pkg build`**: Resolves dependencies, compiles them, and builds the current package.
-- **`iris pkg run`**: Compiles and runs the package entry point.
-- **`iris pkg update`**: Updates lockfile and checks for newer compatible dependency versions.
-- **`iris pkg list`**: Lists all active project dependencies.
-- **`iris pkg check`**: Rapidly parses and checks package types without full compilation.
+Effects let a function declare *what* it needs without committing to *how* it is
+provided. A `handle … with` block intercepts those operations:
 
-### Try It Yourself
+```iris
+extern def echo(s: str) -> str
 
-1. Run `iris pkg init calc_project` to initialize a new package.
-2. Edit `iris.toml` to set yourself as the author.
-3. Build and run it using `iris pkg run`.
+def main() -> i64 {
+    val result = handle {
+        echo("hello")
+    } with {
+        echo(s) -> resume(v) => v("intercepted_via_resume")
+    };
 
+    print(result);
+    if result == "intercepted_via_resume" { 0 } else { 1 }
+}
+```
 
+The arm `echo(s) -> resume(v) => …` binds the operation's argument to `s` and the
+continuation to `v`. Calling `v(x)` resumes the interrupted computation with `x`
+as the result of `echo`. Omit `-> resume(…)` when the handler should simply
+replace the call and not resume.
 
+This is what makes effects more than exceptions: the handler decides whether to
+resume, and with what value.
+
+#### Effect masks
+
+`with` restricts which effects a block may perform, checked at compile time:
+
+```iris
+def pure_computation() -> i64 {
+    with pure {
+        // any I/O here is a compile-time error
+        1 + 2
+    }
+}
+```
+
+#### Declared effects
+
+Functions can declare the effects they perform. The checker infers effects
+bottom-up and verifies them at each call site:
+
+```iris
+def log_and_add(a: i64, b: i64) -> i64 effect io {
+    println("adding");
+    a + b
+}
+```
+
+Setting `IRIS_STRICT_EFFECTS=1` requires an explicit clause on every effectful
+function; by default they are inferred silently for backward compatibility.
+
+### 19.5 Named Arguments
+
+Arguments may be passed by name, in any order, and mixed with positional ones:
+
+```iris
+def add(a: i64, b: i64) -> i64 { a + b }
+
+def main() -> i64 {
+    val t1 = add(a=3, b=4);     // named, in order
+    val t2 = add(b=10, a=5);    // named, out of order
+    val t3 = add(2, b=8);       // positional then named
+    val t4 = add(7, 3);         // positional only
+    t1 + t2 + t3 + t4
+}
+```
+
+Positional arguments must come before named ones. This matters most for functions
+with several same-typed parameters, where `scale(x=3, y=5, z=2)` documents itself
+and `scale(3, 5, 2)` does not.
+
+### 19.6 Default Record Fields
+
+Record fields may declare defaults, so a literal need only mention what differs:
+
+```iris
+record Config {
+    host: str = "localhost",
+    port: i64 = 8080,
+    debug: bool = false,
+}
+
+def main() -> i64 {
+    val c1: Config = Config { };                    // all defaults
+    val c2: Config = Config { port: 443 };          // override one
+    val c3: Config = Config {
+        host: "example.com", port: 80, debug: true
+    };
+    0
+}
+```
+
+Adding a defaulted field to a record does not break existing literals, which
+makes this the preferred way to grow a configuration type.
+
+### 19.7 Extension Methods
+
+Any module-level function whose first parameter is of type `T` can be called with
+method syntax on a `T`. No `impl` block is required, and it works on built-in
+types:
+
+```iris
+def double(x: i64) -> i64 {
+    x * 2
+}
+
+def add_prefix(s: str, prefix: str) -> str {
+    prefix + s
+}
+
+record Point { x: i64, y: i64 }
+
+def distance_to(a: Point, b: Point) -> i64 {
+    val dx = a.x - b.x;
+    val dy = a.y - b.y;
+    dx * dx + dy * dy
+}
+
+def main() -> i64 {
+    val d = 21.double();                       // 42
+    val s = "world".add_prefix("hello ");      // "hello world"
+    val p = Point { x: 0, y: 0 };
+    val q = Point { x: 3, y: 4 };
+    val dist = p.distance_to(q);               // 25
+    d
+}
+```
+
+`21.double()` and `double(21)` are the same call. The method form reads better
+when chaining, and lets you extend types you did not define.
+
+### 19.8 `defer`
+
+`defer` schedules an expression to run when the enclosing function returns,
+whichever path it takes:
+
+```iris
+def test_return() -> i64 {
+    println("before defer");
+    defer cleanup("first");
+    println("about to return");
+    defer cleanup("second");
+    return 42
+}
+```
+
+Deferred calls run in reverse order of registration — `"second"` before
+`"first"` — so cleanup unwinds in the opposite order to acquisition. They fire on
+an explicit `return` and on falling off the end of a tail expression alike, which
+is what makes them reliable for releasing resources.
+
+### Summary
+
+- `defmacro name(params) => body`, invoked as `name!(args)`, expands on the AST
+  and nests.
+- `const def` functions run at compile time and can initialise constants.
+- `#define` / `#ifdef` / `#ifndef` / `#else` / `#endif` select code before lexing.
+- `handle … with { op(a) -> resume(k) => … }` intercepts effects and may resume
+  the continuation; `with pure { … }` restricts them; `effect io` declares them.
+- Named arguments, default record fields, extension methods and `defer` remove
+  ceremony at the call site.
 
 ## Chapter 20: Working with Databases
 

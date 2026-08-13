@@ -1,6 +1,93 @@
 # IRIS Agent Session Log
 
 ## Completed
+
+### Ownership / Borrow Checking (Tier 1) — Phase 93
+- **Lexer**: Added `Token::Amp` (single `&`) with disambiguation from `Token::AmpAmp` (`&&`).
+- **AST**: Added `AstType::Ref(inner, Span)`, `AstType::RefMut(inner, Span)` + `PartialEq`, `Hash`, `span()` impls. Added `AstExpr::Ref { expr, span }`, `AstExpr::RefMut { expr, span }`, `AstExpr::Deref { expr, span }` + `span()` impl.
+- **Parser**: `&T` / `&mut T` parsed in `parse_type()` via new `Token::Amp` arm. `&expr` / `&mut expr` / `*expr` parsed in `parse_unary()` before `Token::Await`.
+- **Lowerer**: References erase to inner types at lowering — `&T` → `T`, `&x` → `x`, `*r` → `r`. Zero-cost at runtime. All 14 match sites updated: `lower_type`, `lower_type_with_structs`, `lower_expr`, `collect_rebound_vars_in_expr`, `collect_generic_apps_in_expr` in lowerer; `rewrite_type`, `rewrite_expr` in compiler.rs; `ast_type_str`, `collect_all_calls_in_expr`, `find_calls_in_expr` in lsp.rs; `expr_uses_name` in lint.rs; `collect_callees_expr`, `verify_expr` in effect_checker.rs.
+- **Borrow checker** (`src/pass/borrow_checker.rs`, 578 lines): Fixed to compile with actual AST — removed nonexistent variants (`ForEachDestructure`, `Yield`, `ModBlock`, `MacroDef`, `Deferred`, `DictLit`, `ListComp`, `Splat`, `TryCatch`, `MacroCall`), fixed `Call.args` field access (`Vec<AstExpr>` not named args), added `NullCoal`, `Break`, `Continue`, `Defer` arms.
+- **Pipeline wiring**: `borrow_checker` module registered in `pass/mod.rs`. Wired into both `compile_ast_to_module` and `compile_ast` in `lib.rs` — runs after `AstExhaustivenessPass` + `VarianceChecker`, errors abort compilation with `error[E0202]`.
+- **Tests**: `test_borrow_checker.iris` (8 positive tests: immutable/mutable params, multiple borrows, deref, block scoping, list refs, expression refs, ref chains) passes. `test_borrow_error.iris` (immutable+mutable borrow conflict) correctly fails with borrow error.
+- **Bug fix: `with` expression value loss**: Removed early `Token::With` catch in `parse_block` that parsed `with` as `MaskStmt` (discarding return value). Now falls through to expression parser as `AstExpr::Mask`, added to block-type expression list alongside `If`/`When`/`Block`. Fixed `test_effects_masks.iris`.
+- **Bug fix: struct destructuring in for loops**: Extended `LetTuple` lowering to handle `IrType::Struct` via positional `GetField` extraction (not just `IrType::Tuple` via `GetElement`). Fixed `test_for_destructure.iris`.
+- **Compiler warnings eliminated**: 5 unused variable warnings (`default_ty`, `dt`, `k_ty`, `span`, `c`) + 1 dead code warning (`parse_with_stmt`) fixed.
+### Linear/Affine Types (Phase 94)
+- **Lexer**: Added `Token::Move` keyword (`move`).
+- **AST**: Added `AstExpr::Move { expr: Box<AstExpr>, span: Span }` variant + `span()` impl.
+- **Parser**: `move expr` parsed in `parse_unary()` before `await`. Produces `AstExpr::Move`.
+- **Borrow checker** (`src/pass/borrow_checker.rs`):
+  - Added `moved: HashSet<String>` field to `BorrowChecker`.
+  - Added 3 new error variants: `UseAfterMove`, `BorrowAfterMove`, `MoveAfterMove`.
+  - `move expr` where expr is `Ident` → marks variable as moved via `mark_moved()`.
+  - `Ident` access → `check_use_after_move()` errors if moved.
+  - `&expr` / `&mut expr` → `check_borrow_after_move()` errors if moved.
+  - `x = value` → `check_use_after_move()` on target if moved.
+  - Moved variables cleared at scope exit (like borrows).
+- **Lowerer**: `move` erased at lowering (`AstExpr::Move { expr, .. } => self.lower_expr(expr)`). Zero-cost at runtime.
+- **All match arms updated**: compiler.rs, lsp.rs, lint.rs, effect_checker.rs, borrow_checker.rs, lower/mod.rs (10+ sites).
+- **Tests**:
+  - `test_move.iris` — 4 positive tests: basic move, move-and-use, move-in-block, move-chain. All pass.
+  - `test_move_error.iris` — use-after-move correctly rejected with `[borrow error] use of moved value`.
+  - `test_move_borrow_error.iris` — borrow-after-move correctly rejected with `[borrow error] cannot borrow because it has been moved`.
+- **Existing tests**: All 89 stdlib tests + borrow checker + effect handlers continue to pass.
+
+### No-Desugaring Audit (2026-07-27)
+- **Comprehensive audit**: Cataloged 42 desugaring patterns across parser, lowerer, and compiler.
+- **Categorization**: 30 fundamental (SSA loops, break/continue, short-circuit, `?`, defer, lambda-lifting), 6 already optimal (StrConcat, StrRepeat, MakeNone, MakeSome/Ok/Err), 6 cosmetic (f-strings→concat, map literals→MapNew+MapSet, list methods→SSA loops, for-destructure in parser).
+- **Conclusion**: All fundamental desugarings are necessary for correct SSA lowering. Cosmetic desugarings (f-strings, map literals, list methods) could get dedicated AST/IR nodes but are deferred as low-impact.
+
+### Integer Overflow Protection (Tier 1 Safety)
+- **Runtime functions**: Added `iris_add_checked`, `iris_sub_checked`, `iris_mul_checked` to `iris_runtime.h` and `iris_runtime.c` using `__builtin_add_overflow`/`__builtin_sub_overflow`/`__builtin_mul_overflow` (GCC/Clang) with portable fallback using `INT64_MAX`/`INT64_MIN` bounds.
+- **LLVM IR codegen** (`src/codegen/llvm_ir.rs`): `BinOp::Add`/`BinOp::Sub`/`BinOp::Mul` (integer) now emit `call i64 @iris_*_checked(i64 %a, i64 %b)` instead of plain `add nsw`/`sub nsw`/`mul nsw`.
+- **Native codegen** (`src/codegen/llvm_native.rs`): Changed inkwell `build_int_add`/`build_int_sub`/`build_int_mul` to `build_call` the checked runtime functions.
+- **Interpreter** (`src/interp/mod.rs`): Changed `wrapping_add`/`wrapping_sub`/`wrapping_mul` to `checked_add`/`checked_sub`/`checked_mul` with `InterpError::Panic` on overflow.
+- **Const folding** (`src/pass/const_fold.rs`): Changed from `wrapping_*` to `checked_*` — returns `None` on overflow instead of silently wrapping.
+
+### Scalar Array Bounds Checking (Tier 1 Safety)
+- **Codegen** (`src/codegen/llvm_ir.rs`): `ArrayLoad` and `ArrayStore` on scalar arrays now emit `icmp ult i64 %index, <size>` + conditional branch before GEP. Out-of-bounds calls `@iris_bounds_check_abort(index, size)` then `unreachable`.
+- **Runtime** (`iris_runtime.h`/`iris_runtime.c`): Added `iris_bounds_check_abort(int64_t index, int64_t size)` — prints error and aborts.
+- **Audit result**: All other access paths (lists, strings, complex arrays, interpreter) already had bounds checking. Only scalar array GEP was unprotected.
+
+### Error Message Improvements (Tier 1 Safety)
+- **Type inference** (`src/pass/type_infer_hm.rs`): Changed all 26 instances of `{:?}` (Debug format) for `IrType`/`ValueId` to `{}` (Display format). User now sees `i64` instead of `Scalar(I64)`, `%5` instead of `ValueId(5)`.
+- **Diagnostic dump removal**: Removed massive `--- slot diagnostics ---`, `--- function blocks ---`, `--- value types ---`, `--- closure captures ---` debug dumps from type inference errors. Users now see only the actual error message.
+- **Borrow checker label** (`src/lib.rs`): Changed `func: "borrow_checker"` to `func: "<borrow checking>"` so errors read "type error in function '<borrow checking>'" instead of "type error in function 'borrow_checker'".
+- **Main error display** (`src/main.rs:72`): Changed `eprintln!("error: {:?}", e)` to `eprintln!("error: {}", e)` to use Display format.
+
+### LSP Improvements (Tier 2 Usability)
+- **Context-aware completions** (`src/lsp.rs`): Added `CompletionContext` enum with 7 variants (DotAccess, Bring, TypeAnnotation, DynKeyword, AfterVal, EnumVariant, Default). Dot access on struct variables returns only that struct's fields; `math.` after `bring std.math` returns math functions; type annotation context returns only type names; `dyn ` returns trait names.
+- **Go-to-definition for local variables** (`src/lsp.rs`): Added `find_local_definition()`, `find_local_in_stmts()`, `find_local_in_expr()`, `find_param_definition()` — depth-first recursive search through function bodies, lambda params, for-loop variables, tuple destructuring. Parameters also resolve. Falls through after top-level + bring searches.
+- **Hover for field access** (`src/lsp.rs`): Added `hover_field_access()` — resolves `obj.field` by extracting the object name, finding its type annotation (or inferring from constructor), looking up the struct definition, and showing the field type. Returns `**field**: \`type\`\nField of \`StructType\``.
+- **Parser recovery fix** (`src/parser/parse.rs`): Added error recovery in `parse_block` when `parse_expr` fails — records error and skips to next `}`/Eof instead of propagating via `?`, which previously dropped entire enclosing functions from the AST.
+
+### Test Framework (`iris test`)
+- **Test runner** (`src/test_runner.rs`): Full implementation — discovers `test_*` zero-argument functions in `.iris` files, compiles each via native LLVM pipeline, runs, reports PASS/FAIL/PANIC with timing and ANSI color.
+- **Features**: `iris test [file.iris]` for single file, `--filter <substr>` to run subset, `--no-color` for CI, auto-discovers `*.iris` in current dir if no file specified.
+- **Summary**: Reports total pass/fail/panic/ignored counts, exits 0 on all-pass, 1 on any failure.
+- **Unit tests**: 4 Rust unit tests verifying failure_reason, panic_message, and native test wrapper pass/fail.
+
+### Doc Comments + Documentation Generator
+- **Lexer** (`src/parser/lexer.rs`): Added `Token::DocComment(String)` variant. `///` lines captured as doc comment text; regular `//` still discarded.
+- **AST** (`src/parser/ast.rs`): Added `doc_comment: Option<String>` to `AstFunction`, `AstStructDef`, `AstEnumDef`, `AstConst`, `AstTypeAlias`, `AstTraitDef`, `AstImplDef`, `AstEffectDef`, `AstExternFn`, `AstModel`.
+- **Parser** (`src/parser/parse.rs`): `parse_module_inner()` collects consecutive `///` lines, attaches to next top-level item. Doc comments silently skipped inside function bodies.
+- **Docs generator** (`src/docs.rs`): New module — `generate_docs(source, filename)` produces self-contained HTML with sidebar TOC, item signatures + doc comments + field tables, professional CSS.
+- **CLI**: `iris docs file.iris [--output out.html]` generates HTML documentation.
+- **Tests**: `test_doc_comments.iris` (doc comments on fn/record/choice/trait/const/type alias), `test_doc_inline.iris` (/// inside function bodies doesn't break compilation).
+
+### Package Manager (`iris install`)
+- **Package model** (`src/package_manager.rs`): Git-based packages with `iris.toml` manifest (`[package]` name/version/description, `[dependencies]` name=url).
+- **Commands**: `iris install` (install all deps from iris.toml), `iris install <url>` (clone single package), `iris list` (show installed packages).
+- **`bring` integration** (`src/compiler.rs`): `resolve_file_path` checks `iris_packages/<name>/` for `lib.iris`/`main.iris`/`<name>.iris`. Package mangling uses `<name>` prefix (not `lib`).
+- **CLI**: Added `Install { url }` and `List` variants to `ParseArgsResult`.
+
+### Formatter (`iris fmt`)
+- **Formatter module** (`src/formatter.rs`): Extracted from LSP formatting code. `format_source()`, `format_file()`, `format_directory()`. Configurable `FormatOptions { indent, max_line_width }`.
+- **Style**: 4-space indent, `{` on same line, space around operators, comma after, blank line before top-level items, no trailing whitespace.
+- **CLI**: `iris fmt file.iris` (format in-place), `iris fmt` (format all *.iris in cwd), `iris fmt --check` (CI mode, exit 1 if changes needed).
+- **LSP integration**: `LspState::format()` delegates to `formatter::format_source()`.
+
 ### Trait Objects (`dyn Trait`) — Phase 91
 - **Goal**: Allow `dyn Trait` values with virtual dispatch. End-to-end: parses, type-checks, dispatches dynamically through interpreter + native binary.
 - **AST**: `AstType::DynTrait { trait_name }` was already present (parser handled `dyn Trait` syntax), but lowerer mapped it to `IrType::Infer` and never produced dispatch — fixed.
@@ -219,7 +306,48 @@
 - **Files modified**: `src/parser/parse.rs`, `src/lower/mod.rs`, `src/codegen/llvm_ir.rs` (declarations + boxing fix + string concat fix), `src/codegen/llvm_stub.rs` (declarations), `src/codegen/llvm_native.rs`, `src/codegen/ir_serial.rs`, `src/codegen/printer.rs`, `src/pass/opt.rs`, `src/pass/const_fold.rs`, `src/pass/inline.rs`, `src/pass/type_infer.rs`, `src/pass/validate.rs`, `src/pass/type_infer_hm.rs`, `src/codegen/onnx.rs`, `src/runtime/iris_runtime.h`, `src/runtime/iris_runtime.c`, `src/interp/mod.rs`, `src/ir/types.rs`, `src/ir/instr.rs`
 - **Test files**: `tests/test_task_group.iris` (full suite), `tests/test_task_group2.iris`, `tests/test_task_group_simple.iris`
 
-## Current Session (2026-07-20) — Effect Handlers + Row Polymorphism
+## Current Session (2026-07-29) — Macros, CLI Test Fix
+
+### CLI `iris test file.iris` Fix
+- **Bug**: `parse_args` returned `ParseArgsResult::Args(CliArgs { emit: Eval, ... })` when a file was given to `iris test file.iris`, routing through eval mode instead of the test runner.
+- **Root cause**: `cli.rs:339-356` had `if file.is_some() { Ok(ParseArgsResult::Args(...)) } else { Ok(ParseArgsResult::Test) }`.
+- **Fix**: Changed `ParseArgsResult::Test` from unit variant to struct variant with `file`, `filter`, `no_color`. `parse_args` now returns `ParseArgsResult::Test { file, filter, no_color }` always when `Command::Test` is matched. `main.rs` passes these to `run_test_command`. `run_test_command` accepts them directly instead of re-parsing from raw args.
+- **Directory support**: Added `f.is_dir()` check — when the argument to `iris test` is a directory, scan it for `*.iris` files.
+- **Files**: `src/cli.rs`, `src/main.rs`, `src/test_runner.rs`
+- **Result**: `iris test tests/test_macros.iris` runs all 5 macro tests (all PASS). `iris test tests` discovers and tests all `.iris` files in the `tests/` directory.
+
+### Default Trait Method Bodies (parser fix)
+- **Bug**: Trait methods couldn't have default bodies (`def m() -> T { body }` in trait definition).
+- **Fix**: `AstTraitMethod.body: Option<AstBlock>` added; `parse_trait_def` parses optional `{ }` block after return type; `inject_default_impl_methods` in `compiler.rs` fills missing impl methods from trait defaults with `self`→concrete type substitution.
+- **Files**: `src/parser/ast.rs`, `src/parser/parse.rs`, `src/compiler.rs`, `src/lib.rs`
+
+### Macro System (`defmacro`)
+- **Definition**: `defmacro name(params) => expr` syntax at top level. `AstMacroDef` struct + `AstExpr::MacroCall` variant.
+- **Lexer**: `Token::DefMacro` keyword.
+- **Parser**: `parse_macro_def()` parses `defmacro name(params) => expr`. `parse_primary()` detects `name!(args...)` → `AstExpr::MacroCall`.
+- **Expansion**: `expand_macros()` in `compiler.rs` — AST substitution pass. Walks entire AST replacing `MacroCall` nodes with macro body with params substituted by args. Handles nested macros recursively.
+- **All match arms updated**: lowerer (3 sites), lsp.rs (2), lint.rs, borrow_checker.rs, effect_checker.rs (2).
+- **Tests**: 5 test functions in `test_macros.iris` (basic, checked, nested, in-condition, no-args). All pass `iris test` native. LLVM IR verified.
+
+### Splat `..args` in function calls
+- **AST**: `AstExpr::Splat { expr, span }` variant.
+- **Parser**: `parse_one_call_arg` detects `Token::DotDot`, consumes `..`, wraps following expression in `Splat`.
+- **Lowerer**: `lower_call` arg loop checks for `Splat`, extracts array size from `IrType::Array { elem, len }`, emits N `ArrayLoad` + `ConstInt` instructions.
+- **11 exhaustive match arms** updated across 7 files.
+
+### `yield` Desugaring
+- **AST-level desugaring** before all passes: `yield expr` → `push(__iris_yield, expr)`, accumulator `var __iris_yield = list()` prepended, tail set to `__iris_yield`.
+- **Files**: `src/compiler.rs` — `desugar_yield()`, `has_yield`/`replace_yield` helpers.
+- **Tests**: `test_yield_comprehensive.iris` ✅ (eval + native), `test_yield_simple.iris` ✅.
+
+### `unbox_list` Native Crash Fix
+- **Root cause**: `iris_list_remove` and `iris_list_insert` took boxed `IrisVal*` but LLVM codegen passed raw `IrisList*`.
+- **Fix**: Changed C signatures to take `IrisList*` (removed internal `iris_unbox_list`). All list functions now consistently use unboxed `IrisList*`.
+- **Files**: `iris_runtime.c`, `iris_runtime.h`, `llvm_ir.rs`.
+
+### `array_to_list` Builtin
+- **Lowering-time expansion**: `ListNew` + `ArrayLoad` × N + `ListPush` × N. No runtime call needed.
+- **Works**: both eval and native.
 
 ### Effect Handlers + Row Polymorphism
 - **Effect row polymorphism**: Extended `EffectRow` with `vars: Vec<String>` for effect variables (uppercase identifiers like `E`), `instantiate()` method for call-site substitution, updated checker to handle effect vars at call sites. `effect E` syntax works on function definitions.
@@ -230,7 +358,17 @@
 - **Parser fix**: Changed hardcoded `return_ty = i64` to `return_ty = Infer` in handle expression/statement parsing (both expression form `handle expr with { arms }` and statement form).
 - **Test**: `tests/test_effect_handlers.iris` — declares `extern def echo(s: str) -> str`, intercepts via handler, verifies custom return value. Passes with `--emit eval` (exit 0).
 - **Pass/fix list**: Added `PushHandler`/`PopHandler` arms to `result()`, `operands()` in `instr.rs`, plus `ir_serial.rs`, `llvm_ir.rs`, `printer.rs`, `const_fold.rs`, `opt.rs`. Added missing `IrType::TaskGroup`/`WeakRef`/`TraitObject` to `llvm_type_complete`. Added missing `MakeTraitObject`/`DynCall`/`TaskGroup*` arms to `emit_instructions`.
-- **Not yet**: Native codegen for effect handlers (interpreter-only for now). Full stdlib effect annotations. Continuation capture/resume in handler arms (basic replacement-only).
+- **Not yet**: Full stdlib effect annotations.
+- **Native effect handler dispatch — COMPLETE (2026-07-27)**:
+  - **Phase 1**: Fixed `effect_checker.rs:551` — `Mask` expression used `union` instead of `intersect` (was bypassing masks in eval).
+  - **Phase 2**: Extended C runtime — `handler_fn` (void*) field on `HandlerArm`, `iris_push_handler_fn()`, `iris_handler_depth()`, `iris_find_handler_fn()`, `iris_effect_dispatch_or_call()` main dispatch function. Thread-local handler stack with 8-deep nesting.
+  - **Phase 3**: Lowerer `lower_handler_arm` — always adds leading `ptr` cont param (named `__cont` for non-resume arms).
+  - **Phase 4**: PushHandler codegen — emits `iris_push_handler_fn(ptr @func_name)` after each `iris_push_handler_arm()`.
+  - **Phase 5**: CallExtern codegen — routes all extern calls through `iris_effect_dispatch_or_call()` C runtime function with arg packing (i64 array), `%Continuation` struct on stack, type casting back.
+  - **Phase 6**: IR serialization — `OP_PUSH_HANDLER` (0x7C) and `OP_POP_HANDLER` (0x7D) opcodes with full handler arm serialization/deserialization.
+  - **`%Continuation = type { i32, i64 }`** declared in LLVM IR output.
+  - **C runtime `iris_effect_dispatch_or_call()`**: Packs args as i64, dispatches via handler fn pointer or falls back to real extern; supports resume via Continuation struct.
+  - **Tests**: `test_effect_handlers.iris` (native: "intercepted"), `test_effects_handlers.iris` (native), `test_effects_basic.iris` (native: "hello"×3 + "allocates"), `test_effects_masks.iris` (native: "masked"), `mathlab.iris` (native), all verified.
 
 ### Const Generics (`const N: usize` in generic params)
 - **AST**: Added `AstGenericParam::Const { name, kind }` variant, `AstType::ConstInt(i64, Span)` for const type args, `len_expr: Option<Box<AstExpr>>` on `AstType::Array`. Changed `type_params` from `Vec<String>` to `Vec<AstGenericParam>` on `AstFunction` and `AstStructDef`.
@@ -381,14 +519,11 @@
 
 The following features are NOT YET IMPLEMENTED and require significant design + implementation work (ordered by estimated effort):
 
-### 1. Trait Objects / Dynamic Dispatch (`dyn Trait`)
-- **Effort**: Weeks to months
-- **What's needed**: `AstType::DynTrait`, `IrType::TraitObject` (fat pointer), vtable layout, `IrInstr::MakeTraitObject`/`DynCall`, LLVM codegen for vtable globals + indirect calls, interpreter support, trait bound verification
-- **Prerequisite**: `where T: Trait` tracking ✅ **DONE** — constraint verification at monomorphization call sites implemented
-- **Prerequisite**: Associated types ✅ **DONE** — `Self::Item` resolves via impl bindings
+### 1. ~~Trait Objects / Dynamic Dispatch (`dyn Trait`)~~ ✅ **DONE**
+- Implemented in Phase 91. `AstType::DynTrait`, `IrType::TraitObject`, vtable codegen, `MakeTraitObject`/`DynCall` instructions, interpreter + LLVM IR codegen.
 
 ### 2. ~~Associated Types in Traits~~ ✅ **DONE**
-- `AstTraitDef::assoc_types`, `AstImplDef::assoc_type_bindings`, `AstType::AssocType`, `Self::Item` resolution via impl bindings
+- `AstTraitDef::assoc_types`, `AstImplDef.assoc_type_bindings`, `AstType::AssocType`, `Self::Item` resolution via impl bindings
 
 ### 3. ~~Const Generics (`record Array[T, const N: usize]`)~~ ✅ **DONE**
 - `AstGenericParam::Const`, `AstType::ConstInt`, `const_param_subs`, mangling `Array__i64__5`, parser `const N: usize`, `len_expr` on `AstType::Array`
@@ -402,12 +537,42 @@ The following features are NOT YET IMPLEMENTED and require significant design + 
 ### 6. ~~Effect System (`effect k1, k2` on functions)~~ ✅ **DONE** (Tier 1)
 - See "Effect System" section above for full details. Tier 1 (tracking + verification) implemented.
 
-### Recommended Implementation Order
-1. ~~Const generics~~ ✅ **DONE**
-2. ~~Trait constraint tracking~~ ✅ **DONE**
-3. ~~Associated types~~ ✅ **DONE**
-4. ~~Variance annotations~~ ✅ **DONE**
-5. ~~Effect System (Tier 1)~~ ✅ **DONE**
-6. **Trait objects** (most requested OOP feature, now unblocked)
-7. **HKTs** — type constructor abstraction (months)
-8. **Effect masks** (`with pure { ... }`) and **effect handlers** (algebraic effects) — Tier 2+ features
+### 7. ~~Ownership / Borrow Checking~~ ✅ **DONE** (Tier 1 — annotations + compile-time validation)
+- **Lexer**: `Token::Amp` (single `&`) disambiguated from `Token::AmpAmp` (`&&`).
+- **AST**: `AstType::Ref(inner, Span)`, `AstType::RefMut(inner, Span)`, `AstExpr::Ref { expr, span }`, `AstExpr::RefMut { expr, span }`, `AstExpr::Deref { expr, span }`.
+- **Parser**: `&T` / `&mut T` in type position (`parse_type`); `&expr` / `&mut expr` / `*expr` in expression position (`parse_unary`).
+- **Lowerer**: References erase to inner types at lowering — `&T` → `T`, `&x` → `x`, `*r` → `r`. Zero-cost at runtime. All 14 match sites across compiler/lsp/lowerer/lint/effect_checker updated.
+- **Borrow checker** (`src/pass/borrow_checker.rs`, 578 lines): Full AST-level analysis tracking immutable/mutable borrows with scope-based lifetime. Four error kinds: `MutBorrowWhileBorrowed`, `BorrowWhileMutBorrowed`, `MutateWhileBorrowed`, `MoveWhileBorrowed`. Rust-style diagnostics with source underlines.
+- **Pipeline wiring**: Runs after `AstExhaustivenessPass` + `VarianceChecker` in both `compile_ast_to_module` and `compile_ast` paths. Errors abort compilation.
+- **Tests**: `test_borrow_checker.iris` (8 positive tests: immutable/mutable params, multiple borrows, deref, block scoping, list refs, expression refs, ref chains) passes. `test_borrow_error.iris` (immutable+mutable borrow conflict) correctly fails with `error[E0202]`.
+- **Files**: `src/parser/lexer.rs` (Token::Amp), `src/parser/ast.rs` (6 new variants + trait impls), `src/parser/parse.rs` (type + expr parsing), `src/lower/mod.rs` (type lowering + expr lowering + 3 traversal functions), `src/compiler.rs` (rewrite_type + rewrite_expr), `src/lsp.rs` (ast_type_str + 2 call collectors), `src/pass/lint.rs` (expr_uses_name), `src/pass/effect_checker.rs` (collect_callees + verify), `src/pass/borrow_checker.rs` (fixed to compile with actual AST), `src/pass/mod.rs` (module registration), `src/lib.rs` (pipeline wiring).
+
+### 8. ~~Blanket Impls (`impl[T where T: Trait]`)~~ ✅ **DONE**
+- **AST**: `AstImplDef.generic_params: Vec<AstGenericParam>` field for generic `impl` blocks.
+- **Parser**: `impl[T where T: Trait] TraitName for T { ... }` via `parse_generic_params()` helper. Parses `[T where T: Show, Ord]` bracket-delimited lists.
+- **Lowerer**: Skips blanket impls in initial `trait_impl_methods` registration. Monomorphizes in `impl_fns` loop — iterates all known concrete types implementing the bound trait, creates renamed copies with concrete type substitutions via `substitute_ast_type`. Bug fix: `Self` keyword matching (lowerer now recognizes `"Self"` alongside `tp_name` for self param type substitution).
+- **Test**: `tests/test_blanket_impls.iris` — `impl[T where T: Show] Describable for T` on `Point`. Verified end-to-end: `p.describe()` dispatches through blanket impl. Passes with `--emit eval`.
+
+### 9. ~~Module System (`mod name { }`)~~ ✅ **DONE**
+- **Lexer**: `Token::Mod` added to keyword map. `Token::Use` removed from Token enum, keyword map, Display impl.
+- **AST**: `AstModuleDef` struct with full item support. `modules: Vec<AstModuleDef>` on `AstModule`. `uses` field and `AstUse` struct removed.
+- **Parser**: `parse_module_def(is_pub)` parses `mod name { items }` with full item support. `parse_use()` removed. `Token::Mod` arm in `parse_module_inner`. `pub mod` in `Token::Pub` arm.
+- **Compiler**: `flatten_inline_modules()` flattens nested `mod` blocks with `mangle_module_symbols` prefixing `modname__itemname`. `resolve_inline_module_bring()` resolves `bring` declarations matching inline modules. Skip-in-resolve-brings for inline module names.
+- **Pipeline**: `flatten_inline_modules` called in both `compile_ast_to_module` and `compile_ast` before passes; `&mut AstModule` required.
+- **Tests**: `test_mod_blocks.iris` (two inline mods, mangled names), `test_mod_bring.iris` (`bring math`), `test_mod_selective.iris` (`bring math.{add}`). All pass.
+
+### 10. ~~Try/Catch + Error Propagation (`?` on Result)~~ ✅ **DONE**
+- **AST**: `AstExpr::TryCatch { body, catch_param, catch_body, span }` variant added.
+- **Parser**: `try { body } catch param { handler }` syntax.
+- **Lowerer**: Creates `catch_bb` + `cont_bb` with block params. Saves/restores `try_catch` state on entry. `?` operator modified: when inside try/catch scope, error branch binds error to catch param and jumps to `catch_bb` instead of early-returning from function.
+- **Test**: `tests/test_try_catch.iris` — 4 tests: success case (no catch triggered), error case (catch receives error), nested try/catch, normal `?` without catch. All pass with `--emit eval`.
+
+### 11. Effect Masks + Handlers — ✅ **DONE** (basic replacement-only)
+- **Effect masks**: `with pure { ... }` works via `AstExpr::Mask` lowering.
+- **Handler arms**: `handle { body } with { effect(s) => replacement }` via `PushHandler`/`PopHandler` IR instructions. Handler arms lowered as independent IR functions. Interpreter handler stack dispatches `CallExtern` to matching handler.
+- **Native codegen**: `CallExtern` routes through `iris_effect_dispatch_or_call()` C runtime with fn pointer dispatch, arg packing, and Continuation struct for resume.
+- **Test**: `tests/test_effect_handlers.iris` — `extern def echo(s: str) -> str` intercepted via handler. Passes with `--emit eval`.
+- **Limitation**: Continuation capture/resume not fully implemented (basic replacement only). Full stdlib effect annotations not done.
+
+### 12. Higher-Kinded Types
+- **Effort**: Months — full type constructor abstraction, major `IrType` redesign
