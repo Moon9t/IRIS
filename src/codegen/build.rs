@@ -158,9 +158,16 @@ pub fn execute_binary_for_eval_with_target(
     target: Option<&str>,
 ) -> Result<String, CodegenError> {
     let output = run_binary_for_eval_entry_capture(module, None, target)?;
-    let stdout = String::from_utf8_lossy(&output.stdout)
-        .replace("\r\n", "\n")
-        .replace('\r', "\n");
+    // Undo the Windows CRT's text-mode translation so eval output matches the
+    // interpreter: a program's `\n` reaches us as `\r\n`, and genuine `\r\n`
+    // data reaches us as `\r\r\n`, which this collapses back correctly.
+    //
+    // Do NOT additionally map lone `\r` to `\n`. That destroyed real carriage
+    // returns in program data — `http_get_request` emits a correct
+    // `GET / HTTP/1.1\r\nHost: …` and eval reported `\n\n`, which looked like a
+    // codegen bug for as long as it went unmeasured. The compiled binary was
+    // right all along; only this capture was wrong.
+    let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(CodegenError::Unsupported {

@@ -641,6 +641,7 @@ fn emit_function_ir_with_name(
 
     let cc = func.capture_count;
     let is_lambda = func.name.starts_with("__lambda_");
+    let is_par_body = func.name.starts_with("__par_body_");
 
     // All lambdas use uniform calling convention: (ptr %env, user_params...).
     let params_str = if is_lambda {
@@ -649,6 +650,17 @@ fn emit_function_ir_with_name(
             parts.push(format!("{} %{}", llvm_type_complete(&p.ty)?, p.name));
         }
         parts.join(", ")
+    } else if is_par_body {
+        // `iris_par_for` invokes the body as `fn(int64_t i, void* env)`, so the
+        // signature is fixed at two parameters no matter how many values the
+        // body captured. The lowerer emits them as params 1.. — those are
+        // unpacked from `%env` in the entry block instead. See issue 12.
+        let loop_var = func
+            .params
+            .first()
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "__par_i".to_owned());
+        format!("i64 %{}, ptr %env", loop_var)
     } else {
         let params: Result<Vec<String>, CodegenError> = func
             .params
@@ -1186,10 +1198,36 @@ fn emit_function_body(
         let blabel = block_label(block.name.as_deref(), block.id);
         writeln!(out, "{}:", blabel)?;
 
-        // For lambdas: emit capture extraction in the entry block.
-        if block.id == entry_id && func.capture_count > 0 {
-            let cc = func.capture_count;
-            for (i, p) in func.params.iter().take(cc).enumerate() {
+        // Capture extraction in the entry block, for both conventions:
+        //
+        //   lambdas    — signature (ptr %env, args...); captures are
+        //                params[0..capture_count] and live in env slot i.
+        //   par bodies — signature (i64 %var, ptr %env), fixed by the runtime's
+        //                `fn(int64_t, void*)`; param 0 is the loop variable and
+        //                the captures are params[1..], in env slot i-1.
+        //                See docs/known-issues.md issue 12.
+        //
+        // Both name the extracted value `%{param.name}`, which is what the rest
+        // of the body already refers to.
+        let cap_params: Vec<(usize, &crate::ir::function::Param)> =
+            if func.name.starts_with("__par_body_") {
+                func.params
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .map(|(i, p)| (i - 1, p))
+                    .collect()
+            } else if func.capture_count > 0 {
+                func.params
+                    .iter()
+                    .take(func.capture_count)
+                    .enumerate()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        if block.id == entry_id && !cap_params.is_empty() {
+            for (i, p) in cap_params {
                 writeln!(
                     out,
                     "  %__cap_raw_{} = call ptr @iris_closure_get_capture(ptr %env, i32 {})",
@@ -1249,11 +1287,25 @@ fn emit_function_body(
                         )?;
                     }
                     _ => {
-                        writeln!(
-                            out,
-                            "  %{} = call ptr @iris_closure_get_capture(ptr %env, i32 {})",
-                            p.name, i
-                        )?;
+                        // Heap kinds are boxed on the way in (`iris_box_atomic`,
+                        // `iris_box_list`, …), so they must be unboxed on the way
+                        // out. Returning the box unchanged handed an IrisVal
+                        // wrapper to code expecting the payload — e.g.
+                        // `iris_atomic_add` received the box and dereferenced the
+                        // wrong pointer. See docs/known-issues.md issue 12.
+                        if let Some(unbox) = runtime_unbox_helper_for_type(&p.ty) {
+                            writeln!(
+                                out,
+                                "  %{} = call ptr @{}(ptr %__cap_raw_{})",
+                                p.name, unbox, i
+                            )?;
+                        } else {
+                            writeln!(
+                                out,
+                                "  %{} = call ptr @iris_closure_get_capture(ptr %env, i32 {})",
+                                p.name, i
+                            )?;
+                        }
                     }
                 }
             }
@@ -2731,12 +2783,54 @@ fn emit_instr_ir(
                         "  {} = getelementptr inbounds {}, ptr %struct_alloc{}, i32 0, i32 {}",
                         gep_name, struct_ty, result.0, i
                     )?;
+
+                    // The value's *emitted* type is authoritative for the store,
+                    // not the declared field type — the two disagree for a
+                    // tag-only `choice`. `MakeVariant` emits a bare `i64` tag
+                    // when the variant carries no payload, while
+                    // `llvm_type_complete` maps every enum to `ptr`: it is a free
+                    // function with no `IrModule` access, so it cannot tell a
+                    // tag-only enum from a payload-carrying one (payload info
+                    // lives in `IrModule.enum_defs`, not in `IrType::Enum`).
+                    //
+                    // Storing the i64 into the ptr-typed slot emitted
+                    // `store ptr %v0, ...` for an i64 value and clang rejected the
+                    // module. Coercing here keeps the slot consistently `ptr`,
+                    // which is what `GetField` already loads it as. See
+                    // docs/known-issues.md issue 6.
+                    let mut store_val = val(*fv);
+                    let actual_ty = emitted_types.get(fv).cloned().or_else(|| {
+                        func.value_type(*fv)
+                            .and_then(|t| llvm_type_complete(t).ok())
+                    });
+                    if let Some(actual) = actual_ty {
+                        if actual != fty_s {
+                            if fty_s == "ptr" && actual.starts_with('i') {
+                                *gep_counter += 1;
+                                let tmp = format!("%fcoerce{}", gep_counter);
+                                writeln!(
+                                    out,
+                                    "  {} = inttoptr {} {} to ptr",
+                                    tmp, actual, store_val
+                                )?;
+                                store_val = tmp;
+                            } else if actual == "ptr" && fty_s.starts_with('i') {
+                                *gep_counter += 1;
+                                let tmp = format!("%fcoerce{}", gep_counter);
+                                writeln!(
+                                    out,
+                                    "  {} = ptrtoint ptr {} to {}",
+                                    tmp, store_val, fty_s
+                                )?;
+                                store_val = tmp;
+                            }
+                        }
+                    }
+
                     writeln!(
                         out,
                         "  store {} {}, ptr {}, align 8",
-                        fty_s,
-                        val(*fv),
-                        gep_name
+                        fty_s, store_val, gep_name
                     )?;
                 }
                 // Use the malloc'd pointer directly as the struct value.
@@ -3395,16 +3489,65 @@ fn emit_instr_ir(
             body_fn,
             start,
             end,
+            args,
             ..
         } => {
-            // Emit an OpenMP-compatible loop via iris_par_for runtime.
-            // The body function is referenced by name.
+            // The lowerer lambda-lifts the body to
+            //   __par_body_N(loop_var, capture0, capture1, ...)
+            // but the runtime can only call it as `fn(int64_t i, void* env)`.
+            // The captures in `args` were previously ignored here, so every
+            // capture parameter received an uninitialised register — a garbage
+            // pointer that segfaulted the moment the body touched it (an
+            // `atomic_add` inside a `par for` was the reported case). A body
+            // with no captures happened to work, which is why this survived.
+            //
+            // Fix: pack the captures into a closure environment with the same
+            // helper closures already use, and pass it as the runtime's `arg`.
+            // `emit_function_ir_with_name` gives `__par_body_*` the matching
+            // `(i64 %var, ptr %env)` signature and unpacks them on entry.
+            // See docs/known-issues.md issue 12.
+            let mut cap_args = vec![];
+            for c in args {
+                let cv = val(*c);
+                let cty = func.value_type(*c);
+                let ptr_c = box_to_ptr(
+                    out,
+                    func,
+                    *c,
+                    &cv,
+                    cty,
+                    emitted_types.get(c).map(|s| s.as_str()),
+                    gep_counter,
+                )?;
+                cap_args.push(format!("ptr {}", ptr_c));
+            }
+
+            let env = if args.is_empty() {
+                "null".to_owned()
+            } else {
+                *gep_counter += 1;
+                let env_name = format!("%par_env{}", gep_counter);
+                let mut mk_args = vec![
+                    format!("ptr @{}", body_fn),
+                    format!("i32 {}", args.len()),
+                ];
+                mk_args.extend(cap_args);
+                writeln!(
+                    out,
+                    "  {} = call ptr @iris_make_closure({})",
+                    env_name,
+                    mk_args.join(", ")
+                )?;
+                env_name
+            };
+
             writeln!(
                 out,
-                "  call void @iris_par_for(ptr @{}, i64 {}, i64 {})",
+                "  call void @iris_par_for(ptr @{}, i64 {}, i64 {}, ptr {})",
                 body_fn,
                 val(*start),
-                val(*end)
+                val(*end),
+                env
             )?;
         }
 
@@ -4949,57 +5092,23 @@ fn emit_instr_ir(
 
         // ── Phase 56: File I/O ─────────────────────────────────────────────
         IrInstr::FileReadAll { result, path } => {
-            let raw = format!("%raw_file_read{}", gep_counter);
-            *gep_counter += 1;
-            let ok_cond = format!("%file_read_ok{}", gep_counter);
-            *gep_counter += 1;
-            let ok_lbl = format!("file_read_ok_{}", result.0);
-            let err_lbl = format!("file_read_err_{}", result.0);
-            let merge_lbl = format!("file_read_merge_{}", result.0);
-            let ok_box = format!("%file_read_ok_box{}", gep_counter);
-            *gep_counter += 1;
-            let ok_res = format!("%file_read_ok_res{}", gep_counter);
-            *gep_counter += 1;
-            let err_msg = format!("%file_read_err_msg{}", gep_counter);
-            *gep_counter += 1;
-            let err_box = format!("%file_read_err_box{}", gep_counter);
-            *gep_counter += 1;
-            let err_res = format!("%file_read_err_res{}", gep_counter);
-            *gep_counter += 1;
+            // `iris_file_read_all` returns an `IrisResult*` that is already
+            // ok-or-err — see iris_runtime.c, which returns
+            // `iris_make_err(...)` for every failure path.
+            //
+            // This used to null-check the return and re-wrap it: on the
+            // non-null branch it did `iris_make_ok(iris_box_str(result))`. Since
+            // an err result is *also* non-null, a missing file took the ok
+            // branch and got wrapped a second time, so `is_ok(...)` reported
+            // `true` for a file that does not exist. Codegen was written against
+            // an older `char*`-returning signature and never updated.
+            //
+            // Pass the result through unchanged.
             writeln!(
                 out,
-                "  {} = call ptr @iris_file_read_all(ptr {})",
-                raw,
+                "  %v{} = call ptr @iris_file_read_all(ptr {})",
+                result.0,
                 val(*path)
-            )?;
-            writeln!(out, "  {} = icmp ne ptr {}, null", ok_cond, raw)?;
-            writeln!(
-                out,
-                "  br i1 {}, label %{}, label %{}",
-                ok_cond, ok_lbl, err_lbl
-            )?;
-            writeln!(out, "{}:", ok_lbl)?;
-            writeln!(out, "  {} = call ptr @iris_box_str(ptr {})", ok_box, raw)?;
-            writeln!(out, "  {} = call ptr @iris_make_ok(ptr {})", ok_res, ok_box)?;
-            writeln!(out, "  br label %{}", merge_lbl)?;
-            writeln!(out, "{}:", err_lbl)?;
-            writeln!(out, "  {} = call ptr @iris_const_str()", err_msg)?;
-            writeln!(
-                out,
-                "  {} = call ptr @iris_box_str(ptr {})",
-                err_box, err_msg
-            )?;
-            writeln!(
-                out,
-                "  {} = call ptr @iris_make_err(ptr {})",
-                err_res, err_box
-            )?;
-            writeln!(out, "  br label %{}", merge_lbl)?;
-            writeln!(out, "{}:", merge_lbl)?;
-            writeln!(
-                out,
-                "  %v{} = phi ptr [ {}, %{} ], [ {}, %{} ]",
-                result.0, ok_res, ok_lbl, err_res, err_lbl
             )?;
         }
         IrInstr::FileWriteAll {
@@ -5007,58 +5116,16 @@ fn emit_instr_ir(
             path,
             content,
         } => {
-            let raw = format!("%raw_file_write{}", gep_counter);
-            *gep_counter += 1;
-            let ok_cond = format!("%file_write_ok{}", gep_counter);
-            *gep_counter += 1;
-            let ok_lbl = format!("file_write_ok_{}", result.0);
-            let err_lbl = format!("file_write_err_{}", result.0);
-            let merge_lbl = format!("file_write_merge_{}", result.0);
-            let ok_box = format!("%file_write_ok_box{}", gep_counter);
-            *gep_counter += 1;
-            let ok_res = format!("%file_write_ok_res{}", gep_counter);
-            *gep_counter += 1;
-            let err_msg = format!("%file_write_err_msg{}", gep_counter);
-            *gep_counter += 1;
-            let err_box = format!("%file_write_err_box{}", gep_counter);
-            *gep_counter += 1;
-            let err_res = format!("%file_write_err_res{}", gep_counter);
-            *gep_counter += 1;
+            // Same as FileReadAll above: `iris_file_write_all` returns an
+            // `IrisResult*` that is already ok-or-err, and an err result is
+            // non-null, so the old null-check-and-rewrap reported success for
+            // every failed write.
             writeln!(
                 out,
-                "  {} = call ptr @iris_file_write_all(ptr {}, ptr {})",
-                raw,
+                "  %v{} = call ptr @iris_file_write_all(ptr {}, ptr {})",
+                result.0,
                 val(*path),
                 val(*content)
-            )?;
-            writeln!(out, "  {} = icmp ne ptr {}, null", ok_cond, raw)?;
-            writeln!(
-                out,
-                "  br i1 {}, label %{}, label %{}",
-                ok_cond, ok_lbl, err_lbl
-            )?;
-            writeln!(out, "{}:", ok_lbl)?;
-            writeln!(out, "  {} = call ptr @iris_box_i64(i64 0)", ok_box)?;
-            writeln!(out, "  {} = call ptr @iris_make_ok(ptr {})", ok_res, ok_box)?;
-            writeln!(out, "  br label %{}", merge_lbl)?;
-            writeln!(out, "{}:", err_lbl)?;
-            writeln!(out, "  {} = call ptr @iris_const_str()", err_msg)?;
-            writeln!(
-                out,
-                "  {} = call ptr @iris_box_str(ptr {})",
-                err_box, err_msg
-            )?;
-            writeln!(
-                out,
-                "  {} = call ptr @iris_make_err(ptr {})",
-                err_res, err_box
-            )?;
-            writeln!(out, "  br label %{}", merge_lbl)?;
-            writeln!(out, "{}:", merge_lbl)?;
-            writeln!(
-                out,
-                "  %v{} = phi ptr [ {}, %{} ], [ {}, %{} ]",
-                result.0, ok_res, ok_lbl, err_res, err_lbl
             )?;
         }
         IrInstr::FileExists { result, path } => {
@@ -5593,13 +5660,47 @@ fn emit_instr_ir(
             let fn_name = format!("iris_{}", name);
             // Use each arg's emitted LLVM type so scalars (i64, double, i1) are
             // passed with the correct type instead of always "ptr".
-            let arg_strs: Vec<String> = args
+            let mut arg_strs: Vec<String> = args
                 .iter()
                 .map(|a| {
                     let ty_s = emitted_types.get(a).map(|s| s.as_str()).unwrap_or("ptr");
                     format!("{} {}", ty_s, val(*a))
                 })
                 .collect();
+
+            // `iris_select(int64_t n, ...)` takes the channel count first — a
+            // variadic callee cannot discover its own argument count. Codegen
+            // passed only the channels, so the first channel *pointer* was read
+            // as `n`, giving an astronomically large count; `va_arg` then treated
+            // the second channel as index 0 and returned the wrong index (0
+            // instead of 1) while walking off the end of the argument list for
+            // any longer select. Prepend the count.
+            if name == "select" {
+                arg_strs.insert(0, format!("i64 {}", args.len()));
+            }
+
+            // `iris_json_stringify(IrisVal*)` takes a *boxed* value, but the
+            // generic path above passes each argument in its own emitted form —
+            // for a `str` that is the raw `char*` of the string constant. The C
+            // side then read those bytes as an IrisVal header, got a garbage tag
+            // and returned the literal string "null" for every input.
+            if name == "json_stringify" {
+                arg_strs.clear();
+                for a in args {
+                    let av = val(*a);
+                    let aty = func.value_type(*a);
+                    let boxed = box_to_ptr(
+                        out,
+                        func,
+                        *a,
+                        &av,
+                        aty,
+                        emitted_types.get(a).map(|s| s.as_str()),
+                        gep_counter,
+                    )?;
+                    arg_strs.push(format!("ptr {}", boxed));
+                }
+            }
             // Determine LLVM return type from result_ty
             // Bool builtins are declared as returning i32 (C int) — call as i32
             // then truncate to i1 for IRIS-level boolean usage.
@@ -6151,7 +6252,10 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare void @iris_chan_send(ptr, ptr)",
         "declare ptr @iris_chan_recv(ptr)",
         "declare void @iris_spawn_fn(ptr, ptr)",
-        "declare void @iris_par_for(ptr, i64, i64)",
+        // 4th parameter is the capture environment. The C runtime has always
+        // had it (`void* arg`, forwarded to the body as its second argument);
+        // codegen simply never passed it. See known-issues issue 12.
+        "declare void @iris_par_for(ptr, i64, i64, ptr)",
         "declare void @iris_barrier()",
         // Structs / Tuples / Closures
         "declare ptr @iris_make_struct(i32, ...)",
@@ -6378,7 +6482,9 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         // Channel extras
         "declare ptr @iris_chan_try_recv(ptr)",
         "declare i64 @iris_chan_len(ptr)",
-        "declare i64 @iris_select(ptr, ...)",
+        // First parameter is the channel count, matching
+        // `int64_t iris_select(int64_t n, ...)` in iris_runtime.c.
+        "declare i64 @iris_select(i64, ...)",
         "declare i1 @iris_timeout(i64)",
         // FFI variadic call
         "declare i64 @iris_ffi_call_args(ptr, ptr, ptr, i32)",
