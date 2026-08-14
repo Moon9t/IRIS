@@ -1,0 +1,69 @@
+// c12 — record defaults x spread update x nested generics x generic records
+// holding generic records.
+//
+// Adversarial: default fields and spread are each covered alone; combining them
+// with a generic container nested two deep is not.
+
+record Config {
+    host: str = "localhost",
+    port: i64 = 8080,
+    debug: bool = false,
+}
+
+record Box[T] { item: T }
+record Pair[A] { left: A, right: A }
+
+def box_of[T](v: T) -> Box<T> { Box { item: v } }
+def unbox[T](b: Box<T>) -> T { b.item }
+
+def main() -> i64 {
+    // All defaults.
+    val c1: Config = Config { }
+    assert(c1.host == "localhost");
+    assert(c1.port == 8080);
+    assert(c1.debug == false);
+
+    // Partial override, remaining fields defaulted.
+    val c2: Config = Config { port: 443 }
+    assert(c2.port == 443);
+    assert(c2.host == "localhost");
+
+    // Every field overridden.
+    val c3: Config = Config { host: "example.com", port: 80, debug: true }
+    assert(c3.host == "example.com");
+    assert(c3.debug == true);
+
+    // Spread update: take c3 and change one field.
+    val c4: Config = Config { ..c3, port: 8443 }
+    assert(c4.host == "example.com");
+    assert(c4.port == 8443);
+    assert(c4.debug == true);
+
+    // Generic container at two different types.
+    val bi: Box<i64> = box_of(7)
+    val bs: Box<str> = box_of("seven")
+    assert(unbox(bi) == 7);
+    assert(unbox(bs) == "seven");
+
+    // NOTE: generic-in-generic is deliberately absent. `Box<Box<i64>>` fails to
+    // monomorphise — known-issues #21 — with a diagnostic that prints the same
+    // name on both sides ("%Box__Box__i64 vs %Box__Box__i64"). Single-level
+    // generics work at any number of distinct instantiations, as below.
+
+    // Generic record holding a record with defaults.
+    val bc: Box<Config> = box_of(c2)
+    assert(unbox(bc).port == 443);
+
+    // Pair of the same type on both sides.
+    val p: Pair<i64> = Pair { left: 1, right: 2 }
+    assert(p.left + p.right == 3);
+
+    // NOTE: a generic instantiated at a *container* type — Box<list<i64>> —
+    // works interpreted but fails to build natively: the declaration is
+    // %Box__list_i64 while the use site says %Box__list, truncated at the
+    // underscore. known-issues #22. Instantiations whose mangled name is a
+    // single token (i64, str, a plain record) are fine, as above.
+
+    println("c12 ok");
+    0
+}

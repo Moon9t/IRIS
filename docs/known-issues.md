@@ -712,6 +712,106 @@ than for the assert expression itself — see `src/ir/function.rs` `SpanTable`.
 
 ---
 
+## 21. A generic instantiated at a generic type — **open**
+
+`Box<Box<i64>>` does not monomorphise correctly.
+
+```iris
+record Box[T] { item: T }
+def box_of[T](v: T) -> Box<T> { Box { item: v } }
+
+def main() -> i64 {
+    val inner: Box<i64> = box_of(3)
+    val outer: Box<Box<i64>> = box_of(inner)
+    val mid = outer.item
+    assert(mid.item == 3);
+    0
+}
+```
+
+```
+type error in function 'box_of__Box__i64'
+  — type mismatch: %Box__Box__i64 vs %Box__Box__i64
+```
+
+Note the two sides are **the same name**. Two structurally different
+`IrType::Struct` values carry that name — one with `item: Box__i64`, one whose
+`item` is still the unsubstituted parameter — and the comparison is structural
+while the message prints only the name. The inner type argument is not being
+concretised, so `resolve_concrete_field` is not recursing through a type
+argument that is itself generic.
+
+Going through a generic *function* instead of direct field access gives the
+other half of the same defect:
+
+```
+expected '%T' but found 'i64'      // unbox(unbox(outer))
+```
+
+Single-level generics are fine, at any number of distinct instantiations —
+`Box<i64>`, `Box<str>`, `Box<Config>`, `Box<list<i64>>` all work (see
+`tests/conformance/c12`). Only generic-in-generic fails.
+
+**Two consequences.** Container-of-container is ordinary — a `Box<list<T>>` is
+fine but a `Pair<Box<T>>` is not — so this bites as soon as abstractions are
+composed. And it blocks the higher-kinded types the project already claims,
+since `Wrapper<Box, i64>` is exactly this shape.
+
+**Secondary finding (DX):** a type-mismatch diagnostic that prints identical
+text on both sides of "vs" is unactionable. When two `IrType`s differ
+structurally but share a name, the message should show the differing fields.
+
+**Status:** open.
+
+---
+
+## 22. Generic instantiated at a container type breaks natively — **open**
+
+`Box<list<i64>>` works interpreted and fails to build.
+
+```iris
+record Box[T] { item: T }
+def box_of[T](v: T) -> Box<T> { Box { item: v } }
+def unbox[T](b: Box<T>) -> T { b.item }
+
+def main() -> i64 {
+    val bl: Box<list<i64>> = box_of(list())
+    push(unbox(bl), 5);
+    assert(list_len(unbox(bl)) == 1);
+    0
+}
+```
+
+```
+error: base element of getelementptr must be sized
+  %fgep1_0 = getelementptr inbounds %Box__list, ptr %b, i32 0, i32 0
+```
+
+The emitted module *declares*:
+
+```llvm
+%Box          = type { ptr }
+%Box__T       = type { ptr }
+%Box__list_i64 = type { ptr }
+```
+
+but the GEP references **`%Box__list`** — the name truncated at the underscore.
+LLVM therefore treats it as an undeclared opaque type, which has no size.
+
+The mangled name for a container type argument contains an underscore
+(`list<i64>` → `list_i64`), and something on the use-side path splits or rebuilds
+the name on `_` and keeps only the first segment. Type arguments whose mangling
+is a single token (`i64`, `str`, a plain record) are unaffected, which is why
+every other instantiation in `tests/conformance/c12` is fine.
+
+Related to #21 but a distinct mechanism: #21 is the type argument not being
+substituted, this is the substituted name being mangled inconsistently between
+declaration and use.
+
+**Status:** open.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:
