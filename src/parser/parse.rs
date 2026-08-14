@@ -2097,7 +2097,16 @@ impl<'t> Parser<'t> {
             }
 
             // `select! { msg = ch => { body }, ... default => { body } }`
-            if matches!(self.peek_tok(), Token::Select) {
+            //
+            // `select` is also the name of a builtin — `select(ch1, ch2)` returns
+            // the index of the first ready channel. Because it is a keyword, an
+            // unguarded branch here swallowed the call form too and died on the
+            // missing `{`, so the builtin was unreachable from source despite
+            // being implemented in the interpreter and registered in the lowerer.
+            // Only the arm form (`select {` / `select! {`) is a statement.
+            if matches!(self.peek_tok(), Token::Select)
+                && matches!(self.peek_next_tok(), Token::LBrace | Token::Bang)
+            {
                 stmts.push(self.parse_select_stmt()?);
                 if matches!(self.peek_tok(), Token::Semi) {
                     self.advance();
@@ -2749,6 +2758,27 @@ impl<'t> Parser<'t> {
                     span: span.merge(end),
                 }
             }
+            // `select(ch1, ch2, ...)` — the builtin polling form, which returns
+            // the index of the first ready channel or -1. `select` is a keyword
+            // (it also introduces `select { binding = ch => body }`), so without
+            // this arm the call form never reaches expression position at all.
+            // Gated on `(` so the statement form is untouched.
+            Token::Select if matches!(self.peek_next_tok(), Token::LParen) => {
+                let ident_span = self.advance().span;
+                self.advance(); // consume '('
+                let (args, named_args) = self.parse_call_args()?;
+                let end = self.expect(&Token::RParen)?;
+                AstExpr::Call {
+                    callee: Ident {
+                        name: "select".to_owned(),
+                        span: ident_span,
+                    },
+                    args,
+                    named_args,
+                    span: ident_span.merge(end),
+                }
+            }
+
             Token::Ident(name) => {
                 let ident_span = self.advance().span;
                 let ident = Ident {
