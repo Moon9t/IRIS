@@ -544,6 +544,9 @@ pub(crate) fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, Va
         IrInstr::Densify { operand, .. } => {
             replace(operand);
         }
+        IrInstr::SparseNnz { operand, .. } => {
+            replace(operand);
+        }
         IrInstr::MakeGrad { value, tangent, .. } => {
             replace(value);
             replace(tangent);

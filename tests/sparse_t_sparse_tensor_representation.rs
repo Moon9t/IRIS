@@ -2,8 +2,8 @@
 //!
 //! sparsify(arr) converts a dense array to a sparse representation that stores
 //! only non-zero (index, value) pairs.
-//! densify(sparse) converts the sparse representation back; in the interpreter
-//! it returns the number of non-zero elements (nnz) as an i64.
+//! densify(sparse) reconstructs the dense collection, filling gaps with zeros.
+//! nnz(sparse) returns the count of stored non-zero elements as an i64.
 
 use iris::{compile, EmitKind};
 
@@ -16,7 +16,7 @@ fn test_sparsify_ir() {
 def f() -> i64 {
     val arr = [1, 0, 3, 0, 5]
     val s = sparsify(arr)
-    densify(s)
+    list_len(densify(s))
 }
 "#;
     let ir = compile(src, "test", EmitKind::Ir).expect("should compile");
@@ -36,7 +36,7 @@ fn test_densify_ir() {
 def f() -> i64 {
     val arr = [1, 0, 3]
     val s = sparsify(arr)
-    densify(s)
+    list_len(densify(s))
 }
 "#;
     let ir = compile(src, "test", EmitKind::Ir).expect("should compile");
@@ -56,7 +56,7 @@ fn test_sparse_nnz_three() {
 def f() -> i64 {
     val arr = [1, 0, 3, 0, 5]
     val s = sparsify(arr)
-    densify(s)
+    nnz(s)
 }
 "#;
     let out = compile(src, "test", EmitKind::Llvm).expect("should compile to LLVM IR");
@@ -68,6 +68,38 @@ def f() -> i64 {
     );
 }
 
+// The non-zero count is `nnz`, not `densify`. Evaluate it rather than only
+// inspecting the IR, so a backend that emits the right call but computes the
+// wrong answer still fails.
+#[test]
+fn test_sparse_nnz_three_evaluates() {
+    let src = r#"
+def f() -> i64 {
+    val arr = [1, 0, 3, 0, 5]
+    val s = sparsify(arr)
+    nnz(s)
+}
+"#;
+    let out = compile(src, "test", EmitKind::Eval).expect("should eval");
+    assert_eq!(out.trim(), "3", "three non-zero elements, got: {}", out.trim());
+}
+
+// `densify` reconstructs the dense collection, so its length is the dense
+// length (5), not the non-zero count (3). This is the distinction that was
+// previously collapsed.
+#[test]
+fn test_densify_returns_dense_collection() {
+    let src = r#"
+def f() -> i64 {
+    val arr = [1, 0, 3, 0, 5]
+    val s = sparsify(arr)
+    list_len(densify(s))
+}
+"#;
+    let out = compile(src, "test", EmitKind::Eval).expect("should eval");
+    assert_eq!(out.trim(), "5", "densify should rebuild all 5 slots, got: {}", out.trim());
+}
+
 // ---------------------------------------------------------------------------
 // 4. densify(sparsify([0,0,0])) == 0  (all zeros)
 // ---------------------------------------------------------------------------
@@ -77,7 +109,7 @@ fn test_sparse_all_zeros() {
 def f() -> i64 {
     val arr = [0, 0, 0]
     val s = sparsify(arr)
-    densify(s)
+    nnz(s)
 }
 "#;
     let out = compile(src, "test", EmitKind::Eval).expect("should eval");
@@ -98,7 +130,7 @@ fn test_sparse_all_nonzero() {
 def f() -> i64 {
     val arr = [1, 2, 3]
     val s = sparsify(arr)
-    densify(s)
+    nnz(s)
 }
 "#;
     let out = compile(src, "test", EmitKind::Eval).expect("should eval");
@@ -119,7 +151,7 @@ fn test_sparse_two_nonzero() {
 def f() -> i64 {
     val arr = [0, 7, 0, 0, 9, 0]
     val s = sparsify(arr)
-    densify(s)
+    nnz(s)
 }
 "#;
     let out = compile(src, "test", EmitKind::Eval).expect("should eval");
@@ -135,7 +167,7 @@ fn test_sparse_single_nonzero() {
 def f() -> i64 {
     val arr = [42]
     val s = sparsify(arr)
-    densify(s)
+    nnz(s)
 }
 "#;
     let out = compile(src, "test", EmitKind::Eval).expect("should eval");
@@ -156,7 +188,7 @@ fn test_sparse_type_annotation_compiles() {
 def f() -> i64 {
     val arr = [10, 0, 20, 0, 30]
     val s: sparse<[i64; 5]> = sparsify(arr)
-    densify(s)
+    nnz(s)
 }
 "#;
     // Just verify it compiles without error.

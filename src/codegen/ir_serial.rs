@@ -76,6 +76,10 @@ const OP_GRAD_VALUE: u8 = 0x32;
 const OP_GRAD_TANGENT: u8 = 0x33;
 const OP_SPARSIFY: u8 = 0x34;
 const OP_DENSIFY: u8 = 0x35;
+/// Appended rather than slotted next to OP_DENSIFY: these values are a
+/// serialisation format, so renumbering existing ones would invalidate any
+/// previously written IR.
+const OP_SPARSE_NNZ: u8 = 0x7E;
 const OP_STR_LEN: u8 = 0x36;
 const OP_STR_CONCAT: u8 = 0x37;
 const OP_PRINT: u8 = 0x38;
@@ -1026,6 +1030,11 @@ impl Writer {
                 self.vid(*result);
                 self.vid(*operand);
                 self.ty(ty);
+            }
+            IrInstr::SparseNnz { result, operand } => {
+                self.u8(OP_SPARSE_NNZ);
+                self.vid(*result);
+                self.vid(*operand);
             }
             IrInstr::StrLen { result, operand } => {
                 self.u8(OP_STR_LEN);
@@ -2404,6 +2413,11 @@ impl<'a> Reader<'a> {
                     operand,
                     ty,
                 }
+            }
+            OP_SPARSE_NNZ => {
+                let result = self.vid()?;
+                let operand = self.vid()?;
+                IrInstr::SparseNnz { result, operand }
             }
             OP_STR_LEN => {
                 let result = self.vid()?;

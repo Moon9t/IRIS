@@ -665,6 +665,10 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
             write!(out, "{} = densify {}", result, operand)?;
         }
 
+        IrInstr::SparseNnz { result, operand } => {
+            write!(out, "{} = sparse_nnz {}", result, operand)?;
+        }
+
         IrInstr::Barrier => {
             write!(out, "barrier")?;
         }

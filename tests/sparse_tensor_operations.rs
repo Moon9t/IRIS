@@ -187,10 +187,11 @@ fn test_densify_sparse() {
 
     let nnz = builder.fresh_value();
     builder.push_instr(
-        IrInstr::Densify {
+        // The non-zero count is SparseNnz. Densify reconstructs the dense
+        // collection and no longer yields a count.
+        IrInstr::SparseNnz {
             result: nnz,
             operand: sp,
-            ty: i64_ty.clone(),
         },
         Some(i64_ty.clone()),
     );
@@ -240,10 +241,11 @@ fn test_densify_empty_sparse() {
 
     let nnz = builder.fresh_value();
     builder.push_instr(
-        IrInstr::Densify {
+        // The non-zero count is SparseNnz. Densify reconstructs the dense
+        // collection and no longer yields a count.
+        IrInstr::SparseNnz {
             result: nnz,
             operand: sp,
-            ty: i64_ty.clone(),
         },
         Some(i64_ty.clone()),
     );

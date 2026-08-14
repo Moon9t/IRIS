@@ -3821,7 +3821,8 @@ fn builtin_hover(name: &str) -> Option<String> {
         // Tensor
         "einsum"   => "def einsum(notation: str, ...) -> tensor<...>\nEinstein summation",
         "sparsify" => "def sparsify(t: tensor<T, S>) -> sparse<T, S>\nConvert to sparse representation",
-        "densify"  => "def densify(s: sparse<T, S>) -> tensor<T, S>\nConvert sparse to dense",
+        "densify"  => "def densify(s: sparse<T>) -> list<T>\nReconstruct the dense collection, filling gaps with zeros",
+        "nnz"      => "def nnz(s: sparse<T>) -> i64\nNumber of non-zero elements stored",
         "zeros"    => "def zeros(shape: [i64]) -> tensor<f32, S>\nCreate zero-filled tensor",
         "ones"     => "def ones(shape: [i64]) -> tensor<f32, S>\nCreate one-filled tensor",
         "fill"     => "def fill(shape: [i64], v: f32) -> tensor<f32, S>\nCreate tensor filled with v",

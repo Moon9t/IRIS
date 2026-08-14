@@ -601,10 +601,20 @@ pub enum IrInstr {
         ty: IrType,
     },
     /// Convert a sparse representation back to dense.
+    ///
+    /// Produces a dense collection, matching the name, the documented signature
+    /// (`densify(s: sparse<T, S>) -> tensor<T, S>`) and the runtime's
+    /// `iris_densify`. It previously produced the count of non-zero elements as
+    /// an i64, which is what [`SparseNnz`] is for.
     Densify {
         result: ValueId,
         operand: ValueId,
         ty: IrType,
+    },
+    /// Number of non-zero elements held by a sparse value.
+    SparseNnz {
+        result: ValueId,
+        operand: ValueId,
     },
 
     // ---- String operations ----
@@ -1091,6 +1101,7 @@ impl IrInstr {
             IrInstr::Barrier => None,
             IrInstr::Sparsify { result, .. } => Some(*result),
             IrInstr::Densify { result, .. } => Some(*result),
+            IrInstr::SparseNnz { result, .. } => Some(*result),
             IrInstr::MakeGrad { result, .. } => Some(*result),
             IrInstr::GradValue { result, .. } => Some(*result),
             IrInstr::GradTangent { result, .. } => Some(*result),
@@ -1293,6 +1304,7 @@ impl IrInstr {
             IrInstr::Barrier => vec![],
             IrInstr::Sparsify { operand, .. } => vec![*operand],
             IrInstr::Densify { operand, .. } => vec![*operand],
+            IrInstr::SparseNnz { operand, .. } => vec![*operand],
             IrInstr::MakeGrad { value, tangent, .. } => vec![*value, *tangent],
             IrInstr::GradValue { operand, .. } => vec![*operand],
             IrInstr::GradTangent { operand, .. } => vec![*operand],

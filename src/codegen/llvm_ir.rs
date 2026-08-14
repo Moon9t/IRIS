@@ -876,6 +876,9 @@ fn emit_function_body(
                     emitted_types.insert(*result, "ptr".to_owned());
                 }
                 IrInstr::Densify { result, .. } => {
+                    emitted_types.insert(*result, "ptr".to_owned());
+                }
+                IrInstr::SparseNnz { result, .. } => {
                     emitted_types.insert(*result, "i64".to_owned());
                 }
                 IrInstr::Call {
@@ -4667,12 +4670,17 @@ fn emit_instr_ir(
         IrInstr::Densify {
             result, operand, ..
         } => {
-            // `densify(s)` is typed i64 by the lowerer, where it is documented as
-            // "returns nnz count as i64", and the interpreter implements exactly
-            // that. This backend instead called `iris_densify`, which returns an
-            // IrisList* — so it produced a `ptr` for an instruction declared i64,
-            // and the two backends disagreed about what the same program means.
-            // `iris_sparse_nnz` is the runtime function matching the declared type.
+            // Reconstructs the dense list, which is what the name, the documented
+            // signature and this runtime function all mean. The non-zero count is
+            // SparseNnz below.
+            writeln!(
+                out,
+                "  %v{} = call ptr @iris_densify(ptr {})",
+                result.0,
+                val(*operand)
+            )?;
+        }
+        IrInstr::SparseNnz { result, operand } => {
             writeln!(
                 out,
                 "  %v{} = call i64 @iris_sparse_nnz(ptr {})",
@@ -5725,6 +5733,8 @@ fn inferred_value_type(
                 | IrInstr::Sparsify { ty, .. }
                 | IrInstr::Densify { ty, .. }
                 | IrInstr::CallExtern { ret_ty: ty, .. } => Some(ty.clone()),
+                // Carries no type field: an element count is always i64.
+                IrInstr::SparseNnz { .. } => Some(IrType::Scalar(DType::I64)),
                 IrInstr::ListNew { elem_ty, .. } => Some(IrType::List(Box::new(elem_ty.clone()))),
                 IrInstr::ListGet { elem_ty, list, .. } => {
                     // If elem_ty is Infer, try to resolve it from the list's inferred type.

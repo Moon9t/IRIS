@@ -6130,7 +6130,14 @@ impl<'m> Lowerer<'m> {
             return Ok((result, result_ty));
         }
 
-        // Built-in: densify(sparse) → Densify (convert sparse back; returns nnz count as i64)
+        // Built-in: densify(sparse) → Densify (reconstruct the dense collection)
+        //
+        // This returns dense data, as the name says and as the README, the LSP
+        // hover signature and the runtime's `iris_densify` all describe. It used
+        // to return the non-zero count as an i64 — a shortcut that contradicted
+        // every one of those, and that the native backend did not implement the
+        // same way, so a program's meaning depended on how it was run. The count
+        // is now `nnz(s)` below.
         if callee.name == "densify" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
@@ -6138,14 +6145,45 @@ impl<'m> Lowerer<'m> {
                     span,
                 });
             }
-            let (val, _) = self.lower_expr(&args[0])?;
-            let result_ty = IrType::Scalar(DType::I64);
+            let (val, sparse_ty) = self.lower_expr(&args[0])?;
+            // The runtime reconstructs an IrisList, so the result is a list of the
+            // sparse value's element type.
+            let elem_ty = match &sparse_ty {
+                IrType::Sparse(inner) => match &**inner {
+                    IrType::Array { elem, .. } => (**elem).clone(),
+                    IrType::List(elem) => (**elem).clone(),
+                    other => other.clone(),
+                },
+                other => other.clone(),
+            };
+            let result_ty = IrType::List(Box::new(elem_ty));
             let result = self.builder.fresh_value();
             self.builder.push_instr(
                 IrInstr::Densify {
                     result,
                     operand: val,
                     ty: result_ty.clone(),
+                },
+                Some(result_ty.clone()),
+            );
+            return Ok((result, result_ty));
+        }
+
+        // Built-in: nnz(sparse) → count of stored non-zero elements.
+        if callee.name == "nnz" {
+            if args.len() != 1 {
+                return Err(LowerError::Unsupported {
+                    detail: "nnz() requires exactly 1 argument".into(),
+                    span,
+                });
+            }
+            let (val, _) = self.lower_expr(&args[0])?;
+            let result_ty = IrType::Scalar(DType::I64);
+            let result = self.builder.fresh_value();
+            self.builder.push_instr(
+                IrInstr::SparseNnz {
+                    result,
+                    operand: val,
                 },
                 Some(result_ty.clone()),
             );

@@ -1878,18 +1878,45 @@ impl<'m> Interpreter<'m> {
                         IrInstr::Densify {
                             result, operand, ..
                         } => {
-                            // Densify returns the number of non-zero elements (nnz) as
-                            // an i64. The lowerer emits Densify with result type i64,
-                            // matching the IRIS builtin signature `densify(s) -> i64`.
-                            // Native codegen uses iris_sparse_to_tensor for the full
-                            // dense reconstruction; the interpreter uses nnz for
-                            // lightweight testing.
+                            // Reconstruct the dense collection, filling the gaps
+                            // with zeros, exactly as the runtime's iris_densify
+                            // does. This used to return the non-zero count, which
+                            // contradicted the builtin's name and documented
+                            // signature and disagreed with the native backend.
+                            // The count is now SparseNnz.
                             let v = self.get(*operand)?;
-                            let nnz = match v {
-                                IrValue::Sparse(pairs) => IrValue::I64(pairs.len() as i64),
+                            let dense = match v {
+                                IrValue::Sparse(pairs) => {
+                                    let size = pairs
+                                        .iter()
+                                        .map(|(idx, _)| *idx + 1)
+                                        .max()
+                                        .unwrap_or(0);
+                                    let mut out = vec![IrValue::I64(0); size];
+                                    for (idx, value) in pairs {
+                                        if idx < size {
+                                            out[idx] = value;
+                                        }
+                                    }
+                                    IrValue::List(std::sync::Arc::new(std::sync::Mutex::new(out)))
+                                }
                                 other => other,
                             };
-                            self.values.insert(*result, nnz);
+                            self.values.insert(*result, dense);
+                        }
+
+                        IrInstr::SparseNnz { result, operand } => {
+                            let v = self.get(*operand)?;
+                            let nnz = match v {
+                                IrValue::Sparse(pairs) => pairs.len() as i64,
+                                // A non-sparse operand has no stored-element count;
+                                // treat a list as fully populated.
+                                IrValue::List(items) => {
+                                    items.lock().map(|g| g.len()).unwrap_or(0) as i64
+                                }
+                                _ => 0,
+                            };
+                            self.values.insert(*result, IrValue::I64(nnz));
                         }
 
                         IrInstr::Barrier => {
