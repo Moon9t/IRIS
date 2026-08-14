@@ -1,0 +1,176 @@
+// threat_response_policy.iris
+//
+// A written-once autonomy policy for a physical security system.
+//
+// The host system (cameras, video pipeline, network, dispatch link) is NOT
+// written in IRIS. It calls this policy with an observation and acts on the
+// returned decision. That is the intended shape: IRIS supplies the judgement,
+// the host supplies the plumbing.
+//
+// The behaviour under test is the one that is hardest to get right and most
+// costly to get wrong: when a person is under duress, a loud local alarm can
+// escalate an intruder into a killer. The policy must recognise that and
+// downgrade to a silent relay -- even though the threat score is at its
+// highest. A rule engine that only ranks threat severity gets this backwards.
+
+bring std.ais
+
+// ── Decision codes ──────────────────────────────────────────────────────────
+// Returned to the host system. Deliberately ordinal EXCEPT for duress, which
+// is why a naive "escalate with severity" policy fails this test.
+const ACT_IGNORE: i64 = 0
+const ACT_LOG: i64 = 1
+const ACT_SILENT_RELAY: i64 = 2
+const ACT_LOCAL_ALARM: i64 = 3
+const ACT_DISPATCH: i64 = 4
+
+// ── What the perception layer hands us ──────────────────────────────────────
+record Observation {
+    threat_score: f64,      // 0.0 .. 1.0 from the vision model
+    person_present: bool,   // a human is in frame
+    duress_signal: bool,    // hands raised / panic gesture / duress code entered
+    is_night: bool,
+    consecutive_hits: i64,  // how many frames in a row have tripped
+}
+
+// ── Policy state that adapts over time ──────────────────────────────────────
+record PolicyState {
+    dispatch_threshold: f64,  // moves with the observed false-alarm rate
+    false_alarms: i64,
+    true_alarms: i64,
+}
+
+pub def policy_new() -> PolicyState {
+    PolicyState { dispatch_threshold: 0.80, false_alarms: 0, true_alarms: 0 }
+}
+
+// ── The safety constitution ─────────────────────────────────────────────────
+// Inviolable constraints, declared as data rather than buried in branches.
+// severity 3 = never override.
+pub def build_constitution() -> Constitution {
+    var c = constitution_new(3)
+    c = constitution_add(c, "no_audible_alarm_under_duress", 3)
+    c = constitution_add(c, "no_dispatch_without_person", 2)
+    c = constitution_add(c, "always_relay_when_life_at_risk", 3)
+    c
+}
+
+// ── The decision ────────────────────────────────────────────────────────────
+// The whole point of the file. Note that duress is checked BEFORE severity:
+// the constitution outranks the threat score, always.
+pub def decide(st: PolicyState, o: Observation) -> i64 {
+    // 1. Constitution first. A duress signal forbids anything audible,
+    //    and mandates a quiet relay, regardless of how high the score is.
+    if o.duress_signal {
+        return ACT_SILENT_RELAY
+    };
+
+    // 2. Nothing in frame -- no dispatch is permitted no matter the score.
+    if o.person_present {
+        // 3. Graded response on the adaptive threshold.
+        val night_bias = if o.is_night { 0.10 } else { 0.0 }
+        val score = o.threat_score + night_bias
+
+        val sustained = o.consecutive_hits >= 3
+
+        if score >= st.dispatch_threshold {
+            if sustained { ACT_DISPATCH } else { ACT_LOCAL_ALARM }
+        } else {
+            if score >= 0.45 { ACT_LOG } else { ACT_IGNORE }
+        }
+    } else {
+        if o.threat_score >= 0.90 { ACT_LOG } else { ACT_IGNORE }
+    }
+}
+
+// ── Adaptation ──────────────────────────────────────────────────────────────
+// The host reports back what actually happened. The policy raises its own bar
+// when it cries wolf and lowers it when it misses. Written once; no retuning
+// trip to site.
+pub def learn(st: PolicyState, was_false_alarm: bool) -> PolicyState {
+    if was_false_alarm {
+        val raised = st.dispatch_threshold + 0.05
+        val capped = if raised > 0.95 { 0.95 } else { raised }
+        PolicyState {
+            dispatch_threshold: capped,
+            false_alarms: st.false_alarms + 1,
+            true_alarms: st.true_alarms,
+        }
+    } else {
+        val lowered = st.dispatch_threshold - 0.02
+        val floored = if lowered < 0.50 { 0.50 } else { lowered }
+        PolicyState {
+            dispatch_threshold: floored,
+            false_alarms: st.false_alarms,
+            true_alarms: st.true_alarms + 1,
+        }
+    }
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────────
+
+def obs(score: f64, person: bool, duress: bool, night: bool, hits: i64) -> Observation {
+    Observation {
+        threat_score: score,
+        person_present: person,
+        duress_signal: duress,
+        is_night: night,
+        consecutive_hits: hits,
+    }
+}
+
+def main() -> i64 {
+    val st = policy_new()
+    val c = build_constitution()
+
+    // The constitution is queryable, not just decorative.
+    assert(constitution_check(c, "no_audible_alarm_under_duress"));
+    assert(constitution_check(c, "always_relay_when_life_at_risk"));
+
+    // 1. Empty scene, low score -> ignore.
+    assert(decide(st, obs(0.20, false, false, false, 0)) == ACT_IGNORE);
+
+    // 2. Person, moderate score -> log only, no siren.
+    assert(decide(st, obs(0.50, true, false, false, 1)) == ACT_LOG);
+
+    // 3. Person, high score, single frame -> local alarm.
+    assert(decide(st, obs(0.85, true, false, false, 1)) == ACT_LOCAL_ALARM);
+
+    // 4. Person, high score, sustained -> dispatch.
+    assert(decide(st, obs(0.85, true, false, false, 4)) == ACT_DISPATCH);
+
+    // 5. THE CASE THAT MATTERS.
+    //    Maximum threat, sustained, at night, person present -- every signal
+    //    says DISPATCH with sirens. But duress is set, so a loud response
+    //    could get the person killed. The policy must go quiet instead.
+    val hostage = obs(0.99, true, true, true, 9)
+    assert(decide(st, hostage) == ACT_SILENT_RELAY);
+    assert(decide(st, hostage) != ACT_LOCAL_ALARM);
+    assert(decide(st, hostage) != ACT_DISPATCH);
+
+    // 6. Night bias makes a borderline score escalate after dark.
+    assert(decide(st, obs(0.72, true, false, false, 4)) == ACT_LOG);
+    assert(decide(st, obs(0.72, true, false, true, 4)) == ACT_DISPATCH);
+
+    // 7. Adaptation: three false alarms raise the bar, and the same
+    //    observation that used to dispatch no longer does.
+    var adapted = st
+    adapted = learn(adapted, true)
+    adapted = learn(adapted, true)
+    adapted = learn(adapted, true)
+    assert(adapted.dispatch_threshold > 0.94);
+    assert(adapted.false_alarms == 3);
+    assert(decide(adapted, obs(0.85, true, false, false, 4)) == ACT_LOG);
+
+    // 8. ...but duress still overrides the adapted threshold. Learning must
+    //    never be able to erode a severity-3 constraint.
+    assert(decide(adapted, hostage) == ACT_SILENT_RELAY);
+
+    // 9. A true alarm walks the threshold back down.
+    val recovered = learn(learn(adapted, false), false)
+    assert(recovered.dispatch_threshold < 0.92);
+    assert(recovered.true_alarms == 2);
+
+    println("threat_response_policy: all assertions passed");
+    0
+}

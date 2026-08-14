@@ -1,0 +1,125 @@
+// fusion.iris — turning a stream of raw samples into one trustworthy number.
+//
+// Part of examples/08_fleet_service.
+//
+// Showcases: option and result types, `?` error propagation, closures passed
+// as arguments, higher-order list operations, and pattern matching with
+// guards and range patterns.
+
+// NOTE: `pub bring` re-exports public *functions* but not `record`/`choice`
+// types, so a downstream file must bring types.iris itself to name Health or
+// Device. Brings are de-duplicated, so importing it in several files is fine.
+pub bring "types.iris"
+bring std.math
+
+// ── Failure modes, as data ──────────────────────────────────────────────────
+// Returning `result<f64, str>` rather than a sentinel like -1.0 means a caller
+// cannot accidentally treat a failure as a reading.
+pub def mean_of(xs: list<f64>) -> result<f64, str> effect alloc {
+    val n = list_len(xs)
+    if n == 0 {
+        return err("empty sample set")
+    };
+    var total = 0.0
+    for i in 0 .. n {
+        total = total + list_get(xs, i)
+    }
+    ok(total / (n to f64))
+}
+
+pub def stddev_of(xs: list<f64>) -> result<f64, str> effect alloc {
+    val n = list_len(xs)
+    if n < 2 {
+        return err("need at least two samples")
+    };
+    // `?` propagates the err from mean_of without an explicit match.
+    val mu = mean_of(xs)?
+    var acc = 0.0
+    for i in 0 .. n {
+        val d = list_get(xs, i) - mu
+        acc = acc + d * d
+    }
+    ok(sqrt(acc / ((n - 1) to f64)))
+}
+
+// ── Outlier rejection ───────────────────────────────────────────────────────
+// Drop samples more than `k` standard deviations from the mean. Both stats are
+// propagated with `?`, so a short or empty input short-circuits to an err and
+// this function never divides by zero.
+pub def reject_outliers(xs: list<f64>, k: f64) -> result<list<f64>, str> effect alloc {
+    val mu = mean_of(xs)?
+    val sd = stddev_of(xs)?
+    val keep: list<f64> = list()
+    val n = list_len(xs)
+    for i in 0 .. n {
+        val v = list_get(xs, i)
+        val dev = abs(v - mu)
+        val _ = if dev <= k * sd { push(keep, v); 0 } else { 0 }
+    }
+    ok(keep)
+}
+
+// ── Closures and higher-order operations ────────────────────────────────────
+/// Apply a caller-supplied calibration to every sample.
+///
+/// The calibration is a closure, so a site can supply its own correction curve
+/// without this module knowing anything about it.
+pub def calibrate(xs: list<f64>, f: |f64| -> f64) -> list<f64> effect alloc {
+    val out: list<f64> = list()
+    val n = list_len(xs)
+    for i in 0 .. n {
+        push(out, f(list_get(xs, i)));
+    }
+    out
+}
+
+/// Extract the valid readings from a batch of samples for one device.
+pub def valid_values(samples: list<Sample>, device_id: str) -> list<f64> effect alloc {
+    val out: list<f64> = list()
+    val n = list_len(samples)
+    for i in 0 .. n {
+        val s = list_get(samples, i)
+        val _ = if s.valid {
+            if s.device_id == device_id { push(out, s.value); 0 } else { 0 }
+        } else { 0 }
+        val _unused = 0
+    }
+    out
+}
+
+// ── option: a lookup that may legitimately find nothing ─────────────────────
+pub def find_device(devices: list<Device>, id: str) -> option<Device> effect alloc {
+    val n = list_len(devices)
+    var found: option<Device> = none()
+    for i in 0 .. n {
+        val d = list_get(devices, i)
+        found = if d.id == id { some(d) } else { found }
+    }
+    found
+}
+
+// ── Pattern matching with guards and ranges ─────────────────────────────────
+/// Classify a signal-quality percentage into a health state.
+///
+/// Range patterns make the bands explicit and total; a missing band is a
+/// compile-time gap rather than a silently-wrong branch.
+pub def quality_to_health(pct: i64) -> Health {
+    when pct {
+        0 ..= 24  => Health.Offline
+        25 ..= 59 => Health.Failing
+        60 ..= 84 => Health.Degraded
+        _         => Health.Nominal
+    }
+}
+
+/// Fuse a device's samples into a single confidence score in 0..1.
+///
+/// Returns an err when there is nothing to fuse, so "no data" and "bad data"
+/// stay distinguishable at the call site.
+pub def fuse_score(xs: list<f64>, expected: f64, tolerance: f64) -> result<f64, str> effect alloc {
+    val cleaned = reject_outliers(xs, 2.0)?
+    val mu = mean_of(cleaned)?
+    val drift = abs(mu - expected)
+    val score = if drift >= tolerance { 0.0 } else { 1.0 - drift / tolerance }
+    ok(score)
+}

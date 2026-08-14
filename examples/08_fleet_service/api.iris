@@ -1,0 +1,137 @@
+// api.iris — the HTTP surface of the fleet service.
+//
+// Part of examples/08_fleet_service.
+//
+// Showcases: JSON construction, HTTP response builders and status codes, a
+// routing table, and request dispatch — the parts that make this a service
+// rather than a library.
+//
+// The handlers are pure functions from a request to a response string. That is
+// deliberate: it means every route below is testable without opening a socket,
+// which is why this file has assertions at all.
+
+bring "types.iris"
+bring "health.iris"
+bring std.http_server
+bring std.fmt
+
+// ── Route tags ──────────────────────────────────────────────────────────────
+pub const ROUTE_HEALTH: str = "health"
+pub const ROUTE_DEVICES: str = "devices"
+pub const ROUTE_VERDICT: str = "verdict"
+pub const ROUTE_METRICS: str = "metrics"
+
+/// The service's routing table.
+pub def build_router() -> list<str> effect alloc {
+    var r = router_new()
+    r = router_add(r, "GET", "/health", ROUTE_HEALTH)
+    r = router_add(r, "GET", "/devices", ROUTE_DEVICES)
+    r = router_add(r, "GET", "/verdict", ROUTE_VERDICT)
+    r = router_add(r, "GET", "/metrics", ROUTE_METRICS)
+    r
+}
+
+// ── JSON encoding ───────────────────────────────────────────────────────────
+// Hand-built rather than reflected: IRIS has no derive mechanism, so the
+// encoding is explicit. That is more typing and one less thing to be surprised
+// by in production.
+
+pub def json_str_field(key: str, value: str) -> str effect io, alloc {
+    "\"" + key + "\":\"" + value + "\""
+}
+
+pub def json_num_field(key: str, value: i64) -> str effect io, alloc {
+    "\"" + key + "\":" + to_str(value)
+}
+
+pub def json_f64_field(key: str, value: f64) -> str effect io, alloc {
+    "\"" + key + "\":" + to_str(value)
+}
+
+pub def verdict_to_json(v: Verdict) -> str effect io, alloc {
+    "{" + json_str_field("device", v.device_id)
+        + "," + json_str_field("health", health_name(v.health))
+        + "," + json_f64_field("score", v.score)
+        + "," + json_num_field("samples", v.samples)
+        + "}"
+}
+
+pub def device_to_json(d: Device) -> str effect io, alloc {
+    "{" + json_str_field("id", d.id)
+        + "," + json_str_field("class", class_name(d.kind))
+        + "," + json_str_field("site", d.site)
+        + "}"
+}
+
+/// Encode a list of verdicts as a JSON array.
+pub def verdicts_to_json(vs: list<Verdict>) -> str effect io, alloc {
+    val n = list_len(vs)
+    var body = "["
+    for i in 0 .. n {
+        val sep = if i == 0 { "" } else { "," }
+        body = body + sep + verdict_to_json(list_get(vs, i))
+    }
+    body + "]"
+}
+
+pub def devices_to_json(ds: list<Device>) -> str effect io, alloc {
+    val n = list_len(ds)
+    var body = "["
+    for i in 0 .. n {
+        val sep = if i == 0 { "" } else { "," }
+        body = body + sep + device_to_json(list_get(ds, i))
+    }
+    body + "]"
+}
+
+// ── Handlers ────────────────────────────────────────────────────────────────
+// Each returns a complete HTTP response. Status selection is part of the
+// policy, not an afterthought: a degraded fleet still answers 200 because the
+// service is healthy; only a service fault is a 5xx.
+
+pub def handle_health(vs: list<Verdict>) -> str effect io, alloc {
+    val overall = fleet_health(vs)
+    val failing = count_at_or_worse(vs, Health.Failing)
+    val body = "{" + json_str_field("fleet", health_name(overall))
+        + "," + json_num_field("devices", list_len(vs))
+        + "," + json_num_field("failing", failing)
+        + "}"
+    json_ok(body)
+}
+
+pub def handle_devices(ds: list<Device>) -> str effect io, alloc {
+    json_ok(devices_to_json(ds))
+}
+
+pub def handle_verdict(vs: list<Verdict>) -> str effect io, alloc {
+    json_ok(verdicts_to_json(vs))
+}
+
+/// Prometheus-style plain-text metrics.
+pub def handle_metrics(vs: list<Verdict>) -> str effect io, alloc {
+    val n = list_len(vs)
+    var text = "fleet_devices " + to_str(n) + "\n"
+    text = text + "fleet_failing " + to_str(count_at_or_worse(vs, Health.Failing)) + "\n"
+    text = text + "fleet_offline " + to_str(count_at_or_worse(vs, Health.Offline)) + "\n"
+    text_ok(text)
+}
+
+/// Dispatch one request.
+///
+/// An unknown path is a 400 rather than a 404 only because `bad_request` is
+/// what std.http_server provides; the distinction is worth having and is noted
+/// as a gap rather than papered over.
+pub def dispatch(
+    router: list<str>,
+    method: str,
+    path: str,
+    ds: list<Device>,
+    vs: list<Verdict>,
+) -> str effect io, alloc {
+    val tag = router_match(router, method, path)
+    if tag == ROUTE_HEALTH { return handle_health(vs) };
+    if tag == ROUTE_DEVICES { return handle_devices(ds) };
+    if tag == ROUTE_VERDICT { return handle_verdict(vs) };
+    if tag == ROUTE_METRICS { return handle_metrics(vs) };
+    bad_request("no route for " + method + " " + path)
+}

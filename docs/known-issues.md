@@ -116,6 +116,292 @@ qualification.
 
 ---
 
+## 6. Record with an enum field, returned from a function — **FIXED**
+
+> **Fixed** in `src/codegen/llvm_ir.rs`, `MakeStruct` field stores. The store now
+> takes the value's *emitted* type as authoritative and coerces to the slot type
+> (`inttoptr` / `ptrtoint`) when they disagree. Verified: store, read-back and
+> `when` dispatch on the field all work natively, including alongside `str`
+> fields and inside a `list`. `examples/08_fleet_service` builds natively as a
+> result. The original report follows.
+
+A record containing a `choice`-typed field produces invalid LLVM IR when it is
+returned from a function. The enum tag is an `i64` but the struct slot is
+emitted as `ptr`.
+
+```iris
+choice K { A, B }
+record R { k: K, n: i64 }
+def mk() -> R { R { k: K.A, n: 1 } }      // <- the trigger
+def main() -> i64 { val r = mk(); assert(r.n == 1); 0 }
+```
+
+```
+module.ll:357:13: error: '%v0' defined with type 'i64' but expected 'ptr'
+  store ptr %v0, ptr %sgep2_0, align 8
+```
+
+Constructing the same record **inline** is fine — only the function-return path
+fails, which is why this hides easily:
+
+```iris
+def main() -> i64 { val r = R { k: K.B }; 0 }   // compiles and runs
+```
+
+**Severity is higher than it looks.** Modelling a domain with `choice` and
+storing it in a record is the ordinary way to make illegal states
+unrepresentable, so this blocks idiomatic domain modelling in any natively-built
+program. `examples/08_fleet_service` hits it and currently runs under the
+interpreter only.
+
+Same family as issue 2 — a record-field type mismatch in codegen.
+
+**Status:** open.
+
+---
+
+## 7. Record field typed by a *brought* module's record — **open, lowering**
+
+A record whose field type comes from another module is mangled as though the
+record were generic over that field.
+
+```iris
+bring std.ais
+record Holder { s: RunningStats, n: i64 }
+def make() -> Holder { Holder { s: running_stats_new(), n: 0 } }
+```
+
+```
+type error in function 'make' —
+  type mismatch: %Holder__ais__RunningStats vs %Holder -- Return value %2
+```
+
+This blocks composing your own types over stdlib types, which is what building
+anything real requires. Workaround: inline the fields you need as scalars.
+
+**Status:** open.
+
+---
+
+## 8. `==` on two enum values is unsupported — **open, runtime**
+
+```iris
+choice Health { Nominal, Degraded }
+assert(Health.Nominal == Health.Nominal);
+```
+
+```
+error[E0404]: [runtime error] type error —
+  unsupported binop CmpEq on Enum(3, []) and Enum(3, [])
+```
+
+Comparison must go through `when`. The idiomatic workaround is to define
+equality on a rank function:
+
+```iris
+def health_rank(h: Health) -> i64 { when h { Health.Nominal => 0, Health.Degraded => 1 } }
+def health_eq(a: Health, b: Health) -> bool { health_rank(a) == health_rank(b) }
+```
+
+**Status:** open. Note the error arrives at *runtime*, not compile time, so an
+untested branch ships broken.
+
+---
+
+## 9. `pub bring` does not re-export types — **open, module system**
+
+`pub bring "types.iris"` re-exports public *functions* but not `record` or
+`choice` declarations, so a downstream file cannot name them and fails with
+`cannot find 'Health'`. Every file that names a type must bring its defining
+module directly. Brings are de-duplicated, so this is safe, just verbose.
+
+**Status:** open.
+
+---
+
+## 10. Effect clauses and traits — **open, two defects**
+
+**10a. The parser rejects an `effect` clause on a trait method declaration.**
+
+```iris
+trait Summarise {
+    def summarise(self: Self) -> str effect io, alloc   // syntax error
+}
+```
+
+So a trait cannot state the effect bound its implementations must respect —
+which is precisely where such a bound is most useful.
+
+**10b. A cross-module trait impl is treated as `pure`.** An impl reached through
+a `bring` is mangled to `types__Summarise__types__Device__summarise`, and the
+effect checker's caller-row lookup misses that name, so every effectful call
+inside reports a spurious `E0302`:
+
+```
+error[E0302]: function `to_str` requires effects `alloc, io`
+  but caller `types__Summarise__types__Verdict__summarise` has effects `pure`
+```
+
+Writing `effect io, alloc` on the impl is accepted by the parser but does **not**
+silence it — evidence that the declared row never reaches the inferred map.
+Harmless today (stderr only, exit 0) but it becomes a false build failure under
+`--strict-effects`.
+
+**Status:** open.
+
+---
+
+## 11. `test_autodiff_determinism_profiling` is flaky — **test defect, not a compiler defect**
+
+The test asserts that the standard deviation of 1,000 timed autodiff runs is
+under 100 µs (`tests/autodiff_determinism.rs:192`). On a 2-core laptop under
+normal scheduling it swings wildly:
+
+```
+run 1: ok
+run 2: FAILED — Standard deviation is too high: 354.7619 microseconds
+run 3: FAILED
+```
+
+Three consecutive runs of the *same binary*, no code change between them.
+
+**Why it matters beyond the noise:** it makes the suite total non-reproducible,
+so a run of 34 failures versus 35 cannot be read as an improvement without
+diffing the failure *names*. It briefly looked as though an unrelated change had
+fixed an autodiff test.
+
+Wall-clock variance on a scheduled OS is not a property of the compiler. The
+assertion should either be removed, moved behind an explicit benchmark feature,
+or rewritten to measure instruction counts rather than elapsed time.
+
+**Status:** open.
+
+---
+
+## 12. `atomic_add` inside a `par for` segfaults natively — **FIXED**
+
+> **Fixed** in `src/codegen/llvm_ir.rs`, three sites. Root cause: `IrInstr::ParFor`
+> carries the lambda-lifted body's captures in `args`, and codegen destructured it
+> with `..` — the captures were never passed. The lowerer emits
+> `__par_body_N(loop_var, cap0, cap1, …)` while the runtime can only call
+> `fn(int64_t i, void* env)`, so every capture parameter read an uninitialised
+> register.
+>
+> The fix packs the captures into a closure environment with the same
+> `iris_make_closure` helper closures already use, passes it as the runtime's
+> long-present 4th argument (`void* arg` — the C side always had it; codegen
+> simply never supplied it), gives `__par_body_*` the matching
+> `(i64 %var, ptr %env)` signature, and unpacks them in the entry block.
+>
+> A second defect surfaced during the fix: the capture-extraction fallback
+> returned the *boxed* `IrisVal` unchanged, so `iris_atomic_add` received the
+> wrapper rather than the atomic. It now routes through
+> `runtime_unbox_helper_for_type`, which already covered every heap kind.
+>
+> Verified natively: single capture, multiple captures of mixed kinds, and
+> correct values (16 iterations × step 3 = 48), matching the interpreter.
+> `examples/08_fleet_service` uses the parallel-counter idiom directly.
+>
+> The original report follows.
+
+Each construct works on its own; only the combination crashes.
+
+```iris
+def main() -> i64 {
+    var t = atomic(0)
+    par for i in 0..4 { atomic_add(t, 1); }
+    assert(atomic_load(t) == 4);
+    0
+}
+```
+
+```
+JIT/Native execution failed (falling back to interpreter):
+  runtime error (exit exit code: 0xc0000005)
+```
+
+`0xc0000005` is an access violation. Isolated by bisection:
+
+| Program | Native |
+|---|---|
+| `atomic_add` outside any loop | works |
+| `par for` with no atomic in the body | works |
+| `atomic_add` **inside** `par for` | **segfault** |
+
+The interpreter computes the right answer in all three, so `--emit eval` masks
+it via the fallback — the failure is only visible in the warning line, or in a
+`iris build` binary.
+
+Likely the atomic handle is not being captured correctly into the parallel
+body's closure environment. This is the same shape as the counter idiom in most
+parallel code, so it is worth fixing before `par for` is presented as usable.
+
+**Status:** open. `examples/08_fleet_service/main.iris` works around it by
+exercising `par for` and atomics separately.
+
+---
+
+## 13. `pub` is not enforced across module boundaries — **open, needs design**
+
+A non-`pub` function in a brought module is callable from the importing module.
+
+```iris
+// utils.iris
+def secret(x: i64) -> i64 { x + 100 }   // no `pub`
+
+// main.iris
+bring "utils.iris"
+def f() -> i64 { secret(0) }            // compiles; should not
+```
+
+`tests/module_system_..._visibility_...rs::test_bring_file_private_not_visible`
+expects an error and does not get one.
+
+**Why this is not a small fix.** Brought modules are merged into a *single flat
+AST* — `merge_dep` in `src/compiler.rs` and the equivalent in
+`compile_multi_to_ast`, whose comment says "Merge all functions (including
+internal ones)". Simply dropping non-`pub` items would also break the defining
+module's own internal calls, since after the merge there is no module boundary
+left to distinguish them.
+
+Doing it properly needs per-item module provenance plus a visibility check at
+each call site (or module-qualified renaming of private items with rewriting of
+only the defining module's references). `is_pub` is already parsed and stored on
+every AST item, so the information exists; the enforcement does not.
+
+**Status:** open. Treat `pub` as documentation of intent, not an access control.
+
+---
+
+## 14. A type parameter used only in the return type needs an annotation — **by design**
+
+```iris
+val s = set_new()              // error: cannot infer type parameter `T`
+val s: Set<str> = set_new()    // fine
+```
+
+IRIS runs type inference *after* lowering, so a generic call is monomorphised
+before anything downstream could constrain it. A parameter that no argument
+mentions therefore has to come from the binding annotation.
+
+As of this session the monomorphiser does consult that annotation (it unifies
+the declared return type against the expected type), and an unconstrained
+parameter is reported as:
+
+```
+cannot infer type parameter `T` for `set_new` — no argument mentions it,
+so annotate the binding (e.g. `val x: Set<...> = set_new(...)`)
+```
+
+Previously it produced the struct name `%set__Set__set__Set__T`, which is
+defined nowhere, and surfaced much later as an opaque pass failure.
+
+This mirrors Rust's "type annotations needed" for `let s = HashSet::new();`.
+The difference is that Rust can recover the parameter from *later* use and IRIS
+cannot, so the annotation is required rather than merely usual.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:

@@ -1,0 +1,203 @@
+// main.iris — the fleet telemetry service, wired end to end.
+//
+// examples/08_fleet_service — a five-module IRIS system:
+//
+//   types.iris   domain model: choices, records, traits, generics
+//   fusion.iris  option/result, `?` propagation, closures, range patterns
+//   health.iris  incremental statistics, an adaptive threshold, a constitution
+//   api.iris     JSON, HTTP responses, a routing table, dispatch
+//   main.iris    ingestion, concurrency, and the end-to-end assertions
+//
+// Run:  iris run examples/08_fleet_service/main.iris
+//
+// Every claim this file makes about the system is an `assert`. A run that
+// prints the summary line has verified all of them; there is no path where it
+// reports success having computed the wrong answer.
+
+bring "types.iris"
+bring "fusion.iris"
+bring "health.iris"
+bring "api.iris"
+
+// ── Fleet construction ──────────────────────────────────────────────────────
+def build_fleet() -> list<Device> effect alloc {
+    val ds: list<Device> = list()
+    push(ds, Device { id: "cam-01", kind: DeviceClass.Camera, site: "dock-a" });
+    push(ds, Device { id: "lid-02", kind: DeviceClass.Lidar, site: "dock-a" });
+    push(ds, Device { id: "imu-03", kind: DeviceClass.Imu, site: "dock-b" });
+    push(ds, Device { id: "thm-04", kind: DeviceClass.Thermal, site: "dock-b" });
+    ds
+}
+
+/// A synthetic sample stream: mostly steady, with a drifting device.
+def build_samples(device_id: str, base: f64, drift: f64, n: i64) -> list<Sample> effect alloc {
+    val out: list<Sample> = list()
+    for i in 0 .. n {
+        val v = base + drift * (i to f64)
+        push(out, Sample { device_id: device_id, value: v, t_ms: i * 10, valid: true });
+    }
+    out
+}
+
+// ── Ingestion over a channel ────────────────────────────────────────────────
+/// Feed readings through a channel, the way a real collector would.
+///
+/// `spawn` runs the producer; `recv` drains it. The point is that the fusion
+/// and health layers never learn where their data came from.
+def ingest_via_channel(values: list<f64>) -> f64 effect alloc {
+    val ch = channel()
+    val n = list_len(values)
+    spawn {
+        var i = 0
+        while i < n {
+            send(ch, (list_get(values, i) * 1000.0) to i64);
+            i = i + 1
+        }
+    }
+    var total = 0.0
+    var got = 0
+    while got < n {
+        val raw = recv(ch)
+        total = total + (raw to f64) / 1000.0
+        got = got + 1
+    }
+    total
+}
+
+// ── The pipeline ────────────────────────────────────────────────────────────
+/// Assess one device end to end: samples -> fusion -> adaptive -> verdict.
+def assess_device(d: Device, samples: list<Sample>, age_ms: i64) -> Verdict effect alloc {
+    val values = valid_values(samples, d.id)
+
+    var a = assessor_new(d.id)
+    val n = list_len(values)
+    for i in 0 .. n {
+        a = assess_observe(a, list_get(values, i))
+    }
+    a = assess_adapt(a)
+
+    // A device with too few readings to fuse is reported Offline rather than
+    // defaulted to healthy — "no data" must never read as "fine".
+    val scored = fuse_score(values, a.mean, 1.0)
+    val score = when scored {
+        ok(s)  => s
+        err(_) => 0.0
+    }
+    val v = verdict_for(d, a, score, age_ms)
+    if n < 2 {
+        Verdict { device_id: d.id, health: Health.Offline, score: 0.0, samples: n }
+    } else {
+        v
+    }
+}
+
+def main() -> i64 {
+    println("── fleet telemetry service ─────────────────────────────");
+
+    // 1. Domain model -----------------------------------------------------
+    val fleet = build_fleet()
+    assert(list_len(fleet) == 4);
+    assert(list_get(fleet, 0).summarise() == "cam-01@dock-a [camera]");
+    assert(class_period_ms(DeviceClass.Imu) == 5);
+
+    // 2. Fusion: results and `?` ------------------------------------------
+    val steady: list<f64> = list()
+    push(steady, 10.0); push(steady, 10.1); push(steady, 9.9); push(steady, 10.05);
+    assert(is_ok(mean_of(steady)));
+    val empty: list<f64> = list()
+    assert(is_err(mean_of(empty)));
+    assert(is_err(stddev_of(empty)));
+
+    // A closure supplied by the caller, applied across the stream.
+    val doubled = calibrate(steady, |v: f64| v * 2.0)
+    assert(list_get(doubled, 0) > 19.99);
+    assert(list_len(doubled) == list_len(steady));
+
+    // option: a lookup that may legitimately find nothing.
+    assert(is_some(find_device(fleet, "imu-03")));
+    assert(is_none(find_device(fleet, "nope-99")));
+
+    // 3. Concurrency: ingestion over a channel ----------------------------
+    val piped = ingest_via_channel(steady)
+    assert(piped > 40.0);
+    assert(piped < 40.1);
+
+    // A parallel loop accumulating into a captured atomic — the standard
+    // parallel-counter idiom, and the one that used to segfault natively
+    // because captures never reached the loop body (known-issues issue 12).
+    var touched = atomic(0)
+    par for i in 0..4 {
+        atomic_add(touched, 1);
+    }
+    assert(atomic_load(touched) == 4);
+
+    // 4. Adaptive health --------------------------------------------------
+    val cam = list_get(fleet, 0)
+    val cam_samples = build_samples("cam-01", 10.0, 0.0, 30)
+    val cam_verdict = assess_device(cam, cam_samples, 20)
+    assert(health_eq(cam_verdict.health, Health.Nominal));
+    assert(cam_verdict.samples == 30);
+
+    // A device that has not reported in a long time is never Nominal, no
+    // matter how clean its signal was. This is the constitution constraint
+    // expressed structurally, and it is the assertion most worth having.
+    val stale_verdict = assess_device(cam, cam_samples, 5000)
+    assert(health_eq(stale_verdict.health, Health.Offline));
+    assert(stale_verdict.score > 0.9);
+
+    // A device with almost no data is Offline, not healthy-by-default.
+    val quiet = build_samples("lid-02", 3.0, 0.0, 1)
+    val quiet_verdict = assess_device(list_get(fleet, 1), quiet, 10)
+    assert(health_eq(quiet_verdict.health, Health.Offline));
+
+    // 5. The adaptive threshold moves, within bounds ----------------------
+    var noisy = assessor_new("imu-03")
+    var k = 0
+    while k < 40 {
+        val spike = if k % 4 == 0 { 50.0 } else { 10.0 }
+        noisy = assess_observe(noisy, spike)
+        k = k + 1
+    }
+    val adapted = assess_adapt(noisy)
+    assert(adapted.drift_limit >= 1.5);
+    assert(adapted.drift_limit <= 5.0);
+    assert(adapted.observations == 40);
+
+    // 6. The HTTP service -------------------------------------------------
+    val router = build_router()
+    val verdicts: list<Verdict> = list()
+    push(verdicts, cam_verdict);
+    push(verdicts, stale_verdict);
+    push(verdicts, quiet_verdict);
+
+    val health_resp = dispatch(router, "GET", "/health", fleet, verdicts)
+    assert(starts_with(health_resp, "HTTP/1.1 200"));
+    assert(contains(health_resp, "\"fleet\":\"offline\""));
+    assert(contains(health_resp, "\"devices\":3"));
+
+    val devices_resp = dispatch(router, "GET", "/devices", fleet, verdicts)
+    assert(contains(devices_resp, "\"id\":\"thm-04\""));
+    assert(contains(devices_resp, "\"class\":\"lidar\""));
+
+    val verdict_resp = dispatch(router, "GET", "/verdict", fleet, verdicts)
+    assert(contains(verdict_resp, "\"device\":\"cam-01\""));
+
+    val metrics_resp = dispatch(router, "GET", "/metrics", fleet, verdicts)
+    assert(contains(metrics_resp, "fleet_devices 3"));
+    assert(contains(metrics_resp, "fleet_offline 2"));
+
+    val unknown = dispatch(router, "GET", "/does-not-exist", fleet, verdicts)
+    assert(starts_with(unknown, "HTTP/1.1 400"));
+
+    // 7. Safety constitution ----------------------------------------------
+    val c = fleet_constitution()
+    assert(constitution_check(c, "never_report_stale_device_as_nominal"));
+    assert(constitution_check(c, "never_suppress_a_failing_verdict"));
+
+    println("fleet: " + health_name(fleet_health(verdicts)));
+    println("devices: " + to_str(list_len(fleet)) + ", verdicts: " + to_str(list_len(verdicts)));
+    println("failing or worse: " + to_str(count_at_or_worse(verdicts, Health.Failing)));
+    println("");
+    println("all assertions passed across 5 modules");
+    0
+}

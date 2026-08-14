@@ -1,0 +1,213 @@
+// intrusion_posture_policy.iris
+//
+// The digital counterpart to threat_response_policy.iris: a written-once
+// policy that lets a running system change its own defensive posture as it
+// is being attacked, without a human in the loop.
+//
+// Scope note, because it decides the whole design: this policy escalates
+// DEFENCE, not counter-attack. Automated retaliation against a remote host is
+// unlawful in most jurisdictions, and it is also unsound engineering --
+// attribution is spoofable, so an attacker who forges a source address can
+// aim your response at an innocent third party. Everything below is action
+// taken on assets the operator owns: isolate, revoke, degrade, quarantine,
+// re-key, and raise evidence retention. That is both the legal version and
+// the version that actually survives contact with a real intrusion.
+//
+// The hard decision this policy exists to get right is the same shape as the
+// hostage case in the physical policy: the maximally "secure" response is
+// sometimes the harmful one. Cutting a compromised subsystem off the network
+// is correct -- unless that subsystem is holding a door lock closed or
+// running a pump, in which case isolation is how the incident kills someone.
+
+bring std.ais
+
+// ── Defensive postures, ordinal ─────────────────────────────────────────────
+const POS_NORMAL: i64 = 0
+const POS_HEIGHTENED: i64 = 1
+const POS_RESTRICTED: i64 = 2
+const POS_QUARANTINE: i64 = 3
+const POS_ISOLATED: i64 = 4
+
+// A safe-mode degrade: keeps the physical function running on local control
+// while cutting everything else. Not ordinal -- it is the answer to a
+// different question, which is why a severity ranking cannot produce it.
+const POS_SAFE_DEGRADE: i64 = 5
+
+// ── Telemetry from the host ─────────────────────────────────────────────────
+record Telemetry {
+    failed_auth_rate: f64,      // per minute, normalised 0..1
+    egress_anomaly: f64,        // 0..1, deviation from learned baseline
+    integrity_failures: i64,    // binaries/config that no longer match
+    privesc_attempts: i64,
+    lateral_connections: i64,   // internal hosts contacted, unusual
+}
+
+// ── What the subsystem is responsible for ───────────────────────────────────
+record AssetProfile {
+    life_safety: bool,   // holds a lock, drives a pump, gates an airway
+    has_local_fallback: bool,
+    name: str,
+}
+
+record PostureState {
+    posture: i64,
+    escalations: i64,
+    baseline_egress: f64,
+}
+
+pub def posture_new() -> PostureState {
+    PostureState { posture: POS_NORMAL, escalations: 0, baseline_egress: 0.05 }
+}
+
+pub def build_cyber_constitution() -> Constitution {
+    var c = constitution_new(3)
+    c = constitution_add(c, "never_isolate_life_safety_asset", 3)
+    c = constitution_add(c, "preserve_evidence_before_remediation", 2)
+    c = constitution_add(c, "no_automated_counterstrike", 3)
+    c
+}
+
+// ── Compromise scoring ──────────────────────────────────────────────────────
+// Integrity failures are weighted hardest: a changed binary is near-proof,
+// where a failed-auth spike is routinely just a broken cron job.
+pub def compromise_score(t: Telemetry) -> f64 {
+    val integrity_w = (t.integrity_failures to f64) * 0.30
+    val privesc_w = (t.privesc_attempts to f64) * 0.12
+    val lateral_w = (t.lateral_connections to f64) * 0.08
+    val raw = t.failed_auth_rate * 0.15
+            + t.egress_anomaly * 0.35
+            + integrity_w + privesc_w + lateral_w
+    if raw > 1.0 { 1.0 } else { raw }
+}
+
+// ── The decision ────────────────────────────────────────────────────────────
+pub def choose_posture(st: PostureState, t: Telemetry, a: AssetProfile) -> i64 {
+    val score = compromise_score(t)
+
+    // The severity-ranked answer, computed first.
+    val naive = if score >= 0.85 {
+        POS_ISOLATED
+    } else {
+        if score >= 0.60 {
+            POS_QUARANTINE
+        } else {
+            if score >= 0.35 { POS_RESTRICTED } else {
+                if score >= 0.15 { POS_HEIGHTENED } else { POS_NORMAL }
+            }
+        }
+    }
+
+    // Constitution override. Isolating an asset that is physically holding
+    // something shut is how a network incident becomes a casualty. If it can
+    // run standalone, degrade it to local control instead; if it cannot,
+    // we may go no further than quarantine and must escalate to a human.
+    if a.life_safety {
+        if naive >= POS_ISOLATED {
+            if a.has_local_fallback { POS_SAFE_DEGRADE } else { POS_QUARANTINE }
+        } else {
+            naive
+        }
+    } else {
+        naive
+    }
+}
+
+// ── Adaptation ──────────────────────────────────────────────────────────────
+// Egress baseline drifts with real traffic, so a policy pinned to a launch-day
+// constant produces alert fatigue within a month. This walks the baseline.
+pub def observe_egress(st: PostureState, observed: f64) -> PostureState {
+    val alpha = 0.10
+    val updated = st.baseline_egress * (1.0 - alpha) + observed * alpha
+    PostureState {
+        posture: st.posture,
+        escalations: st.escalations,
+        baseline_egress: updated,
+    }
+}
+
+pub def apply(st: PostureState, new_posture: i64) -> PostureState {
+    val esc = if new_posture > st.posture { st.escalations + 1 } else { st.escalations }
+    PostureState {
+        posture: new_posture,
+        escalations: esc,
+        baseline_egress: st.baseline_egress,
+    }
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────────
+
+def tel(auth: f64, egress: f64, integ: i64, privesc: i64, lateral: i64) -> Telemetry {
+    Telemetry {
+        failed_auth_rate: auth,
+        egress_anomaly: egress,
+        integrity_failures: integ,
+        privesc_attempts: privesc,
+        lateral_connections: lateral,
+    }
+}
+
+def main() -> i64 {
+    val st = posture_new()
+    val c = build_cyber_constitution()
+
+    // An ordinary web node: no physical responsibility.
+    val web = AssetProfile { life_safety: false, has_local_fallback: true, name: "web-01" }
+    // A door controller: isolating it strands people behind locks.
+    val door = AssetProfile { life_safety: true, has_local_fallback: true, name: "door-ctrl" }
+    // A pump with no standalone mode: cannot be isolated OR degraded safely.
+    val pump = AssetProfile { life_safety: true, has_local_fallback: false, name: "pump-02" }
+
+    assert(constitution_check(c, "never_isolate_life_safety_asset"));
+    assert(constitution_check(c, "no_automated_counterstrike"));
+
+    // 1. Quiet system -> normal posture.
+    val quiet = tel(0.02, 0.03, 0, 0, 0)
+    assert(choose_posture(st, quiet, web) == POS_NORMAL);
+
+    // 2. Auth spike alone is weak evidence -> heighten, do not restrict.
+    val noisy_auth = tel(0.90, 0.05, 0, 0, 0)
+    assert(choose_posture(st, noisy_auth, web) == POS_HEIGHTENED);
+
+    // 3. Exfiltration pattern -> restrict.
+    val exfil = tel(0.10, 0.80, 0, 0, 1)
+    assert(choose_posture(st, exfil, web) == POS_RESTRICTED);
+
+    // 4. Confirmed compromise: changed binaries + privesc + lateral movement.
+    val owned = tel(0.60, 0.85, 2, 3, 5)
+    assert(compromise_score(owned) > 0.85);
+    assert(choose_posture(st, owned, web) == POS_ISOLATED);
+
+    // 5. THE CASE THAT MATTERS.
+    //    Identical evidence, but the asset holds a door. Isolation would
+    //    strand people; the policy degrades to local control instead.
+    assert(choose_posture(st, owned, door) == POS_SAFE_DEGRADE);
+    assert(choose_posture(st, owned, door) != POS_ISOLATED);
+
+    // 6. Same evidence again, on an asset with no standalone mode. It may not
+    //    be isolated and it may not be degraded -- so it is held at quarantine
+    //    and a human has to decide. The policy refuses to guess.
+    assert(choose_posture(st, owned, pump) == POS_QUARANTINE);
+    assert(choose_posture(st, owned, pump) != POS_ISOLATED);
+
+    // 7. Below the isolation line, life-safety assets follow the normal ladder.
+    assert(choose_posture(st, exfil, door) == POS_RESTRICTED);
+
+    // 8. Escalation is counted, so repeated flapping is visible to operators.
+    var s2 = st
+    s2 = apply(s2, choose_posture(s2, exfil, web))
+    s2 = apply(s2, choose_posture(s2, owned, web))
+    assert(s2.posture == POS_ISOLATED);
+    assert(s2.escalations == 2);
+
+    // 9. The egress baseline adapts toward observed traffic rather than
+    //    sitting on a launch-day constant.
+    var s3 = posture_new()
+    s3 = observe_egress(s3, 0.55)
+    s3 = observe_egress(s3, 0.55)
+    s3 = observe_egress(s3, 0.55)
+    assert(s3.baseline_egress > 0.05);
+    assert(s3.baseline_egress < 0.55);
+
+    println("intrusion_posture_policy: all assertions passed");
+    0
+}

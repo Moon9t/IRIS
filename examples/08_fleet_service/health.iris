@@ -1,0 +1,189 @@
+// health.iris — the adaptive layer: deciding whether a device is trustworthy.
+//
+// Part of examples/08_fleet_service.
+//
+// Showcases: std.ais running statistics, an online threshold that adapts to
+// observed behaviour, a safety constitution whose constraints the adaptive
+// layer cannot erode, and folding per-signal assessments into one verdict.
+
+bring "types.iris"
+bring "fusion.iris"
+bring std.ais
+bring std.math
+
+// ── Adaptive assessment state ───────────────────────────────────────────────
+// Welford's running mean/variance, held as scalars.
+//
+// std.ais already provides `RunningStats` and `running_stats_update`, and this
+// would ideally just embed one. It cannot: a record with a field whose type
+// comes from a *brought* module is mangled as though the record were generic,
+// so `record Assessor { stats: RunningStats, ... }` fails to compile with
+//   type mismatch: %Assessor__ais__RunningStats vs %Assessor
+// Minimal reproduction, which is worth keeping:
+//   bring std.ais
+//   record Holder { s: RunningStats, n: i64 }
+//   def make() -> Holder { Holder { s: running_stats_new(), n: 0 } }
+// Inlining the three scalars sidesteps it and costs nothing here.
+pub record Assessor {
+    device_id: str,
+    mean: f64,
+    m2: f64,            // sum of squared deviations, for variance
+    drift_limit: f64,   // in standard deviations; adapts over time
+    strikes: i64,
+    observations: i64,
+}
+
+pub def assessor_new(device_id: str) -> Assessor {
+    Assessor {
+        device_id: device_id,
+        mean: 0.0,
+        m2: 0.0,
+        drift_limit: 2.5,
+        strikes: 0,
+        observations: 0,
+    }
+}
+
+/// Current standard deviation of everything observed so far.
+pub def assess_std(a: Assessor) -> f64 {
+    if a.observations < 2 { 0.0 } else {
+        sqrt(a.m2 / ((a.observations - 1) to f64))
+    }
+}
+
+/// Fold one reading into the assessor.
+///
+/// Statistics are maintained incrementally rather than over a buffer, which is
+/// what makes this viable for a device reporting every 5 ms for a week: the
+/// memory cost is constant regardless of stream length.
+pub def assess_observe(a: Assessor, value: f64) -> Assessor {
+    val n = a.observations + 1
+    val delta = value - a.mean
+    val new_mean = a.mean + delta / (n to f64)
+    val new_m2 = a.m2 + delta * (value - new_mean)
+
+    val sd = assess_std(a)
+    val dev = abs(value - a.mean)
+    // A strike is only meaningful once there is a distribution to compare to.
+    val strike_now = if a.observations >= 5 {
+        if sd > 0.0 {
+            if dev > a.drift_limit * sd { 1 } else { 0 }
+        } else { 0 }
+    } else { 0 }
+
+    Assessor {
+        device_id: a.device_id,
+        mean: new_mean,
+        m2: new_m2,
+        drift_limit: a.drift_limit,
+        strikes: a.strikes + strike_now,
+        observations: n,
+    }
+}
+
+/// Widen or tighten the drift limit from the observed strike rate.
+///
+/// A device in a noisy bay should not generate a permanent alarm, and a device
+/// that has been quiet for a month should be held to a tighter bound. Written
+/// once; no per-site retuning visit.
+pub def assess_adapt(a: Assessor) -> Assessor {
+    if a.observations < 10 {
+        return a
+    };
+    val rate = (a.strikes to f64) / (a.observations to f64)
+    val adjusted = if rate > 0.25 {
+        a.drift_limit + 0.25          // too twitchy — widen
+    } else {
+        if rate < 0.02 {
+            a.drift_limit - 0.10      // very quiet — tighten
+        } else {
+            a.drift_limit
+        }
+    }
+    val clamped = if adjusted > 5.0 { 5.0 } else {
+        if adjusted < 1.5 { 1.5 } else { adjusted }
+    }
+    Assessor {
+        device_id: a.device_id,
+        mean: a.mean,
+        m2: a.m2,
+        drift_limit: clamped,
+        strikes: a.strikes,
+        observations: a.observations,
+    }
+}
+
+// ── The safety constitution ─────────────────────────────────────────────────
+// Constraints the adaptive layer above is not permitted to relax.
+pub def fleet_constitution() -> Constitution effect alloc {
+    var c = constitution_new(3)
+    c = constitution_add(c, "never_report_stale_device_as_nominal", 3)
+    c = constitution_add(c, "never_suppress_a_failing_verdict", 3)
+    c = constitution_add(c, "widen_thresholds_only_within_bounds", 2)
+    c
+}
+
+// ── Verdicts ────────────────────────────────────────────────────────────────
+/// Staleness relative to the device class's nominal period.
+///
+/// A camera silent for 2 s is dead; a thermal sensor silent for 2 s is fine.
+/// Comparing against the class period rather than a global timeout is the
+/// difference between a useful alarm and a wall of noise.
+pub def staleness_health(kind: DeviceClass, age_ms: i64) -> Health {
+    val period = class_period_ms(kind)
+    if age_ms > period * 20 { Health.Offline } else {
+        if age_ms > period * 8 { Health.Failing } else {
+            if age_ms > period * 3 { Health.Degraded } else { Health.Nominal }
+        }
+    }
+}
+
+/// Health implied by the fused confidence score.
+pub def score_health(score: f64) -> Health {
+    if score < 0.25 { Health.Failing } else {
+        if score < 0.60 { Health.Degraded } else { Health.Nominal }
+    }
+}
+
+/// The device's overall verdict.
+///
+/// Note the fold: the WORST of the two assessments wins. A device with a
+/// perfect signal that has not spoken in a minute is not nominal — that is the
+/// `never_report_stale_device_as_nominal` constraint, expressed structurally
+/// rather than as a rule that could be tuned away.
+pub def verdict_for(
+    d: Device,
+    a: Assessor,
+    score: f64,
+    age_ms: i64,
+) -> Verdict {
+    val by_score = score_health(score)
+    val by_age = staleness_health(d.kind, age_ms)
+    Verdict {
+        device_id: d.id,
+        health: health_worse(by_score, by_age),
+        score: score,
+        samples: a.observations,
+    }
+}
+
+/// Count devices at or worse than a given health rank.
+pub def count_at_or_worse(vs: list<Verdict>, floor: Health) -> i64 effect alloc {
+    val n = list_len(vs)
+    var c = 0
+    for i in 0 .. n {
+        val v = list_get(vs, i)
+        c = if health_rank(v.health) >= health_rank(floor) { c + 1 } else { c }
+    }
+    c
+}
+
+/// Fleet-wide health: the worst verdict present, or Nominal for an empty fleet.
+pub def fleet_health(vs: list<Verdict>) -> Health effect alloc {
+    val n = list_len(vs)
+    var worst = Health.Nominal
+    for i in 0 .. n {
+        worst = health_worse(worst, list_get(vs, i).health)
+    }
+    worst
+}

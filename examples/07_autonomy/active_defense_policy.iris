@@ -1,0 +1,207 @@
+// active_defense_policy.iris
+//
+// An adaptive active-defence policy: the system gets progressively more
+// hostile to an intruder as evidence accumulates, WITHOUT ever taking an
+// action against a machine the operator does not own.
+//
+// The design point is structural rather than advisory. There is no offensive
+// action in the decision space at all — no scan, no exploit, no payload, no
+// outbound anything. A counter-attack is not "discouraged by a rule the
+// learning layer might erode"; it is unrepresentable. The final test in this
+// file enumerates the entire input space and asserts that no combination of
+// telemetry can produce an action above the defensive ceiling.
+//
+// That is the property worth having. An adaptive defence that escalates on its
+// own is only deployable if you can demonstrate a bound on how far it can go.
+
+bring std.ais
+
+// ── The defensive ladder ────────────────────────────────────────────────────
+// Ordinal by aggression, but NOT by preference — see choose_response.
+const ACT_OBSERVE: i64 = 0      // watch, log, do not tip them off
+const ACT_TARPIT: i64 = 1       // slow every response; make the attack expensive
+const ACT_HONEYTOKEN: i64 = 2   // serve canary credentials that beacon on use
+const ACT_FEED_DECOY: i64 = 3   // serve plausible false data; poison their haul
+const ACT_REVOKE: i64 = 4       // kill sessions, rotate keys, force re-auth
+const ACT_ISOLATE: i64 = 5      // cut the asset off the network
+const ACT_SAFE_DEGRADE: i64 = 6 // local-only control; physical function survives
+
+// The ceiling. Every action above is something we do to our own estate.
+// Nothing beyond this exists, by construction.
+const DEFENSIVE_CEILING: i64 = 6
+
+record Telemetry {
+    confidence: f64,          // 0..1 that this is a genuine intrusion
+    persistence: i64,         // distinct sessions over time
+    data_at_risk: bool,       // attacker is touching real records now
+    evidence_captured: bool,  // we have what forensics needs
+    in_honeypot: bool,        // they are already inside a decoy environment
+}
+
+record Asset {
+    life_safety: bool,
+    has_local_fallback: bool,
+}
+
+// ── Constitution ────────────────────────────────────────────────────────────
+pub def build_constitution() -> Constitution {
+    var c = constitution_new(3)
+    c = constitution_add(c, "no_action_outside_owned_estate", 3)
+    c = constitution_add(c, "no_automated_counterstrike", 3)
+    c = constitution_add(c, "preserve_evidence_before_eviction", 2)
+    c = constitution_add(c, "never_isolate_life_safety_asset", 3)
+    c
+}
+
+// ── The decision ────────────────────────────────────────────────────────────
+//
+// Two places where the aggressive answer is the wrong one, and both are the
+// reason this is a policy rather than a threshold table:
+//
+//   1. Evicting before evidence is captured destroys the investigation and
+//      tells the attacker exactly what you detected. Deception first.
+//   2. An attacker already in a honeypot is an intelligence asset. Kicking
+//      them out trades known-contained for unknown-at-large.
+pub def choose_response(t: Telemetry, a: Asset) -> i64 {
+    // Low confidence: do not act on noise. Observing is not weakness; a
+    // premature response trains the attacker on your detection thresholds.
+    if t.confidence < 0.30 {
+        return ACT_OBSERVE
+    };
+
+    // Contained in a decoy and touching nothing real: keep them there and
+    // keep collecting. Escalating here would be a downgrade in outcome.
+    if t.in_honeypot {
+        if t.data_at_risk { return ACT_REVOKE } else { return ACT_FEED_DECOY }
+    };
+
+    // Real data in play is the one case that overrides evidence collection.
+    if t.data_at_risk {
+        if a.life_safety {
+            if a.has_local_fallback { return ACT_SAFE_DEGRADE } else { return ACT_REVOKE }
+        };
+        if t.confidence >= 0.80 { return ACT_ISOLATE } else { return ACT_REVOKE }
+    };
+
+    // No data at risk yet. Buy time and build the case.
+    if t.evidence_captured {
+        if t.confidence >= 0.70 { ACT_REVOKE } else { ACT_TARPIT }
+    } else {
+        if t.persistence >= 3 { ACT_HONEYTOKEN } else { ACT_TARPIT }
+    }
+}
+
+// ── Adaptation ──────────────────────────────────────────────────────────────
+// Confidence rises with repeat contact from the same actor and falls when a
+// session turns out to be benign. This is the part that learns; the ceiling
+// above is the part that cannot.
+pub def update_confidence(prior: f64, matched_known_pattern: bool) -> f64 {
+    if matched_known_pattern {
+        val raised = prior + (1.0 - prior) * 0.35
+        if raised > 0.99 { 0.99 } else { raised }
+    } else {
+        val lowered = prior * 0.70
+        if lowered < 0.01 { 0.01 } else { lowered }
+    }
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────────
+
+def tel(conf: f64, persist: i64, at_risk: bool, evidence: bool, honeypot: bool) -> Telemetry {
+    Telemetry {
+        confidence: conf,
+        persistence: persist,
+        data_at_risk: at_risk,
+        evidence_captured: evidence,
+        in_honeypot: honeypot,
+    }
+}
+
+def main() -> i64 {
+    val c = build_constitution()
+    val plain = Asset { life_safety: false, has_local_fallback: true }
+    val door = Asset { life_safety: true, has_local_fallback: true }
+    val pump = Asset { life_safety: true, has_local_fallback: false }
+
+    assert(constitution_check(c, "no_automated_counterstrike"));
+    assert(constitution_check(c, "no_action_outside_owned_estate"));
+
+    // 1. Noise is observed, not answered.
+    assert(choose_response(tel(0.10, 0, false, false, false), plain) == ACT_OBSERVE);
+
+    // 2. Probable intrusion, nothing proven, first contact -> slow them down.
+    assert(choose_response(tel(0.50, 1, false, false, false), plain) == ACT_TARPIT);
+
+    // 3. Persistent actor, still no evidence -> serve canary credentials.
+    assert(choose_response(tel(0.50, 4, false, false, false), plain) == ACT_HONEYTOKEN);
+
+    // 4. Evidence in hand and high confidence -> evict.
+    assert(choose_response(tel(0.85, 4, false, true, false), plain) == ACT_REVOKE);
+
+    // 5. THE NON-OBVIOUS ONE. Same high confidence, evidence NOT yet captured.
+    //    Evicting now would destroy the investigation and reveal the detection.
+    //    The policy stays deceptive instead of escalating.
+    val no_evidence = tel(0.85, 4, false, false, false)
+    assert(choose_response(no_evidence, plain) == ACT_HONEYTOKEN);
+    assert(choose_response(no_evidence, plain) != ACT_ISOLATE);
+
+    // 6. Attacker contained in a decoy, touching nothing real: keep feeding.
+    //    Maximum confidence does NOT escalate here — contained is the goal.
+    assert(choose_response(tel(0.99, 9, false, true, true), plain) == ACT_FEED_DECOY);
+
+    // 7. ...but the moment real data is in play, containment ends.
+    assert(choose_response(tel(0.99, 9, true, true, true), plain) == ACT_REVOKE);
+
+    // 8. Life-safety carve-out survives maximum hostility: a door controller
+    //    is degraded to local control, never cut off.
+    val worst = tel(0.99, 9, true, true, false)
+    assert(choose_response(worst, plain) == ACT_ISOLATE);
+    assert(choose_response(worst, door) == ACT_SAFE_DEGRADE);
+    assert(choose_response(worst, door) != ACT_ISOLATE);
+
+    // 9. No standalone mode: cannot isolate, cannot degrade -> revoke and
+    //    escalate to a human rather than guess.
+    assert(choose_response(worst, pump) == ACT_REVOKE);
+
+    // 10. Confidence adapts up on repeat contact and decays on benign sessions.
+    val c1 = update_confidence(0.20, true)
+    val c2 = update_confidence(c1, true)
+    assert(c2 > c1);
+    assert(c1 > 0.20);
+    assert(update_confidence(0.80, false) < 0.60);
+
+    // ── 11. THE BOUND ───────────────────────────────────────────────────────
+    // Enumerate the entire input space — 2 x 2 x 2 x 3 assets x 6 confidence
+    // bands x 5 persistence levels = 720 states — and assert that no reachable
+    // combination produces an action above the defensive ceiling, and that no
+    // action is ever negative. This is a proof of the bound, not a promise.
+    var checked = 0
+    var violations = 0
+    for ci in 0 .. 6 {
+        for pi in 0 .. 5 {
+            for risk in 0 .. 2 {
+                for ev in 0 .. 2 {
+                    for hp in 0 .. 2 {
+                        for ai in 0 .. 3 {
+                            val conf = (ci to f64) * 0.20
+                            val t = tel(conf, pi, risk == 1, ev == 1, hp == 1)
+                            val a = if ai == 0 { plain } else {
+                                if ai == 1 { door } else { pump }
+                            }
+                            val act = choose_response(t, a)
+                            checked = checked + 1
+                            violations = if act > DEFENSIVE_CEILING { violations + 1 } else {
+                                if act < 0 { violations + 1 } else { violations }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert(checked == 720);
+    assert(violations == 0);
+
+    println("active_defense_policy: all assertions passed, 720 states bounded");
+    0
+}

@@ -1,0 +1,157 @@
+// types.iris — domain model for the fleet telemetry service.
+//
+// Part of examples/08_fleet_service. See main.iris for the wiring and the
+// end-to-end assertions.
+//
+// Showcases: records with defaults, algebraic data types (`choice`) used to
+// make illegal states unrepresentable, traits with multiple implementations,
+// and a generic container.
+
+// ── Device classes ──────────────────────────────────────────────────────────
+// A `choice` rather than a string tag: an unknown class cannot be constructed,
+// so `when` over it is checked for exhaustiveness by the compiler.
+pub choice DeviceClass { Camera, Lidar, Imu, Thermal }
+
+pub def class_name(c: DeviceClass) -> str {
+    when c {
+        DeviceClass.Camera  => "camera"
+        DeviceClass.Lidar   => "lidar"
+        DeviceClass.Imu     => "imu"
+        DeviceClass.Thermal => "thermal"
+    }
+}
+
+// Nominal sample rate, used to decide whether a device has gone quiet.
+pub def class_period_ms(c: DeviceClass) -> i64 {
+    when c {
+        DeviceClass.Camera  => 33
+        DeviceClass.Lidar   => 100
+        DeviceClass.Imu     => 5
+        DeviceClass.Thermal => 500
+    }
+}
+
+// ── Health, ordered worst-last so comparisons read naturally ────────────────
+pub choice Health { Nominal, Degraded, Failing, Offline }
+
+pub def health_rank(h: Health) -> i64 {
+    when h {
+        Health.Nominal  => 0
+        Health.Degraded => 1
+        Health.Failing  => 2
+        Health.Offline  => 3
+    }
+}
+
+pub def health_name(h: Health) -> str {
+    when h {
+        Health.Nominal  => "nominal"
+        Health.Degraded => "degraded"
+        Health.Failing  => "failing"
+        Health.Offline  => "offline"
+    }
+}
+
+// The worse of two health states. Used to fold a device's per-signal
+// assessments into one verdict without an ordering mistake.
+pub def health_worse(a: Health, b: Health) -> Health {
+    if health_rank(a) >= health_rank(b) { a } else { b }
+}
+
+/// Equality for Health.
+///
+/// `a == b` on two `choice` values is NOT supported — it fails at runtime with
+/// "unsupported binop CmpEq on Enum". Comparison has to go through `when`,
+/// which `health_rank` already does, so equality is defined on the rank.
+pub def health_eq(a: Health, b: Health) -> bool {
+    health_rank(a) == health_rank(b)
+}
+
+/// Equality for DeviceClass, for the same reason.
+pub def class_eq(a: DeviceClass, b: DeviceClass) -> bool {
+    class_name(a) == class_name(b)
+}
+
+// ── Records, with defaults ──────────────────────────────────────────────────
+pub record Device {
+    id: str = "unknown",
+    kind: DeviceClass = DeviceClass.Imu,
+    site: str = "default",
+}
+
+pub record Sample {
+    device_id: str = "unknown",
+    value: f64 = 0.0,
+    t_ms: i64 = 0,
+    valid: bool = true,
+}
+
+pub record Verdict {
+    device_id: str = "unknown",
+    health: Health = Health.Nominal,
+    score: f64 = 1.0,
+    samples: i64 = 0,
+}
+
+// ── A generic container ─────────────────────────────────────────────────────
+// Deliberately seeded rather than empty: a zero-argument generic constructor
+// cannot infer its type parameter in the current compiler, and a seeded one
+// is the shape the rest of the stdlib uses.
+pub record Batch[T] { items: list<T>, label: str }
+
+pub def batch_new[T](label: str, first: T) -> Batch<T> {
+    var xs: list<T> = list()
+    push(xs, first);
+    Batch { items: xs, label: label }
+}
+
+pub def batch_add[T](b: Batch<T>, v: T) -> Batch<T> {
+    push(b.items, v);
+    b
+}
+
+pub def batch_len[T](b: Batch<T>) -> i64 {
+    list_len(b.items)
+}
+
+// ── Traits ──────────────────────────────────────────────────────────────────
+pub trait Summarise {
+    // NOTE: the parser rejects an `effect` clause on a *trait method
+    // declaration* (`-> str effect io, alloc` here is a syntax error), though
+    // it accepts one on the `impl`. So a trait cannot currently state the
+    // effect bound its implementations must respect.
+    def summarise(self: Self) -> str
+}
+
+// Two things to know about the bodies below.
+//
+// `+` on str rather than nested `concat(a, concat(b, ...))` reads better and
+// happens to be effect-free at the call site.
+//
+// Effect-carrying calls (`concat`, `to_str`) are kept OUT of trait impls
+// entirely. A trait impl reached through a cross-file `bring` is mangled to
+// `types__Summarise__types__Device__summarise`, and the effect checker's
+// caller-row lookup misses that name and treats the method as `pure` — so any
+// effectful call inside reports a spurious E0302. Writing `effect io, alloc`
+// on the impl is accepted by the parser but does not silence it, which is how
+// we know the declared row never reaches the inferred map. Harmless in
+// practice (stderr only, exit 0), but noisy enough to derail a reader.
+impl Summarise for Device {
+    def summarise(self: Device) -> str {
+        self.id + "@" + self.site + " [" + class_name(self.kind) + "]"
+    }
+}
+
+impl Summarise for Verdict {
+    def summarise(self: Verdict) -> str {
+        self.device_id + " " + health_name(self.health)
+    }
+}
+
+/// Verdict summary including the sample count.
+///
+/// A free function rather than a trait method purely because it needs
+/// `to_str` — see the note above.
+pub def verdict_detail(v: Verdict) -> str effect io, alloc {
+    v.summarise() + " (" + to_str(v.samples) + " samples)"
+}
