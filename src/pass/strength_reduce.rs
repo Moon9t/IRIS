@@ -123,26 +123,31 @@ fn strength_reduce_func(func: &mut IrFunction) {
                             });
                         }
                         BinOp::Div => {
-                            // x / 2^n → x >> n  (integer divide by positive power-of-2)
-                            if let Some(c) = rhs_const {
-                                if is_power_of_two(c) {
-                                    let shift = log2_exact(c);
-                                    let shift_val = fresh();
-                                    new_instrs.push(IrInstr::ConstInt {
-                                        result: shift_val,
-                                        value: shift,
-                                        ty: IrType::Scalar(crate::ir::types::DType::I64),
-                                    });
-                                    new_instrs.push(IrInstr::BinOp {
-                                        result,
-                                        op: BinOp::Shr,
-                                        lhs,
-                                        rhs: shift_val,
-                                        ty,
-                                    });
-                                    continue;
-                                }
-                            }
+                            // `x / 2^n → x >> n` is NOT a valid rewrite for signed
+                            // integers and has been removed.
+                            //
+                            // An arithmetic shift right *floors*; IRIS division
+                            // truncates toward zero (`wrapping_div`, matching the
+                            // interpreter and the C runtime). They differ for every
+                            // negative dividend that does not divide exactly:
+                            //
+                            //     -7 / 2  == -3      (truncate — correct)
+                            //     -7 >> 1 == -4      (floor    — what this emitted)
+                            //
+                            // The rewrite therefore silently changed results, and
+                            // only when the divisor happened to be a visible
+                            // constant. Whether it fired depended on inlining, so
+                            // the same expression gave -3 through a real call and
+                            // -4 once the callee was small enough to inline. It also
+                            // broke the identity `(a/b)*b + (a%b) == a`, since `%`
+                            // was left truncating.
+                            //
+                            // Recovering the optimisation would need the usual bias
+                            // correction (add `(x >> 63) >>> (64 - n)` before
+                            // shifting), or a proof that `x >= 0`. Neither is worth
+                            // doing here: codegen emits LLVM `sdiv`, and LLVM
+                            // performs this strength reduction itself, correctly,
+                            // whenever it is sound.
                             new_instrs.push(IrInstr::BinOp {
                                 result,
                                 op: BinOp::Div,

@@ -622,6 +622,56 @@ feature.
 
 ---
 
+## 19. Signed division miscompiled by strength reduction — **FIXED**
+
+> **Fixed** in `src/pass/strength_reduce.rs` by removing the rewrite. Verified:
+> both backends now agree at `-3`, and the division/modulo identity holds.
+
+`StrengthReducePass` rewrote `x / 2^n` to `x >> n`. That identity holds only for
+non-negative dividends. An arithmetic shift right **floors**; IRIS division
+**truncates toward zero** (`wrapping_div`, matching the interpreter and the C
+runtime):
+
+```
+-7 / 2  == -3      (truncate — correct)
+-7 >> 1 == -4      (floor    — what the pass emitted)
+```
+
+**An optimisation silently changed the answer.** It fired only when the divisor
+was a visible constant, so whether it applied depended on *inlining*:
+
+```iris
+def small_div(a: i64, b: i64) -> i64 { a / b }          // inlined, then reduced
+def big_div(a: i64, b: i64) -> i64 { /* padded */ }     // stays a real call
+
+small_div(0 - 7, 2)   ->  -4
+big_div(0 - 7, 2)     ->  -3      DISAGREE
+```
+
+Both backends agreed on the wrong answer, so this was a pass defect, not a
+backend one — and no single-backend check could have caught it.
+
+It also broke the identity every integer division must satisfy, because `%` was
+left truncating:
+
+```
+(-7 / 2) * 2 + (-7 % 2)  ==  -4*2 + -1  ==  -9     (should be -7)
+```
+
+Recovering the optimisation would need the usual bias correction
+(`x + ((x >> 63) >>> (64 - n))` before shifting) or a proof that `x >= 0`.
+Neither is worth doing: codegen emits LLVM `sdiv`, and LLVM performs this
+reduction itself, correctly, whenever it is sound.
+
+`tests/conformance/c09_numeric_widths.iris` carries the regression guard,
+including both directions of the identity.
+
+**How it was found:** an assertion in a conformance file that I wrote wrongly.
+`(0-7)/2 == -3` failed, and the disagreement between the constant-folded and
+runtime paths turned out to be the compiler, not the test.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:

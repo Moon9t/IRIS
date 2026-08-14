@@ -1,0 +1,75 @@
+// c09 — numeric widths x coercion x overflow x float/int boundaries.
+//
+// Adversarial: mixing i64 with narrower types, explicit casts, and the
+// f32/f64 promotion path, in the arithmetic a real program actually writes.
+
+def sum_to(n: i64) -> i64 {
+    var acc = 0
+    var i = 1
+    while i <= n { acc = acc + i; i = i + 1 }
+    acc
+}
+
+def mean_of3(a: f64, b: f64, c: f64) -> f64 { (a + b + c) / 3.0 }
+
+def main() -> i64 {
+    // i64 arithmetic is checked; these stay well inside range.
+    assert(sum_to(100) == 5050);
+    assert(sum_to(0) == 0);
+
+    // Explicit casts across widths.
+    val big: i64 = 300
+    val as_f: f64 = big to f64
+    assert(as_f > 299.9);
+    assert(as_f < 300.1);
+
+    val back: i64 = as_f to i64
+    assert(back == 300);
+
+    // Truncation direction on cast.
+    val frac: f64 = 7.9
+    assert((frac to i64) == 7);
+    val negfrac: f64 = -7.9
+    assert((negfrac to i64) == -7);
+
+    // f32/f64 promotion: a float literal used with an f64 binding.
+    val d: f64 = 1.5
+    val doubled = d * 2.0
+    assert(doubled > 2.99);
+    assert(doubled < 3.01);
+
+    assert(mean_of3(1.0, 2.0, 3.0) > 1.99);
+    assert(mean_of3(1.0, 2.0, 3.0) < 2.01);
+
+    // Integer division truncates toward zero, and modulo takes the sign of the
+    // dividend (C semantics). These four are the regression guard for a
+    // miscompilation: StrengthReducePass rewrote `x / 2^n` to `x >> n`, which
+    // *floors*, so -7/2 gave -4 whenever the divisor was a visible constant.
+    // Whether it fired depended on inlining, so the same expression gave -3
+    // through a real call and -4 once the callee was small enough to inline.
+    assert(7 / 2 == 3);
+    assert(7 % 2 == 1);
+    assert((0 - 7) / 2 == -3);
+    assert((0 - 7) % 2 == -1);
+    assert(7 / (0 - 2) == -3);
+    assert(7 % (0 - 2) == 1);
+    assert((0 - 8) / 2 == -4);
+    assert((0 - 8) % 2 == 0);
+
+    // The identity every integer division must satisfy.
+    assert(((0 - 7) / 2) * 2 + ((0 - 7) % 2) == -7);
+    assert((7 / (0 - 2)) * (0 - 2) + (7 % (0 - 2)) == 7);
+
+    // Comparison chains across the same width.
+    val x = 5
+    assert(x > 4 && x < 6);
+    assert(x >= 5 && x <= 5);
+
+    // min/max/abs builtins on i64 and f64.
+    assert(min(3, 9) == 3);
+    assert(max(3, 9) == 9);
+    assert(abs(0 - 4) == 4);
+
+    println("c09 ok");
+    0
+}
