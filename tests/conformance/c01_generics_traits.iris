@@ -1,0 +1,52 @@
+// c01 — generics x traits x multiple impls x extension methods.
+//
+// Adversarial: a trait implemented for two records, called through a generic
+// function, and again as an extension method. Each of those works alone in the
+// existing corpus; none of them is exercised together.
+
+record Meters { v: f64 }
+record Feet { v: f64 }
+
+trait ToMetres {
+    def to_metres(self: Self) -> f64
+}
+
+impl ToMetres for Meters {
+    def to_metres(self: Meters) -> f64 { self.v }
+}
+
+impl ToMetres for Feet {
+    def to_metres(self: Feet) -> f64 { self.v * 0.3048 }
+}
+
+// Generic over anything implementing the trait.
+def total_metres[T where T: ToMetres](a: T, b: T) -> f64 {
+    a.to_metres() + b.to_metres()
+}
+
+// A plain module-level fn whose first param is a record: extension-method form.
+def doubled(m: Meters) -> Meters { Meters { v: m.v * 2.0 } }
+
+def main() -> i64 {
+    val a = Meters { v: 10.0 }
+    val b = Meters { v: 5.0 }
+    assert(total_metres(a, b) > 14.99);
+    assert(total_metres(a, b) < 15.01);
+
+    val f1 = Feet { v: 10.0 }
+    val f2 = Feet { v: 10.0 }
+    val ft = total_metres(f1, f2)
+    assert(ft > 6.09);
+    assert(ft < 6.10);
+
+    // Extension-method call syntax on a user record.
+    val d = a.doubled()
+    assert(d.v > 19.99);
+
+    // Chained.
+    val dd = a.doubled().doubled()
+    assert(dd.v > 39.99);
+
+    println("c01 ok");
+    0
+}

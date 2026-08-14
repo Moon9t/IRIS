@@ -402,6 +402,46 @@ cannot, so the annotation is required rather than merely usual.
 
 ---
 
+## 15. A user function is silently discarded when a builtin shares its name — **critical**
+
+```iris
+def band(a: i64, b: i64) -> i64 { 999 }
+
+def main() -> i64 {
+    println(to_str(band(12, 10)));   // prints 8, not 999
+    0
+}
+```
+
+The builtin wins. No error, no warning, no diagnostic of any kind — the
+user's function is simply never called.
+
+**203 builtin names** are resolved in the lowerer and are effectively reserved,
+but none of them is a keyword and none is rejected at the definition site.
+Among them are names an ordinary program is likely to choose:
+
+```
+abs band bor contains filter get hash len map max min
+pop push repeat round set sign split trim
+```
+
+If the arity differs the failure is at least loud, though the message is
+misleading — defining `def band(n: i64) -> str` and calling `band(0)` reports
+*"band() requires exactly 2 arguments"*, describing the builtin the programmer
+never intended to call.
+
+This was found by writing a `.iris` program that happened to name a function
+`band`. Any program that names a function after one of the other 202 has the
+same silent substitution waiting in it.
+
+**Fix direction:** reject a user definition that shadows a builtin at the
+definition site (clear, breaks nothing silently), or let the user definition
+win with a warning. Either is acceptable; silence is not.
+
+**Status:** open, and the highest-severity item on this list.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:

@@ -1,0 +1,75 @@
+// c04 — pattern matching x generic ADTs x nested destructuring x guards.
+//
+// Adversarial: `when` over a generic choice, struct patterns with guards,
+// or-patterns and range patterns in one file, plus recursion over an option.
+
+choice Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Point,
+}
+
+record Vec2 { x: i64, y: i64 }
+
+def area(s: Shape) -> f64 {
+    when s {
+        Shape.Circle(r)  => 3.14159265 * r * r
+        Shape.Rect(w, h) => w * h
+        Shape.Point      => 0.0
+    }
+}
+
+def quadrant(p: Vec2) -> str {
+    when p {
+        Vec2 { x: 0, y: 0 }      => "origin"
+        Vec2 { x: 0, y }         => "y-axis"
+        Vec2 { x, y: 0 }         => "x-axis"
+        Vec2 { x, y } if x == y  => "diagonal"
+        _                        => "general"
+    }
+}
+
+def size_band(n: i64) -> str {
+    when n {
+        0        => "zero"
+        1 ..= 9  => "single"
+        10 ..= 99 => "double"
+        _        => "large"
+    }
+}
+
+// Recursion through option.
+def countdown(n: i64) -> i64 {
+    var c = some(n)
+    var steps = 0
+    while is_some(c) {
+        val v = unwrap(c)
+        steps = steps + 1
+        c = if v <= 1 { none() } else { some(v - 1) }
+    }
+    steps
+}
+
+def main() -> i64 {
+    assert(area(Shape.Circle(1.0)) > 3.14);
+    assert(area(Shape.Circle(1.0)) < 3.15);
+    assert(area(Shape.Rect(3.0, 4.0)) > 11.99);
+    assert(area(Shape.Point) == 0.0);
+
+    assert(quadrant(Vec2 { x: 0, y: 0 }) == "origin");
+    assert(quadrant(Vec2 { x: 0, y: 5 }) == "y-axis");
+    assert(quadrant(Vec2 { x: 5, y: 0 }) == "x-axis");
+    assert(quadrant(Vec2 { x: 4, y: 4 }) == "diagonal");
+    assert(quadrant(Vec2 { x: 1, y: 2 }) == "general");
+
+    assert(size_band(0) == "zero");
+    assert(size_band(5) == "single");
+    assert(size_band(42) == "double");
+    assert(size_band(1000) == "large");
+
+    assert(countdown(5) == 5);
+    assert(countdown(1) == 1);
+
+    println("c04 ok");
+    0
+}

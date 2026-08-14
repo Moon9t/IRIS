@@ -1841,11 +1841,29 @@ fn coerce_to_type(
         if actual_ty != expected_ty {
             *gep_counter += 1;
             let tmp = format!("%coerce{}", gep_counter);
-            // Resolve the real LLVM type for the value from the function's
-            // recorded `value_type` if available to avoid inconsistencies
-            // between `emitted_types` and the IR's authoritative types.
+            // Two sources describe this value's type and they can disagree:
+            // `emitted_types` records the LLVM type actually written for the SSA
+            // value, while `llvm_type_complete(value_type)` records what the IR
+            // type says it should be. The IR type is preferred here because it
+            // carries the authoritative float *width* (emitting
+            // `fptosi float %x` for a value that is really a double is rejected).
+            //
+            // But it must not be preferred across the integer/pointer boundary.
+            // A tag-only enum is emitted as `i64` while its IrType maps to `ptr`,
+            // and trusting the IR type there selected the bitcast fallback,
+            // emitting `bitcast ptr %v14 to ptr` for a value that is an i64 —
+            // which clang rejects with
+            //   '%v14' defined with type 'i64' but expected 'ptr'
+            // That is known-issues #2, and it is the same emitted-vs-declared
+            // disagreement as #6. When the two disagree about int-vs-pointer, the
+            // emitted form is the truth about the operand.
             let actual_ty_str = if let Some(ty) = func.value_type(v) {
-                llvm_type_complete(ty).unwrap_or(actual_ty.clone())
+                let from_ir = llvm_type_complete(ty).unwrap_or(actual_ty.clone());
+                if (from_ir == "ptr") != (actual_ty == "ptr") {
+                    actual_ty.clone()
+                } else {
+                    from_ir
+                }
             } else {
                 actual_ty.clone()
             };

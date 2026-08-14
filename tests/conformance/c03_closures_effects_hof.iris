@@ -1,0 +1,59 @@
+// c03 — closures x higher-order functions x effect annotations x generics.
+//
+// Adversarial: closures that capture, passed into generic higher-order
+// functions, inside functions carrying explicit effect clauses. Closures and
+// effects are each covered alone; the combination is not.
+
+def apply_twice(f: |i64| -> i64, x: i64) -> i64 {
+    f(f(x))
+}
+
+def map_ints(xs: list<i64>, f: |i64| -> i64) -> list<i64> effect alloc {
+    val out: list<i64> = list()
+    val n = list_len(xs)
+    for i in 0 .. n {
+        push(out, f(list_get(xs, i)));
+    }
+    out
+}
+
+def fold_ints(xs: list<i64>, init: i64, f: |i64, i64| -> i64) -> i64 {
+    var acc = init
+    val n = list_len(xs)
+    for i in 0 .. n {
+        acc = f(acc, list_get(xs, i))
+    }
+    acc
+}
+
+def main() -> i64 {
+    // A closure capturing an outer binding.
+    val factor = 3
+    val scale = |x: i64| x * factor
+    assert(scale(4) == 12);
+
+    // Closure passed as an argument, applied repeatedly.
+    assert(apply_twice(scale, 2) == 18);
+
+    val xs: list<i64> = list()
+    push(xs, 1); push(xs, 2); push(xs, 3); push(xs, 4);
+
+    // HOF with a captured closure, inside an alloc-annotated function.
+    val scaled = map_ints(xs, scale)
+    assert(list_len(scaled) == 4);
+    assert(list_get(scaled, 3) == 12);
+
+    // Two-argument closure through a fold.
+    val total = fold_ints(xs, 0, |a: i64, b: i64| a + b)
+    assert(total == 10);
+
+    val product = fold_ints(xs, 1, |a: i64, b: i64| a * b)
+    assert(product == 24);
+
+    // Closure capturing a closure.
+    val twice_scaled = |x: i64| scale(scale(x))
+    assert(twice_scaled(1) == 9);
+
+    println("c03 ok");
+    0
+}

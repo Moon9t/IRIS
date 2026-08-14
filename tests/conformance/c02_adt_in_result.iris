@@ -1,0 +1,57 @@
+// c02 — enum inside a record inside a result, matched with ? propagation.
+//
+// Adversarial: three type constructors nested. known-issues #2 says a `str`
+// field in a record inside result<T,E> mis-types as i64; this checks whether a
+// `choice` field survives the same nesting, and whether `?` works through it.
+
+choice Grade { Pass, Fail, Pending }
+
+record Report {
+    subject: str,
+    grade: Grade,
+    score: i64,
+}
+
+def grade_name(g: Grade) -> str {
+    when g {
+        Grade.Pass    => "pass"
+        Grade.Fail    => "fail"
+        Grade.Pending => "pending"
+    }
+}
+
+def grade_rank(g: Grade) -> i64 {
+    when g { Grade.Pass => 2, Grade.Fail => 0, Grade.Pending => 1 }
+}
+
+def classify(score: i64) -> result<Report, str> {
+    if score < 0 { return err("negative score") };
+    val g = if score >= 50 { Grade.Pass } else { Grade.Fail }
+    ok(Report { subject: "maths", grade: g, score: score })
+}
+
+// `?` through a result carrying a record that carries an enum.
+def rank_of(score: i64) -> result<i64, str> {
+    val r = classify(score)?
+    ok(grade_rank(r.grade))
+}
+
+def main() -> i64 {
+    val good = classify(70)
+    assert(is_ok(good));
+    val r = unwrap(good)
+    assert(r.score == 70);
+    assert(r.subject == "maths");
+    assert(grade_name(r.grade) == "pass");
+
+    val bad = classify(20)
+    assert(grade_name(unwrap(bad).grade) == "fail");
+
+    assert(is_err(classify(-1)));
+    assert(is_err(rank_of(-1)));
+    assert(unwrap(rank_of(70)) == 2);
+    assert(unwrap(rank_of(10)) == 0);
+
+    println("c02 ok");
+    0
+}
