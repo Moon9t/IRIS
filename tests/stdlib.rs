@@ -474,7 +474,7 @@ fn set_add_contains_len() {
             r#"
         bring std.set
         def main() -> i64 {
-            var s = set_new()
+            var s: Set<str> = set_new()
             s = set_add(s, "apple")
             s = set_add(s, "banana")
             s = set_add(s, "apple")
@@ -493,7 +493,7 @@ fn set_remove() {
             r#"
         bring std.set
         def main() -> i64 {
-            var s = set_new()
+            var s: Set<str> = set_new()
             s = set_add(s, "x")
             s = set_add(s, "y")
             s = set_remove(s, "x")
@@ -512,10 +512,10 @@ fn set_union_intersection() {
             r#"
         bring std.set
         def main() -> i64 {
-            var a = set_new()
+            var a: Set<str> = set_new()
             a = set_add(a, "a")
             a = set_add(a, "b")
-            var b = set_new()
+            var b: Set<str> = set_new()
             b = set_add(b, "b")
             b = set_add(b, "c")
             set_len(set_union(a, b)) + set_len(set_intersection(a, b))
@@ -533,11 +533,11 @@ fn set_difference() {
             r#"
         bring std.set
         def main() -> i64 {
-            var a = set_new()
+            var a: Set<str> = set_new()
             a = set_add(a, "x")
             a = set_add(a, "y")
             a = set_add(a, "z")
-            var b = set_new()
+            var b: Set<str> = set_new()
             b = set_add(b, "y")
             set_len(set_difference(a, b))
         }
@@ -601,7 +601,7 @@ fn heap_push_peek_len() {
             r#"
         bring std.heap
         def main() -> i64 {
-            var h = heap_new()
+            var h: MinHeap<i64> = heap_new()
             h = heap_push(h, 5)
             h = heap_push(h, 1)
             h = heap_push(h, 3)
@@ -620,7 +620,7 @@ fn heap_sorted_pops() {
             r#"
         bring std.heap
         def main() -> i64 {
-            var h = heap_new()
+            var h: MinHeap<i64> = heap_new()
             h = heap_push(h, 8)
             h = heap_push(h, 2)
             h = heap_push(h, 5)

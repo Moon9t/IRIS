@@ -8,7 +8,7 @@ fn test_set_add_dedup() {
     let src = r#"
 bring std.set
 def f() -> i64 {
-    val s = set_new()
+    val s: Set<str> = set_new()
     val s2 = set_add(s, "a")
     val s3 = set_add(s2, "b")
     val s4 = set_add(s3, "a")
@@ -25,9 +25,9 @@ fn test_set_union() {
     let src = r#"
 bring std.set
 def f() -> i64 {
-    val s1 = set_new()
+    val s1: Set<str> = set_new()
     val s1a = set_add(s1, "x")
-    val s2 = set_new()
+    val s2: Set<str> = set_new()
     val s2a = set_add(s2, "y")
     val s2b = set_add(s2a, "x")
     val s3 = set_union(s1a, s2b)
@@ -44,10 +44,10 @@ fn test_set_difference() {
     let src = r#"
 bring std.set
 def f() -> i64 {
-    val s1 = set_new()
+    val s1: Set<str> = set_new()
     val s1a = set_add(s1, "a")
     val s1b = set_add(s1a, "b")
-    val s2 = set_new()
+    val s2: Set<str> = set_new()
     val s2a = set_add(s2, "a")
     val diff = set_difference(s1b, s2a)
     set_len(diff)
@@ -96,7 +96,7 @@ fn test_heap_min() {
     let src = r#"
 bring std.heap
 def f() -> i64 {
-    val h = heap_new()
+    val h: MinHeap<i64> = heap_new()
     val h2 = heap_push(h, 5)
     val h3 = heap_push(h2, 3)
     val h4 = heap_push(h3, 7)
@@ -113,7 +113,7 @@ fn test_heap_sorted_pops() {
     let src = r#"
 bring std.heap
 def f() -> i64 {
-    val h0 = heap_new()
+    val h0: MinHeap<i64> = heap_new()
     val h1 = heap_push(h0, 5)
     val h2 = heap_push(h1, 1)
     val h3 = heap_push(h2, 3)
@@ -135,11 +135,11 @@ fn test_set_intersection() {
     let src = r#"
 bring std.set
 def f() -> i64 {
-    val s1 = set_new()
+    val s1: Set<str> = set_new()
     val s1a = set_add(s1, "a")
     val s1b = set_add(s1a, "b")
     val s1c = set_add(s1b, "c")
-    val s2 = set_new()
+    val s2: Set<str> = set_new()
     val s2a = set_add(s2, "b")
     val s2b = set_add(s2a, "c")
     val s2c = set_add(s2b, "d")

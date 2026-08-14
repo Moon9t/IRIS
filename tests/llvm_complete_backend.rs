@@ -121,11 +121,30 @@ fn test_pure_function_attributes() {
 
 #[test]
 fn test_nsw_integer_arithmetic() {
+    // This test used to assert `add nsw`. That is incompatible with what IRIS
+    // actually guarantees, and the two cannot coexist:
+    //
+    //   `nsw`                 signed overflow is undefined behaviour, so the
+    //                         optimizer may assume it never happens
+    //   `iris_add_checked`    signed overflow is detected and aborts
+    //
+    // IRIS deliberately takes the second. Every i64 `+`, `-` and `*` lowers to
+    // a checked runtime call, so there is no raw `add`/`sub`/`mul` instruction
+    // to carry the flag. Asserting `nsw` asserted an abandoned design intent
+    // (it appears in the phase-49 description) against a compiler that had
+    // since chosen the stronger guarantee.
+    //
+    // Assert the guarantee that actually holds.
     let src = r#"def f(x: i64) -> i64 { x + 1 }"#;
     let ir = compile(src, "test", EmitKind::LlvmComplete).unwrap();
     assert!(
-        ir.contains("add nsw"),
-        "expected 'add nsw' (no signed wrap) in LlvmComplete arithmetic:\n{}",
+        ir.contains("iris_add_checked"),
+        "expected checked integer arithmetic in LlvmComplete output:\n{}",
+        ir
+    );
+    assert!(
+        !ir.contains("add nsw"),
+        "nsw would make signed overflow UB, contradicting checked arithmetic:\n{}",
         ir
     );
 }

@@ -79,7 +79,7 @@ bring std.fs
 def f() -> str {{
     val path = "{path}"
     val ok = write_text(path, "hello iris")
-    read_text(path)
+    unwrap(read_text(path))
 }}
 "#
     );
