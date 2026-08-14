@@ -6,8 +6,18 @@
 /// A min-heap containing elements of type T.
 record MinHeap[T] { data: list<T> }
 
-/// Create a new heap seeded with value v (used for type inference).
-pub def heap_new[T](v: T) -> MinHeap<T> {
+/// Create a new, empty min-heap.
+///
+/// Takes no seed. The previous signature was `heap_new[T](v: T)`, which seeded
+/// the heap purely so `T` could be inferred from an argument — leaving an empty
+/// heap unconstructible.
+pub def heap_new[T]() -> MinHeap<T> {
+    var d: list<T> = list()
+    MinHeap { data: d }
+}
+
+/// Create a heap seeded with one value, for callers that want the old shape.
+pub def heap_of[T](v: T) -> MinHeap<T> {
     var d: list<T> = list()
     push(d, v);
     MinHeap { data: d }
@@ -83,7 +93,7 @@ pub def heap_push[T](h: MinHeap<T>, v: T) -> MinHeap<T> {
 
 /// Build a heap from a list.
 pub def heap_from_list[T](lst: list<T>) -> MinHeap<T> {
-    var h: MinHeap<T> = heap_new(list_get(lst, 0))
+    var h: MinHeap<T> = heap_of(list_get(lst, 0))
     var i = 1
     val n = list_len(lst)
     while i < n {

@@ -3,8 +3,21 @@
 /// A set of elements of type T. Maintains unique elements via linear scan.
 record Set[T] { items: list<T> }
 
-/// Create a new set seeded with value v (for type inference).
-pub def set_new[T](v: T) -> Set<T> {
+/// Create a new, empty set.
+///
+/// Takes no seed value. The previous signature was `set_new[T](v: T)`, which
+/// seeded the set with `v` purely so that `T` could be inferred from an
+/// argument — but that made an empty set unconstructible, so
+/// `set_add(set_new(), "a")` had length 2 rather than 1.
+pub def set_new[T]() -> Set<T> {
+    var items: list<T> = list()
+    Set { items: items }
+}
+
+/// Create a set seeded with one value.
+///
+/// Retained for callers that want the old seeding behaviour explicitly.
+pub def set_of[T](v: T) -> Set<T> {
     var items: list<T> = list()
     push(items, v);
     Set { items: items }
@@ -102,7 +115,7 @@ pub def set_difference[T](a: Set<T>, b: Set<T>) -> Set<T> {
 
 /// Build a set from a list (removes duplicates).
 pub def set_from_list[T](lst: list<T>) -> Set<T> {
-    var s: Set<T> = set_new(list_get(lst, 0))
+    var s: Set<T> = set_of(list_get(lst, 0))
     var i = 1
     val n = list_len(lst)
     while i < n {

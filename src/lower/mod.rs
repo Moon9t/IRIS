@@ -1346,6 +1346,33 @@ impl<'m> Lowerer<'m> {
                         );
                         (lhs_val, cast, lhs_ty)
                     }
+                    // Exactly one operand is still `Infer`: adopt the other's
+                    // concrete type.
+                    //
+                    // This is *unification* — propagating a known type onto an
+                    // unknown one — and deliberately NOT the `i64` defaulting that
+                    // docs/architecture-vs-rustc.md §4.1 warns against. Nothing is
+                    // invented here: if both sides are unknown the arm does not
+                    // match and the pair stays `Infer` for HmTypeInferPass to
+                    // solve.
+                    //
+                    // The operand keeps its own inference slot; setting the BinOp's
+                    // type merely records the constraint. HmTypeInferPass already
+                    // unifies BinOp lhs/rhs (`type_infer_hm.rs`) and already threads
+                    // list element types through ListNew/ListPush/ListGet, so a
+                    // loop variable from
+                    //     val xs = list(); push(xs, 1); for x in xs { sum + x }
+                    // resolves to the *pushed element type* rather than a default.
+                    // Rejecting it during lowering discarded a program the very
+                    // next pass would have typed correctly.
+                    (IrType::Infer, concrete) if !matches!(concrete, IrType::Infer) => {
+                        let adopted = rhs_ty.clone();
+                        (lhs_val, rhs_val, adopted)
+                    }
+                    (concrete, IrType::Infer) if !matches!(concrete, IrType::Infer) => {
+                        let adopted = lhs_ty.clone();
+                        (lhs_val, rhs_val, adopted)
+                    }
                     _ => {
                         // Require operand types to match for all other scalar binops.
                         if lhs_ty != rhs_ty {
@@ -7095,6 +7122,104 @@ impl<'m> Lowerer<'m> {
                 for (param2, arg_ty2) in generic_fn.params.iter().zip(arg_tys.iter()) {
                     extract_from_ast_type(&param2.ty, arg_ty2, &type_param_names, &mut subs);
                 }
+            }
+
+            // Pass 4 — expected-type propagation.
+            //
+            // The three passes above all read type parameters out of *argument*
+            // types. A zero-argument constructor has none: `set_new[T]() -> Set<T>`
+            // mentions `T` only in its return type, so `T` stayed unbound, the
+            // signature resolved to `%set__Set__set__Set__T` — a struct defined
+            // nowhere — and monomorphisation failed with
+            //   type mismatch: %set__Set vs %set__Set__set__Set__T
+            //
+            // Unify the declared return type against the type expected at the
+            // binding instead. `val s: Set<str> = set_new()` annotates as the
+            // monomorphised struct `set__Set__str`, whose suffix carries the type
+            // arguments — the same recovery Pass 2 performs for parameters like
+            // `h: MinHeap<T>`, applied to the return position.
+            //
+            // This resolves the parameter from information the programmer actually
+            // supplied. It does not invent one: a call with no argument and no
+            // annotation still leaves `T` unbound, and is reported below.
+            let all_type_params: Vec<String> = generic_fn
+                .type_params
+                .iter()
+                .filter_map(|p| {
+                    if let crate::parser::ast::AstGenericParam::Type(n, _, _) = p {
+                        Some(n.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if subs.len() < all_type_params.len() {
+                if let Some(IrType::Struct { name: expected_name, .. }) = self.binding_ty.clone() {
+                    if let crate::parser::ast::AstType::Generic {
+                        name: gname,
+                        args: gargs,
+                        ..
+                    } = &generic_fn.return_ty
+                    {
+                        // The return type of a brought generic carries the
+                        // module-qualified name (`set__Set`), while the binding
+                        // annotation resolves unqualified (`Set__str`). Try the
+                        // qualified form, the written form, and the unqualified
+                        // tail so either spelling matches.
+                        let base = resolve_brought_name(gname, self.module);
+                        let tail = gname.rsplit("__").next().unwrap_or(gname).to_string();
+                        for prefix in [
+                            format!("{}__", base),
+                            format!("{}__", gname),
+                            format!("{}__", tail),
+                        ] {
+                            if let Some(rest) = expected_name.strip_prefix(prefix.as_str()) {
+                                for (ast_arg, concrete) in gargs.iter().zip(rest.split('_')) {
+                                    if let crate::parser::ast::AstType::Named(n, _) = ast_arg {
+                                        if all_type_params.contains(n) && !subs.contains_key(n) {
+                                            let concrete_ir = lower_type_with_structs(
+                                                &crate::parser::ast::AstType::Named(
+                                                    concrete.to_string(),
+                                                    crate::parser::lexer::Span::at(0),
+                                                ),
+                                                self.module,
+                                            );
+                                            subs.insert(n.clone(), concrete_ir);
+                                        }
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // A type parameter that nothing constrains is an error, not a default.
+            // Reporting it here replaces a bogus struct name that surfaced much
+            // later as an opaque pass failure, and tells the caller what to do.
+            if subs.len() < all_type_params.len() {
+                let missing: Vec<&str> = all_type_params
+                    .iter()
+                    .filter(|n| !subs.contains_key(*n))
+                    .map(|s| s.as_str())
+                    .collect();
+                return Err(LowerError::Unsupported {
+                    detail: format!(
+                        "cannot infer type parameter{} `{}` for `{}` — no argument mentions {}, \
+                         so annotate the binding (e.g. `val x: {}<...> = {}(...)`)",
+                        if missing.len() == 1 { "" } else { "s" },
+                        missing.join(", "),
+                        callee_name,
+                        if missing.len() == 1 { "it" } else { "them" },
+                        match &generic_fn.return_ty {
+                            crate::parser::ast::AstType::Generic { name, .. } => name.clone(),
+                            _ => "T".to_string(),
+                        },
+                        callee_name,
+                    ),
+                    span,
+                });
             }
 
             // Resolve the concrete return type using resolve_ast_type_with_subs
