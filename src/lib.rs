@@ -253,6 +253,55 @@ fn bring_key(path: &crate::parser::ast::BringPath) -> String {
     }
 }
 
+/// Process-wide flag for strict effect checking.
+///
+/// Set by `--strict-effects` on the CLI (via [`set_strict_effects`]) or by the
+/// `IRIS_STRICT_EFFECTS` environment variable. A static is used rather than a
+/// parameter because `compile_ast` has many call sites across the CLI, REPL,
+/// LSP and test harness, and the flag is a whole-process compilation mode.
+static STRICT_EFFECTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Enable strict effect checking for this process. Called by the CLI when
+/// `--strict-effects` is passed.
+pub fn set_strict_effects(on: bool) {
+    STRICT_EFFECTS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// True when strict effect checking is on, from either the flag or the env var.
+pub fn strict_effects_enabled() -> bool {
+    if STRICT_EFFECTS.load(std::sync::atomic::Ordering::Relaxed) {
+        return true;
+    }
+    std::env::var("IRIS_STRICT_EFFECTS")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false)
+}
+
+/// In strict mode, an effect violation fails the build.
+///
+/// Effect diagnostics were previously printed to stderr and then ignored, so a
+/// violating program still compiled and exited 0. A safety property that does
+/// not fail the build cannot gate CI and cannot be cited as a guarantee, which
+/// is the entire point of having it. Warnings (which do not start with
+/// `error[`) remain advisory.
+fn check_effect_gate(strict: bool, errors: &[String]) -> Result<(), Error> {
+    if !strict {
+        return Ok(());
+    }
+    let hard = errors.iter().filter(|e| e.starts_with("error[")).count();
+    if hard == 0 {
+        return Ok(());
+    }
+    Err(Error::Pass(crate::error::PassError::TypeError {
+        func: "<effect checking>".into(),
+        detail: format!(
+            "{} effect violation{} found (strict mode)",
+            hard,
+            if hard == 1 { "" } else { "s" }
+        ),
+    }))
+}
+
 /// Internal: compile a pre-built `AstModule` through the full pipeline to an `IrModule`.
 /// Used when building native binaries so we can pass the module to `build_binary`.
 pub fn compile_ast_to_module(
@@ -295,16 +344,17 @@ pub fn compile_ast_to_module(
     }
 
     // Effect checker (non-strict by default; emits warnings only).
-    // Set IRIS_STRICT_EFFECTS=1 to require explicit `effect` clauses on effectful functions.
-    let strict_effects = std::env::var("IRIS_STRICT_EFFECTS")
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false);
+    // `--strict-effects` / IRIS_STRICT_EFFECTS=1 requires explicit `effect`
+    // clauses on effectful functions AND that each clause covers what the body
+    // actually does — and makes a violation fail the build.
+    let strict_effects = strict_effects_enabled();
     {
         let mut effect_checker = crate::pass::effect_checker::EffectChecker::new(strict_effects);
         effect_checker.run(ast_module);
         for err in &effect_checker.errors {
             eprintln!("{}", err);
         }
+        check_effect_gate(strict_effects, &effect_checker.errors)?;
     }
 
     let mut ir_module = lower(ast_module, module_name)?;
@@ -459,17 +509,15 @@ fn compile_ast_inner(
             }
         }
 
-        // Effect checker (non-strict by default; emits warnings only).
-        // Set IRIS_STRICT_EFFECTS=1 to require explicit `effect` clauses on effectful functions.
-        let strict_effects = std::env::var("IRIS_STRICT_EFFECTS")
-            .map(|v| v == "1" || v.to_lowercase() == "true")
-            .unwrap_or(false);
+        // Effect checker — see the note at the other call site.
+        let strict_effects = strict_effects_enabled();
         {
             let mut effect_checker = crate::pass::effect_checker::EffectChecker::new(strict_effects);
             effect_checker.run(ast_module);
             for err in &effect_checker.errors {
                 eprintln!("{}", err);
             }
+            check_effect_gate(strict_effects, &effect_checker.errors)?;
         }
         lower(ast_module, module_name)?
     };

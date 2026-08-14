@@ -322,15 +322,24 @@ impl EffectChecker {
                 }
             }
             let declared = EffectRow::from_parts(concrete_effects.clone(), effect_vars.clone());
+            // `from_callees` is what the body actually does, tracked apart from
+            // what the signature claims. `inferred` still starts from `declared`
+            // so an effect performed only on a conditional path still propagates
+            // to callers — but seeding *both* from `declared` made the relation
+            // `declared ⊇ inferred` true by construction, which is why no
+            // subsumption violation could ever be detected.
+            let mut from_callees = EffectRow::pure();
             let mut inferred = EffectRow::from_parts(concrete_effects.clone(), effect_vars.clone());
             if let Some(callees) = call_graph.get(name) {
                 for callee in callees {
                     if let Some(row) = self.registry.lookup(callee) {
                         // Instantiate callee's effect vars with the current context.
                         let row = row.instantiate(&declared);
+                        from_callees = from_callees.union(&row);
                         inferred = inferred.union(&row);
                     } else if let Some(row) = self.inferred.get(callee) {
                         let row = row.instantiate(&declared);
+                        from_callees = from_callees.union(&row);
                         inferred = inferred.union(&row);
                     }
                 }
@@ -338,11 +347,14 @@ impl EffectChecker {
 
             self.inferred.insert(name.to_string(), inferred.clone());
 
-            // Warn on unused declared effects (concrete only).
-            if !concrete_effects.is_empty() {
+            // Warn on unused declared effects (concrete only). Compared against
+            // `from_callees`, not `inferred` — the latter contains the declared
+            // row itself, so this warning could never fire. Strict mode only, to
+            // keep default output unchanged.
+            if self.strict && !concrete_effects.is_empty() {
                 let unused: Vec<String> = concrete_effects
                     .iter()
-                    .filter(|e| !inferred.effects.contains(*e))
+                    .filter(|e| !from_callees.effects.contains(*e))
                     .cloned()
                     .collect();
                 if !unused.is_empty() {
@@ -363,6 +375,35 @@ impl EffectChecker {
                     if inferred.effects.len() == 1 { "" } else { "s" },
                     inferred.display()
                 ));
+            }
+
+            // Strict mode: the declared row must *cover* what the body does.
+            //
+            // Without this, an `effect` clause is documentation rather than a
+            // proof: `def f() -> i64 effect throw { list_get(xs, 0) }` allocates
+            // while declaring only `throw`, and used to pass silently. A row
+            // variable (`effect E`) is row-polymorphic and absorbs anything, so
+            // it is exempt.
+            if self.strict && !func.effects.is_empty() && declared.vars.is_empty() {
+                let missing: Vec<String> = from_callees
+                    .effects
+                    .iter()
+                    .filter(|e| !declared.effects.contains(*e))
+                    .cloned()
+                    .collect();
+                if !missing.is_empty() {
+                    // E0303, not E0302 — E0302 is the call-site check below,
+                    // which asks a different question (does the *caller* cover
+                    // the callee). This one asks whether a function's own
+                    // clause covers its own body.
+                    self.errors.push(format!(
+                        "error[E0303]: [effect check] function `{}` performs effect{} `{}` not covered by its `effect` clause `{}` (strict mode)",
+                        name,
+                        if missing.len() == 1 { "" } else { "s" },
+                        missing.join(", "),
+                        declared.display()
+                    ));
+                }
             }
         } else {
             // External / builtin.

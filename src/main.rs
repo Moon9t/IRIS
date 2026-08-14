@@ -255,6 +255,9 @@ fn run() {
             if cli.sandbox {
                 iris::security::set_security_policy(iris::security::SecurityPolicy::sandboxed());
             }
+            if cli.strict_effects {
+                iris::set_strict_effects(true);
+            }
             if cli.target.is_some()
                 && !matches!(
                     cli.emit,

@@ -161,8 +161,19 @@ impl EffectRegistry {
         );
 
         // === alloc (heap allocation) ===
+        //
+        // Both spellings matter. The IR-level names (`list_new`, `list_push`)
+        // are what the lowerer emits, but the effect checker runs on the AST
+        // and therefore sees the *surface* names a programmer writes — `list`,
+        // `push`, `pop`. Registering only the IR names left the single most
+        // common allocation in any IRIS program invisible to the checker.
         self.reg(
             &[
+                // Surface spellings (what the effect checker actually matches).
+                "list",
+                "push",
+                "pop",
+                "map",
                 "list_new",
                 "list_with_capacity",
                 "list_push",

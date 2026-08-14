@@ -104,6 +104,11 @@ pub struct Cli {
     #[arg(long = "sandbox")]
     pub sandbox: bool,
 
+    /// Require every effectful function to declare an `effect` clause that
+    /// covers what it does; a violation fails the build
+    #[arg(long = "strict-effects")]
+    pub strict_effects: bool,
+
     /// Input file
     pub file: Option<PathBuf>,
 }
@@ -212,6 +217,7 @@ pub struct CliArgs {
     pub max_depth: usize,
     pub no_cache: bool,
     pub sandbox: bool,
+    pub strict_effects: bool,
 }
 
 /// Result of `parse_args` — backward-compatible with the old API.
@@ -283,6 +289,7 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
                 max_depth: cli.max_depth,
                 no_cache: cli.no_cache,
                 sandbox: cli.sandbox,
+                strict_effects: cli.strict_effects,
             }))
         }
         Some(Command::Run { file }) => {
@@ -298,6 +305,7 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
                 max_depth: cli.max_depth,
                 no_cache: cli.no_cache,
                 sandbox: cli.sandbox,
+                strict_effects: cli.strict_effects,
             }))
         }
         Some(Command::Repl) => Ok(ParseArgsResult::Repl),
@@ -319,6 +327,7 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
                     max_depth: cli.max_depth,
                     no_cache: cli.no_cache,
                     sandbox: cli.sandbox,
+                    strict_effects: cli.strict_effects,
                 }))
             } else {
                 Ok(ParseArgsResult::Bench)
@@ -338,6 +347,7 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
                     max_depth: cli.max_depth,
                     no_cache: cli.no_cache,
                     sandbox: cli.sandbox,
+                    strict_effects: cli.strict_effects,
                 }))
             } else {
                 Ok(ParseArgsResult::Profile)
@@ -368,6 +378,7 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
                 max_depth: cli.max_depth,
                 no_cache: cli.no_cache,
                 sandbox: cli.sandbox,
+                strict_effects: cli.strict_effects,
             }))
         }
     }
@@ -472,6 +483,8 @@ pub fn help_text() -> &'static str {
        --max-depth <n>       Legacy call-depth guardrail (ignored for native build/run/eval/jit)\n\
        --no-cache            Disable incremental compilation cache\n\
        --sandbox             Run with sandboxed security (deny fs/network/ffi/process)\n\
+       --strict-effects      Require `effect` clauses that cover what each function\n\
+                             does; an effect violation fails the build\n\
        --help, -h            Print this help and exit\n\
        --version, -V         Print version and exit\n"
 }
