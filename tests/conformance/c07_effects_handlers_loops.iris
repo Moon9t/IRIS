@@ -1,0 +1,66 @@
+// c07 — algebraic effects with resume x labelled break x early return x nested
+// control flow.
+//
+// Adversarial: an intercepted extern called from inside a labelled nested loop,
+// with an early return threading through it.
+
+extern def echo(s: str) -> str
+
+// NOTE: the handler is inline rather than wrapped in a function returning it.
+// `def f() -> str { handle {...} with {...} }` fails with "undefined value %0"
+// — known-issues #16. The only handler test in the tree uses the inline form,
+// which is why that went unnoticed.
+
+// Labelled break out of a doubly-nested loop, from inside a conditional.
+def first_pair_summing_to(target: i64, limit: i64) -> i64 {
+    var found = -1
+    for outer i in 1..limit {
+        for j in 1..limit {
+            if i + j == target {
+                found = i * 100 + j
+                break outer;
+            };
+        };
+    };
+    found
+}
+
+// Early return from inside a loop inside a conditional.
+def first_divisor(n: i64) -> i64 {
+    var d = 2
+    while d < n {
+        if n % d == 0 { return d };
+        d = d + 1
+    }
+    n
+}
+
+def main() -> i64 {
+    val handled = handle {
+        echo("original")
+    } with {
+        echo(s) -> resume(v) => v("intercepted")
+    }
+    assert(handled == "intercepted");
+
+    // smallest i,j >= 1 with i+j == 5 scanning i outer: i=1, j=4
+    assert(first_pair_summing_to(5, 10) == 104);
+    assert(first_pair_summing_to(999, 5) == -1);
+
+    assert(first_divisor(15) == 3);
+    assert(first_divisor(17) == 17);
+    assert(first_divisor(8) == 2);
+
+    // NOTE: labelled `continue` is deliberately absent here. It works natively
+    // but fails in the interpreter with "undefined value" — known-issues #17,
+    // already reproduced by tests/test_labeled_break.iris. Unlabelled continue
+    // inside a labelled loop is fine:
+    var evens = 0
+    for scan k in 0..10 {
+        if k % 2 == 0 { evens = evens + 1 };
+    };
+    assert(evens == 5);
+
+    println("c07 ok");
+    0
+}

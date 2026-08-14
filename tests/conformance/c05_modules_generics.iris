@@ -1,0 +1,27 @@
+// c05 — multi-file modules x generics x consts x annotation-driven inference.
+//
+// Adversarial: a generic record defined in one module, instantiated at two
+// different types in another, alongside a module const and a cross-module call
+// chain that passes through a private helper.
+
+bring "c05_mod_shapes.iris"
+
+def main() -> i64 {
+    // Generic instantiated at i64 and at str in the same program.
+    val pi: Pair<i64> = pair_of(3, 7)
+    assert(pair_first(pi) == 3);
+    assert(pair_first(pair_swap(pi)) == 7);
+
+    val ps: Pair<str> = pair_of("left", "right")
+    assert(pair_first(ps) == "left");
+    assert(pair_first(pair_swap(ps)) == "right");
+
+    // Module const crossing the bring.
+    assert(SCALE == 10);
+
+    // Public fn that internally calls a private one.
+    assert(scaled(3) == 60);
+
+    println("c05 ok");
+    0
+}

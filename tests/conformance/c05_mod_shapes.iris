@@ -1,0 +1,13 @@
+// Helper module for c05. Not an entry point — has no main.
+pub record Pair[T] { a: T, b: T }
+
+pub def pair_of[T](a: T, b: T) -> Pair<T> { Pair { a: a, b: b } }
+pub def pair_first[T](p: Pair<T>) -> T { p.a }
+pub def pair_swap[T](p: Pair<T>) -> Pair<T> { Pair { a: p.b, b: p.a } }
+
+pub const SCALE: i64 = 10
+
+// Deliberately not `pub` — see known-issues #13.
+def internal_helper(x: i64) -> i64 { x * 2 }
+
+pub def scaled(x: i64) -> i64 { internal_helper(x) * SCALE }

@@ -1,0 +1,53 @@
+// c06 — par for x captured atomics x channels x spawn x records over channels.
+//
+// Adversarial: the parallel-counter idiom that segfaulted natively until
+// known-issues #12 was fixed, combined with channel handoff and a spawned
+// producer, in one program.
+
+def producer_sum(n: i64) -> i64 {
+    val ch = channel()
+    spawn {
+        var i = 0
+        while i < n {
+            send(ch, i * i);
+            i = i + 1
+        }
+    }
+    var total = 0
+    var got = 0
+    while got < n {
+        total = total + recv(ch)
+        got = got + 1
+    }
+    total
+}
+
+def main() -> i64 {
+    // Captured atomic mutated from a parallel body.
+    var counter = atomic(0)
+    val step = 3
+    par for i in 0..16 {
+        atomic_add(counter, step);
+    }
+    assert(atomic_load(counter) == 48);
+
+    // A second parallel loop capturing a different atomic, same function.
+    var hits = atomic(100)
+    par for j in 0..10 {
+        atomic_add(hits, 1);
+    }
+    assert(atomic_load(hits) == 110);
+
+    // Channel + spawn handoff: 0+1+4+9+16 = 30
+    assert(producer_sum(5) == 30);
+
+    // Sequential atomics still behave.
+    var plain = atomic(0)
+    atomic_store(plain, 7);
+    assert(atomic_load(plain) == 7);
+    atomic_add(plain, 3);
+    assert(atomic_load(plain) == 10);
+
+    println("c06 ok");
+    0
+}

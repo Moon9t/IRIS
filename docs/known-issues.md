@@ -442,6 +442,87 @@ win with a warning. Either is acceptable; silence is not.
 
 ---
 
+## 16. A `handle` expression as a function's return value — **open, compiler bug**
+
+```iris
+extern def echo(s: str) -> str
+
+def intercepted() -> str {
+    handle { echo("original") } with { echo(s) -> resume(v) => v("intercepted") }
+}
+
+def main() -> i64 {
+    println(intercepted());
+    0
+}
+```
+
+```
+error[E0401]: [runtime error] internal error: undefined value %0
+              — this is a compiler bug, please report it
+```
+
+Natively the same program fails LLVM verification with
+`use of undefined value '%v0'`.
+
+The handler is fine *inline* — this works:
+
+```iris
+val result = handle { echo("original") } with { echo(s) -> resume(v) => v("x") }
+```
+
+which is the shape `tests/test_resume_handler.iris` uses, and why the defect
+survived: the only handler test in the tree never returns one from a function.
+The value produced by the handle block is not materialised when the block is a
+function's tail expression.
+
+Algebraic effects with `resume` are one of the more distinctive things IRIS
+offers, so this is worth fixing before the capability is described anywhere.
+
+**Status:** open.
+
+---
+
+## 17. Labelled `continue` fails in the interpreter — **open, backend divergence**
+
+```iris
+def main() -> i64 {
+    var evens = 0
+    for scan k in 0..10 {
+        if k % 2 == 1 { continue scan; };
+        evens = evens + 1
+    };
+    assert(evens == 5);
+    0
+}
+```
+
+| | Interpreter | Native |
+|---|---|---|
+| labelled `break` | works | works |
+| labelled `continue` | **`undefined value %8`** | works |
+
+The tree's own `tests/test_labeled_break.iris` reproduces it — it is one of the
+only three `.iris` files that assert anything, and it fails on one backend. No
+Rust test globs `tests/*.iris`, so nothing has ever run it.
+
+**Two consequences worth stating.**
+
+*The capability is currently over-claimed.* `iris-claims` lists "Labelled
+break/continue" under "Safe to claim (verified this session)". That verification
+was native-only. Labelled `break` is safe to claim; labelled `continue` is not,
+until this is fixed.
+
+*A backend divergence is a distinct failure class.* Everything else on this list
+is wrong or absent on both paths. Here the two backends disagree, so testing
+either one alone reports success. Conformance programs must run under both
+`--emit eval` and `IRIS_FORCE_INTERP=1`; this was found on the first file that
+did.
+
+**Status:** open.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:
