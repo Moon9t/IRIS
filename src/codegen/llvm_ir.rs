@@ -868,14 +868,15 @@ fn emit_function_body(
                 IrInstr::ConstBool { result, .. } => {
                     emitted_types.insert(*result, "i1".to_owned());
                 }
-                // Both produce a heap object. Downstream type checks — notably the
-                // return-value cast — are keyed on this table, so without an entry
-                // they cannot tell the value is a pointer: a function declared
-                // `-> i64` whose tail expression was `densify(s)` emitted
-                // `ret i64 %vN` against a ptr, which is invalid IR and killed the
-                // process rather than reporting a type problem.
-                IrInstr::Sparsify { result, .. } | IrInstr::Densify { result, .. } => {
+                // Sparsify yields a sparse handle (a heap object); Densify is typed
+                // i64 by the lowerer and returns an nnz count. Registering these
+                // lets downstream type checks — notably the return-value cast —
+                // see the real types instead of guessing.
+                IrInstr::Sparsify { result, .. } => {
                     emitted_types.insert(*result, "ptr".to_owned());
+                }
+                IrInstr::Densify { result, .. } => {
+                    emitted_types.insert(*result, "i64".to_owned());
                 }
                 IrInstr::Call {
                     result: Some(r),
@@ -4629,19 +4630,52 @@ fn emit_instr_ir(
         IrInstr::Sparsify {
             result, operand, ..
         } => {
-            writeln!(
-                out,
-                "  %v{} = call ptr @iris_sparsify(ptr {})",
-                result.0,
-                val(*operand)
-            )?;
+            // `iris_sparsify` takes an IrisList*. A fixed-size array literal is
+            // lowered to an `alloca [N x T]`, i.e. a raw data pointer with no list
+            // header, so passing it here made the runtime read a bogus header and
+            // report an empty sparse value — `densify(sparsify([1,0,3,0,5]))`
+            // returned 0 natively while the interpreter returned 3. The runtime
+            // provides array-specific entry points that take a pointer and a
+            // length; use them when the operand really is an array.
+            match func.value_type(*operand) {
+                Some(IrType::Array { elem, len }) => {
+                    let helper = match **elem {
+                        IrType::Scalar(DType::F64) | IrType::Scalar(DType::F32) => {
+                            "iris_sparsify_f64_array"
+                        }
+                        _ => "iris_sparsify_i64_array",
+                    };
+                    writeln!(
+                        out,
+                        "  %v{} = call ptr @{}(ptr {}, i64 {})",
+                        result.0,
+                        helper,
+                        val(*operand),
+                        len
+                    )?;
+                }
+                _ => {
+                    writeln!(
+                        out,
+                        "  %v{} = call ptr @iris_sparsify(ptr {})",
+                        result.0,
+                        val(*operand)
+                    )?;
+                }
+            }
         }
         IrInstr::Densify {
             result, operand, ..
         } => {
+            // `densify(s)` is typed i64 by the lowerer, where it is documented as
+            // "returns nnz count as i64", and the interpreter implements exactly
+            // that. This backend instead called `iris_densify`, which returns an
+            // IrisList* — so it produced a `ptr` for an instruction declared i64,
+            // and the two backends disagreed about what the same program means.
+            // `iris_sparse_nnz` is the runtime function matching the declared type.
             writeln!(
                 out,
-                "  %v{} = call ptr @iris_densify(ptr {})",
+                "  %v{} = call i64 @iris_sparse_nnz(ptr {})",
                 result.0,
                 val(*operand)
             )?;
@@ -6079,6 +6113,9 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare double @iris_tape_grad(ptr)",
         "declare ptr @iris_sparsify(ptr)",
         "declare ptr @iris_densify(ptr)",
+        "declare i64 @iris_sparse_nnz(ptr)",
+        "declare ptr @iris_sparsify_i64_array(ptr, i64)",
+        "declare ptr @iris_sparsify_f64_array(ptr, i64)",
         // Boxing helpers (scalar → IrisVal*)
         "declare ptr @iris_box_i64(i64)",
         "declare ptr @iris_box_i32(i32)",
