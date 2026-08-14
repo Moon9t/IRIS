@@ -1,0 +1,58 @@
+// c10 — strings x f-string interpolation x format x split/join x escapes.
+//
+// Adversarial: the string builtins combined with interpolation and with
+// carriage returns, which a protocol-building program actually needs. The \r
+// path in particular was corrupted by the eval capture until 2026-08-14.
+
+def greet(name: str, n: i64) -> str {
+    f"hello {name}, you have {n} messages"
+}
+
+def main() -> i64 {
+    val s = "  Hello, World  "
+
+    assert(len("abc") == 3);
+    assert(trim(s) == "Hello, World");
+    assert(to_upper("abc") == "ABC");
+    assert(to_lower("ABC") == "abc");
+    assert(contains(s, "World"));
+    assert(starts_with(trim(s), "Hello"));
+    assert(ends_with(trim(s), "World"));
+    assert(repeat("ab", 3) == "ababab");
+    assert(concat("foo", "bar") == "foobar");
+    assert("foo" + "bar" == "foobar");
+
+    // Interpolation with two holes of different types.
+    assert(greet("ada", 3) == "hello ada, you have 3 messages");
+
+    // format with positional holes.
+    assert(format("{}-{}", "a", "b") == "a-b");
+    assert(format("n={}", 42) == "n=42");
+
+    // to_str across types.
+    assert(to_str(42) == "42");
+    assert(to_str(true) == "true");
+
+    // Escapes, including the carriage return that the eval capture used to eat.
+    val crlf = "A\r\nB"
+    assert(len(crlf) == 4);
+    assert(contains(crlf, "\r"));
+    assert(len("A\tB") == 3);
+    assert(len("A\\B") == 3);
+    assert(len("say \"hi\"") == 8);
+
+    // Building a protocol-shaped string.
+    val req = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
+    assert(starts_with(req, "GET"));
+    assert(contains(req, "\r\n"));
+    assert(len(req) == 37);
+
+    // Empty-string edges.
+    assert(len("") == 0);
+    assert(concat("", "x") == "x");
+    assert(trim("   ") == "");
+    assert(repeat("x", 0) == "");
+
+    println("c10 ok");
+    0
+}

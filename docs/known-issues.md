@@ -672,6 +672,46 @@ runtime paths turned out to be the compiler, not the test.
 
 ---
 
+## 20. Assertion failures point at the *previous* statement — **open, DX**
+
+```iris
+def main() -> i64 {
+    val a = 1
+    val b = 2
+    val c = 3
+    assert(a == 1);
+    assert(b == 2);
+    assert(c == 99);   // line 7 — this is what fails
+    0
+}
+```
+
+```
+error[E0406]: [runtime error] program panicked: assertion failed
+ --> 6:20
+   |
+6 |     assert(b == 2);      <-- reported, and it SUCCEEDED
+```
+
+The span is off by one statement, so the diagnostic names a line that passed.
+That is worse than no location: it sends the reader to correct working code.
+
+Reproduced three times while writing the conformance corpus — once pointing at a
+**comment** (`c07`), once two statements early (`c10`), and in the controlled
+case above. It cost real time on each.
+
+Assertions are the primary failure signal in every `.iris` test, so this is the
+single most-encountered diagnostic in the language. Worth fixing before the
+corpus grows to 125 asserting files, because every one of them will report the
+wrong line when it breaks.
+
+Likely the `SpanTable` entry recorded for the assert's `CondBr`/`Panic` rather
+than for the assert expression itself — see `src/ir/function.rs` `SpanTable`.
+
+**Status:** open.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:

@@ -1,0 +1,69 @@
+// c11 — lists x maps x arrays x nesting x empty-collection edges.
+//
+// Adversarial: nested collections and the boundary cases (empty, single, last
+// index) that a one-feature-per-file corpus tends to skip.
+
+def sum_list(xs: list<i64>) -> i64 effect alloc {
+    var t = 0
+    val n = list_len(xs)
+    for i in 0 .. n { t = t + list_get(xs, i) }
+    t
+}
+
+def main() -> i64 {
+    // Empty list behaves.
+    val empty: list<i64> = list()
+    assert(list_len(empty) == 0);
+    assert(sum_list(empty) == 0);
+
+    // Single element, first == last.
+    val one: list<i64> = list()
+    push(one, 42);
+    assert(list_len(one) == 1);
+    assert(list_get(one, 0) == 42);
+
+    // Growth, indexed access at both ends.
+    val xs: list<i64> = list()
+    var i = 0
+    while i < 10 { push(xs, i * i); i = i + 1 }
+    assert(list_len(xs) == 10);
+    assert(list_get(xs, 0) == 0);
+    assert(list_get(xs, 9) == 81);
+    assert(sum_list(xs) == 285);
+
+    // Mutation in place.
+    list_set(xs, 0, 100);
+    assert(list_get(xs, 0) == 100);
+
+    // Nested list-of-lists.
+    val grid: list<list<i64>> = list()
+    var r = 0
+    while r < 3 {
+        val row: list<i64> = list()
+        var c = 0
+        while c < 3 { push(row, r * 3 + c); c = c + 1 }
+        push(grid, row);
+        r = r + 1
+    }
+    assert(list_len(grid) == 3);
+    assert(list_len(list_get(grid, 0)) == 3);
+    assert(list_get(list_get(grid, 2), 2) == 8);
+    assert(list_get(list_get(grid, 1), 0) == 3);
+
+    // Fixed-size array type with literal and indexing.
+    val arr: [i64; 4] = [10, 20, 30, 40]
+    assert(arr[0] == 10);
+    assert(arr[3] == 40);
+
+    // Strings inside a list, iterated.
+    val names: list<str> = list()
+    push(names, "ada"); push(names, "grace"); push(names, "alan");
+    var joined = ""
+    val ln = list_len(names)
+    for k in 0 .. ln { joined = joined + list_get(names, k) }
+    assert(joined == "adagracealan");
+    assert(list_len(names) == 3);
+
+    println("c11 ok");
+    0
+}
