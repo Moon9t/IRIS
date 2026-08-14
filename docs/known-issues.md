@@ -523,6 +523,105 @@ did.
 
 ---
 
+## 18. Trait objects only work through an annotated intermediate binding — **open**
+
+A concrete value is coerced to a trait object at an annotated `val`, and nowhere
+else.
+
+```iris
+record Cat { name: str }
+trait Speaker { def speak(self) -> str }
+impl Speaker for Cat { def speak(self) -> str { "meow" } }
+
+def describe(s: dyn Speaker) -> str { s.speak() }
+
+def main() -> i64 {
+    val c = Cat { name: "tom" }
+
+    val b: dyn Speaker = c        // works — the only path that does
+    assert(b.speak() == "meow");
+
+    assert(describe(c) == "meow");    // compiles, then at runtime:
+    //   type error — DynCall on non-trait-object: Struct([Str("tom")])
+
+    val xs: list<dyn Speaker> = list()
+    push(xs, c);                      // compile error:
+    //   type mismatch: dyn Speaker {...} vs %Cat -- ListPush
+    0
+}
+```
+
+| Form | Result |
+|---|---|
+| `val d: dyn Trait = concrete` | works |
+| passing a concrete value to a `dyn Trait` **parameter** | compiles, fails at runtime |
+| pushing a concrete value into `list<dyn Trait>` | fails at compile time |
+
+The fat pointer is materialised by a `MakeTraitObject` coercion attached to
+annotated let-bindings (`src/lower/mod.rs`, "Cohersion: if the binding is
+annotated `dyn Trait`..."). Argument positions and collection elements have no
+equivalent, so the concrete struct is passed through raw and `DynCall` finds no
+vtable.
+
+**A heterogeneous collection is the primary reason trait objects exist.** Until
+`list<dyn Trait>` accepts concrete elements, `dyn` is close to unusable for the
+thing it is for.
+
+`tests/test_trait_object.iris` passes because it only ever uses the annotated
+binding form, and it asserts nothing — it returns 0/10/20/30/40 as status codes.
+Nothing runs it.
+
+**Fix direction:** apply the same coercion wherever a `dyn Trait` type is
+expected — argument positions, list/map element types, struct fields, return
+positions — rather than only at let-bindings.
+
+### 18b. …and there is no native implementation at all
+
+Worse than the coercion gap: `dyn Trait` does not work in a native build in
+*any* form, including the annotated-binding one that works interpreted.
+
+```
+use of undefined value '%v1'
+  call void @iris_retain_kind(ptr %v1, i32 1)
+```
+
+The emitted IR shows the values simply missing:
+
+```llvm
+%v1 = getelementptr inbounds %Cat, ptr %struct_alloc1, i32 0   ; the Cat
+call void @iris_retain_kind(ptr %v3, i32 1)                    ; %v3 undefined
+%v5 = call i1 @iris_str_eq(ptr %v3, ptr %v4)                   ; used again
+```
+
+`%v2` and `%v3` — the trait object and the dispatched call — are never defined,
+because both instructions are empty no-ops in the LLVM backend
+(`src/codegen/llvm_ir.rs`):
+
+```rust
+IrInstr::MakeTraitObject { .. } => {}
+IrInstr::DynCall { .. } => {}
+```
+
+Both declare a result (`result()` returns `Some`), so every SSA value they
+should produce dangles. This is the partial-update defect the
+`iris-compiler-change` skill describes: every required site updated except the
+codegen one.
+
+`tests/test_trait_object.iris` and `test_trait_object_return.iris` both fail
+natively. Neither is run by anything, and neither asserts.
+
+**Implementing this needs a vtable representation in the LLVM backend** — a
+per-impl table of function pointers, a fat pointer `{ data, vtable }`, and
+`DynCall` indexing it. That is real work, not a patch, and should be planned.
+
+Until then: **trait objects are interpreter-only, and only via
+`val x: dyn Trait = concrete`.** Do not describe `dyn Trait` as a working
+feature.
+
+**Status:** open.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:
