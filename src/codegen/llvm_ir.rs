@@ -5290,6 +5290,67 @@ fn emit_instr_ir(
         } => {
             let llvm_ret = llvm_type_complete(ret_ty).unwrap_or_else(|_| "ptr".to_owned());
             let nargs = args.len();
+
+            // Call the extern directly unless some handler in this module could
+            // actually intercept it.
+            //
+            // iris_effect_dispatch_or_call casts every target to
+            //   int64_t (*)(int64_t, int64_t, ...)
+            // regardless of its real signature. On x86-64 that is an ABI
+            // violation for floating point: f64 arguments belong in xmm0-3, not
+            // the integer registers, and an f64 result is returned in xmm0, not
+            // rax. So every extern taking or returning f64 read and wrote garbage
+            // — `adaptive_learning_rate` returned 3.39e-312 instead of 0.01, a
+            // denormal formed by reading an integer bit pattern as a double.
+            //
+            // Whether interception is possible is a static property: an effect can
+            // only be handled by a `handle` block naming it, and those appear as
+            // PushHandler arms. If no arm in the module names this extern, no
+            // handler can ever intercept it, so a direct typed call is both
+            // correct and cheaper. Externs that *are* handled still go through the
+            // trampoline, and the f64 limitation remains for those.
+            let interceptable = _module.functions().iter().any(|f| {
+                f.blocks().iter().any(|b| {
+                    b.instrs.iter().any(|i| match i {
+                        IrInstr::PushHandler { arms } => {
+                            arms.iter().any(|a| a.effect_name == *name)
+                        }
+                        _ => false,
+                    })
+                })
+            });
+
+            if !interceptable {
+                let arg_list = args
+                    .iter()
+                    .map(|a| {
+                        let ty = emitted_types
+                            .get(a)
+                            .cloned()
+                            .or_else(|| {
+                                func.value_type(*a)
+                                    .and_then(|t| llvm_type_complete(t).ok())
+                            })
+                            .unwrap_or_else(|| "i64".to_owned());
+                        format!("{} {}", ty, val(*a))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                match result {
+                    Some(r) if llvm_ret != "void" => {
+                        writeln!(
+                            out,
+                            "  %v{} = call {} @{}({})",
+                            r.0, llvm_ret, name, arg_list
+                        )?;
+                    }
+                    _ => {
+                        writeln!(out, "  call {} @{}({})", llvm_ret, name, arg_list)?;
+                    }
+                }
+                return Ok(());
+            }
+
             // A miss means the string-collection pass never saw this extern call.
             // Falling back to index 0 silently passed an unrelated string as the
             // effect name, which surfaced at runtime as "no handler for effect ','"
