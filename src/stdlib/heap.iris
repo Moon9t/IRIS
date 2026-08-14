@@ -41,6 +41,28 @@ pub def heap_pop[T](h: MinHeap<T>) -> (T, MinHeap<T>) {
     (v, MinHeap { data: new_data })
 }
 
+/// The minimum element, discarding the updated heap.
+///
+/// `heap_pop` returns a `(value, heap)` tuple, which is awkward when only one
+/// half is wanted — and destructuring it at the call site is what the tests were
+/// written against. These two accessors were referenced by the test suite but had
+/// never been defined.
+pub def heap_pop_val[T](h: MinHeap<T>) -> T {
+    list_get(h.data, 0)
+}
+
+/// The heap remaining after removing the minimum element.
+pub def heap_pop_heap[T](h: MinHeap<T>) -> MinHeap<T> {
+    var new_data: list<T> = list()
+    var i = 1
+    val n = list_len(h.data)
+    while i < n {
+        push(new_data, list_get(h.data, i));
+        i = i + 1
+    }
+    MinHeap { data: new_data }
+}
+
 /// Insert v into the heap maintaining sorted order.
 pub def heap_push[T](h: MinHeap<T>, v: T) -> MinHeap<T> {
     var new_data: list<T> = list()
