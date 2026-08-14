@@ -868,6 +868,15 @@ fn emit_function_body(
                 IrInstr::ConstBool { result, .. } => {
                     emitted_types.insert(*result, "i1".to_owned());
                 }
+                // Both produce a heap object. Downstream type checks — notably the
+                // return-value cast — are keyed on this table, so without an entry
+                // they cannot tell the value is a pointer: a function declared
+                // `-> i64` whose tail expression was `densify(s)` emitted
+                // `ret i64 %vN` against a ptr, which is invalid IR and killed the
+                // process rather than reporting a type problem.
+                IrInstr::Sparsify { result, .. } | IrInstr::Densify { result, .. } => {
+                    emitted_types.insert(*result, "ptr".to_owned());
+                }
                 IrInstr::Call {
                     result: Some(r),
                     callee,
@@ -2098,6 +2107,42 @@ fn emit_instr_ir(
                     coerce_to_type(*lhs, &ty_s, consts, func, emitted_types, gep_counter, out)?;
                 let rv =
                     coerce_to_type(*rhs, &ty_s, consts, func, emitted_types, gep_counter, out)?;
+                // Arithmetic on a boxed (pointer-represented) operand has no valid
+                // LLVM form: `mul ptr %a, %b` is not an instruction. It arose for
+                // types whose values are heap objects rather than machine scalars
+                // — `grad<T>` dual numbers and sparse tensors — where the native
+                // backend has no arithmetic helpers at all, only accessors like
+                // iris_grad_value. Previously this emitted invalid IR and clang
+                // killed the process.
+                //
+                // Reporting Unsupported instead is both honest and useful: the
+                // eval path falls back to the interpreter on a codegen error, and
+                // the interpreter does implement dual-number arithmetic, so these
+                // programs now produce the right answer rather than crashing.
+                // Comparisons are excluded — `icmp` on pointers is legal.
+                if ty_s == "ptr"
+                    && matches!(
+                        op,
+                        BinOp::Add
+                            | BinOp::Sub
+                            | BinOp::Mul
+                            | BinOp::Div
+                            | BinOp::FloorDiv
+                            | BinOp::Mod
+                            | BinOp::Pow
+                    )
+                {
+                    return Err(CodegenError::Unsupported {
+                        backend: "native".into(),
+                        detail: format!(
+                            "arithmetic ({:?}) on a heap-represented value is not implemented by \
+                             the native backend — types such as grad<T> and sparse tensors have \
+                             no arithmetic runtime helpers. Use the interpreter (--emit eval).",
+                            op
+                        ),
+                    });
+                }
+
                 let is_float = ty_s == "float" || ty_s == "double";
                 let llvm_op = match (op, is_float) {
                     (BinOp::Add, true) => format!("fadd {} {}, {}", ty_s, lv, rv),
