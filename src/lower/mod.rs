@@ -15544,6 +15544,38 @@ impl<'m> Lowerer<'m> {
                     .map(|(name, (vid, ty))| (name.clone(), *vid, ty.clone()))
                     .collect();
 
+                // Reject mutation of a captured collection from the loop body.
+                //
+                // `par for` runs its body on several OS threads. A captured
+                // `list` or `map` mutated from inside is a data race: the
+                // runtime now locks the collection primitives, so it will not
+                // corrupt memory, but the *result* is still order-dependent and
+                // the program is not deterministic. Locking makes it survivable;
+                // it does not make it correct.
+                //
+                // A language whose selling point is a statically verifiable
+                // autonomy layer should not admit a race through the front door,
+                // and the captures are already enumerated here, so the check
+                // costs nothing.
+                //
+                // Limit, stated plainly: this catches a mutating builtin applied
+                // directly to a captured name. Mutation reached through a
+                // user-defined function is not detected — that needs
+                // interprocedural analysis. False negatives, never false
+                // positives.
+                {
+                    let captured_names: std::collections::HashSet<&str> =
+                        captures.iter().map(|(n, _, _)| n.as_str()).collect();
+                    let mut offender: Option<(String, String)> = None;
+                    find_captured_mutation(body, &captured_names, &mut offender);
+                    if let Some((coll, op)) = offender {
+                        return Err(LowerError::Rejected {
+                            detail: format!("`par for` body mutates the captured collection `{}` via `{}`.\nIterations run concurrently, so the result depends on thread scheduling.\nUse `atomic` for a shared counter, or build a per-iteration value and combine after the loop.", coll, op),
+                            span: *span,
+                        });
+                    }
+                }
+
                 // Build params: loop var first, then captures.
                 let mut params = vec![crate::ir::function::Param {
                     name: var.name.clone(),
@@ -16760,6 +16792,100 @@ fn collect_rebound_vars_in_stmt(stmt: &AstStmt, names: &mut Vec<String>, include
                 collect_rebound_vars_in_block(d, names, false);
             }
         }
+    }
+}
+
+/// Builtins that mutate a collection in place. First argument is the target.
+const MUTATING_COLLECTION_BUILTINS: &[&str] = &[
+    "push", "pop", "list_push", "list_pop", "list_set", "list_insert",
+    "list_remove", "list_sort", "map_set", "map_insert", "map_remove", "set",
+];
+
+/// Find the first call of a mutating collection builtin whose target is one of
+/// `captured`. Records `(collection name, builtin name)`.
+///
+/// Deliberately conservative: it only inspects statement and expression forms
+/// that can contain a call, so an unhandled form yields a missed violation
+/// rather than a spurious one.
+fn find_captured_mutation(
+    block: &AstBlock,
+    captured: &std::collections::HashSet<&str>,
+    out: &mut Option<(String, String)>,
+) {
+    for stmt in &block.stmts {
+        find_captured_mutation_stmt(stmt, captured, out);
+    }
+    if let Some(tail) = &block.tail {
+        find_captured_mutation_expr(tail, captured, out);
+    }
+}
+
+fn find_captured_mutation_stmt(
+    stmt: &AstStmt,
+    captured: &std::collections::HashSet<&str>,
+    out: &mut Option<(String, String)>,
+) {
+    if out.is_some() {
+        return;
+    }
+    match stmt {
+        AstStmt::Expr(e) => find_captured_mutation_expr(e, captured, out),
+        AstStmt::Let { init, .. } => find_captured_mutation_expr(init, captured, out),
+        AstStmt::Assign { value, .. } => find_captured_mutation_expr(value, captured, out),
+        AstStmt::Return { value: Some(e), .. } => find_captured_mutation_expr(e, captured, out),
+        AstStmt::While { body, cond, .. } => {
+            find_captured_mutation_expr(cond, captured, out);
+            find_captured_mutation(body, captured, out);
+        }
+        AstStmt::Loop { body, .. } => find_captured_mutation(body, captured, out),
+        AstStmt::ForRange { body, .. } => find_captured_mutation(body, captured, out),
+        AstStmt::ForEach { body, .. } => find_captured_mutation(body, captured, out),
+        AstStmt::ParFor { body, .. } => find_captured_mutation(body, captured, out),
+        _ => {}
+    }
+}
+
+fn find_captured_mutation_expr(
+    expr: &AstExpr,
+    captured: &std::collections::HashSet<&str>,
+    out: &mut Option<(String, String)>,
+) {
+    if out.is_some() {
+        return;
+    }
+    match expr {
+        AstExpr::Call { callee, args, .. } => {
+            if MUTATING_COLLECTION_BUILTINS.contains(&callee.name.as_str()) {
+                if let Some(AstExpr::Ident(target)) = args.first() {
+                    if captured.contains(target.name.as_str()) {
+                        *out = Some((target.name.clone(), callee.name.clone()));
+                        return;
+                    }
+                }
+            }
+            for a in args {
+                find_captured_mutation_expr(a, captured, out);
+            }
+        }
+        AstExpr::BinOp { lhs, rhs, .. } => {
+            find_captured_mutation_expr(lhs, captured, out);
+            find_captured_mutation_expr(rhs, captured, out);
+        }
+        AstExpr::UnaryOp { expr, .. } => find_captured_mutation_expr(expr, captured, out),
+        AstExpr::If {
+            cond,
+            then_block,
+            else_block,
+            ..
+        } => {
+            find_captured_mutation_expr(cond, captured, out);
+            find_captured_mutation(then_block, captured, out);
+            if let Some(eb) = else_block {
+                find_captured_mutation(eb, captured, out);
+            }
+        }
+        AstExpr::Block(b) => find_captured_mutation(b, captured, out),
+        _ => {}
     }
 }
 

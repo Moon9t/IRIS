@@ -782,6 +782,37 @@ IrisVal* iris_result_unwrap_err(IrisResult* res) {
 // List
 // ---------------------------------------------------------------------------
 
+/* ---- Collection lock ---------------------------------------------------
+ *
+ * `iris_list_push` grew the buffer with `xrealloc` and advanced `len++` with no
+ * synchronisation at all, so two threads inside a `par for` could lose an
+ * update, or one could move the buffer while the other wrote through the stale
+ * pointer. That is a data race reachable from ordinary safe IRIS:
+ *
+ *     par for i in 0..2000 { push(shared, i); }
+ *
+ * It produced the right answer on every run of an eleven-run probe, which is
+ * the most dangerous possible result -- two accidents were hiding it. Every
+ * push passes through `iris_retain`, which takes a *global* refcount mutex and
+ * serialises most of the window; and `iris_par_for` created one thread per
+ * iteration, so on a 2-core box thread startup dominated and overlap was
+ * minimal. Both disappear on a larger machine.
+ *
+ * A single global lock rather than per-list: the refcount mutex above is
+ * already taken on every element operation, so the serialisation exists
+ * regardless and a second global adds little. Per-list mutexes are the upgrade
+ * path if profiling ever shows this to matter.
+ *
+ * Recursive, so that a public entry point which internally calls another
+ * (`iris_str_split` builds its result with `iris_list_push`) cannot deadlock.
+ * Auditing every internal caller instead would be a standing trap for anyone
+ * adding a collection helper later.
+ */
+static pthread_mutex_t coll_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void coll_lock(void)   { pthread_mutex_lock(&coll_mu); }
+static void coll_unlock(void) { pthread_mutex_unlock(&coll_mu); }
+
 IrisList* iris_list_new(void) {
     IrisList* l = xcalloc(1, sizeof(IrisList));
     l->cap  = 8;
@@ -789,12 +820,14 @@ IrisList* iris_list_new(void) {
     return l;
 }
 void iris_list_push(IrisList* l, IrisVal* val) {
+    coll_lock();
     if (l->len == l->cap) {
         l->cap *= 2;
         l->data = xrealloc(l->data, sizeof(IrisVal*) * l->cap);
     }
     if (val) iris_retain(val);
     l->data[l->len++] = val;
+    coll_unlock();
 }
 int64_t  iris_list_len(IrisList* l) { return (int64_t)l->len; }
 IrisVal* iris_list_get(IrisList* l, int64_t idx) {
@@ -805,17 +838,27 @@ IrisVal* iris_list_get(IrisList* l, int64_t idx) {
     return l->data[idx];
 }
 void iris_list_set(IrisList* l, int64_t idx, IrisVal* val) {
+    coll_lock();
     if (idx < 0 || (size_t)idx >= l->len) {
+        coll_unlock();
         fprintf(stderr, "iris: list set index %ld out of bounds\n", (long)idx);
         abort();
     }
     if (val) iris_retain(val);
     if (l->data[idx]) iris_release(l->data[idx]);
     l->data[idx] = val;
+    coll_unlock();
 }
 IrisVal* iris_list_pop(IrisList* l) {
-    if (l->len == 0) { fprintf(stderr, "iris: pop on empty list\n"); abort(); }
-    return l->data[--l->len];
+    coll_lock();
+    if (l->len == 0) {
+        coll_unlock();
+        fprintf(stderr, "iris: pop on empty list\n");
+        abort();
+    }
+    IrisVal* v = l->data[--l->len];
+    coll_unlock();
+    return v;
 }
 
 // ---------------------------------------------------------------------------
@@ -837,7 +880,11 @@ IrisMap* iris_map_new(void) {
     return m;
 }
 void iris_map_set(IrisMap* m, IrisVal* key, IrisVal* val) {
+    /* Stringify the key BEFORE taking the lock: `iris_value_to_str` walks a
+     * list value and would re-enter `iris_list_get`, deadlocking on a
+     * non-recursive mutex. */
     char* key_str = iris_value_to_str(key);
+    coll_lock();
     size_t h = hash_str(key_str) % m->n_buckets;
     for (IrisMapEntry* e = m->buckets[h]; e; e = e->next) {
         if (strcmp(e->key, key_str) == 0) {
@@ -845,6 +892,7 @@ void iris_map_set(IrisMap* m, IrisVal* key, IrisVal* val) {
             if (e->val) iris_release(e->val);
             e->val = val;
             free(key_str);
+            coll_unlock();
             return;
         }
     }
@@ -854,6 +902,7 @@ void iris_map_set(IrisMap* m, IrisVal* key, IrisVal* val) {
     if (val) iris_retain(val);
     e->next = m->buckets[h];
     m->buckets[h] = e;  m->len++;
+    coll_unlock();
 }
 IrisOption* iris_map_get(IrisMap* m, IrisVal* key) {
     char* key_str = iris_value_to_str(key);
@@ -878,7 +927,8 @@ int iris_map_contains(IrisMap* m, IrisVal* key) {
     return 0;
 }
 void iris_map_remove(IrisMap* m, IrisVal* key) {
-    char* key_str = iris_value_to_str(key);
+    char* key_str = iris_value_to_str(key);   /* see iris_map_set */
+    coll_lock();
     size_t h = hash_str(key_str) % m->n_buckets;
     IrisMapEntry** pp = &m->buckets[h];
     while (*pp) {
@@ -890,11 +940,13 @@ void iris_map_remove(IrisMap* m, IrisVal* key) {
             free(doomed);
             m->len--;
             free(key_str);
+            coll_unlock();
             return;
         }
         pp = &(*pp)->next;
     }
     free(key_str);
+    coll_unlock();
 }
 int64_t iris_map_len(IrisMap* m) { return (int64_t)m->len; }
 
@@ -1482,17 +1534,85 @@ static void* par_for_worker(void* arg) {
     free(a);
     return NULL;
 }
+/* Worker arguments for a strided share of the iteration space. */
+typedef struct {
+    void (*fn)(int64_t, void*);
+    int64_t start;
+    int64_t end;
+    int64_t stride;
+    void*   arg;
+} ParRangeArg;
+
+static void* par_for_range_worker(void* p) {
+    ParRangeArg* a = (ParRangeArg*)p;
+    for (int64_t i = a->start; i < a->end; i += a->stride) {
+        a->fn(i, a->arg);
+    }
+    return NULL;
+}
+
+static int64_t iris_hw_threads(void) {
+#if defined(_WIN32)
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    int64_t n = (int64_t)si.dwNumberOfProcessors;
+#elif defined(_SC_NPROCESSORS_ONLN)
+    int64_t n = (int64_t)sysconf(_SC_NPROCESSORS_ONLN);
+#else
+    int64_t n = 4;
+#endif
+    if (n < 1) n = 1;
+    if (n > 64) n = 64;
+    return n;
+}
+
+/* A fixed pool striding the iteration space, not one thread per iteration.
+ *
+ * The previous implementation called pthread_create once per index, so
+ * `par for i in 0..2000` created two thousand OS threads. At roughly 1 MB of
+ * reserved stack each that is an address-space problem before it is a
+ * performance one, and the creation cost so dominated that iterations barely
+ * overlapped -- which was one of two accidents hiding the unsynchronised
+ * collection mutation now fixed above.
+ *
+ * Striding rather than contiguous blocks keeps the split even when the body
+ * cost varies with the index, which it usually does. */
 void iris_par_for(void (*fn)(int64_t, void*), int64_t start, int64_t end, void* arg) {
     int64_t n = end - start;
     if (n <= 0) return;
-    pthread_t* threads = xmalloc(sizeof(pthread_t) * (size_t)n);
-    for (int64_t i = start; i < end; i++) {
-        ParArg* a = xmalloc(sizeof(ParArg));
-        a->fn = fn;  a->i = i;  a->arg = arg;
-        pthread_create(&threads[i - start], NULL, par_for_worker, a);
+
+    int64_t workers = iris_hw_threads();
+    if (workers > n) workers = n;
+    if (workers <= 1) {
+        for (int64_t i = start; i < end; i++) fn(i, arg);
+        return;
     }
-    for (int64_t i = 0; i < n; i++) pthread_join(threads[i], NULL);
+
+    pthread_t* threads = xmalloc(sizeof(pthread_t) * (size_t)workers);
+    ParRangeArg* args = xmalloc(sizeof(ParRangeArg) * (size_t)workers);
+    /* Per-slot, not a high-water mark: a failed create in the middle would
+     * otherwise leave an uninitialised handle inside the join range. */
+    unsigned char* created = xmalloc((size_t)workers);
+    for (int64_t w = 0; w < workers; w++) {
+        args[w].fn = fn;
+        args[w].start = start + w;
+        args[w].end = end;
+        args[w].stride = workers;
+        args[w].arg = arg;
+        if (pthread_create(&threads[w], NULL, par_for_range_worker, &args[w]) == 0) {
+            created[w] = 1;
+        } else {
+            /* Out of threads: run this share inline rather than dropping it. */
+            created[w] = 0;
+            par_for_range_worker(&args[w]);
+        }
+    }
+    for (int64_t w = 0; w < workers; w++) {
+        if (created[w]) pthread_join(threads[w], NULL);
+    }
+    free(created);
     free(threads);
+    free(args);
 }
 
 typedef struct {

@@ -119,6 +119,14 @@ pub enum LowerError {
     #[error("unsupported expression — {detail}. This construct is not yet supported by the IRIS compiler")]
     Unsupported { detail: String, span: Span },
 
+    /// Valid syntax that the language deliberately does not permit.
+    ///
+    /// Distinct from `Unsupported`, whose message promises the construct may
+    /// arrive later. A concurrency violation is not a missing feature and
+    /// telling the programmer to wait for it would be wrong.
+    #[error("{detail}")]
+    Rejected { detail: String, span: Span },
+
     #[error("cannot find layer or input '{name}' — make sure it is defined earlier in the model")]
     UndefinedLayer { name: String, span: Span },
 
@@ -247,6 +255,7 @@ impl Error {
                 LowerError::TypeMismatch { .. } => "E0101",
                 LowerError::DuplicateFunction { .. } => "E0102",
                 LowerError::Unsupported { .. } => "E0103",
+                LowerError::Rejected { .. } => "E0108",
                 LowerError::UndefinedLayer { .. } => "E0104",
                 LowerError::DuplicateNode { .. } => "E0105",
                 LowerError::InvalidLayerParam { .. } => "E0106",

@@ -87,6 +87,7 @@ fn extract_span(err: &Error) -> Option<(u32, u32)> {
             LowerError::TypeMismatch { span, .. } => Some((span.start.0, span.end.0)),
             LowerError::DuplicateFunction { span, .. } => Some((span.start.0, span.end.0)),
             LowerError::Unsupported { span, .. } => Some((span.start.0, span.end.0)),
+            LowerError::Rejected { span, .. } => Some((span.start.0, span.end.0)),
             LowerError::UndefinedLayer { span, .. } => Some((span.start.0, span.end.0)),
             LowerError::DuplicateNode { span, .. } => Some((span.start.0, span.end.0)),
             LowerError::InvalidLayerParam { span, .. } => Some((span.start.0, span.end.0)),

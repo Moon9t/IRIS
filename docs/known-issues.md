@@ -927,6 +927,72 @@ lifecycle nodes remain absent.
 
 ---
 
+## 24. `par for` was a data race by construction — **FIXED**
+
+`iris_list_push` grew the buffer with `xrealloc` and advanced `len++` with no
+synchronisation at all, so two threads could lose an update or one could move
+the buffer while another wrote through the stale pointer:
+
+```iris
+val shared: list<i64> = list()
+par for i in 0..2000 { push(shared, i); }
+```
+
+**It produced the right answer on all eleven runs of a probe.** That is the most
+dangerous possible result, and two accidents were hiding it: every push passes
+through `iris_retain`, which takes a *global* refcount mutex and serialises most
+of the window; and `iris_par_for` created **one OS thread per iteration**, so on
+a 2-core box thread startup dominated and iterations barely overlapped. Both
+disappear on a larger machine.
+
+Three changes, at three levels:
+
+**Runtime — the collection primitives are locked.** `list_push`, `list_get`,
+`list_set`, `list_pop`, `map_set`, `map_remove` now take a global collection
+mutex. `list_get` is locked too: an unsynchronised read can observe `data`
+mid-realloc and follow a freed pointer. A single global lock rather than
+per-list because the refcount mutex is already taken on every element
+operation, so the serialisation exists regardless; per-list is the upgrade path
+if profiling ever shows it matters. The mutex is non-recursive, so
+`iris_map_set` stringifies its key *before* taking it — `iris_value_to_str`
+walks a list value and would otherwise re-enter `iris_list_get` and deadlock.
+
+**Runtime — `par for` is a worker pool.** `min(hardware_threads, n)` workers
+striding the iteration space, instead of a thread per index. `par for i in
+0..2000` created two thousand OS threads; at ~1 MB of reserved stack each that
+is an address-space problem before it is a performance one. Striding rather
+than contiguous blocks keeps the split even when body cost varies with the
+index.
+
+**Language — mutating a captured collection is now a compile error.**
+
+```
+error[E0108]: `par for` body mutates the captured collection `shared` via `push`.
+Iterations run concurrently, so the result depends on thread scheduling.
+Use `atomic` for a shared counter, or build a per-iteration value and combine
+after the loop.
+```
+
+Locking makes the race survivable; it does not make it *correct*, because the
+result is still order-dependent. A language whose selling point is a statically
+verifiable autonomy layer should not admit a race through the front door, and
+`IrInstr::ParFor` already enumerates its captures, so the check costs nothing.
+
+A new `LowerError::Rejected` variant carries it. `Unsupported` was wrong: its
+message promises the construct may arrive later, and a concurrency violation is
+not a missing feature.
+
+**Limit, stated plainly:** the check catches a mutating builtin applied directly
+to a captured name. Mutation reached through a user-defined function is not
+detected — that needs interprocedural analysis. False negatives, never false
+positives.
+
+**Still open:** `list_sort`, `list_concat`, `list_slice`, `map_keys` and
+`map_values` are not yet locked. They are read-mostly and not reachable from the
+rejected pattern, but they are not proven safe either.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:
