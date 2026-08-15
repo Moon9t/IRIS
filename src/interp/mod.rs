@@ -4805,15 +4805,22 @@ fn eval_binop(op: BinOp, lv: &IrValue, rv: &IrValue) -> Result<IrValue, InterpEr
         // Enum(3, []) and Enum(3, [])". Comparing two enum values is elementary,
         // and failing at runtime means an untested branch ships broken.
         // See known-issues #8.
-        (BinOp::CmpEq, Enum(..), Enum(..)) => Ok(Bool(lv == rv)),
-        (BinOp::CmpNe, Enum(..), Enum(..)) => Ok(Bool(lv != rv)),
         //
-        // Struct and Tuple are deliberately NOT handled here even though
-        // `PartialEq` covers them. Native codegen compares aggregates wrongly —
-        // `P{1,2} == P{1,3}` evaluates to `true` there — so implementing them
-        // interpreted-only would replace one wrong answer with two backends that
-        // disagree, which is worse. Recorded as #26; add these arms when the
-        // native side is fixed.
+        // Records are enabled here only now that native codegen compares them
+        // structurally too (#26). Before that, native `strcmp`-ed raw struct
+        // memory and reported `P{1,2} == P{1,3}` as **true**, so enabling the
+        // interpreter on its own would have traded one wrong answer for two
+        // backends that disagree — harder to find, not easier.
+        //
+        // Tuples are still excluded: they have no named LLVM type to index, so
+        // native has no structural comparison for them and rejects `==` at
+        // compile time. Adding the arm here would reintroduce the divergence.
+        (BinOp::CmpEq, Enum(..), Enum(..)) | (BinOp::CmpEq, Struct(_), Struct(_)) => {
+            Ok(Bool(lv == rv))
+        }
+        (BinOp::CmpNe, Enum(..), Enum(..)) | (BinOp::CmpNe, Struct(_), Struct(_)) => {
+            Ok(Bool(lv != rv))
+        }
 
         _ => Err(InterpError::TypeError {
             detail: format!("unsupported binop {:?} on {:?} and {:?}", op, lv, rv),

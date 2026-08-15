@@ -1175,7 +1175,39 @@ call.
 
 ---
 
-## 26. Native struct/tuple equality returns `true` for unequal values — **open, silent**
+## 26. Native struct/tuple equality returns `true` for unequal values — **FIXED for records; tuples now rejected**
+
+> **Root cause.** Records are `ptr` in LLVM, and the comparison path treated
+> "both operands are `ptr`" as evidence of a *string*, so `==` on two records
+> called `iris_str_eq`, which `strcmp`s the raw struct bytes.
+> `P { x: 1, y: 2 }` and `P { x: 1, y: 3 }` both read as the one-byte string
+> `""` — the first field followed by its zero padding — and compared
+> **equal**. Not unreliable: the exact opposite of the truth, silently.
+>
+> It also explains why the first check tried during #8 appeared to pass. It did
+> not work; it returned `true` for everything whose first field matched.
+>
+> **Fix.** The `ptr`-means-string heuristic now excludes aggregates, and records
+> compare field by field: `icmp`/`fcmp` for scalars, `iris_str_eq` for `str`
+> fields, and recursion for nested records. Pointer identity would have been
+> just as wrong in the other direction — two separately built records with
+> identical fields would compare unequal, while the interpreter compares by
+> value.
+>
+> With native correct, the interpreter's `Struct` arms were enabled, so both
+> backends now agree.
+>
+> **Tuples are not fixed.** They have no named LLVM type to index, so there is
+> no structural comparison to emit; native rejects `==` on tuples at compile
+> time and the interpreter still rejects it at runtime. Both refuse, which is
+> the honest state — a field type with no comparison is refused explicitly
+> rather than guessed at, because a wrong answer here is invisible.
+>
+> Regression test: `tests/conformance/c20_record_equality.iris`, whose cases are
+> chosen to fail a `strcmp` implementation — records differing only in a
+> trailing field, and records sharing a leading field.
+
+### Original report
 
 ```iris
 record P { x: i64, y: i64 }

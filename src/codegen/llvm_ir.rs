@@ -2113,10 +2113,49 @@ fn emit_instr_ir(
             // String comparison: use iris_str_eq / iris_str_cmp (pointer comparison is wrong).
             let lhs_ety = emitted_types.get(lhs).map(|s| s.as_str());
             let rhs_ety = emitted_types.get(rhs).map(|s| s.as_str());
+            // Aggregates are also emitted as `ptr`, so "both operands are ptr"
+            // is not evidence of a string. Treating it as one sent struct
+            // pointers into `iris_str_eq`, which `strcmp`s raw struct memory:
+            // `P { x: 1, y: 2 }` and `P { x: 1, y: 3 }` both read as the
+            // one-byte string "" (the first field, then its zero padding)
+            // and compared **equal**. A silent wrong answer, and the opposite
+            // of the truth. See known-issues #26.
+            let is_aggregate = matches!(
+                semantic_operand_ty,
+                Some(IrType::Struct { .. })
+                    | Some(IrType::Tuple(_))
+                    | Some(IrType::Array { .. })
+                    | Some(IrType::List(_))
+                    | Some(IrType::Map(_, _))
+                    | Some(IrType::Option(_))
+                    | Some(IrType::ResultType(_, _))
+            );
             let is_str_cmp = semantic_operand_ty == Some(&IrType::Str)
-                || (lhs_ety == Some("ptr")
+                || (!is_aggregate
+                    && lhs_ety == Some("ptr")
                     && rhs_ety == Some("ptr")
                     && matches!(op, BinOp::CmpEq | BinOp::CmpNe));
+
+            // Structural equality for records, field by field.
+            if matches!(op, BinOp::CmpEq | BinOp::CmpNe) {
+                if let Some(sty @ IrType::Struct { .. }) = semantic_operand_ty {
+                    let lv = coerce_to_type(
+                        *lhs, "ptr", consts, func, emitted_types, gep_counter, out,
+                    )?;
+                    let rv = coerce_to_type(
+                        *rhs, "ptr", consts, func, emitted_types, gep_counter, out,
+                    )?;
+                    let eq = emit_struct_eq(sty, &lv, &rv, gep_counter, out)?;
+                    if *op == BinOp::CmpEq {
+                        writeln!(out, "  %v{} = and i1 {}, true", result.0, eq)?;
+                    } else {
+                        writeln!(out, "  %v{} = xor i1 {}, true", result.0, eq)?;
+                    }
+                    // Result type is recorded by the shared comparison path,
+                    // same as every other `i1`-producing compare.
+                    return Ok(());
+                }
+            }
             if is_str_cmp && matches!(op, BinOp::CmpEq | BinOp::CmpNe) {
                 let lv =
                     coerce_to_type(*lhs, "ptr", consts, func, emitted_types, gep_counter, out)?;
@@ -5825,6 +5864,111 @@ fn emit_instr_ir(
 // ---------------------------------------------------------------------------
 
 /// Complete LLVM type mapping — includes proper struct, array, and scalar types.
+/// Emits a field-by-field equality test for two record pointers, returning the
+/// name of the resulting `i1`.
+///
+/// Records are `ptr` in LLVM, so there is no single instruction that compares
+/// them. Before this existed, `==` on two records fell into the string path and
+/// `strcmp`-ed the raw struct bytes, which reported records with *different*
+/// contents as equal. Comparing the pointers instead would be no better: two
+/// separately built records with identical fields would compare unequal, and
+/// the interpreter compares by value.
+///
+/// Scalar fields compare with `icmp`/`fcmp`, `str` fields with `iris_str_eq`,
+/// and nested records recurse. Anything else is refused rather than guessed at
+/// -- a wrong answer here is invisible, so an explicit error is worth more than
+/// coverage. See known-issues #26.
+fn emit_struct_eq(
+    ty: &IrType,
+    lhs_ptr: &str,
+    rhs_ptr: &str,
+    gep_counter: &mut u32,
+    out: &mut String,
+) -> Result<String, CodegenError> {
+    let (name, fields) = match ty {
+        IrType::Struct { name, fields } => (name, fields),
+        other => {
+            return Err(CodegenError::Unsupported {
+                backend: "llvm".into(),
+                detail: format!("structural equality is not supported for {:?}", other),
+            })
+        }
+    };
+
+    if fields.is_empty() {
+        // No fields to disagree on.
+        let id = *gep_counter;
+        *gep_counter += 1;
+        writeln!(out, "  %seq{} = and i1 true, true", id)?;
+        return Ok(format!("%seq{}", id));
+    }
+
+    let mut acc: Option<String> = None;
+    for (idx, (fname, fty)) in fields.iter().enumerate() {
+        let id = *gep_counter;
+        *gep_counter += 1;
+        let lgep = format!("%seq_l{}", id);
+        let rgep = format!("%seq_r{}", id);
+        writeln!(
+            out,
+            "  {} = getelementptr inbounds %{}, ptr {}, i32 0, i32 {}",
+            lgep, name, lhs_ptr, idx
+        )?;
+        writeln!(
+            out,
+            "  {} = getelementptr inbounds %{}, ptr {}, i32 0, i32 {}",
+            rgep, name, rhs_ptr, idx
+        )?;
+        let fty_s = llvm_type_complete(fty)?;
+        let lval = format!("%seq_lv{}", id);
+        let rval = format!("%seq_rv{}", id);
+        writeln!(out, "  {} = load {}, ptr {}, align 8", lval, fty_s, lgep)?;
+        writeln!(out, "  {} = load {}, ptr {}, align 8", rval, fty_s, rgep)?;
+
+        let cmp = format!("%seq_c{}", id);
+        match fty {
+            IrType::Scalar(DType::F32) | IrType::Scalar(DType::F64) => {
+                writeln!(out, "  {} = fcmp oeq {} {}, {}", cmp, fty_s, lval, rval)?;
+            }
+            IrType::Scalar(_) => {
+                writeln!(out, "  {} = icmp eq {} {}, {}", cmp, fty_s, lval, rval)?;
+            }
+            IrType::Str => {
+                writeln!(
+                    out,
+                    "  {} = call i1 @iris_str_eq(ptr {}, ptr {})",
+                    cmp, lval, rval
+                )?;
+            }
+            IrType::Struct { .. } => {
+                let inner = emit_struct_eq(fty, &lval, &rval, gep_counter, out)?;
+                writeln!(out, "  {} = and i1 {}, true", cmp, inner)?;
+            }
+            other => {
+                return Err(CodegenError::Unsupported {
+                    backend: "llvm".into(),
+                    detail: format!(
+                        "`==` on record `{}` is not supported: field `{}` has type {:?}, \
+                         which has no structural comparison. Compare the fields directly.",
+                        name, fname, other
+                    ),
+                })
+            }
+        }
+
+        acc = Some(match acc {
+            None => cmp,
+            Some(prev) => {
+                let aid = *gep_counter;
+                *gep_counter += 1;
+                writeln!(out, "  %seq_a{} = and i1 {}, {}", aid, prev, cmp)?;
+                format!("%seq_a{}", aid)
+            }
+        });
+    }
+    Ok(acc.expect("at least one field"))
+}
+
 pub fn llvm_type_complete(ty: &IrType) -> Result<String, CodegenError> {
     match ty {
         IrType::Scalar(DType::F32) => Ok("float".to_owned()),

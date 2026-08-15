@@ -1,0 +1,44 @@
+// c20 -- structural equality on records, both backends.
+//
+// Pins known-issues #26. Records are `ptr` in LLVM, and codegen decided "both
+// operands are ptr" meant "string", so `==` on two records called `iris_str_eq`
+// and `strcmp`-ed raw struct memory. `P { x: 1, y: 2 }` and `P { x: 1, y: 3 }`
+// both read as the one-byte string "" -- the first field followed by its
+// zero padding -- and compared **equal**. The answer was not merely unreliable,
+// it was the opposite of the truth, and nothing crashed.
+//
+// The cases below are chosen so that a `strcmp` implementation fails them:
+// records that differ only in a trailing field, and records whose leading field
+// is identical. Nested records check that the comparison recurses rather than
+// stopping at the pointer.
+
+record P { x: i64, y: i64 }
+record Mixed { name: str, n: i64, f: f64, ok: bool }
+record Outer { inner: P, tag: i64 }
+
+def main() -> i64 {
+    // equal contents, separately constructed
+    assert(P { x: 1, y: 2 } == P { x: 1, y: 2 });
+    // differs only in the LAST field -- the case strcmp could never see
+    assert((P { x: 1, y: 2 } == P { x: 1, y: 3 }) == false);
+    assert(P { x: 1, y: 2 } != P { x: 1, y: 3 });
+    // differs only in the FIRST field
+    assert((P { x: 9, y: 2 } == P { x: 1, y: 2 }) == false);
+
+    // every scalar kind, and a str field
+    val a = Mixed { name: "abc", n: 5, f: 1.5, ok: true };
+    assert(a == Mixed { name: "abc", n: 5, f: 1.5, ok: true });
+    assert(a != Mixed { name: "abd", n: 5, f: 1.5, ok: true });
+    assert(a != Mixed { name: "abc", n: 6, f: 1.5, ok: true });
+    assert(a != Mixed { name: "abc", n: 5, f: 2.5, ok: true });
+    assert(a != Mixed { name: "abc", n: 5, f: 1.5, ok: false });
+
+    // nested records recurse
+    val o = Outer { inner: P { x: 1, y: 2 }, tag: 7 };
+    assert(o == Outer { inner: P { x: 1, y: 2 }, tag: 7 });
+    assert(o != Outer { inner: P { x: 1, y: 3 }, tag: 7 });
+    assert(o != Outer { inner: P { x: 1, y: 2 }, tag: 8 });
+
+    println("c20 ok");
+    0
+}
