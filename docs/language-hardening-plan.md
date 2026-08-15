@@ -64,6 +64,55 @@ Each file must `assert` and must run under **both** `--emit eval` and
 **Gate:** the defect list stops growing — two consecutive new programs find
 nothing. Until then, keep writing; the rate says there is more to find.
 
+### Phase 0 — COMPLETE (2026-08-15)
+
+**18 files, 17 entry points, all passing on both `--emit eval` and
+`IRIS_FORCE_INTERP=1`.** `c08` is interpreter-only and marked so: `dyn Trait`
+has no native backend (#18b).
+
+**Fifteen defects found, nine fixed.** Rate: roughly one per 120 lines of
+asserting IRIS.
+
+| Fixed | |
+|---|---|
+| #2 | `str` in a record inside `result` — unblocked `projects/autonomous_regulator` |
+| #6 | enum field in a record broke native codegen |
+| #12 | `par for` never passed its captures to the loop body |
+| #19 | **signed division miscompiled** by strength reduction |
+| #20 | every diagnostic in every CRLF file was misplaced |
+| #23 | FFI out-parameters — six ROS 2 `take_*` functions made reachable |
+| #24 | `par for` was a data race by construction |
+| #25 | deep recursion crashed the process instead of erroring |
+| — | foreach (12 tests), `select` (3), generics (12), singles (7) |
+
+| Still open | |
+|---|---|
+| #15 | a user function is silently discarded when a builtin shares its name |
+| #18/#18b | `dyn Trait` has no native backend |
+| #21/#22 | nested generics, and generics over container types |
+| #7/#9/#10/#13 | module-system and trait/effect gaps |
+| #20b | `span_table` invalidated by every optimisation pass |
+| #25 | interpreter uses ~190 KB of host stack per IRIS call |
+
+**Two observations worth carrying forward.**
+
+*The two most serious defects were guards that existed and could never fire.*
+Effect subsumption was unfalsifiable because `inferred` was seeded from
+`declared`; the recursion guard was set to 5,000 against a real limit of ~350.
+Both read as correct code in review. **For every guard, there should be a test
+that watches it fire** — the sandbox policy, the borrow checker's rejection
+paths and the effect masks have not been probed this way.
+
+*Running both backends found four defects that either alone would have missed* —
+labelled `continue` (interpreter only), `dyn Trait` (native only), the FFI cell
+double-free (native only), and deep recursion (interpreter only). The
+both-backends rule is not ceremony.
+
+*And two were invisible to both.* The division miscompilation and the `par for`
+race produced **correct answers on every run**. Neither was catchable by testing
+outputs; they needed an arithmetic identity checked and a runtime function read.
+That is the argument for asserting *properties*, not just values.
+
 ### Phase 1 — Expressiveness blockers
 
 Every item below was hit while writing ordinary code, not while probing edges.

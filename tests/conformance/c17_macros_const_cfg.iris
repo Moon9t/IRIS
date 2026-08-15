@@ -1,0 +1,65 @@
+// c17 — macros x const functions x conditional compilation, combined.
+//
+// Adversarial: each is covered alone in the tree, but macros expanding to
+// const-function calls inside conditionally-compiled code is the interaction,
+// and it is the shape a real "compile this policy for this target" build uses.
+
+#define TARGET_A 1
+
+defmacro double(x) => x * 2
+defmacro add3(a, b, c) => a + b + c
+defmacro clamp_lo(v, lo) => { if v < lo { lo } else { v } }
+
+const def square(x: i64) -> i64 { x * x }
+const def cube(x: i64) -> i64 { x * square(x) }
+
+#ifdef TARGET_A
+def platform_factor() -> i64 { 10 }
+#else
+def platform_factor() -> i64 { 1 }
+#endif
+
+#ifdef NOT_DEFINED_ANYWHERE
+def unreachable_fn() -> i64 { 999 }
+#endif
+
+def main() -> i64 {
+    // ── Macros alone ──
+    val a: i64 = double!(21);
+    assert(a == 42);
+    val b: i64 = add3!(10, 20, 30);
+    assert(b == 60);
+
+    // ── Macro nested inside macro ──
+    val c: i64 = double!(add3!(1, 2, 3));
+    assert(c == 12);
+    val d: i64 = add3!(double!(1), double!(2), double!(3));
+    assert(d == 12);
+
+    // ── Block-bodied macro ──
+    val e: i64 = clamp_lo!(3, 10);
+    assert(e == 10);
+    val f: i64 = clamp_lo!(30, 10);
+    assert(f == 30);
+
+    // ── const functions, including one calling another ──
+    assert(square(5) == 25);
+    assert(cube(3) == 27);
+    assert(square(0) == 0);
+
+    // ── The interaction: a macro whose argument is a const-fn call ──
+    val g: i64 = double!(square(4));
+    assert(g == 32);
+    val h: i64 = add3!(square(2), cube(2), 1);
+    assert(h == 13);
+
+    // ── Conditional compilation selected the right branch ──
+    assert(platform_factor() == 10);
+
+    // ── All three at once ──
+    val combined: i64 = double!(square(platform_factor()));
+    assert(combined == 200);
+
+    println("c17 ok");
+    0
+}

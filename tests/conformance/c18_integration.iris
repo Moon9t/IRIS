@@ -1,0 +1,115 @@
+// c18 — the integration file: a small but complete system.
+//
+// The Phase 0 gate is two consecutive files finding nothing, and c16/c17 met
+// it. This file exists because both were feature-focused, and every defect
+// found in this corpus so far came from *interaction* rather than from a
+// feature used alone. If the gate is real, this passes; if it does not, the
+// gate was premature.
+//
+// Combines: ADTs in records, traits, generics with bounds, closures, HOFs,
+// option/result with `?`, string building, collections, effects, concurrency
+// with atomics, and std.ais reductions — in one program that computes a real
+// answer.
+
+bring std.ais
+
+choice Severity { Info, Warn, Critical }
+
+record Event {
+    source: str,
+    severity: Severity,
+    value: f64,
+}
+
+record Summary {
+    total: i64,
+    critical: i64,
+    mean_value: f64,
+}
+
+trait Describe {
+    def describe(self: Self) -> str
+}
+
+impl Describe for Event {
+    def describe(self: Event) -> str { self.source }
+}
+
+def sev_rank(s: Severity) -> i64 {
+    when s { Severity.Info => 0, Severity.Warn => 1, Severity.Critical => 2 }
+}
+
+def sev_eq(a: Severity, b: Severity) -> bool { sev_rank(a) == sev_rank(b) }
+
+// Generic with a trait bound, over a user record.
+def label_of[T where T: Describe](x: T) -> str { x.describe() }
+
+// result + `?` through a fallible aggregation.
+def summarise(events: list<Event>) -> result<Summary, str> effect alloc {
+    val n = list_len(events)
+    if n == 0 { return err("no events") };
+
+    val values: list<f64> = list()
+    var crit = 0
+    for i in 0 .. n {
+        val e = list_get(events, i)
+        push(values, e.value);
+        crit = if sev_eq(e.severity, Severity.Critical) { crit + 1 } else { crit }
+    }
+    val mu = list_mean(values)
+    ok(Summary { total: n, critical: crit, mean_value: mu })
+}
+
+def mk(src: str, sev: Severity, v: f64) -> Event {
+    Event { source: src, severity: sev, value: v }
+}
+
+def main() -> i64 {
+    val events: list<Event> = list()
+    push(events, mk("cam-01", Severity.Info, 1.0));
+    push(events, mk("cam-02", Severity.Critical, 5.0));
+    push(events, mk("imu-03", Severity.Warn, 3.0));
+    push(events, mk("imu-04", Severity.Critical, 7.0));
+
+    // Trait dispatch through a generic with a bound.
+    assert(label_of(list_get(events, 0)) == "cam-01");
+    assert(list_get(events, 3).describe() == "imu-04");
+
+    // Fallible aggregation with `?` inside.
+    val s = unwrap(summarise(events))
+    assert(s.total == 4);
+    assert(s.critical == 2);
+    assert(s.mean_value == 4.0);          // (1+5+3+7)/4
+
+    assert(is_err(summarise(list())));
+
+    // Closure + HOF over the extracted values.
+    val doubled: list<f64> = list()
+    val n = list_len(events)
+    for i in 0 .. n {
+        push(doubled, list_get(events, i).value * 2.0);
+    }
+    assert(list_mean(doubled) == 8.0);
+
+    // std.ais reduction over the same data.
+    assert(argmax(doubled) == 3);          // 14.0 is the largest
+
+    // String building across the collection.
+    var names = ""
+    for i in 0 .. n {
+        names = names + list_get(events, i).source
+    }
+    assert(len(names) == 24);              // 4 x 6 characters
+    assert(contains(names, "imu-03"));
+    assert(starts_with(names, "cam-01"));
+
+    // Concurrency alongside all of it, using the only safe shared primitive.
+    var counted = atomic(0)
+    par for i in 0..4 {
+        atomic_add(counted, 1);
+    }
+    assert(atomic_load(counted) == 4);
+
+    println("c18 ok");
+    0
+}

@@ -1,0 +1,99 @@
+// c16 — std.tensor: shapes, indexing, elementwise ops, matmul.
+//
+// std.tensor is 18 of 37 functions referenced by anything. Every module at that
+// coverage level has produced a defect so far except std.ais, so this is a
+// deliberate probe rather than a formality. Values are asserted, including the
+// matmul, which is the one where a wrong answer is easy to miss.
+
+bring std.tensor
+
+def main() -> i64 {
+    // ── Shapes and element counts ──
+    val shape2x3: list<i64> = list()
+    push(shape2x3, 2); push(shape2x3, 3);
+    assert(tensor_numel(shape2x3) == 6);
+
+    val scalar_shape: list<i64> = list()
+    push(scalar_shape, 1);
+    assert(tensor_numel(scalar_shape) == 1);
+
+    // ── zeros / full ──
+    val z = tensor_zeros(shape2x3)
+    val idx: list<i64> = list()
+    push(idx, 0); push(idx, 0);
+    assert(tensor_get(z, idx) == 0.0);
+
+    val f = tensor_full(shape2x3, 3.5)
+    assert(tensor_get(f, idx) > 3.49);
+    assert(tensor_get(f, idx) < 3.51);
+
+    val last: list<i64> = list()
+    push(last, 1); push(last, 2);
+    assert(tensor_get(f, last) > 3.49);
+
+    // ── from_data preserves row-major order ──
+    val data: list<f64> = list()
+    push(data, 1.0); push(data, 2.0); push(data, 3.0);
+    push(data, 4.0); push(data, 5.0); push(data, 6.0);
+    val t = tensor_from_data(data, shape2x3)
+
+    val i00: list<i64> = list()
+    push(i00, 0); push(i00, 0);
+    val i01: list<i64> = list()
+    push(i01, 0); push(i01, 1);
+    val i12: list<i64> = list()
+    push(i12, 1); push(i12, 2);
+    assert(tensor_get(t, i00) == 1.0);
+    assert(tensor_get(t, i01) == 2.0);
+    assert(tensor_get(t, i12) == 6.0);
+
+    // ── set then read back ──
+    tensor_set(t, i00, 99.0);
+    assert(tensor_get(t, i00) == 99.0);
+    assert(tensor_get(t, i01) == 2.0);      // neighbour untouched
+
+    // ── elementwise add ──
+    val a = tensor_full(shape2x3, 2.0)
+    val b = tensor_full(shape2x3, 5.0)
+    val sum = tensor_add(a, b)
+    assert(tensor_get(sum, i00) > 6.99);
+    assert(tensor_get(sum, i00) < 7.01);
+    assert(tensor_get(sum, i12) > 6.99);
+
+    // ── relu: negatives clamp to zero, positives pass through ──
+    val neg = tensor_full(shape2x3, -1.0)
+    val r = tensor_relu(neg)
+    assert(tensor_get(r, i00) == 0.0);
+    val pos = tensor_full(shape2x3, 1.5)
+    val rp = tensor_relu(pos)
+    assert(tensor_get(rp, i00) > 1.49);
+
+    // ── matmul, checked by hand ──
+    //   A = [[1,2],[3,4]]   B = [[5,6],[7,8]]
+    //   AB = [[19,22],[43,50]]
+    val sq: list<i64> = list()
+    push(sq, 2); push(sq, 2);
+    val da: list<f64> = list()
+    push(da, 1.0); push(da, 2.0); push(da, 3.0); push(da, 4.0);
+    val db: list<f64> = list()
+    push(db, 5.0); push(db, 6.0); push(db, 7.0); push(db, 8.0);
+    val ma = tensor_from_data(da, sq)
+    val mb = tensor_from_data(db, sq)
+    val mc = tensor_matmul2(ma, mb, 2, 2, 2)
+
+    val c00: list<i64> = list()
+    push(c00, 0); push(c00, 0);
+    val c01: list<i64> = list()
+    push(c01, 0); push(c01, 1);
+    val c10: list<i64> = list()
+    push(c10, 1); push(c10, 0);
+    val c11: list<i64> = list()
+    push(c11, 1); push(c11, 1);
+    assert(tensor_get(mc, c00) > 18.99); assert(tensor_get(mc, c00) < 19.01);
+    assert(tensor_get(mc, c01) > 21.99); assert(tensor_get(mc, c01) < 22.01);
+    assert(tensor_get(mc, c10) > 42.99); assert(tensor_get(mc, c10) < 43.01);
+    assert(tensor_get(mc, c11) > 49.99); assert(tensor_get(mc, c11) < 50.01);
+
+    println("c16 ok");
+    0
+}
