@@ -737,16 +737,29 @@ pub def software_governor_add_rule(gov: SoftwareGovernor, rule: AutonomicRule) -
     gov
 }
 
+// Evaluate one autonomic rule against a measured value.
+//
+// Previously only ">" and "<" were understood and every other operator
+// returned `false` for all inputs. A rule written with ">=" was therefore not a
+// strict rule -- it was a rule that never fired, while still appearing in the
+// policy and counting toward the rule set. That is a guard that cannot fire,
+// which is the failure mode this project has already hit three times
+// (effect subsumption, the recursion limit, use-before-def).
+//
+// An unrecognised operator now panics rather than returning `false`. In a
+// policy engine a typo is a programming error, and the safe direction for a
+// programming error is loud: a rule that silently never fires is far more
+// dangerous in an autonomic system than one that stops the program while it is
+// being written. See known-issues #29.
 pub def eval_rule(rule: AutonomicRule, metric_val: f64) -> bool {
-    if rule.operator == ">" {
-        metric_val > rule.threshold
-    } else {
-        if rule.operator == "<" {
-            metric_val < rule.threshold
-        } else {
-            false
-        }
-    }
+    if rule.operator == ">" { return metric_val > rule.threshold };
+    if rule.operator == "<" { return metric_val < rule.threshold };
+    if rule.operator == ">=" { return metric_val >= rule.threshold };
+    if rule.operator == "<=" { return metric_val <= rule.threshold };
+    if rule.operator == "==" { return metric_val == rule.threshold };
+    if rule.operator == "!=" { return metric_val != rule.threshold };
+    panic("eval_rule: unknown operator '" + rule.operator + "' on metric '" + rule.metric_name + "' -- expected one of > < >= <= == !=");
+    false
 }
 
 pub def model_save(weights: list<f64>, path: str) -> bool effect fs, io {

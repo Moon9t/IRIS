@@ -1291,6 +1291,31 @@ needs the message to name the types the user actually wrote.
 
 ---
 
+## 29. `eval_rule` silently ignored four of six operators — **FIXED**
+
+> `AutonomicRule` carries an `operator: str`, and `eval_rule` understood only
+> `">"` and `"<"`. Every other operator fell through to `false`, for every
+> input. A rule written with `">="` was therefore not a strict rule -- it was a
+> rule that **never fired**, while still appearing in the policy, counting
+> toward the rule set, and looking correct in review.
+>
+> This is the fourth instance of the project's most expensive pattern: a guard
+> that exists and cannot fire (after effect subsumption, the recursion limit,
+> and use-before-def). It is also the most dangerous instance, because the
+> others were compiler internals and this one is a user-facing policy
+> primitive -- in an autonomic system, a safety rule that quietly never fires is
+> worse than one that fails loudly.
+>
+> **Fixed:** all six comparisons (`>` `<` `>=` `<=` `==` `!=`) are handled, and
+> an unrecognised operator now **panics** rather than returning `false`. A typo
+> in a policy is a programming error, and the safe direction for a programming
+> error is loud.
+>
+> Asserted on both sides of every boundary in `tests/test_ais_primitives.iris`,
+> since off-by-one at a threshold is the entire difference between `>=` and `>`.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:

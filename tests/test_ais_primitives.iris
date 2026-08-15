@@ -1,0 +1,236 @@
+// std.ais -- the pure primitives, asserted directly.
+//
+// These are exercised indirectly by higher-level functions, but indirect
+// exercise does not pin a contract: it catches "this crashed", not "this
+// computes the documented thing". Welford's variance and a regression slope
+// both return plausible numbers when subtly wrong.
+
+bring std.ais
+
+def check_running_stats() -> i64 {
+    var rs = running_stats_new();
+    rs = running_stats_update(rs, 2.0);
+    rs = running_stats_update(rs, 4.0);
+    rs = running_stats_update(rs, 4.0);
+    rs = running_stats_update(rs, 4.0);
+    rs = running_stats_update(rs, 5.0);
+    rs = running_stats_update(rs, 5.0);
+    rs = running_stats_update(rs, 7.0);
+    rs = running_stats_update(rs, 9.0);
+
+    assert(rs.count == 8);
+    assert(rs.mean == 5.0);
+    assert(rs.lowest == 2.0);
+    assert(rs.highest == 9.0);
+
+    // This is the *sample* variance (n-1), not the population variance (n).
+    // For this classic sequence the two differ visibly -- 4.571... against 4.0
+    // -- so the assertion pins which one std.ais implements. `list_std` in the
+    // builtins disagrees with `std.ais` on exactly this distinction, so leaving
+    // it unasserted is how the two silently drift.
+    val v = running_stats_variance(rs);
+    assert(v > 4.57);
+    assert(v < 4.58);
+
+    // Fewer than two samples has no defined spread; it must be 0, not NaN.
+    var one = running_stats_new();
+    one = running_stats_update(one, 3.0);
+    assert(running_stats_variance(one) == 0.0);
+    assert(running_stats_std(one) == 0.0);
+    0
+}
+
+def check_normalize() -> i64 {
+    val d: list<f64> = list();
+    list_push(d, 10.0);
+    list_push(d, 20.0);
+    list_push(d, 30.0);
+    val n = normalize_input(d);
+    assert(list_len(n) == 3);
+    assert(list_get(n, 0) == 0.0);
+    assert(list_get(n, 2) == 1.0);
+    assert(list_get(n, 1) > 0.49);
+    assert(list_get(n, 1) < 0.51);
+
+    // A flat input has no range. Dividing by it would produce NaN or inf and
+    // poison everything downstream, so it must collapse to zeros instead.
+    val flat: list<f64> = list();
+    list_push(flat, 7.0);
+    list_push(flat, 7.0);
+    val fz = normalize_input(flat);
+    assert(list_get(fz, 0) == 0.0);
+    assert(list_get(fz, 1) == 0.0);
+    0
+}
+
+def check_trend() -> i64 {
+    // A rising history has a positive slope, a falling one negative. This is
+    // what tells a self-adapting system that its own performance is degrading,
+    // so the sign has to be right.
+    val rising: list<f64> = list();
+    list_push(rising, 1.0);
+    list_push(rising, 2.0);
+    list_push(rising, 3.0);
+    list_push(rising, 4.0);
+    assert(meta_performance_trend(rising, 4) > 0.9);
+
+    val falling: list<f64> = list();
+    list_push(falling, 4.0);
+    list_push(falling, 3.0);
+    list_push(falling, 2.0);
+    list_push(falling, 1.0);
+    assert(meta_performance_trend(falling, 4) < -0.9);
+
+    val flat: list<f64> = list();
+    list_push(flat, 5.0);
+    list_push(flat, 5.0);
+    list_push(flat, 5.0);
+    assert(meta_performance_trend(flat, 3) == 0.0);
+
+    // Too short a window has no slope.
+    val one: list<f64> = list();
+    list_push(one, 1.0);
+    assert(meta_performance_trend(one, 5) == 0.0);
+    0
+}
+
+def check_eval_rule() -> i64 {
+    val hot = AutonomicRule { metric_name: "temp", operator: ">", threshold: 80.0, action_idx: 0, severity: 1 };
+    assert(eval_rule(hot, 90.0));
+    assert(eval_rule(hot, 70.0) == false);
+    // Boundary: strictly greater, so equality does not fire.
+    assert(eval_rule(hot, 80.0) == false);
+
+    val cold = AutonomicRule { metric_name: "temp", operator: "<", threshold: 10.0, action_idx: 1, severity: 1 };
+    assert(eval_rule(cold, 5.0));
+    assert(eval_rule(cold, 15.0) == false);
+
+    // All six comparison operators are understood. Before this, only ">" and
+    // "<" were: every other operator returned false for every input, so a rule
+    // written with ">=" appeared in the policy and never fired. Each is
+    // asserted on both sides of its boundary, since off-by-one on a threshold
+    // is the whole difference between ">=" and ">".
+    val ge = AutonomicRule { metric_name: "temp", operator: ">=", threshold: 80.0, action_idx: 2, severity: 1 };
+    assert(eval_rule(ge, 80.0));
+    assert(eval_rule(ge, 80.1));
+    assert(eval_rule(ge, 79.9) == false);
+
+    val le = AutonomicRule { metric_name: "temp", operator: "<=", threshold: 10.0, action_idx: 3, severity: 1 };
+    assert(eval_rule(le, 10.0));
+    assert(eval_rule(le, 9.9));
+    assert(eval_rule(le, 10.1) == false);
+
+    val eq = AutonomicRule { metric_name: "temp", operator: "==", threshold: 80.0, action_idx: 4, severity: 1 };
+    assert(eval_rule(eq, 80.0));
+    assert(eval_rule(eq, 80.1) == false);
+
+    val ne = AutonomicRule { metric_name: "temp", operator: "!=", threshold: 80.0, action_idx: 5, severity: 1 };
+    assert(eval_rule(ne, 80.1));
+    assert(eval_rule(ne, 80.0) == false);
+
+    // An unrecognised operator panics rather than returning false, so a typo in
+    // a policy cannot become a rule that quietly never fires. Not asserted here
+    // because it aborts by design; see the note in std.ais.
+    0
+}
+
+def check_genome_primitives() -> i64 {
+    seed(101);
+    val g = genome_random(5, 2.0);
+    assert(list_len(g.genes) == 5);
+    assert(g.age == 0);
+    assert(g.fitness == 0.0);
+    // `scale` bounds the magnitude: genes are drawn in [-scale, scale].
+    for i in 0 .. 5 {
+        val v = list_get(g.genes, i);
+        assert(v >= -2.0);
+        assert(v <= 2.0);
+    };
+
+    // Mutation ages the genome and preserves its length.
+    val m = genome_mutate(g, 1.0, 0.5);
+    assert(list_len(m.genes) == 5);
+    assert(m.age == g.age + 1);
+
+    // A zero mutation rate must change nothing at all.
+    val unchanged = genome_mutate(g, 0.0, 5.0);
+    for i in 0 .. 5 {
+        assert(list_get(unchanged.genes, i) == list_get(g.genes, i));
+    };
+
+    // Crossover takes the longer parent's tail, so the child is as long as the
+    // longer parent, and is a fresh genome rather than an aged one.
+    val short = genome_random(2, 1.0);
+    val long = genome_random(6, 1.0);
+    val child = genome_crossover(short, long);
+    assert(list_len(child.genes) == 6);
+    assert(child.age == 0);
+    assert(child.fitness == 0.0);
+    0
+}
+
+def check_tournament() -> i64 {
+    seed(55);
+    val p = population_new(8, 2, 0.1);
+    val fs: list<f64> = list();
+    for i in 0 .. 8 { list_push(fs, to_f64(i)); };
+    val scored = population_score(p, fs);
+
+    // With a tournament as large as the population, the winner is very likely
+    // the best; with k = 1 it is a uniform draw. Both must return a real
+    // member of the population, which is the contract being pinned here.
+    val champ = tournament_select(scored, 8);
+    assert(champ.fitness >= 0.0);
+    assert(champ.fitness <= 7.0);
+    val any = tournament_select(scored, 1);
+    assert(any.fitness >= 0.0);
+    assert(any.fitness <= 7.0);
+    0
+}
+
+def check_metacognition() -> i64 {
+    var mc = metacog_new();
+    mc = meta_record(mc, 0.5);
+    mc = meta_record(mc, 0.7);
+    assert(list_len(mc.performance_history) == 2);
+    assert(list_get(mc.performance_history, 1) == 0.7);
+
+    // Self-efficacy must stay a probability, whatever it is fed.
+    val high = meta_update_efficacy(mc, 1.0);
+    assert(high.self_efficacy >= 0.0);
+    assert(high.self_efficacy <= 1.0);
+    val low = meta_update_efficacy(mc, 0.0);
+    assert(low.self_efficacy >= 0.0);
+    assert(low.self_efficacy <= 1.0);
+    0
+}
+
+def check_knowledge_base() -> i64 {
+    var kb = kb_new(3);
+    assert(kb.n_strategies == 3);
+    val obs: list<f64> = list();
+    list_push(obs, 1.0);
+    list_push(obs, 2.0);
+    kb = kb_record(kb, obs, 1, 0.9);
+    assert(list_len(kb.actions_taken) == 1);
+    assert(list_get(kb.actions_taken, 0) == 1);
+    assert(list_get(kb.rewards_received, 0) == 0.9);
+    kb = kb_record(kb, obs, 2, -0.4);
+    assert(list_len(kb.actions_taken) == 2);
+    assert(list_get(kb.rewards_received, 1) == -0.4);
+    0
+}
+
+def main() -> i64 {
+    val a = check_running_stats();
+    val b = check_normalize();
+    val c = check_trend();
+    val d = check_eval_rule();
+    val e = check_genome_primitives();
+    val f = check_tournament();
+    val g = check_metacognition();
+    val h = check_knowledge_base();
+    assert(a + b + c + d + e + f + g + h == 0);
+    println("ais primitives ok");
+    0
+}
