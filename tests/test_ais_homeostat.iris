@@ -1,0 +1,166 @@
+// std.ais -- homeostasis, with a test that watches the guard FIRE.
+//
+// `homeostat_is_safe` is the mechanism that stops a self-optimising system from
+// optimising its way somewhere useless. A data-cleaning policy rewarded for
+// "fewer bad records" converges on dropping everything; a controller rewarded
+// for "low error" converges on doing nothing. Binding a homeostatic variable to
+// throughput, and refusing to act when it leaves tolerance, is the bound the
+// learner cannot reward-hack past.
+//
+// So the assertions here are mostly about the guard returning FALSE. This
+// project has now found four guards that existed and could never fire -- effect
+// subsumption, the recursion limit, use-before-def, and `eval_rule`'s operators
+// (#29). Every one read as correct code. A test that only ever sees a guard
+// pass is not evidence the guard works.
+
+bring std.ais
+
+def check_var_construction() -> i64 {
+    val v = homeovar_new(0.95, 0.03, 0.5);
+    // A fresh variable starts at its set point: no error, no accumulated
+    // integral. If it started at 0.0 instead, the first correction would be a
+    // large spurious kick.
+    assert(v.set_point == 0.95);
+    assert(v.current_value == 0.95);
+    assert(v.tolerance == 0.03);
+    assert(v.correction_gain == 0.5);
+    assert(v.integral == 0.0);
+    assert(v.last_error == 0.0);
+    0
+}
+
+def check_safe_when_in_band() -> i64 {
+    var h = homeostat_new();
+    h = homeostat_add_var(h, homeovar_new(0.95, 0.05, 0.5));
+    assert(list_len(h.variables) == 1);
+
+    // Reading inside tolerance: still safe.
+    val readings: list<f64> = list();
+    list_push(readings, 0.93);
+    val res = homeostat_update(h, readings, 1.0);
+    val h2 = res.0;
+    assert(homeostat_is_safe(h2));
+    assert(h2.health > 0.3);
+    0
+}
+
+def check_guard_fires_outside_band() -> i64 {
+    var h = homeostat_new();
+    h = homeostat_add_var(h, homeovar_new(0.95, 0.03, 0.5));
+
+    // Throughput collapses to 10% -- far outside the 3% tolerance band. This
+    // is the reward-hacking scenario: the learner found a way to score well by
+    // dropping nearly everything.
+    val collapsed: list<f64> = list();
+    list_push(collapsed, 0.10);
+    val res = homeostat_update(h, collapsed, 1.0);
+    val h2 = res.0;
+
+    // THE ASSERTION THIS FILE EXISTS FOR: the guard says no.
+    assert(homeostat_is_safe(h2) == false);
+    0
+}
+
+def check_correction_opposes_error() -> i64 {
+    var h = homeostat_new();
+    h = homeostat_add_var(h, homeovar_new(1.0, 0.05, 2.0));
+
+    // Below set point: correction must push up (positive).
+    val low: list<f64> = list();
+    list_push(low, 0.5);
+    val lo_res = homeostat_update(h, low, 1.0);
+    val lo_corr = lo_res.1;
+    assert(list_get(lo_corr, 0) > 0.0);
+
+    // Above set point: correction must push down (negative). A sign error here
+    // makes a controller diverge instead of settle, which is the kind of defect
+    // that looks like "tuning" until it destroys something.
+    var h2 = homeostat_new();
+    h2 = homeostat_add_var(h2, homeovar_new(1.0, 0.05, 2.0));
+    val high: list<f64> = list();
+    list_push(high, 1.5);
+    val hi_res = homeostat_update(h2, high, 1.0);
+    val hi_corr = hi_res.1;
+    assert(list_get(hi_corr, 0) < 0.0);
+    0
+}
+
+def check_error_tracking() -> i64 {
+    var h = homeostat_new();
+    h = homeostat_add_var(h, homeovar_new(1.0, 0.5, 1.0));
+    val r: list<f64> = list();
+    list_push(r, 0.4);
+    val res = homeostat_update(h, r, 1.0);
+    val updated = res.0;
+    val v = list_get(updated.variables, 0);
+
+    // The variable records what it actually saw, and the error against target.
+    assert(v.current_value == 0.4);
+    assert(v.last_error > 0.59);
+    assert(v.last_error < 0.61);
+    // The integral accumulates error over dt, which is what removes steady
+    // state offset. With dt = 1.0 it equals the error after one step.
+    assert(v.integral > 0.59);
+    assert(v.integral < 0.61);
+    0
+}
+
+def check_health_degrades_with_deviation() -> i64 {
+    var near = homeostat_new();
+    near = homeostat_add_var(near, homeovar_new(1.0, 0.9, 1.0));
+    val rn: list<f64> = list();
+    list_push(rn, 0.95);
+    val near_res = homeostat_update(near, rn, 1.0);
+
+    var far = homeostat_new();
+    far = homeostat_add_var(far, homeovar_new(1.0, 0.9, 1.0));
+    val rf: list<f64> = list();
+    list_push(rf, 0.10);
+    val far_res = homeostat_update(far, rf, 1.0);
+
+    // Health is a graded signal, not just a boolean: a system drifting toward
+    // its limit should be visible before it crosses one.
+    assert(near_res.0.health > far_res.0.health);
+    assert(near_res.0.health <= 1.0);
+    assert(far_res.0.health >= 0.0);
+    0
+}
+
+def check_multiple_variables() -> i64 {
+    // A real policy holds several things in band at once -- throughput AND
+    // latency AND error rate. One breach must condemn the whole system, or the
+    // guard can be satisfied by keeping the easy variables happy.
+    var h = homeostat_new();
+    h = homeostat_add_var(h, homeovar_new(0.95, 0.05, 0.5));
+    h = homeostat_add_var(h, homeovar_new(0.20, 0.05, 0.5));
+    assert(list_len(h.variables) == 2);
+
+    val both_ok: list<f64> = list();
+    list_push(both_ok, 0.94);
+    list_push(both_ok, 0.21);
+    val ok_res = homeostat_update(h, both_ok, 1.0);
+    assert(homeostat_is_safe(ok_res.0));
+
+    var h2 = homeostat_new();
+    h2 = homeostat_add_var(h2, homeovar_new(0.95, 0.05, 0.5));
+    h2 = homeostat_add_var(h2, homeovar_new(0.20, 0.05, 0.5));
+    val one_bad: list<f64> = list();
+    list_push(one_bad, 0.94);
+    list_push(one_bad, 0.90);
+    val bad_res = homeostat_update(h2, one_bad, 1.0);
+    assert(homeostat_is_safe(bad_res.0) == false);
+    0
+}
+
+def main() -> i64 {
+    val a = check_var_construction();
+    val b = check_safe_when_in_band();
+    val c = check_guard_fires_outside_band();
+    val d = check_correction_opposes_error();
+    val e = check_error_tracking();
+    val f = check_health_degrades_with_deviation();
+    val g = check_multiple_variables();
+    assert(a + b + c + d + e + f + g == 0);
+    println("homeostat ok");
+    0
+}

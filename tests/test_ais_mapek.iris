@@ -1,0 +1,152 @@
+// std.ais -- the MAPE-K autonomic loop, asserted.
+//
+// MAPE-K (Monitor, Analyse, Plan, Execute over shared Knowledge) is the shape
+// every self-adapting system in this direction takes: an intrusion detector, a
+// self-cleaning ingest pipeline, and an app that adapts to one user's behaviour
+// differ in their four functions, not in their loop.
+//
+// `MAPEKAgent` stores four closures and a knowledge base, so this also
+// exercises closures crossing a module boundary and being called back from
+// stdlib code -- which nothing else in the tree did.
+//
+// Note the zero-argument closure is written `| | ...`, with a space. `||`
+// lexes as logical-or, so the obvious spelling is a parse error.
+
+bring std.ais
+
+// A deterministic environment: the monitored signal is driven by a counter in
+// a shared list, so the loop's behaviour is exactly reproducible without
+// needing the RNG at all. Reward is 1.0 when the chosen action matches what the
+// analysis asked for, 0.0 otherwise -- so total_reward counts correct decisions
+// and can be asserted exactly.
+def check_single_step() -> i64 {
+    val ticks: list<f64> = list();
+    list_push(ticks, 0.0);
+
+    val agent = mapek_agent_new(
+        | | {
+            val t = list_get(ticks, 0);
+            list_set(ticks, 0, t + 1.0);
+            val obs: list<f64> = list();
+            list_push(obs, t);
+            obs
+        },
+        |obs: list<f64>, kb: KnowledgeBase| obs,
+        |analysis: list<f64>, kb: KnowledgeBase| {
+            // Act only once the signal passes a threshold.
+            if list_get(analysis, 0) >= 2.0 { 1 } else { 0 }
+        },
+        |action: i64| { if action == 1 { 1.0 } else { 0.0 } },
+        5
+    );
+
+    assert(agent.step == 0);
+    assert(agent.total_reward == 0.0);
+    assert(agent.max_steps == 5);
+
+    // First step: signal is 0.0, below threshold, so action 0 and no reward.
+    val r1 = mapek_step(agent);
+    val a1 = r1.0;
+    assert(r1.1 == 0.0);
+    assert(a1.step == 1);
+    assert(a1.total_reward == 0.0);
+    // The knowledge base records every decision, which is what lets the system
+    // later score its own strategies.
+    assert(list_len(a1.kb.actions_taken) == 1);
+    assert(list_get(a1.kb.actions_taken, 0) == 0);
+
+    // Second step: signal 1.0, still below threshold.
+    val r2 = mapek_step(a1);
+    val a2 = r2.0;
+    assert(r2.1 == 0.0);
+    assert(a2.step == 2);
+
+    // Third step: signal 2.0 reaches the threshold, so it acts and is rewarded.
+    val r3 = mapek_step(a2);
+    val a3 = r3.0;
+    assert(r3.1 == 1.0);
+    assert(a3.step == 3);
+    assert(a3.total_reward == 1.0);
+    assert(list_get(a3.kb.actions_taken, 2) == 1);
+    assert(list_get(a3.kb.rewards_received, 2) == 1.0);
+    0
+}
+
+def check_run_to_completion() -> i64 {
+    val ticks: list<f64> = list();
+    list_push(ticks, 0.0);
+
+    val agent = mapek_agent_new(
+        | | {
+            val t = list_get(ticks, 0);
+            list_set(ticks, 0, t + 1.0);
+            val obs: list<f64> = list();
+            list_push(obs, t);
+            obs
+        },
+        |obs: list<f64>, kb: KnowledgeBase| obs,
+        |analysis: list<f64>, kb: KnowledgeBase| {
+            if list_get(analysis, 0) >= 2.0 { 1 } else { 0 }
+        },
+        |action: i64| { if action == 1 { 1.0 } else { 0.0 } },
+        5
+    );
+
+    val res = mapek_run(agent);
+    val done = res.0;
+    val steps = res.1;
+
+    // It runs exactly max_steps times and then stops. An off-by-one here means
+    // a control loop that runs one cycle too many, which for a physical system
+    // is a real actuation.
+    assert(steps == 5);
+    assert(done.step == 5);
+    // Signals 0,1 score nothing; 2,3,4 each score 1.0.
+    assert(done.total_reward == 3.0);
+    assert(list_len(done.kb.actions_taken) == 5);
+    0
+}
+
+def check_exhausted_agent_is_inert() -> i64 {
+    val calls: list<f64> = list();
+    list_push(calls, 0.0);
+
+    val agent = mapek_agent_new(
+        | | {
+            list_set(calls, 0, list_get(calls, 0) + 1.0);
+            val obs: list<f64> = list();
+            list_push(obs, 1.0);
+            obs
+        },
+        |obs: list<f64>, kb: KnowledgeBase| obs,
+        |analysis: list<f64>, kb: KnowledgeBase| 1,
+        |action: i64| 1.0,
+        1
+    );
+
+    val first = mapek_step(agent);
+    assert(first.0.step == 1);
+    assert(list_get(calls, 0) == 1.0);
+
+    // Past max_steps the agent must not monitor, act, or accrue reward. An
+    // exhausted controller that still executes is worse than one that stops.
+    val beyond = mapek_step(first.0);
+    assert(beyond.1 == 0.0);
+    assert(beyond.0.step == 1);
+    assert(beyond.0.total_reward == first.0.total_reward);
+    assert(list_get(calls, 0) == 1.0);
+
+    // And running an already-finished agent does nothing at all.
+    val rerun = mapek_run(first.0);
+    assert(rerun.1 == 0);
+    0
+}
+
+def main() -> i64 {
+    val a = check_single_step();
+    val b = check_run_to_completion();
+    val c = check_exhausted_agent_is_inert();
+    assert(a + b + c == 0);
+    println("mapek ok");
+    0
+}
