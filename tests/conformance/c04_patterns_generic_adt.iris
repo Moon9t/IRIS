@@ -70,6 +70,14 @@ def main() -> i64 {
     assert(countdown(5) == 5);
     assert(countdown(1) == 1);
 
+    // Direct enum equality. This used to fail at *runtime* with
+    // "unsupported binop CmpEq on Enum" -- known-issues #8 -- which meant an
+    // untested branch containing an enum comparison would ship broken.
+    assert(Shape.Point == Shape.Point);
+    val s1 = Shape.Point
+    assert(s1 == Shape.Point);
+    assert((s1 == Shape.Circle(1.0)) == false);
+
     println("c04 ok");
     0
 }

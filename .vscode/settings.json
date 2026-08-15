@@ -1,5 +1,17 @@
 {
-  "iris.executablePath": "C:\\Users\\Moon\\Desktop\\Projects\\IRIS\\target\\debug\\iris.exe",
+  // Point the language server at a STABLE copy, never at target/debug.
+  //
+  // target/debug/iris.exe is a build artifact: every `cargo build` and
+  // `cargo test` relinks it. That fights the editor in both directions on
+  // Windows — while cargo is relinking, the file is missing or partial and the
+  // extension's preflight probe fails (the server then gives up after five
+  // restarts); and while the server IS running it holds the .exe locked, so
+  // cargo cannot overwrite it and the build fails instead.
+  //
+  // Refresh this copy after a build you want the editor to pick up:
+  //   cargo build && cp target/debug/iris.exe ~/.iris/bin/iris.exe
+  // (or run the "IRIS: refresh LSP binary" task in .vscode/tasks.json)
+  "iris.executablePath": "C:\\Users\\Moon\\.iris\\bin\\iris.exe",
   "iris.formatOnSave": true,
   "iris.trace.server": "off",
   "git.ignoreLimitWarning": true,

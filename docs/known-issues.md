@@ -183,7 +183,20 @@ anything real requires. Workaround: inline the fields you need as scalars.
 
 ---
 
-## 8. `==` on two enum values is unsupported — **open, runtime**
+## 8. `==` on two enum values is unsupported — **FIXED**
+
+> **Fixed** in `src/interp/mod.rs`: the binop match gained `CmpEq`/`CmpNe` arms
+> for `Enum`. `IrValue` already implemented `PartialEq` structurally for every
+> aggregate; the arm was simply missing, so the comparison fell through to
+> "unsupported binop" at *runtime*. Verified identical on both backends across
+> equal, unequal and bound-variable cases.
+>
+> Note the failure mode this removes: an untested branch containing an enum
+> comparison would compile, ship, and abort in production.
+>
+> The original report follows.
+
+### Original report
 
 ```iris
 choice Health { Nominal, Degraded }
@@ -1076,6 +1089,36 @@ worth trimming the frame: 190 KB suggests large values are being copied per
 call.
 
 **Status:** guard fixed and verified; underlying frame cost open.
+
+---
+
+## 26. Native struct/tuple equality returns `true` for unequal values — **open, silent**
+
+```iris
+record P { x: i64, y: i64 }
+P { x: 1, y: 2 } == P { x: 1, y: 3 }
+```
+
+| | Result |
+|---|---|
+| native | **`true`** |
+| interpreter | `false` (via `PartialEq`, but the binop arm is not wired — see below) |
+
+Native reports two structs with different contents as equal, and correspondingly
+`!=` as `false`. A silent wrong answer, not a crash.
+
+Found while fixing #8. Enum equality was added to the interpreter and verified
+identical on both backends; struct and tuple equality was **deliberately left
+out**, because `IrValue` already implements `PartialEq` for them and wiring the
+arm would have made the interpreter structurally correct while native stayed
+wrong — replacing one wrong answer with a backend disagreement, which is worse
+to debug.
+
+**Fix both together:** native needs a real field-wise comparison (or a runtime
+helper) for aggregates, and the interpreter needs the two binop arms. The
+interpreter side is two lines and is marked in place with a pointer here.
+
+**Status:** open.
 
 ---
 

@@ -4797,6 +4797,24 @@ fn eval_binop(op: BinOp, lv: &IrValue, rv: &IrValue) -> Result<IrValue, InterpEr
         (BinOp::BitXor, I32(a), I32(b)) => Ok(I32(a ^ b)),
         (BinOp::Shl, I32(a), I32(b)) => Ok(I32(a.wrapping_shl(*b as u32))),
         (BinOp::Shr, I32(a), I32(b)) => Ok(I32(a.wrapping_shr(*b as u32))),
+        // Equality on aggregates.
+        //
+        // `IrValue` already implements `PartialEq` structurally for every one of
+        // these, but the binop match had no arm, so `Health.Nominal ==
+        // Health.Nominal` failed at *runtime* with "unsupported binop CmpEq on
+        // Enum(3, []) and Enum(3, [])". Comparing two enum values is elementary,
+        // and failing at runtime means an untested branch ships broken.
+        // See known-issues #8.
+        (BinOp::CmpEq, Enum(..), Enum(..)) => Ok(Bool(lv == rv)),
+        (BinOp::CmpNe, Enum(..), Enum(..)) => Ok(Bool(lv != rv)),
+        //
+        // Struct and Tuple are deliberately NOT handled here even though
+        // `PartialEq` covers them. Native codegen compares aggregates wrongly —
+        // `P{1,2} == P{1,3}` evaluates to `true` there — so implementing them
+        // interpreted-only would replace one wrong answer with two backends that
+        // disagree, which is worse. Recorded as #26; add these arms when the
+        // native side is fixed.
+
         _ => Err(InterpError::TypeError {
             detail: format!("unsupported binop {:?} on {:?} and {:?}", op, lv, rv),
         }),
