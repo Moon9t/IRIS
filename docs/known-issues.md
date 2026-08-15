@@ -993,6 +993,55 @@ rejected pattern, but they are not proven safe either.
 
 ---
 
+## 25. Deep recursion crashed the interpreter instead of erroring — **guard FIXED, cause open**
+
+```iris
+def sum_to(n: i64, acc: i64) -> i64 { if n == 0 { acc } else { sum_to(n - 1, acc + n) } }
+def main() -> i64 { println(to_str(sum_to(400, 0))); 0 }
+```
+
+```
+thread 'iris-compile' has overflowed its stack
+```
+
+A hard process abort, not a diagnostic. Native builds the same program and runs
+it fine — another backend divergence, and this one kills the process.
+
+**The guard existed and could never fire.** `InterpOptions.max_depth` and the
+"call depth exceeded" error are both present, but:
+
+| | Was | Now |
+|---|---|---|
+| eval path | hardcoded `max_depth: 5_000` | honours the caller |
+| `compile_ast_inner` | took `_max_depth` (discarded) | threaded through |
+| CLI default | 500 | 250 |
+| Real limit | **~350 frames** | unchanged |
+| Error hint | *"use `--max-steps`"* | `--max-depth` |
+
+Every layer was set above the depth the stack can actually take, so the process
+died before the check was reached. That is the second guard found dead by
+construction in this codebase — the effect-subsumption check (#20's neighbour)
+was the first. A guard nobody has watched fire is a guard that does not work.
+
+`--max-depth` was also accepted by the CLI and thrown away, and the error it
+raises named the wrong flag.
+
+**Cause still open.** The interpreter consumes a Rust stack frame per IRIS call
+frame — 64 MiB / ~350 ≈ **190 KB per call**, which is enormous. `Interpreter::new`
+is invoked recursively for each call rather than pushing onto an explicit stack.
+Until that changes, the depth limit is a property of the host stack rather than
+of the language, and native and interpreted programs disagree about which
+programs are valid.
+
+**Fix direction:** an explicit heap-allocated frame stack in the interpreter, so
+IRIS recursion depth is bounded by memory rather than by the Rust stack. Also
+worth trimming the frame: 190 KB suggests large values are being copied per
+call.
+
+**Status:** guard fixed and verified; underlying frame cost open.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:

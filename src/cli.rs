@@ -92,8 +92,13 @@ pub struct Cli {
     #[arg(long = "max-steps", default_value_t = 1_000_000)]
     pub max_steps: usize,
 
-    /// Legacy interpreter guardrail (max call depth, default: 500)
-    #[arg(long = "max-depth", default_value_t = 500)]
+    /// Interpreter call-depth guard.
+    ///
+    /// Default is well under the depth at which the interpreter exhausts its
+    /// stack (~350 frames on a 64 MiB stack), so exceeding it produces a
+    /// diagnostic instead of killing the process. Raise it if you need deeper
+    /// recursion and accept the risk.
+    #[arg(long = "max-depth", default_value_t = 250)]
     pub max_depth: usize,
 
     /// Disable incremental compilation cache

@@ -160,7 +160,7 @@ pub fn compile_multi(
     emit: EmitKind,
 ) -> Result<String, Error> {
     let mut main_ast = compile_multi_to_ast(sources, main_module)?;
-    compile_ast(&mut main_ast, main_module, emit, 1_000_000, 500, None)
+    compile_ast(&mut main_ast, main_module, emit, 1_000_000, 0, None)
 }
 
 /// Internal: parse+merge all brought modules into a single merged `AstModule`.
@@ -389,6 +389,13 @@ pub fn compile_ast_to_module(
 /// worker thread hit the same cliff.
 const COMPILER_STACK_BYTES: usize = 64 * 1024 * 1024;
 
+/// Default interpreter call-depth limit.
+///
+/// Empirical: a tail-recursive `sum_to` survives 300 frames and overflows
+/// between 300 and 400 on a 64 MiB stack. Set below that so the guard produces
+/// a diagnostic rather than letting the process die.
+const INTERP_DEFAULT_MAX_DEPTH: usize = 250;
+
 /// Runs the compiler pipeline on a thread with a guaranteed stack.
 ///
 /// rustc does the same thing for the same reason. This makes available stack
@@ -432,8 +439,8 @@ fn compile_ast_inner(
     ast_module: &mut crate::parser::ast::AstModule,
     module_name: &str,
     emit: EmitKind,
-    _max_steps: usize,
-    _max_depth: usize,
+    max_steps: usize,
+    max_depth: usize,
     dump_ir_after: Option<&str>,
 ) -> Result<String, Error> {
     use crate::codegen::cuda::emit_cuda;
@@ -550,7 +557,7 @@ fn compile_ast_inner(
         EmitKind::PgoInstrument => Ok(emit_pgo_instrument(&ir_module)?),
         EmitKind::PgoOptimize => Ok(emit_pgo_optimize(&ir_module, "")?),
         EmitKind::Graph | EmitKind::Onnx | EmitKind::OnnxBinary => unreachable!(),
-        EmitKind::Eval => eval_ir_module_internal(&ir_module),
+        EmitKind::Eval => eval_ir_module_internal(&ir_module, max_steps, max_depth),
         EmitKind::TensorRt => Ok(crate::codegen::tensorrt::emit_tensorrt(&ir_module)?),
     }
 }
@@ -604,16 +611,21 @@ pub fn compile_to_module_debug(source: &str, module_name: &str) -> Result<IrModu
 /// Finds the first zero-argument function and executes it via the native LLVM
 /// pipeline, capturing stdout.
 pub fn eval_ir_module(module: &IrModule) -> Result<String, Error> {
-    eval_ir_module_internal(module)
+    eval_ir_module_internal(module, 0, 0)
 }
 
-fn eval_ir_module_internal(module: &IrModule) -> Result<String, Error> {
+/// `max_steps` / `max_depth` of 0 mean "use the defaults".
+fn eval_ir_module_internal(
+    module: &IrModule,
+    max_steps: usize,
+    max_depth: usize,
+) -> Result<String, Error> {
     // Opt-in shortcut: skip building a native binary altogether. Compiling and
     // linking one program per evaluation dominates test-suite runtime, and the
     // interpreter produces the same answer, so a suite can trade native coverage
     // for a very large speedup.
     if codegen::build::force_interpreter() {
-        return interpret_module_for_eval(module);
+        return interpret_module_for_eval(module, max_steps, max_depth);
     }
     match codegen::execute_binary_for_eval(module) {
         Ok(s) => Ok(s),
@@ -626,7 +638,7 @@ fn eval_ir_module_internal(module: &IrModule) -> Result<String, Error> {
                 crate::error::CodegenError::Unsupported { backend, .. }
                     if backend == "native" || backend == "binary" =>
                 {
-                    interpret_module_for_eval(module)
+                    interpret_module_for_eval(module, max_steps, max_depth)
                 }
                 other => Err(Error::Codegen(other)),
             }
@@ -640,7 +652,11 @@ fn eval_ir_module_internal(module: &IrModule) -> Result<String, Error> {
 /// the returned value(s) — so callers cannot tell which path ran. Previously this
 /// returned only the return value, silently discarding everything the program
 /// printed.
-fn interpret_module_for_eval(module: &IrModule) -> Result<String, Error> {
+fn interpret_module_for_eval(
+    module: &IrModule,
+    max_steps: usize,
+    max_depth: usize,
+) -> Result<String, Error> {
     let func = module
         .functions()
         .iter()
@@ -653,8 +669,22 @@ fn interpret_module_for_eval(module: &IrModule) -> Result<String, Error> {
             })
         })?;
     let opts = crate::interp::InterpOptions {
-        max_steps: 10_000_000,
-        max_depth: 5_000,
+        max_steps: if max_steps == 0 { 10_000_000 } else { max_steps },
+        // Honour the caller's limit, and default it to something the stack can
+        // actually take.
+        //
+        // This was hardcoded to 5_000 while the interpreter overflows its
+        // 64 MiB stack at roughly 350 frames — about 190 KB of Rust stack per
+        // IRIS call. The guard could therefore never fire: deep recursion
+        // aborted the whole process with STATUS_STACK_OVERFLOW instead of
+        // returning the "call depth exceeded" error that exists for exactly
+        // this case. A crash where a diagnostic was already written.
+        //
+        // The safe depth depends on how much state each frame holds, so no
+        // constant is right for every program; this is deliberately
+        // conservative and `--max-depth` raises it. The real fix is to stop
+        // consuming a Rust frame per IRIS frame — see known-issues #25.
+        max_depth: if max_depth == 0 { INTERP_DEFAULT_MAX_DEPTH } else { max_depth },
     };
     let (result, printed) =
         crate::interp::eval_function_in_module_opts_capturing(module, func, &[], opts);
@@ -715,7 +745,7 @@ fn parse_recovering(source: &str) -> Result<crate::parser::ast::AstModule, Error
 /// stage fails. The pipeline aborts at the first error.
 pub fn compile(source: &str, module_name: &str, emit: EmitKind) -> Result<String, Error> {
     let mut ast_module = parse_recovering(source)?;
-    compile_ast(&mut ast_module, module_name, emit, 1_000_000, 500, None)
+    compile_ast(&mut ast_module, module_name, emit, 1_000_000, 0, None)
 }
 
 /// Compiles an IRIS source string and also returns dead-variable warnings.
@@ -728,7 +758,7 @@ pub fn compile_with_warnings(
 ) -> Result<(String, Vec<IrWarning>), Error> {
     let mut ast_module = parse_recovering(source)?;
     let warnings = pass::find_unused_vars(&ast_module);
-    let output = compile_ast(&mut ast_module, module_name, emit, 1_000_000, 500, None)?;
+    let output = compile_ast(&mut ast_module, module_name, emit, 1_000_000, 0, None)?;
     Ok((output, warnings))
 }
 
@@ -765,7 +795,7 @@ pub fn compile_with_diagnostics(
 pub fn compile_file(path: &std::path::Path, emit: EmitKind) -> Result<String, Error> {
     let mut main_ast = compiler::FileCompiler::new().compile_file_to_ast(path, &[])?;
     let module_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("main");
-    compile_ast(&mut main_ast, module_name, emit, 1_000_000, 500, None)
+    compile_ast(&mut main_ast, module_name, emit, 1_000_000, 0, None)
 }
 
 /// Compiles an `.iris` file with bring resolution, using the provided `source`
@@ -782,7 +812,7 @@ pub fn compile_file_text(
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("main");
-    compile_ast(&mut main_ast, module_name, emit, 1_000_000, 500, None)
+    compile_ast(&mut main_ast, module_name, emit, 1_000_000, 0, None)
 }
 
 /// Like [`compile_file`] but returns the merged `IrModule` for further processing.

@@ -1,0 +1,93 @@
+// c15 — recursion x mutual recursion x deep call chains x option/result chains.
+//
+// Adversarial on purpose: recursion is where a compiler's stack handling, SSA
+// construction and TCO claims meet. known-issues #5 records that TCO is
+// interpreter-only, so deep recursion is a real risk in a native build — this
+// file probes how deep is safe rather than assuming.
+
+record Node { value: i64, has_left: bool, has_right: bool }
+
+// Straight recursion.
+def factorial(n: i64) -> i64 {
+    if n <= 1 { 1 } else { n * factorial(n - 1) }
+}
+
+def fib(n: i64) -> i64 {
+    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+// Tail-recursive accumulator — the shape TCO would apply to.
+def sum_to(n: i64, acc: i64) -> i64 {
+    if n == 0 { acc } else { sum_to(n - 1, acc + n) }
+}
+
+// Mutual recursion.
+def is_even_rec(n: i64) -> bool {
+    if n == 0 { true } else { is_odd_rec(n - 1) }
+}
+def is_odd_rec(n: i64) -> bool {
+    if n == 0 { false } else { is_even_rec(n - 1) }
+}
+
+// Recursion returning result, with `?` threading through the recursion.
+def checked_depth(n: i64) -> result<i64, str> {
+    if n < 0 { return err("negative depth") };
+    if n == 0 { return ok(0) };
+    val inner = checked_depth(n - 1)?
+    ok(inner + 1)
+}
+
+// Recursion over an option chain.
+def unwrap_chain(n: i64) -> i64 {
+    var cur = some(n)
+    var steps = 0
+    while is_some(cur) {
+        val v = unwrap(cur)
+        steps = steps + 1
+        cur = if v <= 1 { none() } else { some(v - 1) }
+    }
+    steps
+}
+
+def main() -> i64 {
+    assert(factorial(0) == 1);
+    assert(factorial(5) == 120);
+    assert(factorial(10) == 3628800);
+
+    assert(fib(0) == 0);
+    assert(fib(1) == 1);
+    assert(fib(10) == 55);
+    assert(fib(15) == 610);
+
+    // Tail position, moderate depth.
+    assert(sum_to(100, 0) == 5050);
+    assert(sum_to(240, 0) == 28920);
+
+    // Mutual recursion both ways.
+    assert(is_even_rec(0));
+    assert(is_even_rec(10));
+    assert(is_odd_rec(7));
+    assert(is_even_rec(101) == false);
+
+    // `?` propagating out of a recursive call.
+    assert(unwrap(checked_depth(0)) == 0);
+    assert(unwrap(checked_depth(20)) == 20);
+    assert(is_err(checked_depth(0 - 1)));
+
+    // Option chain drained iteratively.
+    assert(unwrap_chain(1) == 1);
+    assert(unwrap_chain(50) == 50);
+
+    // NOTE: depth is deliberately kept under the interpreter's guard.
+    //
+    // The interpreter consumes a Rust stack frame per IRIS call (~190 KB each)
+    // and exhausts its 64 MiB stack near 350 frames. Until that is fixed
+    // (known-issues #25) the guard is set to 250 so exceeding it is a
+    // diagnostic rather than a process crash. Native has no such limit --
+    // sum_to(5000) works there -- so this is a backend divergence, not a
+    // language limit.
+    assert(sum_to(200, 0) == 20100);
+
+    println("c15 ok");
+    0
+}

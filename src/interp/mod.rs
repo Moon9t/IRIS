@@ -909,7 +909,7 @@ impl<'m> Interpreter<'m> {
                                     if self.depth >= self.opts.max_depth {
                                         return Err(InterpError::Unsupported {
                                         detail: format!(
-                                            "call depth exceeded {} (infinite recursion?); use --max-steps to adjust",
+                                            "call depth exceeded {} (infinite recursion?); raise it with --max-depth",
                                             self.opts.max_depth
                                         ),
                                     });

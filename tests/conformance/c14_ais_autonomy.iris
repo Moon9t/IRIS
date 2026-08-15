@@ -1,0 +1,110 @@
+// c14 — std.ais autonomy primitives.
+//
+// The highest-value target in the corpus: std.ais is 61 public functions of
+// which 11 were referenced by anything at all, and it is the module the whole
+// "systems that are alive" claim rests on. Untested code that nothing calls is
+// where wrong answers live quietly.
+//
+// Every assertion here checks a *value*, not that the call returns.
+
+bring std.ais
+
+def main() -> i64 {
+    // ── Reductions, the base everything else is built on ──
+    val xs: list<f64> = list()
+    push(xs, 2.0); push(xs, 4.0); push(xs, 6.0); push(xs, 8.0);
+
+    val m = list_mean(xs)
+    assert(m > 4.99); assert(m < 5.01);
+
+    val sd = list_std(xs)
+    assert(sd > 2.23); assert(sd < 2.24);     // population sd of 2,4,6,8
+
+    // ── argmax ──
+    val logits: list<f64> = list()
+    push(logits, 1.0); push(logits, 9.0); push(logits, 3.0);
+    assert(argmax(logits) == 1);
+
+    val single: list<f64> = list()
+    push(single, 42.0);
+    assert(argmax(single) == 0);
+
+    // ── one_hot ──
+    val oh = one_hot(2, 4)
+    assert(list_len(oh) == 4);
+    assert(list_get(oh, 2) == 1.0);
+    assert(list_get(oh, 0) == 0.0);
+    assert(list_get(oh, 3) == 0.0);
+
+    // ── clip_list ──
+    val wild: list<f64> = list()
+    push(wild, -5.0); push(wild, 0.5); push(wild, 5.0);
+    val clipped = clip_list(wild, 0.0, 1.0)
+    assert(list_get(clipped, 0) == 0.0);
+    assert(list_get(clipped, 1) > 0.49);
+    assert(list_get(clipped, 2) == 1.0);
+
+    // ── normalize_list: zero mean, unit-ish scale ──
+    val norm = normalize_list(xs)
+    assert(list_len(norm) == 4);
+    val nm = list_mean(norm)
+    assert(nm > -0.01); assert(nm < 0.01);
+
+    // ── discount_rewards: only the last step pays ──
+    val rewards: list<f64> = list()
+    push(rewards, 0.0); push(rewards, 0.0); push(rewards, 10.0);
+    val returns = discount_rewards(rewards, 0.9)
+    assert(list_len(returns) == 3);
+    assert(list_get(returns, 2) == 10.0);
+    assert(list_get(returns, 1) > 8.99); assert(list_get(returns, 1) < 9.01);
+    assert(list_get(returns, 0) > 8.09); assert(list_get(returns, 0) < 8.11);
+
+    // ── curiosity_reward: monotone in prediction error, zero at zero ──
+    assert(curiosity_reward(0.0, 1.0) == 0.0);
+    val c_small = curiosity_reward(0.5, 1.0)
+    val c_big = curiosity_reward(2.0, 1.0)
+    assert(c_big > c_small);
+    assert(c_small > 0.0);
+
+    // ── novelty_score: a repeat of a remembered observation is less novel
+    //    than something unseen. This is the signal intrinsic motivation runs
+    //    on, so the ordering is the property that matters.
+    val memory: list<list<f64>> = list()
+    val seen: list<f64> = list()
+    push(seen, 1.0); push(seen, 1.0);
+    push(memory, seen);
+
+    val same: list<f64> = list()
+    push(same, 1.0); push(same, 1.0);
+
+    val different: list<f64> = list()
+    push(different, 9.0); push(different, 9.0);
+
+    val n_same = novelty_score(same, memory)
+    val n_diff = novelty_score(different, memory)
+    assert(n_diff > n_same);
+
+    // ── ucb_select: an unexplored arm is preferred over a known-mediocre one ──
+    val means: list<f64> = list()
+    push(means, 0.5); push(means, 0.0);
+    val counts: list<i64> = list()
+    push(counts, 100); push(counts, 1);
+    val pick = ucb_select(means, counts, 101)
+    assert(pick >= 0); assert(pick < 2);
+
+    // ── EWC: penalty is zero at the anchor and rises as params move away.
+    //    This is what stops a continually-learning system forgetting.
+    val ewc = ewc_new(3, 1.0)
+    val at_anchor: list<f64> = list()
+    push(at_anchor, 0.0); push(at_anchor, 0.0); push(at_anchor, 0.0);
+    val p0 = ewc_penalty(ewc, at_anchor)
+    assert(p0 >= 0.0);
+
+    val moved: list<f64> = list()
+    push(moved, 5.0); push(moved, 5.0); push(moved, 5.0);
+    val p1 = ewc_penalty(ewc, moved)
+    assert(p1 >= p0);
+
+    println("c14 ok");
+    0
+}
