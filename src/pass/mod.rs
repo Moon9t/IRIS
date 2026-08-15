@@ -299,6 +299,18 @@ pub fn verify_uses_defined(module: &IrModule, after_pass: &str) -> Result<(), St
                     }
                     Ok(())
                 };
+                // Every operand, not just branch arguments.
+                //
+                // This used to check `Br`/`CondBr` args only, which let an
+                // ordinary use-before-def through: LICM hoisted a constant out
+                // of a block and left `%18 = add %3, %17` behind with no
+                // reaching definition of `%17`. Because the surviving
+                // representative was chosen from a hash map, *which* run
+                // produced invalid IR varied — the same source compiled three
+                // different ways in six runs and crashed in three of them.
+                // See known-issues #17.
+                check("operand", &instr.operands())?;
+
                 match instr {
                     crate::ir::instr::IrInstr::Br { args, .. } => {
                         check("Br", args)?;

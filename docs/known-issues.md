@@ -562,7 +562,61 @@ offers, so this is worth fixing before the capability is described anywhere.
 
 ---
 
-## 17. Labelled `continue` fails in the interpreter — **open, backend divergence**
+## 17. Labelled `continue` fails in the interpreter — **FIXED (and it was not a backend divergence)**
+
+> The original diagnosis was wrong in a way worth recording. This was filed as
+> "works natively, fails interpreted". It is neither: **the compiler was
+> non-deterministic**, and the same source compiled to different IR on different
+> runs. Six runs of one file produced **three distinct IR outputs, three of
+> which were invalid**, so the program succeeded or failed about half the time
+> on *either* backend. Whichever backend was run first looked broken.
+>
+> **Three separate defects, all fixed.**
+>
+> **(a) LICM merged nothing across back edges.** `continue outer` gives the
+> outer header two back edges — one from the inner loop's exit, one from the
+> continue block. Each was treated as its own natural loop, so each body
+> excluded the other's latch, and that latch then looked like a block *outside*
+> the loop and became a candidate preheader. Back edges sharing a header are now
+> unioned into one loop, per the textbook definition.
+>
+> **(b) LICM did not require the preheader to dominate the header.** It took any
+> predecessor outside the body, chosen with `.iter().find()` over a `HashSet` —
+> non-deterministic, and unsound. It now requires the candidate to dominate the
+> header (which makes it dominate every block in the loop, hence every use it
+> hoists past) and takes the lowest index of those, which is also deterministic.
+>
+> **(c) `LoopUnrollPass` left the original body block referring to deleted
+> definitions.** It cleared the loop header's block params and instructions but
+> stubbed only the header, not the body — and the body reads the induction
+> variable, which arrives as a header param. Both blocks are unreachable after
+> rewiring, so both backends kept producing correct answers over invalid IR.
+> Both are stubbed now.
+>
+> **Two more sources of non-determinism, fixed alongside.** Closure captures,
+> `spawn` captures and `par for` captures were all collected by iterating
+> `Lowerer.scope`, a `HashMap`. Order was self-consistent within a run — the
+> lifted parameter list and the call's argument list come from the same vector —
+> so programs were correct, but no two builds agreed. All three are sorted by
+> name now.
+>
+> **The guard that should have caught this could not.** `verify_uses_defined`
+> runs after every pass, but checked only `Br`/`CondBr` arguments — and the
+> broken use was `%18 = add %3, %17`. It now checks every operand via
+> `instr.operands()`. Turning it on immediately found (c), which had been
+> compiling invalid IR silently. Across all 125 `.iris` files, zero invalid IR
+> remains.
+>
+> This is the third instance of the pattern in `language-hardening-plan.md`: **a
+> guard that existed and could not fire.** It is also the third defect that
+> produced correct answers on every run that happened to work.
+>
+> Regression test: `tests/conformance/c19_labelled_flow.iris`, whose expected
+> values are weighted so that a wrong *set* of iterations fails even when the
+> iteration count is right. Determinism itself is checked by compiling each
+> conformance file five times and comparing IR hashes.
+
+### Original report
 
 ```iris
 def main() -> i64 {

@@ -1,0 +1,87 @@
+// c19 -- labelled break/continue across nested loops.
+//
+// Written to pin down known-issues #17. `continue outer` from an inner loop
+// gives the outer header *two* back edges: one from the inner loop's exit and
+// one from the continue block. LICM treated each back edge as a separate loop,
+// so each body excluded the other's latch -- which made that latch look like a
+// block outside the loop and therefore a candidate preheader. Hoisting a
+// definition into it put the definition where its use could not reach it.
+//
+// Because the preheader was picked from a `HashSet`, whether a given run got a
+// valid or an invalid preheader depended on the per-process hash seed: the same
+// source compiled three different ways in six runs and crashed in three of them.
+// A test that runs once has a coin-flip chance of noticing, so the numbers below
+// are chosen to be sensitive to *which* iterations actually ran, not merely to
+// whether the program completed.
+
+// Count how many (i, j) pairs survive `continue outer` when j > i.
+// i = 0 -> j = 0 only            -> 1
+// i = 1 -> j = 0, 1              -> 2
+// i = 2 -> j = 0, 1, 2           -> 3
+// i = 3 -> j = 0, 1, 2, 3        -> 4
+// total 10
+def triangle() -> i64 {
+    var hits = 0;
+    for outer i in 0..4 {
+        for j in 0..4 {
+            if j > i { continue outer; };
+            hits = hits + 1;
+        };
+    };
+    hits
+}
+
+// `continue` on the inner loop skips only that iteration, so every pair runs
+// except the ones where j is odd: 4 * 2 = 8.
+def skip_inner() -> i64 {
+    var hits = 0;
+    for i in 0..4 {
+        for inner j in 0..4 {
+            if j == 1 { continue inner; };
+            if j == 3 { continue inner; };
+            hits = hits + 1;
+        };
+    };
+    hits
+}
+
+// Labelled break leaves both loops at the first match.
+def find_pair() -> i64 {
+    var found = 0;
+    for scan i in 0..5 {
+        for j in 0..5 {
+            if i * j == 6 { found = i * 10 + j; break scan; };
+        };
+    };
+    found
+}
+
+// A weighted sum, so a wrong *set* of iterations gives a wrong total even when
+// the iteration count happens to be right.
+def weighted() -> i64 {
+    var acc = 0;
+    for outer i in 0..4 {
+        for j in 0..4 {
+            if j > i { continue outer; };
+            acc = acc + (i + 1) * 100 + j;
+        };
+    };
+    acc
+}
+
+def main() -> i64 {
+    assert(triangle() == 10);
+    assert(skip_inner() == 8);
+
+    // First i*j == 6 scanning i outward then j: i=2, j=3.
+    assert(find_pair() == 23);
+
+    // i=0: 100+0                        = 100
+    // i=1: (200+0) + (200+1)            = 401
+    // i=2: (300+0)+(300+1)+(300+2)      = 903
+    // i=3: (400+0)+...+(400+3)          = 1606
+    assert(weighted() == 100 + 401 + 903 + 1606);
+
+    println("c19 ok");
+    0
+}

@@ -3428,12 +3428,22 @@ impl<'m> Lowerer<'m> {
             params.iter().map(|p| p.name.name.clone()).collect();
 
         // Free variables: everything in scope that isn't a lambda param.
-        let captures: Vec<(String, ValueId, IrType)> = self
+        //
+        // Sorted by name because `scope` is a `HashMap`, whose iteration order
+        // changes with the per-process hash seed. The order is self-consistent
+        // within one run — the lifted parameter list and the `MakeClosure`
+        // argument list are both built from this vector — so programs were
+        // correct, but the same source compiled to different IR on every run.
+        // Reproducible builds matter on their own, and non-reproducibility also
+        // hid a real miscompilation for as long as it lasted (known-issues #17).
+        let mut captures: Vec<(String, ValueId, IrType)> = self
             .scope
             .iter()
             .filter(|(name, _)| !param_names.contains(*name))
             .map(|(name, (vid, ty))| (name.clone(), *vid, ty.clone()))
             .collect();
+        captures.sort_by(|a, b| a.0.cmp(&b.0));
+        let captures = captures;
 
         // Build the lifted function: params = captures + lambda_params.
         let mut lifted_params: Vec<Param> = captures
@@ -15598,12 +15608,16 @@ impl<'m> Lowerer<'m> {
                 self.lambda_counter.set(counter + 1);
                 let fn_name = format!("__spawn_{}", counter);
 
-                // Collect captures (all in-scope variables).
-                let captures: Vec<(String, ValueId, IrType)> = self
+                // Collect captures (all in-scope variables), sorted by name so
+                // the spawned body's parameter list does not depend on
+                // `HashMap` iteration order. See the note in `lower_lambda`.
+                let mut captures: Vec<(String, ValueId, IrType)> = self
                     .scope
                     .iter()
                     .map(|(name, (vid, ty))| (name.clone(), *vid, ty.clone()))
                     .collect();
+                captures.sort_by(|a, b| a.0.cmp(&b.0));
+                let captures = captures;
 
                 let lifted_params: Vec<crate::ir::function::Param> = captures
                     .iter()
@@ -15728,13 +15742,18 @@ impl<'m> Lowerer<'m> {
                 self.lambda_counter.set(counter + 1);
                 let fn_name = format!("__par_body_{}", counter);
 
-                // Collect outer-scope captures (all in-scope variables except the loop var).
-                let captures: Vec<(String, ValueId, IrType)> = self
+                // Collect outer-scope captures (all in-scope variables except
+                // the loop var), sorted by name so the generated
+                // `__par_body_N` signature does not depend on `HashMap`
+                // iteration order. See the note in `lower_lambda`.
+                let mut captures: Vec<(String, ValueId, IrType)> = self
                     .scope
                     .iter()
                     .filter(|(name, _)| *name != &var.name)
                     .map(|(name, (vid, ty))| (name.clone(), *vid, ty.clone()))
                     .collect();
+                captures.sort_by(|a, b| a.0.cmp(&b.0));
+                let captures = captures;
 
                 // Reject mutation of a captured collection from the loop body.
                 //

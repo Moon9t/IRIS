@@ -301,17 +301,30 @@ fn unroll_loops_in_function(module: &mut IrModule, fn_idx: usize, threshold: usi
         // Check if CondBr had else_args; remove them since we don't pass i anymore.
         // (Already covered since unrolled block uses Br with no args.)
 
-        // Mark header and body as dead by replacing with Br to exit.
+        // Mark header and body as dead by replacing each with a Br to exit.
         // (DCE will clean them up, but we need to keep them valid.)
-        // Replace header instrs with just a Br to exit.
-        module.functions[fn_idx].blocks[header_idx].params.clear();
-        module.functions[fn_idx].blocks[header_idx].instrs.clear();
-        module.functions[fn_idx].blocks[header_idx]
-            .instrs
-            .push(IrInstr::Br {
-                target: exit_bid,
-                args: vec![],
-            });
+        //
+        // The *body* must be stubbed as well as the header, not just the
+        // header. Clearing the header deletes its block params and its
+        // instructions, and the original body block still refers to them --
+        // the induction variable comes in as a header param, and the body's
+        // comparison and increment read it. Leaving the body intact therefore
+        // left a block full of references to definitions that no longer
+        // existed. Both blocks are unreachable once the predecessor is
+        // redirected to `unrolled`, so nothing executes it, and the
+        // interpreter and codegen both happened to produce right answers --
+        // but the IR was invalid, and `verify_uses_defined` only checked
+        // branch arguments, so nothing caught it. See known-issues #17.
+        for dead_idx in [header_idx, body_idx] {
+            module.functions[fn_idx].blocks[dead_idx].params.clear();
+            module.functions[fn_idx].blocks[dead_idx].instrs.clear();
+            module.functions[fn_idx].blocks[dead_idx]
+                .instrs
+                .push(IrInstr::Br {
+                    target: exit_bid,
+                    args: vec![],
+                });
+        }
 
         // Only process one loop per function pass to avoid block index invalidation.
         break;

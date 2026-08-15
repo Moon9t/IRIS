@@ -128,6 +128,33 @@ fn licm_func(func: &mut IrFunction) {
         }
     }
 
+    // Back edges that share a header belong to the *same* natural loop, and its
+    // body is the union of theirs. Treating them as separate loops was wrong in
+    // a way that only showed up with a labelled `continue`:
+    //
+    //     for outer i in 0..4 { for j in 0..4 { if j > i { continue outer; } } }
+    //
+    // gives the outer header two back edges — one from the inner loop's exit,
+    // one from the `continue outer` block. Considered separately, each body
+    // excludes the other's latch, so that latch looks like a block *outside*
+    // the loop and became a candidate preheader. Hoisting into it placed a
+    // definition where it could not reach its use. See known-issues #17.
+    {
+        let mut merged: HashMap<usize, HashSet<usize>> = HashMap::new();
+        for (header, body) in loops.drain(..) {
+            merged.entry(header).or_default().extend(body);
+        }
+        let mut headers: Vec<usize> = merged.keys().copied().collect();
+        headers.sort_unstable();
+        loops = headers
+            .into_iter()
+            .map(|h| {
+                let body = merged.remove(&h).unwrap_or_default();
+                (h, body)
+            })
+            .collect();
+    }
+
     if loops.is_empty() {
         return;
     }
@@ -147,14 +174,29 @@ fn licm_func(func: &mut IrFunction) {
     }
 
     for (header, body) in &loops {
-        // Find preheader: a predecessor of header that's not in the loop body.
-        let preheader = predecessors[*header]
+        // Find preheader: a predecessor of the header, outside the loop, that
+        // *dominates* the header.
+        //
+        // The dominance requirement is what makes the hoist sound. A block that
+        // merely sits outside the loop body can still fail to reach parts of it,
+        // and hoisting a definition into such a block strands its uses. Since
+        // the preheader dominates the header, and the header dominates every
+        // block in a natural loop, it dominates every use we are hoisting past.
+        //
+        // Selection is also made deterministic by taking the lowest index rather
+        // than an arbitrary `HashSet` element. Without that, the same source
+        // compiled to different IR on different runs — three distinct outputs in
+        // six runs of the same file, three of which were invalid — because the
+        // hash seed changes per process.
+        let mut cands: Vec<usize> = predecessors[*header]
             .iter()
-            .find(|p| !body.contains(p))
-            .copied();
-        let preheader = match preheader {
-            Some(p) => p,
-            None => continue, // No preheader available — skip.
+            .copied()
+            .filter(|p| !body.contains(p) && dom[*header].contains(p))
+            .collect();
+        cands.sort_unstable();
+        let preheader = match cands.first() {
+            Some(&p) => p,
+            None => continue, // No sound preheader available — skip this loop.
         };
 
         // Identify loop-invariant instructions.
