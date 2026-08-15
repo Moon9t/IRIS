@@ -50,7 +50,7 @@ clone builds; the hardcoded developer `PATH` is gone from `build.rs`. Do not
 re-report these.
 
 **Known broken — see `docs/known-issues.md` (14 entries, #6 and #12 now fixed):**
-- 🔴 Named arguments `f(a=1, b=2)` silently evaluate to `0`
+- ✅ Named arguments `f(a=1, b=2)` — **fixed** 2026-08-15 (#1)
 - 🔴 `str` field in a record inside `result<T,E>` mis-types as `i64`
 - 🔴 `==` on two `choice` values fails **at runtime**, not compile time (#8)
 - 🟠 A record field typed by a *brought* module mangles as generic (#7)

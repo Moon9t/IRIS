@@ -5,7 +5,36 @@ their output. Each entry has a minimal reproduction.
 
 ---
 
-## 1. Named arguments silently evaluate to 0 — **critical**
+## 1. Named arguments silently evaluate to 0 — **FIXED**
+
+> **Fixed** in `src/lower/mod.rs`. The parser had always collected named
+> arguments into `AstExpr::Call::named_args`, but `lower_call` destructured the
+> node with `..` and never read that field — so a call written entirely with
+> named arguments was lowered with an argument list of length **zero**, and the
+> callee read whatever was left in the argument registers.
+>
+> `lower_call` now takes `named_args` and folds them into positional order
+> before any other code inspects `args`, against a new `fn_param_names` table
+> built in the same loop as `fn_defaults`. Gaps are filled from parameter
+> defaults; a gap with no default is a compile error rather than a short
+> argument list. Unknown parameter names, duplicates and
+> positional/named collisions all now fail at compile time, with a did-you-mean
+> and the declared parameter list. Named arguments on a builtin or extern are
+> rejected explicitly, because parameter names are not known for those.
+>
+> Resolution runs only when `named_args` is non-empty, so purely positional
+> calls take exactly the path they always did.
+>
+> **This defect is the origin of project rule 3.** `tests/test_named_args.iris`
+> printed seven values and then `All named arg tests passed!` while every one of
+> those values was wrong; it asserted nothing, so it reported success for the
+> entire life of the defect. That file now asserts all seven, plus four
+> non-commutative cases (`sub(b=1, a=10) == 9`) that would catch a resolver
+> which appended named arguments in written order rather than parameter order.
+>
+> Verified identical on `--emit eval` and `IRIS_FORCE_INTERP=1`.
+
+### Original report
 
 `f(a=1, b=2)` parses and is accepted, but the arguments do not reach the callee.
 

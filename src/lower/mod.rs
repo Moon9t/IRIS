@@ -441,6 +441,11 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
     let mut generic_fn_map: HashMap<String, crate::parser::ast::AstFunction> = HashMap::new();
     let mut fn_defaults_map: HashMap<String, Vec<Option<crate::parser::ast::AstExpr>>> =
         HashMap::new();
+    // Declared parameter names, in order, for every function in the program.
+    // Used to resolve named arguments `f(w = 3, h = 4)` to positional slots.
+    // Kept separate from `fn_defaults`, which is only populated for functions
+    // that actually have defaults.
+    let mut fn_param_names_map: HashMap<String, Vec<String>> = HashMap::new();
     for func in &ast.functions {
         user_fn_names.insert(func.name.name.clone());
         if func.type_params.is_empty() {
@@ -456,6 +461,10 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
         if func.is_const {
             generic_fn_map.insert(func.name.name.clone(), func.clone());
         }
+        fn_param_names_map.insert(
+            func.name.name.clone(),
+            func.params.iter().map(|p| p.name.name.clone()).collect(),
+        );
         if func.params.iter().any(|p| p.default.is_some()) {
             fn_defaults_map.insert(
                 func.name.name.clone(),
@@ -468,6 +477,7 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
         *u.borrow_mut() = user_fn_names;
     });
     let fn_defaults = std::rc::Rc::new(fn_defaults_map);
+    let fn_param_names = std::rc::Rc::new(fn_param_names_map);
 
     // Pre-populate built-in / runtime function return types so call sites
     // get concrete types instead of Infer.
@@ -734,6 +744,7 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
             mono_sigs.clone(),
             trait_dispatch.clone(),
             fn_defaults.clone(),
+            fn_param_names.clone(),
             lambda_counter.clone(),
         )?;
         module
@@ -806,6 +817,8 @@ struct Lowerer<'m> {
     trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
     /// Default parameter expressions: fn_name → [Option<AstExpr>] per param.
     fn_defaults: std::rc::Rc<HashMap<String, Vec<Option<crate::parser::ast::AstExpr>>>>,
+    /// Declared parameter names per function, for resolving named arguments.
+    fn_param_names: std::rc::Rc<HashMap<String, Vec<String>>>,
     /// Expected type from a `val x: T = expr` annotation — used by collection
     /// constructors (e.g. `list()`, `map()`) to infer the element/key/value type.
     binding_ty: Option<IrType>,
@@ -943,6 +956,7 @@ impl<'m> Lowerer<'m> {
             std::rc::Rc::new(HashMap::new()),
             std::rc::Rc::new(HashMap::new()),
             std::rc::Rc::new(HashMap::new()),
+            std::rc::Rc::new(HashMap::new()),
         )
     }
 
@@ -960,6 +974,7 @@ impl<'m> Lowerer<'m> {
         const_defs: std::rc::Rc<HashMap<String, crate::parser::ast::AstExpr>>,
         trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
         fn_defaults: std::rc::Rc<HashMap<String, Vec<Option<crate::parser::ast::AstExpr>>>>,
+        fn_param_names: std::rc::Rc<HashMap<String, Vec<String>>>,
     ) -> Self {
         Self {
             builder,
@@ -977,6 +992,7 @@ impl<'m> Lowerer<'m> {
             const_defs,
             trait_dispatch,
             fn_defaults,
+            fn_param_names,
             binding_ty: None,
             current_return_ty: None,
             expected_expr_ty: None,
@@ -1488,7 +1504,9 @@ impl<'m> Lowerer<'m> {
                 Ok((result, ty))
             }
 
-            AstExpr::Call { callee, args, span, .. } => self.lower_call(callee, args, *span),
+            AstExpr::Call { callee, args, named_args, span } => {
+                self.lower_call(callee, args, named_args, *span)
+            }
 
             AstExpr::If {
                 cond,
@@ -2250,7 +2268,7 @@ impl<'m> Lowerer<'m> {
                                 name: mangled_fn,
                                 span: base_ident.span,
                             };
-                            return self.lower_call(&synthetic_callee, args, *span);
+                            return self.lower_call(&synthetic_callee, args, &[], *span);
                         }
                         let ret_ty =
                             self.fn_sigs.get(mangled_fn.as_str()).cloned().or_else(|| {
@@ -2282,7 +2300,7 @@ impl<'m> Lowerer<'m> {
                                 name: unqualified_mangled_fn,
                                 span: base_ident.span,
                             };
-                            return self.lower_call(&synthetic_callee, args, *span);
+                            return self.lower_call(&synthetic_callee, args, &[], *span);
                         }
                         let ret_ty = self
                             .fn_sigs
@@ -3753,13 +3771,141 @@ impl<'m> Lowerer<'m> {
     }
 
     /// Lowers a function call. Handles the built-in `einsum` intrinsic specially.
+    /// Resolve named arguments `f(w = 3, h = 4)` into positional order.
+    ///
+    /// Named arguments were parsed into `AstExpr::Call::named_args` but never
+    /// read by the lowerer, so the call was lowered with only its *positional*
+    /// arguments -- usually none at all. The callee then read whatever happened
+    /// to be in the argument registers. No stage produced a diagnostic:
+    /// `tests/test_named_args.iris` printed "All named arg tests passed!" while
+    /// every value it computed was wrong. See known-issues #1.
+    ///
+    /// Only reachable when `named_args` is non-empty, so a purely positional
+    /// call takes exactly the path it always did.
+    fn resolve_named_args(
+        &self,
+        callee_name: &str,
+        args: &[AstExpr],
+        named_args: &[(String, AstExpr)],
+        span: Span,
+    ) -> Result<Vec<AstExpr>, LowerError> {
+        let params = self
+            .fn_param_names
+            .get(callee_name)
+            .ok_or_else(|| LowerError::Rejected {
+                detail: format!(
+                    "named arguments are not supported when calling `{}`. They are matched \
+                     against declared parameter names, which are only known for functions \
+                     defined in this program -- not builtins, externs or closures. Pass the \
+                     arguments positionally instead.",
+                    callee_name
+                ),
+                span,
+            })?;
+
+        if args.len() > params.len() {
+            return Err(LowerError::Rejected {
+                detail: format!(
+                    "`{}` declares {} parameter(s) but {} positional argument(s) were given \
+                     before the named ones",
+                    callee_name,
+                    params.len(),
+                    args.len()
+                ),
+                span,
+            });
+        }
+
+        // Positional arguments fill the leading slots; named ones fill by name.
+        let mut slots: Vec<Option<AstExpr>> = params.iter().map(|_| None).collect();
+        for (i, a) in args.iter().enumerate() {
+            slots[i] = Some(a.clone());
+        }
+
+        for (name, value) in named_args {
+            let idx = params.iter().position(|p| p == name).ok_or_else(|| {
+                // Nearest declared parameter by shared prefix, for a "did you mean".
+                let suggestion = params
+                    .iter()
+                    .find(|p| {
+                        let n = name.as_bytes();
+                        let q = p.as_bytes();
+                        !n.is_empty() && !q.is_empty() && n[0] == q[0]
+                    })
+                    .cloned();
+                LowerError::Rejected {
+                    detail: match suggestion {
+                        Some(near) => format!(
+                            "`{}` has no parameter named `{}` -- did you mean `{}`? It declares: {}",
+                            callee_name,
+                            name,
+                            near,
+                            params.join(", ")
+                        ),
+                        None => format!(
+                            "`{}` has no parameter named `{}`. It declares: {}",
+                            callee_name,
+                            name,
+                            params.join(", ")
+                        ),
+                    },
+                    span: value.span(),
+                }
+            })?;
+            if slots[idx].is_some() {
+                return Err(LowerError::Rejected {
+                    detail: format!(
+                        "parameter `{}` of `{}` is supplied more than once",
+                        name, callee_name
+                    ),
+                    span: value.span(),
+                });
+            }
+            slots[idx] = Some(value.clone());
+        }
+
+        // Fill any gap from that parameter's default. A gap with no default is
+        // an error here rather than a silently short argument list.
+        let defaults = self.fn_defaults.get(callee_name);
+        let mut out = Vec::with_capacity(slots.len());
+        for (i, slot) in slots.into_iter().enumerate() {
+            match slot {
+                Some(e) => out.push(e),
+                None => match defaults.and_then(|d| d.get(i)).and_then(|d| d.clone()) {
+                    Some(d) => out.push(d),
+                    None => {
+                        return Err(LowerError::Rejected {
+                            detail: format!(
+                                "parameter `{}` of `{}` has no argument and no default value",
+                                params[i], callee_name
+                            ),
+                            span,
+                        });
+                    }
+                },
+            }
+        }
+        Ok(out)
+    }
+
     fn lower_call(
         &mut self,
         callee: &Ident,
         args: &[AstExpr],
+        named_args: &[(String, AstExpr)],
         span: Span,
     ) -> Result<(ValueId, IrType), LowerError> {
         let callee_name = self.resolve_unqualified_name(&callee.name);
+
+        // Named arguments are folded into positional order before anything
+        // else inspects `args`, so every path below sees a normal call.
+        let reordered: Vec<AstExpr>;
+        let args: &[AstExpr] = if named_args.is_empty() {
+            args
+        } else {
+            reordered = self.resolve_named_args(&callee_name, args, named_args, span)?;
+            &reordered
+        };
 
         // A user (or stdlib) definition of this name shadows the builtin.
         //
@@ -7343,6 +7489,7 @@ impl<'m> Lowerer<'m> {
                     subs,
                     self.trait_dispatch.clone(),
                     self.fn_defaults.clone(),
+                    self.fn_param_names.clone(),
                     self.lambda_counter.clone(),
                 )?;
 
@@ -16012,6 +16159,7 @@ fn lower_function_with_generics(
     mono_sigs: std::rc::Rc<std::cell::RefCell<HashMap<String, IrType>>>,
     trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
     fn_defaults: std::rc::Rc<HashMap<String, Vec<Option<AstExpr>>>>,
+    fn_param_names: std::rc::Rc<HashMap<String, Vec<String>>>,
     lambda_counter: std::rc::Rc<std::cell::Cell<u32>>,
 ) -> Result<
     (
@@ -16031,6 +16179,7 @@ fn lower_function_with_generics(
         HashMap::new(), // no type param subs for top-level functions
         trait_dispatch,
         fn_defaults,
+        fn_param_names,
         lambda_counter,
     )
 }
@@ -16047,6 +16196,7 @@ fn lower_function_with_generics_and_subs(
     type_param_subs: HashMap<String, IrType>,
     trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
     fn_defaults: std::rc::Rc<HashMap<String, Vec<Option<AstExpr>>>>,
+    fn_param_names: std::rc::Rc<HashMap<String, Vec<String>>>,
     lambda_counter: std::rc::Rc<std::cell::Cell<u32>>,
 ) -> Result<
     (
@@ -16089,6 +16239,7 @@ fn lower_function_with_generics_and_subs(
             type_param_subs.clone(),
             trait_dispatch.clone(),
             fn_defaults.clone(),
+            fn_param_names.clone(),
             lambda_counter.clone(),
         )?;
         // Preserve attributes on the inner implementation only.
@@ -16220,6 +16371,7 @@ fn lower_function_with_generics_and_subs(
         const_defs.clone(),
         trait_dispatch,
         fn_defaults,
+        fn_param_names,
     );
     lowerer.current_return_ty = Some(return_ty.clone());
 
