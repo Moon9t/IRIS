@@ -5841,7 +5841,15 @@ fn emit_instr_ir(
             let llvm_ret = llvm_type_complete(&res_ty)?;
             // Coerce the value to the proper type if needed
             write!(out, "  {} = ", val(*result))?;
-            if llvm_ret.starts_with('i') {
+            if llvm_ret == "i64" {
+                // Already the carrier width. `trunc i64 %x to i64` is rejected
+                // by LLVM as an invalid cast, and this path is reached whenever
+                // a handler *uses* its parameter: handler bindings carry no
+                // declared type, so they default to i64 (known-issues #31) and
+                // land here. `test_resume_handler.iris` passed natively only
+                // because its handler ignores its argument.
+                writeln!(out, "add i64 {}, 0", val_i64)?;
+            } else if llvm_ret.starts_with('i') && llvm_ret != "i1" {
                 writeln!(out, "trunc i64 {} to {}", val_i64, llvm_ret)?;
             } else if llvm_ret == "ptr" {
                 writeln!(out, "inttoptr i64 {} to ptr", val_i64)?;

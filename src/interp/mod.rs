@@ -4017,17 +4017,28 @@ impl<'m> Interpreter<'m> {
                     }
                 }
 
-                // Return a zero value of the declared return type so tests can verify the call happened.
-                let zero = match ret_ty {
-                    IrType::Scalar(crate::ir::types::DType::F64) => IrValue::F64(0.0),
-                    IrType::Scalar(crate::ir::types::DType::F32) => IrValue::F32(0.0),
-                    IrType::Scalar(crate::ir::types::DType::I64) => IrValue::I64(0),
-                    IrType::Scalar(crate::ir::types::DType::I32) => IrValue::I32(0),
-                    IrType::Scalar(crate::ir::types::DType::Bool) => IrValue::Bool(false),
-                    IrType::Str => IrValue::Str(String::new()),
-                    _ => IrValue::I64(0),
-                };
-                Ok(zero)
+                // An extern that could not be resolved is an error, not a zero.
+                //
+                // This used to return a zero of the declared return type, with
+                // the comment "so tests can verify the call happened" -- but a
+                // test that accepts a fabricated answer verifies nothing. The
+                // whole of `std.adaptive` (36 functions over
+                // `iris_adaptive_*`) ran this way interpreted: `adaptive_new`
+                // handed back handle 0, `adaptive_name` an empty string,
+                // `adaptive_n_params` 0, all without a diagnostic, while the
+                // same program was correct natively.
+                //
+                // It is worse than an ordinary silent default because
+                // `--emit eval` falls back to the interpreter when a native
+                // build fails. That turned "the build broke" into "every
+                // extern returns 0", which is a wrong answer wearing the
+                // costume of a successful run.
+                Err(InterpError::Unsupported {
+                    detail: format!(
+                        "extern `{}` is not available to the interpreter: no builtin                          implementation and the symbol could not be resolved dynamically.                          Run natively (drop IRIS_FORCE_INTERP), or add a builtin for it.                          Returning a zero here would be a silent wrong answer.",
+                        name
+                    ),
+                })
             }
         }
     }

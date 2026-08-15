@@ -1,52 +1,95 @@
-// Comprehensive test suite for IRIS Algebraic Effect System
+// IRIS algebraic effect system -- effects that are actually handled.
+//
+// This file previously declared `effect FileIO` and `effect Logger`, ran the
+// operations inside `with FileIO { ... }`, and relied on them falling through
+// to extern stubs that returned typed defaults -- its own comment said so:
+// "Effect operations resolve as extern stubs in interpreter (returns typed
+// default: str -> "", bool -> false)".
+//
+// That is not the effect system working; it is the effect system being bypassed
+// while the test prints "Effect system test passed!". An unhandled operation
+// returning a fabricated default is exactly the silent-zero pattern this
+// project has been digging out all session, and the interpreter no longer does
+// it -- an unresolvable extern is an error now.
+//
+// So the operations are genuinely handled here, and the results are asserted.
+// A handler that never ran, or that dropped its argument, now fails.
 
-effect FileIO {
-    def read_file(path: str) -> str;
-    def write_file(path: str, content: str) -> bool;
+extern def write_file(path: str, content: str) -> str
+extern def read_file(path: str) -> str
+extern def log_msg(msg: str) -> str
+
+def check_single_handler() -> i64 {
+    // The handler intercepts the operation and resumes with its own value, so
+    // no real file is touched. Asserting the *content* is what proves the
+    // argument reached the handler rather than being discarded.
+    val written = handle {
+        write_file("test.txt", "Hello, Effects!")
+    } with {
+        write_file(path, content) -> resume(v) => v(content)
+    };
+    assert(written == "Hello, Effects!");
+
+    // A handler that ignores its argument and returns a constant must be
+    // distinguishable from one that uses it.
+    val fixed = handle {
+        write_file("ignored.txt", "payload")
+    } with {
+        write_file(path, content) -> resume(v) => v("constant")
+    };
+    assert(fixed == "constant");
+    0
 }
 
-effect Logger {
-    def log_msg(msg: str) -> bool;
+def check_path_reaches_handler() -> i64 {
+    // Both parameters must arrive, not just the first.
+    val seen = handle {
+        write_file("/var/log/app.log", "body")
+    } with {
+        write_file(path, content) -> resume(v) => v(path)
+    };
+    assert(seen == "/var/log/app.log");
+    0
 }
 
-// Function declaring effect usage
-def perform_io(filename: str, data: str) -> str with FileIO {
-    val ok = write_file(filename, data);
-    if ok {
-        return read_file(filename);
-    }
-    return "error";
+// NOTE: these handlers use `concat` rather than `+`. String `+` inside a
+// handler body silently evaluates to 0 -- handler parameters carry no declared
+// type, so they default to i64 and `+` lowers as integer addition. See
+// known-issues #31.
+def check_read_handler() -> i64 {
+    val contents = handle {
+        read_file("config.toml")
+    } with {
+        read_file(path) -> resume(v) => v(concat("stubbed:", path))
+    };
+    assert(contents == "stubbed:config.toml");
+    0
 }
 
-// Function with multiple effects  
-def log_and_write(tag: str, msg: str) -> bool with FileIO, Logger {
-    log_msg(tag + ": " + msg);
-    return write_file("app.log", msg);
-}
-
-// Pure function — no effect annotation needed
-def pure_add(a: i64, b: i64) -> i64 {
-    return a + b;
+def check_handler_scoping() -> i64 {
+    // A handler covers only its own block. Two blocks handling the same
+    // operation differently must not leak into one another.
+    val first = handle {
+        log_msg("one")
+    } with {
+        log_msg(m) -> resume(v) => v(concat("A:", m))
+    };
+    val second = handle {
+        log_msg("two")
+    } with {
+        log_msg(m) -> resume(v) => v(concat("B:", m))
+    };
+    assert(first == "A:one");
+    assert(second == "B:two");
+    0
 }
 
 def main() -> i64 {
-    // Test 1: Pure function call works without effect context
-    val sum = pure_add(10, 20);
-    print(to_str(sum));
-
-    // Test 2: Effect operations resolve as extern stubs in interpreter  
-    // (returns typed default: str→"", bool→false)
-    with FileIO {
-        val result = perform_io("test.txt", "Hello, Effects!");
-        print(concat("IO result: ", result));
-    }
-
-    // Test 3: Multiple effects
-    with FileIO, Logger {
-        val logged = log_and_write("INFO", "System started");
-        print(concat("Logged: ", to_str(logged)));
-    }
-
-    print("Effect system test passed!");
-    return 0;
+    val a = check_single_handler();
+    val b = check_path_reaches_handler();
+    val c = check_read_handler();
+    val d = check_handler_scoping();
+    assert(a + b + c + d == 0);
+    println("effect system ok");
+    0
 }

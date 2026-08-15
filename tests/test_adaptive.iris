@@ -1,0 +1,170 @@
+// std.adaptive -- online parameter adaptation, asserted.
+//
+// This module is a thin IRIS surface over `extern def iris_adaptive_*`, so
+// these assertions exercise the FFI boundary and the C implementation as much
+// as the IRIS wrappers. Values chosen to be exact where the underlying maths
+// permits: a dot product and a conjugate update both have closed forms, and
+// asserting a band where an exact value exists is how a subtly wrong
+// implementation survives.
+
+bring std.adaptive
+
+def check_lifecycle() -> i64 {
+    val h = adaptive_new("throughput", 3, 0.05, 0.5);
+    assert(h != 0);
+    assert(adaptive_name(h) == "throughput");
+    assert(adaptive_n_params(h) == 3);
+    assert(adaptive_learning_rate(h) > 0.049);
+    assert(adaptive_learning_rate(h) < 0.051);
+
+    adaptive_set_learning_rate(h, 0.2);
+    assert(adaptive_learning_rate(h) > 0.199);
+    assert(adaptive_learning_rate(h) < 0.201);
+
+    adaptive_free(h);
+    0
+}
+
+def check_params_roundtrip() -> i64 {
+    val h = adaptive_new("p", 4, 0.1, 0.5);
+    adaptive_set_param(h, 0, 1.5);
+    adaptive_set_param(h, 1, -2.25);
+    adaptive_set_param(h, 2, 0.0);
+    adaptive_set_param(h, 3, 100.0);
+    assert(adaptive_get_param(h, 0) == 1.5);
+    assert(adaptive_get_param(h, 1) == -2.25);
+    // Zero must round-trip as zero and be distinguishable from "unset".
+    assert(adaptive_get_param(h, 2) == 0.0);
+    assert(adaptive_get_param(h, 3) == 100.0);
+    adaptive_free(h);
+    0
+}
+
+def check_predict_is_dot_product() -> i64 {
+    val h = adaptive_new("dot", 3, 0.1, 0.5);
+    adaptive_set_param(h, 0, 2.0);
+    adaptive_set_param(h, 1, 3.0);
+    adaptive_set_param(h, 2, -1.0);
+
+    val x: list<f64> = list();
+    list_push(x, 1.0);
+    list_push(x, 2.0);
+    list_push(x, 4.0);
+    // 2*1 + 3*2 + (-1)*4 = 4
+    assert(adaptive_predict(h, x) == 4.0);
+
+    // All-zero input predicts zero regardless of parameters.
+    val z: list<f64> = list();
+    list_push(z, 0.0);
+    list_push(z, 0.0);
+    list_push(z, 0.0);
+    assert(adaptive_predict(h, z) == 0.0);
+
+    // A shorter input than the parameter vector uses only the overlap rather
+    // than reading past the end.
+    val shortx: list<f64> = list();
+    list_push(shortx, 1.0);
+    assert(adaptive_predict(h, shortx) == 2.0);
+    adaptive_free(h);
+    0
+}
+
+def check_risk_tracking() -> i64 {
+    val h = adaptive_new("risk", 2, 0.1, 10.0);
+    val fresh = adaptive_get_risk(h);
+    assert(risk_observations(fresh) == 0);
+    assert(risk_errors(fresh) == 0);
+
+    adaptive_record_error(h, 1.0);
+    adaptive_record_error(h, 3.0);
+    adaptive_record_error(h, 2.0);
+
+    val m = adaptive_get_risk(h);
+    assert(risk_observations(m) == 3);
+    // Mean of 1, 3, 2 is exactly 2.
+    assert(risk_mean_error(m) > 1.99);
+    assert(risk_mean_error(m) < 2.01);
+    // Max is the largest seen, not the most recent -- a peak-tracking bug
+    // hides whenever the last sample happens to be the biggest, so the largest
+    // value is deliberately not last here.
+    assert(risk_max_error(m) > 2.99);
+    assert(risk_max_error(m) < 3.01);
+    assert(risk_confidence(m) >= 0.0);
+    assert(risk_confidence(m) <= 1.0);
+
+    // Reset clears the history rather than merely zeroing the mean.
+    adaptive_reset_stats(h);
+    val after = adaptive_get_risk(h);
+    assert(risk_observations(after) == 0);
+    adaptive_free(h);
+    0
+}
+
+def check_risk_threshold() -> i64 {
+    val h = adaptive_new("thresh", 2, 0.1, 100.0);
+    // Errors well below a high threshold: not unsafe.
+    adaptive_record_error(h, 0.1);
+    adaptive_record_error(h, 0.1);
+    assert(adaptive_is_unsafe(h) == false);
+
+    // Drop the threshold under the observed error and the guard must fire.
+    // Asserting the *false* case only would leave a dead guard undetected,
+    // which is a pattern this project has now hit four times.
+    adaptive_set_risk_threshold(h, 0.01);
+    adaptive_record_error(h, 5.0);
+    assert(adaptive_is_unsafe(h));
+    adaptive_free(h);
+    0
+}
+
+def check_bayes_update() -> i64 {
+    val h = adaptive_new("bayes", 1, 0.1, 0.5);
+
+    // Normal-normal conjugate update with no accumulated data:
+    //   precision = 1/prior_var + 1/obs_var = 1 + 1 = 2
+    //   mean      = (prior_mean/prior_var + observation/obs_var) / precision
+    //             = (0 + 10) / 2 = 5
+    //
+    // The old implementation returned `prior_mean + observation` = 10 here,
+    // which is not a posterior: a Bayesian update with no data must return the
+    // prior mean, and the observation must be weighted by its variance rather
+    // than added on top. See known-issues #30.
+    val posterior = adaptive_uncertainty_bayes_update(h, 0.0, 1.0, 10.0, 1.0);
+    assert(posterior > 4.99);
+    assert(posterior < 5.01);
+
+    // The posterior must lie between the prior mean and the observation --
+    // the defining property of a conjugate update, and the one the old
+    // implementation violated by returning a value above both.
+    val between = adaptive_uncertainty_bayes_update(h, 2.0, 1.0, 6.0, 1.0);
+    assert(between > 2.0);
+    assert(between < 6.0);
+
+    // A very confident prior (tiny variance) barely moves.
+    val stubborn = adaptive_uncertainty_bayes_update(h, 1.0, 0.0001, 99.0, 1.0);
+    assert(stubborn > 0.99);
+    assert(stubborn < 1.02);
+
+    // A very uncertain prior defers almost entirely to the observation.
+    val yielding = adaptive_uncertainty_bayes_update(h, 1.0, 10000.0, 42.0, 0.001);
+    assert(yielding > 41.9);
+    assert(yielding < 42.1);
+
+    // Non-positive variances are clamped rather than dividing by zero.
+    val guarded = adaptive_uncertainty_bayes_update(h, 1.0, 0.0, 3.0, 0.0);
+    assert(guarded == guarded);
+    adaptive_free(h);
+    0
+}
+
+def main() -> i64 {
+    val a = check_lifecycle();
+    val b = check_params_roundtrip();
+    val c = check_predict_is_dot_product();
+    val d = check_risk_tracking();
+    val e = check_risk_threshold();
+    val f = check_bayes_update();
+    assert(a + b + c + d + e + f == 0);
+    println("adaptive ok");
+    0
+}

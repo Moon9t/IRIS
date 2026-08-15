@@ -6612,13 +6612,26 @@ double iris_adaptive_uncertainty_bayes_update_impl(IrisAdaptiveState* state,
                                                     double prior_mean, double prior_var,
                                                     double observation, double obs_var) {
     if (!state) return 0.0;
+    /*
+     * Normal-normal conjugate update, treating `observation` as one new datum
+     * on top of the state's accumulated error statistics.
+     *
+     * This previously computed a posterior from the accumulated data only and
+     * then returned `posterior_mean + observation`. That is not a posterior:
+     * with no accumulated data it returned `prior_mean + observation`, where a
+     * Bayesian update with no data must return the prior mean, and the result
+     * grew without bound as observations arrived. The `observation` argument
+     * was never actually folded into the update. Since this value is what an
+     * adaptive system uses to decide whether it is confident enough to act, a
+     * posterior that is not a posterior is a live hazard. See known-issues #30.
+     */
     if (prior_var <= 0.0) prior_var = 1.0;
     if (obs_var <= 0.0) obs_var = 1.0;
-    double posterior_precision = 1.0 / prior_var + (double)state->obs_count / obs_var;
+    double n = (double)state->obs_count;
+    double posterior_precision = 1.0 / prior_var + (n + 1.0) / obs_var;
     if (posterior_precision <= 0.0) posterior_precision = 1.0;
-    double posterior_mean = (prior_mean / prior_var + (double)state->obs_count * state->mean_err / obs_var)
-        / posterior_precision;
-    return posterior_mean + observation;
+    double data_sum = n * state->mean_err + observation;
+    return (prior_mean / prior_var + data_sum / obs_var) / posterior_precision;
 }
 
 int iris_adaptive_should_retrain_impl(IrisAdaptiveState* state) {

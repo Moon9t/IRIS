@@ -3629,11 +3629,27 @@ impl<'m> Lowerer<'m> {
                 .add_block_param(entry, Some(&rp.name), cont_ty.clone());
             handler_lowerer.scope.insert(rp.name.clone(), (val, cont_ty));
         }
-        for p in &arm.params {
+        // Use the types already recovered from the extern signature above.
+        //
+        // These block params were previously added as `IrType::Infer`, which
+        // discarded the very types `lifted_params` had just looked up. Inference
+        // then defaulted them to `i64`, so a handler that *used* its parameter
+        // produced a `str` bound as an integer: interpreted, `"s:" + p`
+        // evaluated to 0; natively, codegen emitted
+        // `call ptr @iris_str_concat(ptr %v2, ptr %p)` with `%p` defined as
+        // i64, which fails LLVM verification.
+        //
+        // `test_resume_handler.iris` passed on both backends throughout,
+        // because its handler ignores its argument. See known-issues #31.
+        for (i, p) in arm.params.iter().enumerate() {
+            let ty = lifted_params
+                .get(i)
+                .map(|lp| lp.ty.clone())
+                .unwrap_or(IrType::Infer);
             let val = handler_lowerer
                 .builder
-                .add_block_param(entry, Some(&p.name), IrType::Infer);
-            handler_lowerer.scope.insert(p.name.clone(), (val, IrType::Infer));
+                .add_block_param(entry, Some(&p.name), ty.clone());
+            handler_lowerer.scope.insert(p.name.clone(), (val, ty));
         }
 
         let (ret_val, ret_ty) = handler_lowerer.lower_expr(&arm.body)?;

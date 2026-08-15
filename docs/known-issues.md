@@ -1316,6 +1316,107 @@ needs the message to name the types the user actually wrote.
 
 ---
 
+## 30. `adaptive_uncertainty_bayes_update` was not a Bayesian update — **FIXED**
+
+The C implementation computed a posterior from the accumulated error
+statistics and then returned `posterior_mean + observation`. With no
+accumulated data that is `prior_mean + observation`, where a conjugate update
+with no data must return the **prior mean**; the `observation` argument was
+never folded into the update at all, and the result grew without bound as
+observations arrived.
+
+This value is what an adaptive system uses to decide whether it is confident
+enough to act, so a posterior that is not a posterior is a live hazard rather
+than a cosmetic error.
+
+**Fixed:** proper normal-normal conjugate update treating `observation` as one
+new datum on top of the accumulated statistics. Asserted in
+`tests/test_adaptive.iris` against the defining property the old version
+violated -- the posterior must lie **between** the prior mean and the
+observation -- plus the confident-prior and uncertain-prior limits.
+
+---
+
+## 31. Effect handler parameters were untyped — **MOSTLY FIXED**
+
+> **Root cause.** `lower_handler_arm` looked up the extern signature and built
+> `lifted_params` with the correct types -- and then added the entry block's
+> params as `IrType::Infer` anyway, discarding what it had just computed.
+> Inference defaulted them to `i64`, so a handler that *used* its parameter
+> received a `str` bound as an integer.
+>
+> Two symptoms, one cause:
+>
+> | | before | after |
+> |---|---|---|
+> | `concat(s, p)` in a handler, native | **invalid LLVM IR** -- `call ptr @iris_str_concat(ptr %v2, ptr %p)` with `%p` defined `i64` | works |
+> | `concat(s, p)` in a handler, interpreted | worked | works |
+> | `"s:" + p` in a handler | **silently evaluated to `0`** | compile error (see below) |
+>
+> **`test_resume_handler.iris` passed on both backends throughout**, because its
+> handler ignores its argument. Every handler in the tree did. So the algebraic
+> effect system -- a headline feature -- could not use handler arguments
+> natively at all, and nothing said so.
+>
+> A second fix went in alongside: `ResumeCont` emitted `trunc i64 %x to i64`
+> when the handler result was already `i64`, which LLVM rejects as an invalid
+> cast. Only reachable once a handler used its parameter.
+>
+> **Still open:** `"s:" + p` inside a handler now fails to compile with
+> `expected 'str' but found 'weak_ref<_>'` rather than producing a wrong answer.
+> That is a strict improvement -- loud beats silent -- but the message names a
+> type the user never wrote, and `+` should work. Use `concat` in handler bodies
+> until it does.
+
+### Original report
+
+```iris
+extern def rf(path: str) -> str
+val c = handle { rf("cfg") } with { rf(p) -> resume(v) => v("s:" + p) };
+// interpreter: c is I64(0), then `c == "s:cfg"` fails as CmpEq on I64 and Str
+// native:      "arithmetic (Add) on a heap-represented value is not supported"
+```
+
+`concat("s:", p)` works, and `"s:" + p` works fine **outside** a handler. Handler
+parameters carry no declared type, so they default to `i64` and `+` lowers as
+integer addition rather than string concatenation.
+
+Another instance of the type-inference-after-lowering weakness in
+`docs/architecture-vs-rustc.md`: `p` is a handler binding with nothing to anchor
+its type to by the time inference runs.
+
+**Workaround:** use `concat` inside handler bodies.
+
+**Status:** open. The fix is to give handler parameters their declared types from
+the `effect` declaration at lowering time.
+
+---
+
+## 32. Unresolved externs returned a typed zero instead of failing — **FIXED**
+
+`dispatch_extern` ended with:
+
+```rust
+// Return a zero value of the declared return type so tests can verify the call happened.
+```
+
+A test that accepts a fabricated answer verifies nothing. The whole of
+`std.adaptive` -- 36 functions over `iris_adaptive_*` -- ran this way in the
+interpreter: `adaptive_new` returned handle `0`, `adaptive_name` an empty
+string, `adaptive_n_params` `0`, with no diagnostic, while the identical program
+was correct natively.
+
+Worse than an ordinary silent default, because `--emit eval` **falls back to the
+interpreter when a native build fails**. That turned "the build broke" into
+"every extern returns 0" -- a wrong answer wearing the costume of a successful
+run.
+
+**Fixed:** an extern with no builtin implementation and no resolvable dynamic
+symbol is now an error naming the symbol. Blast radius across the 132-file
+corpus was two files, both of which were depending on the fabricated zero.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:
