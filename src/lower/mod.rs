@@ -3641,10 +3641,15 @@ impl<'m> Lowerer<'m> {
         //
         // `test_resume_handler.iris` passed on both backends throughout,
         // because its handler ignores its argument. See known-issues #31.
+        // Read the types straight from the extern signature rather than from
+        // `lifted_params`, which has the continuation inserted at index 0 and
+        // is therefore off by one against `arm.params`. Indexing it by the arm
+        // position gave every first parameter the continuation's
+        // `weak_ref<_>`, which is why `"s:" + p` reported
+        // `expected 'str' but found 'weak_ref<_>'`.
         for (i, p) in arm.params.iter().enumerate() {
-            let ty = lifted_params
-                .get(i)
-                .map(|lp| lp.ty.clone())
+            let ty = extern_fn
+                .and_then(|ef| ef.param_types.get(i).cloned())
                 .unwrap_or(IrType::Infer);
             let val = handler_lowerer
                 .builder

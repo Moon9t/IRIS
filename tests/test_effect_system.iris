@@ -52,10 +52,6 @@ def check_path_reaches_handler() -> i64 {
     0
 }
 
-// NOTE: these handlers use `concat` rather than `+`. String `+` inside a
-// handler body silently evaluates to 0 -- handler parameters carry no declared
-// type, so they default to i64 and `+` lowers as integer addition. See
-// known-issues #31.
 def check_read_handler() -> i64 {
     val contents = handle {
         read_file("config.toml")
@@ -63,6 +59,19 @@ def check_read_handler() -> i64 {
         read_file(path) -> resume(v) => v(concat("stubbed:", path))
     };
     assert(contents == "stubbed:config.toml");
+
+    // The same thing with `+` rather than `concat`. This is the regression
+    // guard for known-issues #31: handler parameters carry the types declared
+    // on the extern, so `p` is a `str` and `+` is string concatenation. When
+    // they defaulted to i64 this evaluated to 0 interpreted and emitted invalid
+    // LLVM IR natively -- and no test caught it, because every handler in the
+    // tree ignored its argument.
+    val plussed = handle {
+        read_file("a.txt")
+    } with {
+        read_file(path) -> resume(v) => v("plus:" + path)
+    };
+    assert(plussed == "plus:a.txt");
     0
 }
 

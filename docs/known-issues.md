@@ -1337,7 +1337,7 @@ observation -- plus the confident-prior and uncertain-prior limits.
 
 ---
 
-## 31. Effect handler parameters were untyped — **MOSTLY FIXED**
+## 31. Effect handler parameters were untyped — **FIXED**
 
 > **Root cause.** `lower_handler_arm` looked up the extern signature and built
 > `lifted_params` with the correct types -- and then added the entry block's
@@ -1362,11 +1362,13 @@ observation -- plus the confident-prior and uncertain-prior limits.
 > when the handler result was already `i64`, which LLVM rejects as an invalid
 > cast. Only reachable once a handler used its parameter.
 >
-> **Still open:** `"s:" + p` inside a handler now fails to compile with
-> `expected 'str' but found 'weak_ref<_>'` rather than producing a wrong answer.
-> That is a strict improvement -- loud beats silent -- but the message names a
-> type the user never wrote, and `+` should work. Use `concat` in handler bodies
-> until it does.
+> The first attempt at this fix indexed `lifted_params` by the arm-parameter
+> position, but the continuation is `insert`ed at index 0, so every first
+> parameter received the continuation's `weak_ref<_>` -- which is where the
+> `expected 'str' but found 'weak_ref<_>'` message came from. Reading the types
+> straight from the extern signature removes the offset entirely. `+` and
+> `concat` both work in handler bodies now, on both backends, and
+> `tests/test_effect_system.iris` asserts both.
 
 ### Original report
 
