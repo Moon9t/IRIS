@@ -1,2 +1,0 @@
-def area(w: i64, h: i64) -> i64 { w * h }
-def main() -> i64 { assert(area(w = 3, hh = 4) == 12); 0 }
