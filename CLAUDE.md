@@ -29,13 +29,18 @@ Systems. Single Rust crate (~112k lines) at this repo root.
    silently mixes the changes and its result attributes them to the wrong commit.
    Wait for the build to finish (unit tests appearing in the log) or for the run
    to complete.
-5. **Run a suspicious program several times before believing either result.**
+5. **A stdlib usage survey must read `tests/*.rs`, not just `.iris` files.**
+   Eight modules were deleted on 2026-08-15 as having zero dependents; seven had
+   asserting Rust tests and had to be restored. The Rust suite exercises the
+   stdlib directly, so an `.iris`-only survey sees a fraction of the real
+   dependency graph.
+6. **Run a suspicious program several times before believing either result.**
    Compilation was non-deterministic until 2026-08-15: the same source produced
    three different IR outputs in six runs, three of them invalid, so a program
    passed or failed roughly half the time. It was filed as a *backend
    divergence* for exactly this reason. `--emit ir | md5sum` across five runs is
    now a cheap and meaningful check.
-6. **Do not pipe program output through text tools when bytes matter.** `sed`,
+7. **Do not pipe program output through text tools when bytes matter.** `sed`,
    `grep` and `tail` normalise line endings on msys; redirect to a file and use
    `od -c`. A `\r` corruption was "confirmed" through `sed` before this was
    noticed, and the compiled binary had been correct all along.

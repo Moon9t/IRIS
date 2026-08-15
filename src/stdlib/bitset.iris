@@ -1,0 +1,32 @@
+// src/stdlib/bitset.iris -- IRIS standard bit set library
+//
+// Provides a compact bit array implementation using the `list<i64>` backend.
+// Bitsets are represented as lists of 64-bit integers where each bit is a flag.
+
+/// Create a new empty bitset.
+pub def bitset_create() -> list<i64> {
+    bitset_new()
+}
+
+/// Set a bit at position `pos` (0-indexed).
+/// Returns the modified bitset for chaining.
+pub def set_bit(bs: list<i64>, pos: i64) -> list<i64> {
+    bitset_set(bs, pos)
+}
+
+/// Get a bit at position `pos` (0-indexed).
+/// Returns `true` if the bit is set, `false` otherwise.
+pub def get_bit(bs: list<i64>, pos: i64) -> bool {
+    bitset_get(bs, pos)
+}
+
+/// Clear a bit at position `pos` (0-indexed).
+/// Returns the modified bitset for chaining.
+pub def clear_bit(bs: list<i64>, pos: i64) -> list<i64> {
+    bitset_clear(bs, pos)
+}
+
+/// Count the number of set bits in the bitset (population count).
+pub def popcount(bs: list<i64>) -> i64 {
+    bitset_count(bs)
+}

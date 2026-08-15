@@ -1,0 +1,38 @@
+// src/stdlib/queue.iris -- IRIS standard FIFO queue (i64, list-backed with head index)
+
+record Queue { items: list<i64>, head: i64 }
+
+pub def queue_new() -> Queue {
+    Queue { items: list(), head: 0 }
+}
+
+// Returns true if the queue has no elements left to dequeue.
+pub def queue_is_empty(q: Queue) -> bool {
+    q.head >= list_len(q.items)
+}
+
+// Returns the number of elements available to dequeue.
+pub def queue_len(q: Queue) -> i64 {
+    list_len(q.items) - q.head
+}
+
+// Adds v to the back of the queue and returns the updated queue.
+pub def enqueue(q: Queue, v: i64) -> Queue {
+    push(q.items, v);
+    Queue { items: q.items, head: q.head }
+}
+
+// Returns the front element without removing it.
+pub def queue_peek(q: Queue) -> i64 {
+    list_get(q.items, q.head)
+}
+
+// Returns the front element.
+pub def dequeue_val(q: Queue) -> i64 {
+    list_get(q.items, q.head)
+}
+
+// Returns the queue with the front element removed.
+pub def dequeue_queue(q: Queue) -> Queue {
+    Queue { items: q.items, head: q.head + 1 }
+}

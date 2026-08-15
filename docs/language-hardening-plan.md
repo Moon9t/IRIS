@@ -212,6 +212,28 @@ documentation alone.
 
 ### Phase 4 — Stdlib maturity is a *cut* decision first
 
+> **Correction, 2026-08-15.** An attempt to act on this section deleted eight
+> modules measured as having "zero dependents". The measurement counted `.iris`
+> references only. **Seven of the eight had asserting Rust tests** —
+> `bitset`, `dataframe`, `dataset`, `log`, `path`, `queue` and `table` between
+> them carried 28 tests across five files, which is more verification than most
+> of the modules that were kept. The full suite caught it: 1767/2 became
+> 1737/32, and every new failure named one of the deleted modules.
+>
+> All seven are restored. Two lessons, both instances of rules already in this
+> repo:
+>
+> 1. **`tests/` is the index of truth — and `tests/` is not only `tests/*.iris`.**
+>    The Rust suite exercises the stdlib directly. A usage survey that reads
+>    only `.iris` files is measuring a fraction of the real dependency graph.
+> 2. **Deleting tested code to improve a coverage ratio is backwards.** The
+>    metric existed to find code nothing exercises. These modules *were*
+>    exercised; the survey just could not see it.
+>
+> The cut list below should be recomputed against Rust tests as well as `.iris`
+> files before anyone acts on it again.
+
+
 307 of 621 public functions are referenced by nothing; six modules are imported
 by nothing. Maturing all 42 modules is a year of work. Cutting to the autonomy
 core and deepening that is a quarter.

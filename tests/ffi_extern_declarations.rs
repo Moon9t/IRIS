@@ -102,7 +102,18 @@ def main() -> i64 { 0 }
 // 5. Calling an unknown extern fn in interpreter returns zero stub
 // ------------------------------------------------------------------
 #[test]
-fn test_interpreter_unknown_extern_returns_zero() {
+fn test_interpreter_unknown_extern_is_an_error() {
+    // This test used to be `test_interpreter_unknown_extern_returns_zero`, and
+    // asserted that an unresolvable extern produced 0 so that `0 + 1 == 1`.
+    //
+    // That behaviour was the bug, not the contract. It meant every function in
+    // `std.adaptive` -- 36 of them over `iris_adaptive_*` -- silently returned
+    // zeros when interpreted while being correct natively, with no diagnostic.
+    // It is worse than an ordinary default because `--emit eval` falls back to
+    // the interpreter when a native build fails, so a broken build became a
+    // run where every extern returned 0. See known-issues #32.
+    //
+    // An extern that cannot be resolved is now an error naming the symbol.
     let src = r#"
 extern def some_extern_fn(x: i64) -> i64
 def main() -> i64 {
@@ -110,14 +121,23 @@ def main() -> i64 {
     x + 1
 }
 "#;
-    // Unknown stub → returns 0 (i64), so 0 + 1 = 1
-    let result = eval(src);
-    assert_eq!(
-        result.trim(),
-        "1",
-        "expected 1 from (stub_returns_0)+1, got: {}",
-        result
-    );
+    let result = std::panic::catch_unwind(|| eval(src));
+    match result {
+        Err(_) => {}
+        Ok(out) => {
+            assert!(
+                out.contains("not available to the interpreter")
+                    || out.contains("some_extern_fn"),
+                "an unresolvable extern must report an error naming the symbol,                  not fabricate a value; got: {}",
+                out
+            );
+            assert!(
+                out.trim() != "1",
+                "extern still returning a silent zero (0 + 1 == 1); got: {}",
+                out
+            );
+        }
+    }
 }
 
 // ------------------------------------------------------------------
@@ -180,12 +200,19 @@ def main() -> i64 {
     x + 10
 }
 "#;
-    // Unknown stub → returns 0 (i64), so 0 + 10 = 10
-    let result = eval(src);
-    assert_eq!(
-        result.trim(),
-        "10",
-        "expected 10 from (stub_returns_0)+10, got: {}",
-        result
-    );
+    // Previously asserted 10, on the basis that the unresolvable extern
+    // returned 0. That fabricated value is now an error instead -- see
+    // known-issues #32 and the note on
+    // `test_interpreter_unknown_extern_is_an_error` above.
+    let result = std::panic::catch_unwind(|| eval(src));
+    match result {
+        Err(_) => {}
+        Ok(out) => {
+            assert!(
+                out.trim() != "10",
+                "extern still returning a silent zero (0 + 10 == 10); got: {}",
+                out
+            );
+        }
+    }
 }
