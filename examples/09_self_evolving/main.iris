@@ -1,0 +1,354 @@
+// A self-evolving data-ingestion cleaner.
+//
+// WHAT THIS DEMONSTRATES
+//
+// A stream of sensor readings arrives, most of them good and some corrupt. The
+// cleaning policy is not written by hand: its thresholds are encoded in a
+// genome, scored against observed outcomes, and evolved. Over generations the
+// system learns to keep good records and reject bad ones without anyone
+// specifying the cut-offs.
+//
+// THE PART THAT MATTERS
+//
+// Every self-optimising cleaner has the same failure mode: it learns to drop
+// everything. Zero bad records accepted is a perfect score if nothing gets
+// through, and a reward function that only punishes false negatives drives
+// straight to that degenerate policy. This is reward hacking, and it is not
+// hypothetical -- `check_reward_hacking_is_caught` below evolves a policy under
+// exactly that naive reward and shows it collapse.
+//
+// The answer is a homeostatic bound on *throughput*, not on quality. The
+// learner is free to optimise cleaning; it is not free to leave the accept-rate
+// band. `homeostat_is_safe` is a gate the optimiser cannot reward-hack past,
+// because it is not part of what the optimiser maximises.
+//
+// WHY IT IS REPRODUCIBLE
+//
+// `seed()` fixes the whole run: the stream, the initial population, every
+// mutation and every tournament. Re-running with the same seed reproduces the
+// evolved policy exactly. That is what makes an evolved system auditable -- you
+// can ask "how did it reach this policy" and replay the answer. Without it the
+// assertions below could only be statistical.
+//
+// PERIPHERALS
+//
+// The stream here is synthetic so the example runs anywhere. `Source` is a
+// `choice`, so a real deployment swaps in `std.serial` (a microcontroller on a
+// USB port) or `std.ros2` without touching the policy or the evolution loop --
+// see `describe_source`. A `choice` rather than `dyn Trait` because trait
+// objects have no native backend yet (known-issues #18b).
+
+bring std.ais
+
+// ---------------------------------------------------------------------------
+// Domain
+// ---------------------------------------------------------------------------
+
+record Reading {
+    value: f64,
+    // Ground truth, used only to score the policy. The policy never sees it --
+    // that would be cheating, and it is what makes the reward meaningful.
+    corrupt: bool,
+}
+
+// Where readings come from. Only Synthetic is exercised here; the others exist
+// to show the policy layer does not care.
+choice Source {
+    Synthetic,
+    SerialPort,
+    Ros2Topic,
+}
+
+def describe_source(s: Source) -> str {
+    when s {
+        Source.Synthetic => "synthetic stream",
+        Source.SerialPort => "serial peripheral (std.serial)",
+        Source.Ros2Topic => "ROS 2 topic (std.ros2)",
+    }
+}
+
+// A cleaning policy: an accepted band plus a spread multiplier. These are the
+// numbers a human would otherwise guess and then tune forever.
+record Policy {
+    lo: f64,
+    hi: f64,
+    z_max: f64,
+}
+
+// ---------------------------------------------------------------------------
+// Genome <-> policy
+//
+// Genes arrive in roughly [-1, 1]. Mapping them onto bounded ranges keeps
+// evolution inside a sane search space and means a mutation can never produce a
+// policy that is nonsense rather than merely bad.
+// ---------------------------------------------------------------------------
+
+def policy_from_genome(g: Genome) -> Policy {
+    val g0 = list_get(g.genes, 0);
+    val g1 = list_get(g.genes, 1);
+    val g2 = list_get(g.genes, 2);
+    Policy {
+        lo: 50.0 + g0 * 60.0,
+        hi: 140.0 + g1 * 120.0,
+        z_max: 2.5 + g2 * 2.0,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stream
+// ---------------------------------------------------------------------------
+
+// 80% good readings clustered near 100, 20% corrupt -- half wild spikes, half
+// impossible negatives. Both corruption modes exist so a policy cannot score
+// well by learning a single-sided cut.
+def make_stream(n: i64) -> list<Reading> {
+    val out: list<Reading> = list();
+    for i in 0 .. n {
+        val roll = random();
+        if roll < 0.8 {
+            list_push(out, Reading { value: 90.0 + random() * 20.0, corrupt: false });
+        } else {
+            if random() < 0.5 {
+                list_push(out, Reading { value: 500.0 + random() * 500.0, corrupt: true });
+            } else {
+                list_push(out, Reading { value: 0.0 - random() * 100.0, corrupt: true });
+            };
+        };
+    };
+    out
+}
+
+// Summary statistics over the raw stream, corrupt records included -- the
+// cleaner does not get a pre-cleaned view of its own input.
+def stream_stats(stream: list<Reading>) -> RunningStats {
+    var rs = running_stats_new();
+    for i in 0 .. list_len(stream) {
+        rs = running_stats_update(rs, list_get(stream, i).value);
+    };
+    rs
+}
+
+// ---------------------------------------------------------------------------
+// The policy decision
+// ---------------------------------------------------------------------------
+
+def accepts(p: Policy, r: Reading, mean: f64, sd: f64) -> bool {
+    if r.value < p.lo { return false };
+    if r.value > p.hi { return false };
+    if sd > 0.0 {
+        val z = abs(r.value - mean) / sd;
+        if z > p.z_max { return false };
+    };
+    true
+}
+
+def accept_rate(p: Policy, stream: list<Reading>, mean: f64, sd: f64) -> f64 {
+    val n = list_len(stream);
+    if n == 0 { return 0.0 };
+    var kept = 0;
+    for i in 0 .. n {
+        if accepts(p, list_get(stream, i), mean, sd) { kept = kept + 1 };
+    };
+    to_f64(kept) / to_f64(n)
+}
+
+// ---------------------------------------------------------------------------
+// Rewards
+//
+// Two of them, deliberately. The difference between them is the whole point of
+// the demonstration.
+// ---------------------------------------------------------------------------
+
+// Balanced: keeping a good record is worth as much as rejecting a bad one, and
+// discarding good data is penalised. The optimum is to classify correctly.
+def reward_balanced(p: Policy, stream: list<Reading>, mean: f64, sd: f64) -> f64 {
+    var total = 0.0;
+    for i in 0 .. list_len(stream) {
+        val r = list_get(stream, i);
+        val keep = accepts(p, r, mean, sd);
+        if r.corrupt {
+            if keep { total = total - 2.0 } else { total = total + 1.0 };
+        } else {
+            if keep { total = total + 1.0 } else { total = total - 1.0 };
+        };
+    };
+    total
+}
+
+// Naive: only accepting a corrupt record costs anything. Nothing rewards
+// keeping good data, so the optimum is to drop the entire stream. This is the
+// reward function a well-meaning engineer writes first.
+def reward_naive(p: Policy, stream: list<Reading>, mean: f64, sd: f64) -> f64 {
+    var total = 0.0;
+    for i in 0 .. list_len(stream) {
+        val r = list_get(stream, i);
+        val keep = accepts(p, r, mean, sd);
+        if r.corrupt {
+            if keep { total = total - 2.0 } else { total = total + 1.0 };
+        };
+    };
+    total
+}
+
+// ---------------------------------------------------------------------------
+// The safety gate
+//
+// Bound throughput, not quality. The learner may optimise cleaning however it
+// likes; it may not leave this band. Because accept-rate is not a term in the
+// reward, no amount of optimisation pressure can argue its way past this.
+// ---------------------------------------------------------------------------
+
+def throughput_guard(rate: f64) -> Homeostat {
+    var h = homeostat_new();
+    h = homeostat_add_var(h, homeovar_new(0.80, 0.12, 0.5));
+    val readings: list<f64> = list();
+    list_push(readings, rate);
+    val res = homeostat_update(h, readings, 1.0);
+    res.0
+}
+
+// ---------------------------------------------------------------------------
+// Evolution
+// ---------------------------------------------------------------------------
+
+def score_population(pop: Population, stream: list<Reading>, mean: f64, sd: f64, balanced: bool) -> list<f64> {
+    val fs: list<f64> = list();
+    for i in 0 .. list_len(pop.genomes) {
+        val p = policy_from_genome(list_get(pop.genomes, i));
+        if balanced {
+            list_push(fs, reward_balanced(p, stream, mean, sd));
+        } else {
+            list_push(fs, reward_naive(p, stream, mean, sd));
+        };
+    };
+    fs
+}
+
+// Evolve a cleaning policy and return the best genome found.
+def evolve_policy(stream: list<Reading>, mean: f64, sd: f64, gens: i64, balanced: bool) -> Genome {
+    var pop = population_new(20, 3, 0.35);
+    var best = list_get(pop.genomes, 0);
+    for g in 0 .. gens {
+        val scored = population_score(pop, score_population(pop, stream, mean, sd, balanced));
+        best = population_best(scored);
+        pop = population_evolve(scored, 2, 0.3);
+    };
+    best
+}
+
+// ---------------------------------------------------------------------------
+// Checks
+// ---------------------------------------------------------------------------
+
+def check_learns_to_clean() -> i64 {
+    seed(20260816);
+    val stream = make_stream(300);
+    val rs = stream_stats(stream);
+    val mean = rs.mean;
+    val sd = running_stats_std(rs);
+
+    // An untrained policy from generation zero, against an evolved one.
+    val naive_start = policy_from_genome(list_get(population_new(20, 3, 0.35).genomes, 0));
+    val start_reward = reward_balanced(naive_start, stream, mean, sd);
+
+    val learned = evolve_policy(stream, mean, sd, 30, true);
+    val policy = policy_from_genome(learned);
+    val learned_reward = reward_balanced(policy, stream, mean, sd);
+
+    // It must actually learn, not merely churn.
+    assert(learned_reward > start_reward);
+
+    // And it must be *good*: with 300 readings the perfect score is 300, so
+    // requiring 240 means it classifies at least ~90% correctly.
+    assert(learned_reward > 240.0);
+
+    // The evolved band must bracket the good data rather than having found some
+    // degenerate shortcut. Good readings live in [90, 110].
+    assert(policy.lo <= 90.0);
+    assert(policy.hi >= 110.0);
+
+    // Throughput lands where it should: ~80% of the stream is good.
+    val rate = accept_rate(policy, stream, mean, sd);
+    assert(rate > 0.68);
+    assert(rate < 0.92);
+
+    // And the safety gate is satisfied by the policy the balanced reward found.
+    assert(homeostat_is_safe(throughput_guard(rate)));
+    0
+}
+
+// The demonstration: a naive reward drives the policy to drop everything, and
+// the homeostatic gate catches it.
+def check_reward_hacking_is_caught() -> i64 {
+    seed(20260816);
+    val stream = make_stream(300);
+    val rs = stream_stats(stream);
+    val mean = rs.mean;
+    val sd = running_stats_std(rs);
+
+    val hacked = policy_from_genome(evolve_policy(stream, mean, sd, 30, false));
+    val hacked_rate = accept_rate(hacked, stream, mean, sd);
+
+    // Under the naive reward the optimiser is *succeeding* -- it has maximised
+    // exactly what it was told to maximise. It scores well.
+    val naive_score = reward_naive(hacked, stream, mean, sd);
+    assert(naive_score > 50.0);
+
+    // But it did so by throwing the data away.
+    assert(hacked_rate < 0.5);
+
+    // THE ASSERTION THIS EXAMPLE EXISTS FOR: the throughput gate refuses it.
+    // Nothing in the reward function could have prevented this, because the
+    // reward function is what caused it.
+    assert(homeostat_is_safe(throughput_guard(hacked_rate)) == false);
+
+    // Judged by the reward that actually reflects what we want, the hacked
+    // policy is far worse than the honestly-trained one.
+    assert(reward_balanced(hacked, stream, mean, sd) < 100.0);
+    0
+}
+
+def check_reproducible() -> i64 {
+    seed(4242);
+    val s1 = make_stream(120);
+    val r1 = stream_stats(s1);
+    val p1 = policy_from_genome(evolve_policy(s1, r1.mean, running_stats_std(r1), 12, true));
+
+    seed(4242);
+    val s2 = make_stream(120);
+    val r2 = stream_stats(s2);
+    val p2 = policy_from_genome(evolve_policy(s2, r2.mean, running_stats_std(r2), 12, true));
+
+    // Same seed, same evolved policy, to the bit. This is what lets an operator
+    // ask "how did the system arrive at these thresholds" and get an answer by
+    // replaying the run rather than guessing.
+    assert(p1.lo == p2.lo);
+    assert(p1.hi == p2.hi);
+    assert(p1.z_max == p2.z_max);
+
+    // A different seed explores differently, so the reproducibility above is
+    // not simply an implementation that ignores the seed.
+    seed(99);
+    val s3 = make_stream(120);
+    val r3 = stream_stats(s3);
+    val p3 = policy_from_genome(evolve_policy(s3, r3.mean, running_stats_std(r3), 12, true));
+    assert(p3.lo != p1.lo);
+    0
+}
+
+def check_sources_are_pluggable() -> i64 {
+    assert(describe_source(Source.Synthetic) == "synthetic stream");
+    assert(describe_source(Source.SerialPort) == "serial peripheral (std.serial)");
+    assert(describe_source(Source.Ros2Topic) == "ROS 2 topic (std.ros2)");
+    0
+}
+
+def main() -> i64 {
+    val a = check_learns_to_clean();
+    val b = check_reward_hacking_is_caught();
+    val c = check_reproducible();
+    val d = check_sources_are_pluggable();
+    assert(a + b + c + d == 0);
+    println("self-evolving cleaner ok");
+    0
+}
