@@ -293,7 +293,32 @@ Harmless today (stderr only, exit 0) but it becomes a false build failure under
 
 ---
 
-## 11. `test_autodiff_determinism_profiling` is flaky — **test defect, not a compiler defect**
+## 11. `test_autodiff_determinism_profiling` is flaky — **FIXED**
+
+> The test asserted `std_dev < 100.0` microseconds across 1000 timed
+> iterations, which measures the host's scheduler rather than the code. On this
+> two-core machine it failed roughly one run in three, which is why the standing
+> rule "diff failure names, never totals" existed: the suite's totals were not
+> comparable between runs.
+>
+> The deeper problem is that a test named *determinism* asserted nothing about
+> determinism, and nothing about correctness either — a version that always
+> returned `0.0` would have passed every time it was fast enough.
+>
+> **Rewritten** to assert what the name promises: all 1000 runs must produce a
+> **bit-identical** gradient (comparing `to_bits`, so a stray `-0.0` or `NaN`
+> is caught), and that gradient must equal `y + cos(x)`, the true derivative of
+> `x*y + sin(x)`. The correctness assertion passed first time, so the autodiff
+> was right all along — it simply had nothing checking it.
+>
+> Timing is now reported rather than asserted, apart from a sanity bound three
+> orders of magnitude looser than scheduling noise, which still catches a real
+> performance collapse. 5 of 5 runs pass where the old version failed 1 in 3.
+>
+> A test that fails for reasons unrelated to the code is worse than no test: it
+> trains readers to ignore red.
+
+### Original report
 
 The test asserts that the standard deviation of 1,000 timed autodiff runs is
 under 100 µs (`tests/autodiff_determinism.rs:192`). On a 2-core laptop under

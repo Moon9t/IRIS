@@ -158,17 +158,50 @@ fn test_autodiff_determinism_profiling() {
     );
     let func = builder.build();
 
+    // Extract the returned gradient as an f64.
+    fn grad_of(out: &[IrValue]) -> f64 {
+        match out.first() {
+            Some(IrValue::F64(v)) => *v,
+            other => panic!("expected an f64 gradient, got {:?}", other),
+        }
+    }
+
     // Warm-up iteration
-    let _ = eval_function(&func, &[IrValue::F64(2.0), IrValue::F64(3.0)]).expect("warmup");
+    let warmup =
+        eval_function(&func, &[IrValue::F64(2.0), IrValue::F64(3.0)]).expect("warmup");
+    let baseline = grad_of(&warmup);
 
     let mut latencies = Vec::with_capacity(1000);
 
-    for _ in 0..1000 {
+    for i in 0..1000 {
         let start = Instant::now();
-        let _ = eval_function(&func, &[IrValue::F64(2.0), IrValue::F64(3.0)]).expect("eval");
+        let out = eval_function(&func, &[IrValue::F64(2.0), IrValue::F64(3.0)]).expect("eval");
         let duration = start.elapsed();
         latencies.push(duration.as_secs_f64() * 1_000_000.0); // store in microseconds
+
+        // THIS is the determinism assertion the test's name promises: identical
+        // inputs must produce bit-identical gradients, every time. Comparing
+        // bits rather than values also catches a -0.0 or NaN creeping in.
+        assert_eq!(
+            grad_of(&out).to_bits(),
+            baseline.to_bits(),
+            "gradient changed between identical runs at iteration {}: {} vs {}",
+            i,
+            grad_of(&out),
+            baseline
+        );
     }
+
+    // And the gradient must be *right*, not merely stable. A function that
+    // always returned 0.0 would satisfy every determinism check above.
+    // f(x, y) = x*y + sin(x), so df/dx = y + cos(x).
+    let expected = 3.0 + 2.0_f64.cos();
+    assert!(
+        (baseline - expected).abs() < 1e-9,
+        "df/dx should be y + cos(x) = {:.12}, got {:.12}",
+        expected,
+        baseline
+    );
 
     // Compute stats
     let sum_lat: f64 = latencies.iter().sum();
@@ -188,10 +221,24 @@ fn test_autodiff_determinism_profiling() {
     println!("  Mean execution time: {:.4} microseconds", mean);
     println!("  Standard deviation: {:.4} microseconds", std_dev);
 
-    // Assert that standard deviation is well under 100 microseconds (flexible for virtualization/CPU scheduling environments)
+    // Timing is REPORTED, not asserted.
+    //
+    // This test previously asserted `std_dev < 100.0` microseconds, which
+    // measures the host's scheduler rather than the code under test. On a
+    // two-core machine it failed intermittently -- roughly one run in three --
+    // making the whole suite's totals non-comparable and forcing the standing
+    // rule "diff failure names, never totals". A test that fails for reasons
+    // unrelated to the code is worse than no test: it trains readers to ignore
+    // red.
+    //
+    // The determinism and correctness assertions above are what the test is
+    // actually for, and both are exact. The only timing assertion kept is a
+    // sanity bound that catches a genuine performance collapse -- an order of
+    // magnitude beyond anything scheduling noise produces -- rather than
+    // ordinary jitter.
     assert!(
-        std_dev < 100.0,
-        "Standard deviation is too high: {:.4} microseconds",
-        std_dev
+        mean < 100_000.0,
+        "mean autodiff evaluation took {:.1} microseconds, which indicates a          real performance regression rather than scheduling noise",
+        mean
     );
 }

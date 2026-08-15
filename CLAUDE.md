@@ -68,8 +68,6 @@ re-report these.
 - 🟠 Assigning an enclosing `var` from `when` arms fails SSA construction
 - 🟠 `dyn Trait` has no native backend — interpreter only (#18b)
 - 🟠 Tuples cannot be compared with `==` on either backend (#26)
-- ⚪ `test_autodiff_determinism_profiling` asserts wall-clock variance and is
-  flaky (#11) — so **always diff failure *names*, never compare totals**
 
 **A type parameter used only in the return type needs an annotation** (#14):
 `val s: Set<str> = set_new()`. Inference runs after lowering, so it cannot be
