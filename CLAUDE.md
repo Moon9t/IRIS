@@ -29,7 +29,13 @@ Systems. Single Rust crate (~112k lines) at this repo root.
    silently mixes the changes and its result attributes them to the wrong commit.
    Wait for the build to finish (unit tests appearing in the log) or for the run
    to complete.
-5. **Do not pipe program output through text tools when bytes matter.** `sed`,
+5. **Run a suspicious program several times before believing either result.**
+   Compilation was non-deterministic until 2026-08-15: the same source produced
+   three different IR outputs in six runs, three of them invalid, so a program
+   passed or failed roughly half the time. It was filed as a *backend
+   divergence* for exactly this reason. `--emit ir | md5sum` across five runs is
+   now a cheap and meaningful check.
+6. **Do not pipe program output through text tools when bytes matter.** `sed`,
    `grep` and `tail` normalise line endings on msys; redirect to a file and use
    `od -c`. A `\r` corruption was "confirmed" through `sed` before this was
    noticed, and the compiled binary had been correct all along.
@@ -49,14 +55,14 @@ at `720f358`). A run takes ~60 min. Both remaining failures are known:
 clone builds; the hardcoded developer `PATH` is gone from `build.rs`. Do not
 re-report these.
 
-**Known broken — see `docs/known-issues.md` (14 entries, #6 and #12 now fixed):**
+**Known broken — see `docs/known-issues.md`:**
 - ✅ Named arguments `f(a=1, b=2)` — **fixed** 2026-08-15 (#1)
-- 🔴 `str` field in a record inside `result<T,E>` mis-types as `i64`
-- 🔴 `==` on two `choice` values fails **at runtime**, not compile time (#8)
 - 🟠 A record field typed by a *brought* module mangles as generic (#7)
 - 🟠 `pub bring` re-exports functions but not `record`/`choice` types (#9)
 - 🟠 `effect` clauses are rejected on trait method declarations (#10)
 - 🟠 Assigning an enclosing `var` from `when` arms fails SSA construction
+- 🟠 `dyn Trait` has no native backend — interpreter only (#18b)
+- 🟠 Tuples cannot be compared with `==` on either backend (#26)
 - ⚪ `test_autodiff_determinism_profiling` asserts wall-clock variance and is
   flaky (#11) — so **always diff failure *names*, never compare totals**
 

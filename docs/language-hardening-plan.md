@@ -113,6 +113,55 @@ race produced **correct answers on every run**. Neither was catchable by testing
 outputs; they needed an arithmetic identity checked and a runtime function read.
 That is the argument for asserting *properties*, not just values.
 
+### Phase 0b — What the corpus found next (2026-08-15)
+
+Six more defects, five fixed. The corpus keeps paying, but the *character* of
+what it finds has changed: these were not missing features, they were wrong
+answers that nothing reported.
+
+| # | Defect | How it hid |
+|---|---|---|
+| #1 | named arguments never reached the callee | its own test printed "All named arg tests passed!" and asserted nothing |
+| #8 | `==` on two enums failed at *runtime* | only on a branch a test never took |
+| #15 | a user function lost silently to a same-named builtin | the builtin returned a plausible number |
+| #17 | **compilation was non-deterministic** | filed as a backend divergence for two months |
+| #26 | records compared with `strcmp` on their raw bytes | returned `true` for records differing after the first field |
+| #18b | `dyn Trait` has no native backend | interpreter-only, so `--emit eval` fell back and looked fine |
+
+**#17 is the one to learn from.** It was recorded as "labelled `continue` works
+natively, fails interpreted". It was neither. The compiler produced **three
+distinct IR outputs in six runs of the same file, three of them invalid**,
+because a loop preheader was chosen with `.iter().find()` over a `HashSet` and
+the hash seed changes per process. Whichever backend someone happened to run
+first looked like the broken one.
+
+Three consequences worth carrying:
+
+1. **A single run is not a measurement.** Any result — pass or fail — may be one
+   sample from a distribution. `--emit ir | md5sum` over five runs is now a
+   standing check, and all 18 conformance files are byte-identical across runs.
+2. **"Backend divergence" was the wrong frame.** Two of the four divergences
+   recorded in Phase 0 deserve re-examination on this basis.
+3. **Deterministic compilation is a property worth asserting**, not a nicety.
+   Three separate capture sites (`closure`, `spawn`, `par for`) iterated a
+   `HashMap` to build a parameter list. Programs were *correct* — the order was
+   self-consistent within a run — but no two builds agreed.
+
+**The guard-that-cannot-fire pattern claimed a third victim.**
+`verify_uses_defined` runs after every pass but checked only `Br`/`CondBr`
+arguments, and the broken use was `%18 = add %3, %17`. Widening it to every
+operand immediately exposed `LoopUnrollPass` emitting invalid IR — which had
+been doing so silently, while both backends produced correct answers, because
+the invalid blocks were unreachable.
+
+That is now **three** guards found unable to fire (effect subsumption, the
+recursion limit, use-before-def) and **four** defects that produced correct
+answers on every run (signed division, the `par for` race, unrolled dead blocks,
+and non-deterministic capture order). The two categories are related: a guard
+that cannot fire and a bug that cannot be observed are the same problem seen
+from either end. **Probing whether a check can fail should be part of writing
+it.**
+
 ### Phase 1 — Expressiveness blockers
 
 Every item below was hit while writing ordinary code, not while probing edges.
@@ -120,7 +169,7 @@ All are recorded with reproductions in `known-issues.md`.
 
 | # | Defect | Why it blocks real programs |
 |---|---|---|
-| 8 | `==` on two `choice` values fails **at runtime** | comparing enum values is elementary; an untested branch ships broken |
+| ~~8~~ | ~~`==` on two `choice` values fails at runtime~~ — **fixed 2026-08-15** | comparing enum values is elementary; an untested branch ships broken |
 | 7 | record field typed by a *brought* module mangles as generic | blocks composing your types over stdlib types |
 | 9 | `pub bring` re-exports functions but not types | every file must import every type module directly |
 | 10a | `effect` clause rejected on trait method declarations | a trait cannot state the effect bound its impls must respect |
