@@ -4718,35 +4718,87 @@ char* iris_type_of(IrisVal* val) {
 /*  Random                                                                  */
 /* ======================================================================== */
 
-static int rand_seeded = 0;
-static void ensure_rand(void) {
-    if (!rand_seeded) {
-        unsigned seed = (unsigned)time(NULL);
+/*
+ * Deterministic, seedable RNG -- SplitMix64.
+ *
+ * This replaces libc `rand()`/`srand()`, which was wrong here in three
+ * separate ways:
+ *
+ *   1. It could not be seeded from IRIS, so an evolved system could never be
+ *      replayed. For a language whose pitch is a *verifiable* autonomy layer,
+ *      a self-evolving system that cannot be reproduced cannot be audited --
+ *      you cannot ask "how did it get here" and get an answer.
+ *   2. `RAND_MAX` is 32767 on this toolchain, so `rand()/RAND_MAX` produced
+ *      only 32768 distinct values. Evolutionary search over a genome of f64
+ *      genes was quantising every draw to 15 bits.
+ *   3. The interpreter used an entirely different generator (a chained
+ *      `DefaultHasher`), so the two backends produced different sequences for
+ *      the same program -- and kept two independent streams besides, one for
+ *      `random` and one for `random_range`.
+ *
+ * SplitMix64 is used because it is exactly reproducible with plain 64-bit
+ * wrapping arithmetic, which means the Rust interpreter can implement it bit
+ * for bit. `src/interp/mod.rs` carries the identical constants; the two are
+ * asserted equal in tests/test_random_determinism.iris. Changing one without
+ * the other reintroduces the divergence this replaced.
+ */
+
+static uint64_t iris_rng_state = 0;
+static int64_t  iris_rng_seed_value = 0;
+static int      iris_rng_seeded = 0;
+
+static void iris_rng_autoseed(void) {
+    if (iris_rng_seeded) return;
+    uint64_t seed = (uint64_t)time(NULL);
 #ifdef _WIN32
-        seed ^= (unsigned)(GetCurrentProcessId() << 16);
-        seed ^= (unsigned)(GetTickCount() & 0xFFFF);
+    seed ^= ((uint64_t)GetCurrentProcessId() << 16);
+    seed ^= ((uint64_t)GetTickCount() & 0xFFFFu);
 #else
-        seed ^= (unsigned)(getpid() << 16);
-        {
-            struct timespec ts;
-            clock_gettime(CLOCK_MONOTONIC, &ts);
-            seed ^= (unsigned)(ts.tv_nsec & 0xFFFF);
-        }
-#endif
-        srand(seed);
-        rand_seeded = 1;
+    seed ^= ((uint64_t)getpid() << 16);
+    {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        seed ^= ((uint64_t)ts.tv_nsec & 0xFFFFu);
     }
+#endif
+    iris_rng_state = seed;
+    iris_rng_seed_value = (int64_t)seed;
+    iris_rng_seeded = 1;
+}
+
+static uint64_t iris_rng_next(void) {
+    iris_rng_autoseed();
+    iris_rng_state += 0x9E3779B97F4A7C15ULL;
+    uint64_t z = iris_rng_state;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+/* Set the stream. Returns the seed, so a run can log what it used. */
+int64_t iris_seed(int64_t seed) {
+    iris_rng_state = (uint64_t)seed;
+    iris_rng_seed_value = seed;
+    iris_rng_seeded = 1;
+    return seed;
+}
+
+/* The seed currently in effect, auto-generating one if never set. This is what
+ * makes a run reproducible after the fact: print it, pass it back to seed(). */
+int64_t iris_random_seed(void) {
+    iris_rng_autoseed();
+    return iris_rng_seed_value;
 }
 
 double iris_random(void) {
-    ensure_rand();
-    return (double)rand() / (double)RAND_MAX;
+    /* Top 53 bits scaled into [0, 1) -- the full mantissa, no quantisation. */
+    return (double)(iris_rng_next() >> 11) / 9007199254740992.0;
 }
 
 int64_t iris_random_range(int64_t lo, int64_t hi) {
-    ensure_rand();
     if (hi <= lo) return lo;
-    return lo + (int64_t)(rand() % (int)(hi - lo));
+    uint64_t span = (uint64_t)(hi - lo);
+    return lo + (int64_t)(iris_rng_next() % span);
 }
 
 /* ======================================================================== */

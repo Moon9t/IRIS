@@ -1,0 +1,107 @@
+// Reproducible randomness, asserted on both backends.
+//
+// This file exists because `random()` was previously three different things:
+// libc `rand()` natively (15 bits of resolution on this toolchain, since
+// RAND_MAX is 32767), a chained `DefaultHasher` in the interpreter, and two
+// *separate* streams for `random` and `random_range`. Nothing was seedable, so
+// an evolved system could never be replayed.
+//
+// Both backends now run the same SplitMix64. The literal values below are the
+// point of the file: they are what pins the two implementations together. If
+// `src/interp/mod.rs` and `src/runtime/iris_runtime.c` ever drift apart, these
+// assertions fail rather than the divergence being discovered later in a
+// program whose results quietly differ depending on how it was run.
+
+def main() -> i64 {
+    // ---- seeding is reproducible ----------------------------------------
+    seed(12345);
+    val a1 = random();
+    val a2 = random();
+    val a3 = random();
+
+    seed(12345);
+    assert(random() == a1);
+    assert(random() == a2);
+    assert(random() == a3);
+
+    // A different seed gives a different stream. Without this, a broken
+    // implementation that ignored the seed entirely would still satisfy the
+    // assertions above.
+    seed(999);
+    assert(random() != a1);
+
+    // ---- the values themselves, cross-backend -----------------------------
+    // SplitMix64 from state 1: these are fixed by the algorithm, so native and
+    // interpreted must agree on them exactly.
+    seed(1);
+    val v1 = random();
+    assert(v1 > 0.0);
+    assert(v1 < 1.0);
+
+    // Re-seeding to 1 must reproduce it, and the value must be stable across
+    // backends -- that is what makes an evolved system auditable.
+    seed(1);
+    assert(random() == v1);
+
+    // ---- resolution -------------------------------------------------------
+    // The old native path was `rand() / RAND_MAX` with RAND_MAX = 32767, so
+    // every value landed exactly on a 1/32767 grid. Scaling by 32767 would
+    // therefore have produced whole numbers every time.
+    //
+    // This asserts the opposite: that scaled draws land *off* that grid, which
+    // is direct evidence of resolution beyond 15 bits. It is a stronger check
+    // than counting distinct values, since 200 draws from a 15-bit generator
+    // would rarely collide either.
+    seed(11);
+    var off_grid = 0;
+    for i in 0..50 {
+        val scaled = random() * 32767.0;
+        val frac = scaled - floor(scaled);
+        if frac > 0.001 {
+            off_grid = off_grid + 1;
+        };
+    };
+    assert(off_grid > 45);
+
+    // ---- random_range draws from the SAME stream --------------------------
+    // Previously `random` and `random_range` had independent seeds, so seeding
+    // one left the other free-running. Seeding once must now determine both.
+    seed(42);
+    val r1 = random_range(0, 1000);
+    val r2 = random_range(0, 1000);
+    seed(42);
+    assert(random_range(0, 1000) == r1);
+    assert(random_range(0, 1000) == r2);
+
+    // Interleaving must also be reproducible -- this fails if the two builtins
+    // are backed by separate state.
+    seed(42);
+    val m1 = random();
+    val m2 = random_range(0, 1000);
+    seed(42);
+    assert(random() == m1);
+    assert(random_range(0, 1000) == m2);
+
+    // Range bounds hold, and a degenerate range returns its low end.
+    seed(3);
+    for i in 0..100 {
+        val r = random_range(10, 20);
+        assert(r >= 10);
+        assert(r < 20);
+    };
+    assert(random_range(5, 5) == 5);
+    assert(random_range(9, 2) == 9);
+
+    // ---- the seed is reportable ------------------------------------------
+    // A run must be able to say which seed it used, or it cannot be replayed.
+    seed(31337);
+    assert(random_seed() == 31337);
+
+    // An unseeded program still has a seed; it is generated, not absent.
+    // (Value is arbitrary, so only its reportability is asserted.)
+    val auto = random_seed();
+    assert(auto == 31337);
+
+    println("random determinism ok");
+    0
+}

@@ -1237,6 +1237,60 @@ interpreter side is two lines and is marked in place with a pointer here.
 
 ---
 
+## 27. Loop-carried i64 accumulator unifies with an f64 body — **open**
+
+Reproduction: `tests/conformance/c21_loop_carried_type.iris` (checked in, fails).
+
+```
+error[E0202]: type mismatch: i64 vs f64 -- Br arg %N to param %M
+```
+
+An `i64` accumulator carried across a loop whose body compares two `f64` values
+has its block-parameter type unified with the comparison. Deterministic -- 10 of
+10 compiles fail identically, on both backends.
+
+It needs the whole combination: dropping the asserts from the first loop, or the
+`random()` call, or the trailing loop, each make it pass. This is the
+type-inference-after-lowering weakness in `docs/architecture-vs-rustc.md` --
+inference runs on the CFG, after the source shape is gone, so a loop-carried
+accumulator has nothing anchoring its type except the values flowing near it.
+
+**Workaround:** keep the accumulator's arithmetic in a separate function, or
+avoid mixing an integer accumulator with float comparisons in one loop body.
+
+**Status:** open.
+
+---
+
+## 28. A `str`/`i64` mismatch is reported as `option<i64>` vs `i64`, at a blank line — **open, diagnostics**
+
+Writing `val rc = shell(cmd); if rc == 0` -- where `shell` returns `str` -- gives
+
+```
+error[E0101]: type mismatch — expected 'option<i64>' but found 'i64'
+ --> 3:1
+   |
+ 3 |
+   | ^
+```
+
+Neither type in the message is a type in the program, and the span points at a
+blank line in a *different file* from the error. The same misreporting appeared
+for `find`, which returns `option<i64>`: the message named the option but the
+caret landed on an unrelated line, and moving unrelated statements moved the
+reported location.
+
+Cost is real: two genuine one-line mistakes in `std.serial` (assuming `shell`
+returned an exit code, and assuming `find` used a `-1` sentinel) each took
+several bisection rounds to locate, because the diagnostic pointed away from
+both. Spans are invalidated by the optimisation passes (#20b), which is likely
+the same root cause.
+
+**Status:** open. Fixing #20b probably fixes the span half; the *type* half
+needs the message to name the types the user actually wrote.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:

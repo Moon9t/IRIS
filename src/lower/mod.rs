@@ -6889,6 +6889,14 @@ impl<'m> Lowerer<'m> {
                 // Random
                 "random" => Some(("random", IrType::Scalar(DType::F64))),
                 "random_range" => Some(("random_range", IrType::Scalar(DType::I64))),
+                // Seeding. `seed(n)` returns n so a run can log the seed it
+                // used; `random_seed()` reports the seed in effect, generating
+                // one if none was set. Together they make an evolved system
+                // reproducible -- print the seed, feed it back, get the same
+                // system. Without that, a self-evolving program cannot be
+                // audited or replayed after a failure.
+                "seed" => Some(("seed", IrType::Scalar(DType::I64))),
+                "random_seed" => Some(("random_seed", IrType::Scalar(DType::I64))),
                 // Hashing / Encoding
                 "hash" => Some(("hash", IrType::Scalar(DType::I64))),
                 "base64_encode" => Some(("base64_encode", IrType::Str)),

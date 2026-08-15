@@ -6570,6 +6570,8 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         // Type introspection
         "declare ptr @iris_type_of(ptr)",
         // Random
+        "declare i64 @iris_seed(i64)",
+        "declare i64 @iris_random_seed()",
         "declare double @iris_random()",
         "declare i64 @iris_random_range(i64, i64)",
         // Hash / Encoding

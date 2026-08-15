@@ -1,0 +1,43 @@
+// c21 -- loop-carried variable type, known-issues #27. CURRENTLY FAILING.
+//
+// This file does not pass. It is checked in as an executable reproduction so
+// the defect cannot be forgotten, and so that whoever fixes it has a case that
+// fails now and passes after.
+//
+//   error[E0202]: type mismatch: i64 vs f64 -- Br arg %N to param %M
+//
+// `adjacent` is an i64 accumulator carried across a loop whose body compares
+// two f64 values. Something unifies the loop-carried parameter's type with the
+// f64 comparison, and the module fails validation. Deterministic: 10 of 10
+// compiles fail identically, on both backends.
+//
+// It needs the whole combination -- dropping the asserts from the first loop,
+// or the `random()` call, or the trailing loop, all make it pass. That is the
+// feature-interaction pattern this corpus exists to catch, and it is the
+// type-inference-after-lowering weakness described in
+// docs/architecture-vs-rustc.md: inference runs on the CFG, after the source
+// shape is gone, so a loop-carried accumulator has nothing left to anchor its
+// type to except the values flowing near it.
+
+def main() -> i64 {
+    seed(7);
+    val seen: list<f64> = list();
+    for i in 0..200 {
+        val r = random();
+        assert(r >= 0.0);
+        assert(r < 1.0);
+        list_push(seen, r);
+    };
+    var adjacent = 0;
+    for i in 1..200 {
+        if list_get(seen, i) != list_get(seen, i - 1) { adjacent = adjacent + 1; };
+    };
+    assert(adjacent == 199);
+    seed(3);
+    for i in 0..100 {
+        val r = random_range(10, 20);
+        assert(r >= 10);
+        assert(r < 20);
+    };
+    println("c21 ok"); 0
+}

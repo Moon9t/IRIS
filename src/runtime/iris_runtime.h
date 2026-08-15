@@ -799,6 +799,8 @@ char*     iris_type_of(IrisVal* val);
 // ---------------------------------------------------------------------------
 // Random
 // ---------------------------------------------------------------------------
+int64_t   iris_seed(int64_t seed);
+int64_t   iris_random_seed(void);
 double    iris_random(void);
 int64_t   iris_random_range(int64_t lo, int64_t hi);
 

@@ -1,0 +1,151 @@
+// std.serial -- protocol layer, asserted with no hardware present.
+//
+// The framing half of a serial module is where the bugs actually live, and it
+// is completely testable without a board: a checksum that is wrong is wrong on
+// a desk. The port half needs an UNO plugged in and is deliberately NOT
+// asserted here -- claiming it works from a machine with nothing attached is
+// exactly the habit that produced 122 non-asserting files in this tree.
+//
+// Split into small functions rather than one long `main`. Type inference runs
+// after lowering (docs/architecture-vs-rustc.md), so a long function body gives
+// it more opportunities to unify things it should not -- two defects found this
+// session only appeared once a body grew past a certain size.
+
+bring std.serial
+
+def check_checksum() -> i64 {
+    // Empty payload sums to zero; a single byte sums to its own value.
+    assert(checksum("") == 0);
+    assert(checksum("A") == 65);
+    assert(checksum("AB") == 65 + 66);
+    // Order must not matter to a sum. This pins the definition, so a later
+    // switch to a position-weighted checksum has to update the test rather
+    // than silently change the wire format.
+    assert(checksum("AB") == checksum("BA"));
+    // It must wrap at 256 rather than growing without bound: 'A' is 65, so
+    // four of them sum to 260, which wraps to 4.
+    assert(checksum("AAAA") == 4);
+    assert(checksum("AAA") == 195);
+    0
+}
+
+def check_framing() -> i64 {
+    val f = frame("R:temp=21.5");
+    assert(starts_with(f, "R:temp=21.5*"));
+    assert(frame_verify(f));
+
+    // Not frames: no separator, and an empty checksum.
+    assert(frame_verify("R:temp=21.5") == false);
+    assert(frame_verify("R:temp=21.5*") == false);
+
+    // Corrupting the payload must break the checksum. That is the whole point
+    // of the module, so it is asserted directly rather than inferred.
+    val good_sum = to_str(checksum("R:temp=21.5"));
+    assert(frame_verify("R:temp=21.6*" + good_sum) == false);
+    0
+}
+
+def check_payload() -> i64 {
+    val f = frame("R:temp=21.5");
+    val p = frame_payload(f);
+    assert(is_ok(p));
+    assert(unwrap(p) == "R:temp=21.5");
+
+    // Errors are reported, not swallowed.
+    val no_sep = frame_payload("no-separator");
+    assert(is_ok(no_sep) == false);
+    val bad_sum = frame_payload("R:x=1*999");
+    assert(is_ok(bad_sum) == false);
+    0
+}
+
+def check_kinds() -> i64 {
+    assert(unwrap(frame_kind(encode_reading("t", 1.0))) == "R");
+    assert(unwrap(frame_kind(encode_write(13, 255))) == "W");
+    assert(unwrap(frame_kind(encode_query(13))) == "Q");
+    0
+}
+
+def check_reading_roundtrip() -> i64 {
+    val r = parse_reading(encode_reading("temp", 21.5));
+    assert(is_ok(r));
+    val rv = unwrap(r);
+    assert(rv.name == "temp");
+    assert(rv.value == 21.5);
+
+    // A negative value survives: the '-' must not be mistaken for framing.
+    val neg = parse_reading(encode_reading("delta", -3.25));
+    assert(is_ok(neg));
+    assert(unwrap(neg).value == -3.25);
+
+    // Zero is the value a silent failure most often produces, so it must be
+    // distinguishable from an error rather than merely falsy.
+    val zero = parse_reading(encode_reading("z", 0.0));
+    assert(is_ok(zero));
+    assert(unwrap(zero).value == 0.0);
+    0
+}
+
+def check_write_roundtrip() -> i64 {
+    val w = parse_write(encode_write(13, 255));
+    assert(is_ok(w));
+    val pw = unwrap(w);
+    assert(pw.pin == 13);
+    assert(pw.value == 255);
+    0
+}
+
+def check_rejection() -> i64 {
+    // A well-formed frame of the wrong kind is refused, not misread.
+    val as_reading = parse_reading(encode_write(13, 255));
+    assert(is_ok(as_reading) == false);
+    val as_write = parse_write(encode_reading("t", 1.0));
+    assert(is_ok(as_write) == false);
+
+    // Structurally broken reading frames are refused.
+    val no_eq = parse_reading(frame("R:noequals"));
+    assert(is_ok(no_eq) == false);
+    val no_name = parse_reading(frame("R:=5"));
+    assert(is_ok(no_name) == false);
+    val no_value = parse_reading(frame("R:name="));
+    assert(is_ok(no_value) == false);
+
+    // A non-numeric value is rejected rather than cast. `to_f64` would have
+    // turned "abc" into a plausible-looking number and shipped it as a sensor
+    // reading; `parse_f64` refuses it. This is the assertion that keeps the
+    // module from regressing to a cast.
+    val bad_float = parse_reading(frame("R:temp=abc"));
+    assert(is_ok(bad_float) == false);
+    val bad_pin = parse_write(frame("W:xx=255"));
+    assert(is_ok(bad_pin) == false);
+    val bad_val = parse_write(frame("W:13=zzz"));
+    assert(is_ok(bad_val) == false);
+    0
+}
+
+def check_port_validation() -> i64 {
+    // These fail before touching any device, so they are safe to assert on a
+    // machine with no board attached. Everything past validation is untested
+    // here by design -- see the module header.
+    val empty_port = serial_configure("", 9600);
+    assert(is_ok(empty_port) == false);
+    val zero_baud = serial_configure("/dev/ttyACM0", 0);
+    assert(is_ok(zero_baud) == false);
+    val neg_baud = serial_configure("/dev/ttyACM0", -1);
+    assert(is_ok(neg_baud) == false);
+    0
+}
+
+def main() -> i64 {
+    val a = check_checksum();
+    val b = check_framing();
+    val c = check_payload();
+    val d = check_kinds();
+    val e = check_reading_roundtrip();
+    val f = check_write_roundtrip();
+    val g = check_rejection();
+    val h = check_port_validation();
+    assert(a + b + c + d + e + f + g + h == 0);
+    println("serial protocol ok");
+    0
+}

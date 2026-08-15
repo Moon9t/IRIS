@@ -5549,47 +5549,33 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
             Ok(IrValue::Str(t.to_string()))
         }
         // ---- Random ----
-        "random" => {
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            thread_local! {
-                static SEED: std::cell::Cell<u64> = std::cell::Cell::new(
-                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos() as u64).unwrap_or(42)
-                );
-            }
-            let val = SEED.with(|s| {
-                let mut h = DefaultHasher::new();
-                s.get().hash(&mut h);
-                let next = h.finish();
-                s.set(next);
-                (next >> 11) as f64 / (1u64 << 53) as f64
-            });
-            Ok(IrValue::F64(val))
-        }
+        //
+        // SplitMix64, identical to `iris_rng_next` in
+        // `src/runtime/iris_runtime.c`. The two implementations must stay bit
+        // for bit the same: before this, native used libc `rand()` (15 bits of
+        // resolution on this toolchain) while the interpreter chained a
+        // `DefaultHasher`, so the same program drew different sequences on the
+        // two backends -- and `random` and `random_range` even ran on separate
+        // streams. Asserted equal in tests/test_random_determinism.iris.
+        "random" => Ok(IrValue::F64(rng_next_f64())),
         "random_range" => {
             let lo = i64_arg(&args[0]);
             let hi = i64_arg(&args[1]);
             if hi <= lo {
                 return Ok(IrValue::I64(lo));
             }
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            thread_local! {
-                static SEED2: std::cell::Cell<u64> = std::cell::Cell::new(
-                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos() as u64).unwrap_or(99)
-                );
-            }
-            let val = SEED2.with(|s| {
-                let mut h = DefaultHasher::new();
-                s.get().hash(&mut h);
-                let next = h.finish();
-                s.set(next);
-                lo + (next % (hi - lo) as u64) as i64
-            });
-            Ok(IrValue::I64(val))
+            let span = (hi - lo) as u64;
+            Ok(IrValue::I64(lo + (rng_next() % span) as i64))
         }
+        // Set the stream, returning the seed so a run can log what it used.
+        "seed" => {
+            let n = i64_arg(&args[0]);
+            rng_set_seed(n);
+            Ok(IrValue::I64(n))
+        }
+        // The seed in effect, generating one if never set. This is what makes
+        // an evolved system replayable: print it, feed it back to `seed`.
+        "random_seed" => Ok(IrValue::I64(rng_seed_value())),
         // ---- Hash ----
         "hash" => {
             let s = str_arg(&args[0]);
@@ -7729,4 +7715,64 @@ fn base64_decode(s: &str) -> String {
         out.push((triple >> 16) as u8);
     }
     String::from_utf8_lossy(&out).to_string()
+}
+
+
+// ---------------------------------------------------------------------------
+// Deterministic RNG (SplitMix64)
+//
+// Mirrors `iris_rng_*` in `src/runtime/iris_runtime.c` exactly. Any change here
+// must be made there too, or the backends diverge silently -- which is the
+// failure this replaced.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static RNG_STATE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static RNG_SEED: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+    static RNG_SEEDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn rng_autoseed() {
+    RNG_SEEDED.with(|f| {
+        if f.get() {
+            return;
+        }
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(42)
+            ^ ((std::process::id() as u64) << 16);
+        RNG_STATE.with(|s| s.set(seed));
+        RNG_SEED.with(|s| s.set(seed as i64));
+        f.set(true);
+    });
+}
+
+pub(crate) fn rng_set_seed(seed: i64) {
+    RNG_STATE.with(|s| s.set(seed as u64));
+    RNG_SEED.with(|s| s.set(seed));
+    RNG_SEEDED.with(|f| f.set(true));
+}
+
+pub(crate) fn rng_seed_value() -> i64 {
+    rng_autoseed();
+    RNG_SEED.with(|s| s.get())
+}
+
+pub(crate) fn rng_next() -> u64 {
+    rng_autoseed();
+    let state = RNG_STATE.with(|s| {
+        let next = s.get().wrapping_add(0x9E37_79B9_7F4A_7C15);
+        s.set(next);
+        next
+    });
+    let mut z = state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+pub(crate) fn rng_next_f64() -> f64 {
+    // Top 53 bits scaled into [0, 1) -- the full f64 mantissa.
+    (rng_next() >> 11) as f64 / 9_007_199_254_740_992.0
 }

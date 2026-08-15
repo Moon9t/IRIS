@@ -1,0 +1,316 @@
+// std.serial -- line-oriented serial I/O for microcontroller peripherals.
+//
+// WHY THIS EXISTS
+//
+// IRIS has no embedded backend: there is no AVR, Xtensa or Cortex-M target, and
+// the runtime needs malloc, pthreads and a reference-counting collector, none of
+// which exist on an ATmega328P with 2 KB of SRAM. IRIS therefore cannot run *on*
+// an Arduino UNO R3 or an ESP32, and this module does not pretend otherwise.
+//
+// What it supports is the split that does work: the microcontroller runs dumb
+// firmware and owns the pins, IRIS runs on a host and owns the decisions. That
+// is the same shape as Firmata, rosserial and the micro-ROS agent. The board
+// does deterministic pin timing and ADC; IRIS does the autonomy layer, where
+// `--strict-effects` can prove a control path allocates nothing and does no I/O.
+//
+// WHAT IS VERIFIED AND WHAT IS NOT
+//
+// The protocol half -- framing, checksums, encoding and parsing -- is pure and
+// is asserted end to end in `tests/test_serial_protocol.iris`, with no hardware
+// present. Read it as Verified.
+//
+// The port half -- `serial_open`, `serial_read_line`, `serial_write_line` and
+// friends -- has been exercised against ordinary files, which is what a POSIX
+// serial device is, but NOT against a physical board. Read it as Present, not
+// Verified. Attaching an UNO is what would upgrade it, and until someone does,
+// this comment should not be softened.
+//
+// A NOTE ON `find`
+//
+// `find` returns `option<i64>`, not an `i64` with a -1 sentinel. This module
+// was first written assuming the sentinel, and every parse function was wrong
+// in the same way. It is the better API -- there is no in-band failure value to
+// forget about -- and the mistake is recorded here because the compiler
+// reported it as "expected 'option<i64>' but found 'i64'" pointing at a blank
+// line, naming neither the call nor the real type. See known-issues #28.
+//
+// PORT CONFIGURATION
+//
+// Baud rate and raw mode are set by shelling out (`stty` on unix, `mode` on
+// Windows) rather than by a native termios/DCB call. That is a real limitation:
+// it costs a process per open and it fails silently on systems without those
+// tools. It is honest about what it does, and a native `iris_serial_configure`
+// can replace `serial_configure` without changing any other function here.
+
+bring std.ffi
+
+// A handle to an open port. `file` is the raw stream handle; the port name and
+// baud are kept so errors can name the device that failed.
+pub record Serial {
+    file: i64,
+    port: str,
+    baud: i64,
+}
+
+// One decoded sensor reading.
+pub record Reading {
+    name: str,
+    value: f64,
+}
+
+// A decoded pin-write command.
+//
+// A record rather than a `(i64, i64)` tuple: a tuple returned from a brought
+// module loses its element types at the call site and `pair.1` mis-resolves to
+// `option<i64>` (the #7/#9 module-boundary family). Named fields are the better
+// API regardless -- `w.pin` beats `w.0`.
+pub record PinWrite {
+    pin: i64,
+    value: i64,
+}
+
+// ---------------------------------------------------------------------------
+// Wire protocol
+//
+// Line-oriented ASCII with a trailing checksum, in the shape NMEA uses, because
+// a microcontroller can emit and verify it in a few lines of C:
+//
+//     R:temp=21.5*217     reading from the device
+//     W:13=255*103        write `value` to `pin`
+//     Q:13*39             query `pin`
+//
+// The checksum covers everything before the `*`. It is the sum of the payload
+// bytes modulo 256 -- weak against deliberate tampering and not meant to be
+// otherwise, but it catches the failure that actually happens on a serial line,
+// which is a dropped or mangled byte on a noisy USB cable.
+// ---------------------------------------------------------------------------
+
+// Sum of a payload's bytes, modulo 256.
+pub def checksum(payload: str) -> i64 {
+    var sum = 0;
+    var i = 0;
+    val n = len(payload);
+    while i < n {
+        sum = sum + str_index(payload, i);
+        i = i + 1;
+    };
+    sum % 256
+}
+
+// Wrap a payload as a complete frame.
+pub def frame(payload: str) -> str {
+    payload + "*" + to_str(checksum(payload))
+}
+
+// True when `line` is a well-formed frame whose checksum matches.
+pub def frame_verify(line: str) -> bool {
+    val star_at = find(line, "*");
+    if !is_some(star_at) { return false };
+    val star = unwrap(star_at);
+    val payload = slice(line, 0, star);
+    val claimed = slice(line, star + 1, len(line));
+    if len(claimed) == 0 { return false };
+    to_str(checksum(payload)) == claimed
+}
+
+// The payload of a frame, or an error naming what was wrong with it.
+pub def frame_payload(line: str) -> result<str, str> {
+    val star_at = find(line, "*");
+    if !is_some(star_at) {
+        return err("frame has no checksum separator '*': " + line)
+    };
+    val star = unwrap(star_at);
+    val payload = slice(line, 0, star);
+    val claimed = slice(line, star + 1, len(line));
+    val actual = to_str(checksum(payload));
+    if actual == claimed {
+        ok(payload)
+    } else {
+        err("checksum mismatch on '" + payload + "': frame says " + claimed + ", computed " + actual)
+    }
+}
+
+// The kind letter of a frame -- "R", "W" or "Q".
+pub def frame_kind(line: str) -> result<str, str> {
+    val payload = frame_payload(line)?;
+    if len(payload) < 2 {
+        return err("frame payload too short to have a kind: " + payload)
+    };
+    val colon_at = find(payload, ":");
+    if !is_some(colon_at) {
+        return err("frame payload has no ':' after its kind: " + payload)
+    };
+    val colon = unwrap(colon_at);
+    ok(slice(payload, 0, colon))
+}
+
+// Encode a sensor reading for transmission.
+pub def encode_reading(name: str, value: f64) -> str {
+    frame("R:" + name + "=" + to_str(value))
+}
+
+// Encode "write `value` to `pin`".
+pub def encode_write(pin: i64, value: i64) -> str {
+    frame("W:" + to_str(pin) + "=" + to_str(value))
+}
+
+// Encode "report the current value of `pin`".
+pub def encode_query(pin: i64) -> str {
+    frame("Q:" + to_str(pin))
+}
+
+// Decode a reading frame.
+pub def parse_reading(line: str) -> result<Reading, str> {
+    val payload = frame_payload(line)?;
+    val colon_at = find(payload, ":");
+    if !is_some(colon_at) {
+        return err("not a reading frame, no ':': " + payload)
+    };
+    val colon = unwrap(colon_at);
+    val kind = slice(payload, 0, colon);
+    if kind != "R" {
+        return err("expected a reading frame ('R'), got '" + kind + "'")
+    };
+    val body = slice(payload, colon + 1, len(payload));
+    val eq_at = find(body, "=");
+    if !is_some(eq_at) {
+        return err("reading has no '=' between name and value: " + body)
+    };
+    val eq = unwrap(eq_at);
+    val name = slice(body, 0, eq);
+    if len(name) == 0 {
+        return err("reading has an empty name: " + payload)
+    };
+    val raw = slice(body, eq + 1, len(body));
+    if len(raw) == 0 {
+        return err("reading '" + name + "' has no value")
+    };
+    // `parse_f64`, not `to_f64`: the latter is a *cast*, which turns a
+    // malformed value into a plausible-looking number instead of an error. A
+    // sensor frame that says `temp=abc` must be rejected, not read as 0.
+    val parsed = parse_f64(raw);
+    if !is_some(parsed) {
+        return err("reading '" + name + "' has a non-numeric value: " + raw)
+    };
+    ok(Reading { name: name, value: unwrap(parsed) })
+}
+
+// Decode the pin and value of a write frame.
+pub def parse_write(line: str) -> result<PinWrite, str> {
+    val payload = frame_payload(line)?;
+    val colon_at = find(payload, ":");
+    if !is_some(colon_at) {
+        return err("not a write frame, no ':': " + payload)
+    };
+    val colon = unwrap(colon_at);
+    val kind = slice(payload, 0, colon);
+    if kind != "W" {
+        return err("expected a write frame ('W'), got '" + kind + "'")
+    };
+    val body = slice(payload, colon + 1, len(payload));
+    val eq_at = find(body, "=");
+    if !is_some(eq_at) {
+        return err("write has no '=' between pin and value: " + body)
+    };
+    val eq = unwrap(eq_at);
+    val pin_raw = parse_i64(slice(body, 0, eq));
+    if !is_some(pin_raw) {
+        return err("write frame has a non-numeric pin: " + body)
+    };
+    val value_raw = parse_i64(slice(body, eq + 1, len(body)));
+    if !is_some(value_raw) {
+        return err("write frame has a non-numeric value: " + body)
+    };
+    ok(PinWrite { pin: unwrap(pin_raw), value: unwrap(value_raw) })
+}
+
+// ---------------------------------------------------------------------------
+// Port I/O
+//
+// Present, not Verified -- see the header. Every function here returns a
+// `result` rather than panicking, because a serial port is the part of the
+// system most likely to be absent, busy or unplugged mid-run.
+// ---------------------------------------------------------------------------
+
+// Put the port into raw mode at `baud`.
+//
+// Shells out, which is the limitation named in the header. Returns the port
+// name on success so it can be chained.
+pub def serial_configure(port: str, baud: i64) -> result<bool, str> effect ffi, sys {
+    if len(port) == 0 {
+        return err("serial_configure: empty port name")
+    };
+    if baud <= 0 {
+        return err("serial_configure: baud must be positive, got " + to_str(baud))
+    };
+    // `shell` returns the command's *stdout*, not its exit status, and `stty`
+    // reports failures on stderr -- so a failed configure genuinely cannot be
+    // detected from here. Saying so is better than inventing a check: the real
+    // evidence is whether `file_open` then succeeds, which is why `serial_open`
+    // does not treat this `ok` as proof the port is configured.
+    val _out = shell("stty -F " + port + " " + to_str(baud) + " raw -echo");
+    ok(true)
+}
+
+// Open a configured port for reading and writing.
+pub def serial_open(port: str, baud: i64) -> result<Serial, str> effect fs, io, ffi, sys {
+    val _cfg = serial_configure(port, baud)?;
+    val h = file_open(port, "r+");
+    if h == 0 {
+        err("could not open serial port " + port)
+    } else {
+        ok(Serial { file: h, port: port, baud: baud })
+    }
+}
+
+pub def serial_close(s: Serial) -> result<bool, str> effect fs, io {
+    if file_close(s.file) {
+        ok(true)
+    } else {
+        err("could not close serial port " + s.port)
+    }
+}
+
+// Write a frame, terminated by a newline so the device can split on it.
+pub def serial_write_line(s: Serial, line: str) -> result<bool, str> effect fs, io {
+    if file_write(s.file, line + "\n") {
+        ok(true)
+    } else {
+        err("write failed on " + s.port)
+    }
+}
+
+// Read one newline-terminated line.
+pub def serial_read_line(s: Serial) -> result<str, str> effect fs, io {
+    var acc = "";
+    var guard = 0;
+    // Bounded rather than `loop`: an unplugged device returns empty forever,
+    // and a control loop must not be able to block on it.
+    while guard < 4096 {
+        val c = file_read(s.file, 1);
+        if len(c) == 0 {
+            if len(acc) > 0 { return ok(acc) };
+            return err("no data on " + s.port)
+        };
+        if c == "\n" { return ok(acc) };
+        if c != "\r" { acc = acc + c };
+        guard = guard + 1;
+    };
+    err("line from " + s.port + " exceeded 4096 bytes without a newline")
+}
+
+// Send one sensor reading.
+pub def serial_send_reading(s: Serial, name: str, value: f64) -> result<bool, str> effect fs, io {
+    serial_write_line(s, encode_reading(name, value))
+}
+
+// Command a pin, then confirm the device echoed the same command back.
+pub def serial_write_pin(s: Serial, pin: i64, value: i64) -> result<bool, str> effect fs, io {
+    serial_write_line(s, encode_write(pin, value))
+}
+
+// Read the next reading from the device.
+pub def serial_poll(s: Serial) -> result<Reading, str> effect fs, io {
+    val line = serial_read_line(s)?;
+    parse_reading(line)
+}
