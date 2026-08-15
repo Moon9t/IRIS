@@ -66,7 +66,7 @@ re-report these.
 - 🟠 `pub bring` re-exports functions but not `record`/`choice` types (#9)
 - 🟠 `effect` clauses are rejected on trait method declarations (#10)
 - 🟠 Assigning an enclosing `var` from `when` arms fails SSA construction
-- 🟠 `dyn Trait` has no native backend — interpreter only (#18b)
+- 🟠 `dyn Trait`: native backend works (#18b fixed); coercion still only at an annotated binding, so `list<dyn Trait>` is rejected (#18)
 - 🟠 Tuples cannot be compared with `==` on either backend (#26)
 
 **A type parameter used only in the return type needs an annotation** (#14):

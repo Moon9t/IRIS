@@ -376,6 +376,83 @@ fn emit_llvm_ir_impl(
         writeln!(out)?;
     }
 
+    // ── Trait-object vtables ──────────────────────────────────────────────
+    //
+    // `MakeTraitObject` records both the trait and the *concrete* type at the
+    // coercion site, so the set of methods a given trait object can dispatch to
+    // is known statically. That makes a constant vtable per (trait, concrete)
+    // pair sufficient: no runtime construction, and the slot layout is the
+    // trait's own declaration order, which `IrType::TraitObject` already stores.
+    //
+    // Slots with no matching impl are emitted as `ptr null`. That can only be
+    // reached by calling a method the concrete type does not implement, which
+    // the front end rejects; emitting null keeps the table shape uniform rather
+    // than silently shifting every later slot.
+    let mut vtables: Vec<(String, String, Vec<String>)> = Vec::new();
+    {
+        let mut seen: HashSet<(String, String)> = HashSet::new();
+        for func in module.functions() {
+            for block in func.blocks() {
+                for instr in &block.instrs {
+                    if let IrInstr::MakeTraitObject {
+                        target_trait,
+                        concrete_ty,
+                        result_ty,
+                        ..
+                    } = instr
+                    {
+                        if !seen.insert((target_trait.clone(), concrete_ty.clone())) {
+                            continue;
+                        }
+                        // Slot order comes from the trait object's own type.
+                        let slot_names: Vec<String> = match result_ty {
+                            IrType::TraitObject { methods, .. } => {
+                                methods.iter().map(|m| m.name.clone()).collect()
+                            }
+                            _ => module
+                                .trait_def(target_trait)
+                                .map(|ms| ms.iter().map(|m| m.name.clone()).collect())
+                                .unwrap_or_default(),
+                        };
+                        let impls = module.trait_impl_methods();
+                        let entries = impls.get(target_trait);
+                        let mut slots = Vec::with_capacity(slot_names.len());
+                        for mname in &slot_names {
+                            let mangled = entries.and_then(|es| {
+                                es.iter()
+                                    .find(|(c, m, _)| c == concrete_ty && m == mname)
+                                    .map(|(_, _, mangled)| mangled.clone())
+                            });
+                            slots.push(match mangled {
+                                Some(f) => format!("ptr @{}", f),
+                                None => "ptr null".to_owned(),
+                            });
+                        }
+                        vtables.push((target_trait.clone(), concrete_ty.clone(), slots));
+                    }
+                }
+            }
+        }
+        vtables.sort();
+    }
+    for (tname, cname, slots) in &vtables {
+        writeln!(
+            out,
+            "@vt_{}_{} = private unnamed_addr constant [{} x ptr] [{}], align 8",
+            tname,
+            cname,
+            slots.len().max(1),
+            if slots.is_empty() {
+                "ptr null".to_owned()
+            } else {
+                slots.join(", ")
+            }
+        )?;
+    }
+    if !vtables.is_empty() {
+        writeln!(out)?;
+    }
+
     // ── Runtime declarations ──────────────────────────────────────────────
     emit_runtime_declares(&mut out)?;
 
@@ -2079,7 +2156,7 @@ fn emit_instr_ir(
     func: &IrFunction,
     entry_rename: Option<(&str, &str)>,
     fn_sigs: &HashMap<String, (String, Vec<String>)>,
-    _module: &IrModule,
+    module: &IrModule,
     scalar_arrays: &HashSet<ValueId>,
     gep_counter: &mut u32,
     str_table: &HashMap<String, usize>,
@@ -5433,7 +5510,7 @@ fn emit_instr_ir(
             // handler can ever intercept it, so a direct typed call is both
             // correct and cheaper. Externs that *are* handled still go through the
             // trampoline, and the f64 limitation remains for those.
-            let interceptable = _module.functions().iter().any(|f| {
+            let interceptable = module.functions().iter().any(|f| {
                 f.blocks().iter().any(|b| {
                     b.instrs.iter().any(|i| match i {
                         IrInstr::PushHandler { arms } => {
@@ -5699,9 +5776,121 @@ fn emit_instr_ir(
             writeln!(out, "  call void @iris_sleep_ms(i64 {})", val(*ms))?;
             writeln!(out, "  %v{} = add i64 0, 0", result.0)?;
         }
-        // Phase 115: Trait object instructions (no-op in simple codegen)
-        IrInstr::MakeTraitObject { .. } => {}
-        IrInstr::DynCall { .. } => {}
+        // ── Trait objects ─────────────────────────────────────────────────
+        //
+        // A trait object is a two-word value: `{ ptr data, ptr vtable }`. These
+        // two instructions were empty no-ops, so every value they should have
+        // defined dangled and any module using `dyn Trait` failed verification.
+        // `--emit eval` builds natively and falls back to the interpreter, so
+        // the failure looked like an interpreter-only feature rather than a
+        // missing backend. See known-issues #18b.
+        IrInstr::MakeTraitObject {
+            result,
+            value,
+            target_trait,
+            concrete_ty,
+            ..
+        } => {
+            let data = val(*value);
+            writeln!(out, "  %v{} = call ptr @malloc(i64 16)", result.0)?;
+            writeln!(out, "  store ptr {}, ptr %v{}, align 8", data, result.0)?;
+            writeln!(
+                out,
+                "  %tovt{r} = getelementptr inbounds ptr, ptr %v{r}, i32 1",
+                r = result.0
+            )?;
+            writeln!(
+                out,
+                "  store ptr @vt_{}_{}, ptr %tovt{}, align 8",
+                target_trait, concrete_ty, result.0
+            )?;
+        }
+
+        IrInstr::DynCall {
+            result,
+            obj,
+            method_name,
+            args,
+            result_ty,
+        } => {
+            // The trait object's *type* carries the method list in vtable slot
+            // order, so the slot index is a static lookup and no runtime name
+            // matching is needed.
+            let obj_ty = inferred_value_type(func, *obj, func.value_type(*obj));
+            let methods = match obj_ty.as_ref() {
+                Some(IrType::TraitObject { methods, .. }) => methods.clone(),
+                _ => {
+                    return Err(CodegenError::Unsupported {
+                        backend: "llvm".into(),
+                        detail: format!(
+                            "dynamic call to `{}` on a value that is not a trait object",
+                            method_name
+                        ),
+                    })
+                }
+            };
+            let slot = methods
+                .iter()
+                .position(|m| &m.name == method_name)
+                .ok_or_else(|| CodegenError::Unsupported {
+                    backend: "llvm".into(),
+                    detail: format!(
+                        "method `{}` is not a slot of this trait object (has: {})",
+                        method_name,
+                        methods
+                            .iter()
+                            .map(|m| m.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                })?;
+
+            let n = *gep_counter;
+            *gep_counter += 1;
+            let ov = val(*obj);
+            // self data pointer
+            writeln!(out, "  %dcd{} = load ptr, ptr {}, align 8", n, ov)?;
+            // vtable pointer
+            writeln!(
+                out,
+                "  %dcvp{} = getelementptr inbounds ptr, ptr {}, i32 1",
+                n, ov
+            )?;
+            writeln!(out, "  %dcvt{n} = load ptr, ptr %dcvp{n}, align 8", n = n)?;
+            // slot -> function pointer
+            writeln!(
+                out,
+                "  %dcs{n} = getelementptr inbounds [{len} x ptr], ptr %dcvt{n}, i32 0, i32 {slot}",
+                n = n,
+                len = methods.len().max(1),
+                slot = slot
+            )?;
+            writeln!(out, "  %dcf{n} = load ptr, ptr %dcs{n}, align 8", n = n)?;
+
+            // Build the argument list: `self` first, then the call's own args.
+            let ret_s = llvm_type_complete(result_ty)?;
+            let mut arg_s: Vec<String> = vec![format!("ptr %dcd{}", n)];
+            for a in args {
+                let aty = emitted_types
+                    .get(a)
+                    .cloned()
+                    .or_else(|| {
+                        func.value_type(*a)
+                            .and_then(|t| llvm_type_complete(t).ok())
+                    })
+                    .unwrap_or_else(|| "ptr".to_owned());
+                arg_s.push(format!("{} {}", aty, val(*a)));
+            }
+            writeln!(
+                out,
+                "  %v{} = call {} %dcf{}({})",
+                result.0,
+                ret_s,
+                n,
+                arg_s.join(", ")
+            )?;
+            let _ = module;
+        }
         // Phase 113: TaskGroup instructions (no-op in simple codegen)
         IrInstr::TaskGroupNew { .. } => {}
         IrInstr::TaskGroupSpawn { .. } => {}

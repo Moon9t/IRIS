@@ -1,19 +1,16 @@
 // c08 — trait objects x multiple impls x dispatch through a dyn binding.
 //
-// SCOPE NOTE — this file is INTERPRETER-ONLY, deliberately.
+// `dyn Trait` now has a native backend (known-issues #18b), so this file runs
+// on both `--emit eval` and `IRIS_FORCE_INTERP=1`. It was interpreter-only
+// until 2026-08-16: `MakeTraitObject` and `DynCall` were empty no-ops in the
+// LLVM backend, so every value they should have defined dangled and the module
+// failed verification.
 //
-// `dyn Trait` has no native implementation: MakeTraitObject and DynCall are
-// empty no-ops in the LLVM backend, so every value they should define dangles
-// and the module fails verification with "use of undefined value"
-// (known-issues #18b). The tree's own test_trait_object.iris fails natively
-// for the same reason.
-//
-// Interpreted, a concrete value is coerced to a trait object at an *annotated
-// binding* and nowhere else: passing a concrete value to a `dyn Trait`
-// parameter fails at runtime, and pushing one into `list<dyn Trait>` fails at
-// compile time (#18). A heterogeneous collection is the main reason trait
-// objects exist, so this file is far narrower than it should be. It should
-// grow, and gain a native run, when #18 is fixed.
+// Still narrower than it should be: a concrete value is coerced to a trait
+// object at an *annotated binding* and nowhere else. Passing a concrete value
+// to a `dyn Trait` parameter fails at runtime, and pushing one into
+// `list<dyn Trait>` fails at compile time (#18). A heterogeneous collection is
+// the main reason trait objects exist, so this should grow when #18 is fixed.
 
 record Cat { name: str }
 record Dog { name: str }
