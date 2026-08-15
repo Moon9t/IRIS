@@ -785,3 +785,130 @@ pub def model_load(path: str) -> list<f64> effect fs, io {
 
 
 
+
+// ---------------------------------------------------------------------------
+// Evolution: the generation step
+//
+// `genome_random`, `genome_mutate`, `genome_crossover` and `population_new`
+// existed, but nothing closed the loop -- there was no way to score a
+// population and produce the next one, so "evolutionary" was a bag of parts.
+//
+// Selection is elitist: the top `elite` genomes survive unchanged. That is not
+// only a quality choice, it is what makes evolution *assertable*. With elitism
+// and a seeded RNG, best fitness is monotonically non-decreasing across
+// generations, and a test can check that directly. Without it, a run can only
+// be described in vague statistical terms, and a broken implementation hides.
+// ---------------------------------------------------------------------------
+
+// Attach externally computed fitness values to a population and refresh its
+// best/average statistics. `fitnesses` is positional: entry i scores genome i.
+pub def population_score(pop: Population, fitnesses: list<f64>) -> Population {
+    val n = list_len(pop.genomes);
+    val scored: list<Genome> = list();
+    var total = 0.0;
+    var best = -1.0e30;
+    for i in 0 .. n {
+        val g = list_get(pop.genomes, i);
+        val f = if i < list_len(fitnesses) { list_get(fitnesses, i) } else { g.fitness };
+        list_push(scored, Genome { genes: g.genes, fitness: f, age: g.age });
+        total = total + f;
+        if f > best { best = f };
+    };
+    val avg = if n > 0 { total / to_f64(n) } else { 0.0 };
+    Population {
+        genomes: scored, pop_size: pop.pop_size, mutation_rate: pop.mutation_rate,
+        generation: pop.generation, best_fitness: best, avg_fitness: avg
+    }
+}
+
+// Highest fitness currently in the population.
+pub def population_best_fitness(pop: Population) -> f64 {
+    var best = -1.0e30;
+    val n = list_len(pop.genomes);
+    for i in 0 .. n {
+        val g = list_get(pop.genomes, i);
+        if g.fitness > best { best = g.fitness };
+    };
+    best
+}
+
+// Genomes ordered by fitness, fittest first.
+//
+// Selection sort over a `taken` marker rather than an in-place swap: genomes
+// are records in a list and this keeps the original population untouched, which
+// matters because `population_evolve` reads the unranked population for
+// tournament selection while building the next generation from the ranked one.
+pub def population_ranked(pop: Population) -> list<Genome> {
+    val n = list_len(pop.genomes);
+    val taken: list<i64> = list();
+    for i in 0 .. n { list_push(taken, 0); };
+    val out: list<Genome> = list();
+    for round in 0 .. n {
+        var best_i = 0 - 1;
+        var best_f = -1.0e30;
+        for i in 0 .. n {
+            if list_get(taken, i) == 0 {
+                val g = list_get(pop.genomes, i);
+                if g.fitness > best_f {
+                    best_f = g.fitness;
+                    best_i = i;
+                };
+            };
+        };
+        if best_i >= 0 {
+            list_push(out, list_get(pop.genomes, best_i));
+            list_set(taken, best_i, 1);
+        };
+    };
+    out
+}
+
+// The fittest genome. Ties resolve to the earliest index.
+pub def population_best(pop: Population) -> Genome {
+    val ranked = population_ranked(pop);
+    list_get(ranked, 0)
+}
+
+// Pick a parent by tournament: sample `k` genomes, return the fittest.
+//
+// Tournament rather than fitness-proportionate selection because it needs no
+// normalisation and behaves sensibly with negative fitness, which a cost-like
+// objective produces naturally.
+pub def tournament_select(pop: Population, k: i64) -> Genome effect random {
+    val n = list_len(pop.genomes);
+    if n == 0 { return genome_random(1, 1.0) };
+    val rounds = if k < 1 { 1 } else { k };
+    var champion = list_get(pop.genomes, random_range(0, n));
+    for i in 1 .. rounds {
+        val challenger = list_get(pop.genomes, random_range(0, n));
+        if challenger.fitness > champion.fitness { champion = challenger };
+    };
+    champion
+}
+
+// Produce the next generation.
+//
+// The top `elite` genomes carry over untouched; the rest are children of
+// tournament-selected parents, crossed over and mutated. Because elites are
+// copied rather than regenerated, best fitness cannot fall between generations.
+pub def population_evolve(pop: Population, elite: i64, mut_scale: f64) -> Population effect random {
+    val n = list_len(pop.genomes);
+    if n == 0 { return pop };
+    val ranked = population_ranked(pop);
+    val clamped = if elite < 0 { 0 } else { if elite > n { n } else { elite } };
+
+    val next: list<Genome> = list();
+    for i in 0 .. clamped { list_push(next, list_get(ranked, i)); };
+    for i in clamped .. n {
+        val a = tournament_select(pop, 3);
+        val b = tournament_select(pop, 3);
+        val child = genome_crossover(a, b);
+        list_push(next, genome_mutate(child, pop.mutation_rate, mut_scale));
+    };
+
+    Population {
+        genomes: next, pop_size: pop.pop_size, mutation_rate: pop.mutation_rate,
+        generation: pop.generation + 1,
+        best_fitness: pop.best_fitness, avg_fitness: pop.avg_fitness
+    }
+}

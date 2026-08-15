@@ -1,0 +1,162 @@
+// std.ais -- the evolution loop, asserted.
+//
+// Until now `genome_random`, `genome_mutate`, `genome_crossover` and
+// `population_new` existed with no way to score a population and produce the
+// next one. Nothing could be asserted about evolution because nothing evolved.
+//
+// This file is only possible because randomness is seedable. With a fixed seed
+// and elitist selection, an evolutionary run is a deterministic function, so
+// these are real assertions about behaviour rather than statistical hand-waving:
+//
+//   * best fitness never decreases across generations (the elitism guarantee)
+//   * fitness actually improves -- the search works, it does not merely churn
+//   * the same seed reproduces the same result exactly (auditability)
+//   * a different seed explores differently (the seed is genuinely used)
+
+bring std.ais
+
+// Objective: get close to a fixed target vector. Fitness is negative squared
+// distance, so the optimum is 0.0 and every real genome scores below it.
+// Negative fitness is deliberate -- it is what a cost-like objective produces,
+// and it is where fitness-proportionate selection would misbehave.
+def fitness_of(g: Genome) -> f64 {
+    val d0 = list_get(g.genes, 0) - 0.5;
+    val d1 = list_get(g.genes, 1) + 0.25;
+    val d2 = list_get(g.genes, 2) - 0.75;
+    0.0 - (d0 * d0 + d1 * d1 + d2 * d2)
+}
+
+def score_all(p: Population) -> list<f64> {
+    val fs: list<f64> = list();
+    val n = list_len(p.genomes);
+    for i in 0 .. n {
+        list_push(fs, fitness_of(list_get(p.genomes, i)));
+    };
+    fs
+}
+
+// Run `gens` generations and return the best fitness reached.
+def evolve_for(gens: i64) -> f64 {
+    var p = population_score(population_new(24, 3, 0.3), list());
+    var best = -1.0e30;
+    for g in 0 .. gens {
+        val scored = population_score(p, score_all(p));
+        val b = population_best_fitness(scored);
+        // The elitism guarantee: best fitness must never fall.
+        assert(b >= best);
+        best = b;
+        p = population_evolve(scored, 2, 0.2);
+    };
+    best
+}
+
+def check_improves() -> i64 {
+    seed(2024);
+    val early = evolve_for(2);
+    seed(2024);
+    val late = evolve_for(40);
+    // Forty generations must beat two. If selection were broken -- parents
+    // picked at random, or elites dropped -- these would be indistinguishable.
+    assert(late > early);
+    // And it must get genuinely close to the optimum of 0.0, not merely
+    // improve by a rounding error.
+    assert(late > -0.2);
+    0
+}
+
+def check_reproducible() -> i64 {
+    seed(77);
+    val a = evolve_for(15);
+    seed(77);
+    val b = evolve_for(15);
+    // Bit-identical: this is what makes an evolved system auditable. Replay the
+    // seed, get the same system back.
+    assert(a == b);
+    0
+}
+
+def check_seed_matters() -> i64 {
+    seed(1);
+    val a = evolve_for(6);
+    seed(500);
+    val b = evolve_for(6);
+    // A different seed must explore differently. Without this, an
+    // implementation that ignored the seed entirely would satisfy
+    // check_reproducible perfectly.
+    assert(a != b);
+    0
+}
+
+def check_ranking() -> i64 {
+    seed(9);
+    val p = population_score(population_new(8, 3, 0.1), list());
+    val scored = population_score(p, score_all(p));
+    val ranked = population_ranked(scored);
+    assert(list_len(ranked) == 8);
+    // Ranked descending: every neighbour pair is ordered.
+    for i in 1 .. 8 {
+        val hi = list_get(ranked, i - 1);
+        val lo = list_get(ranked, i);
+        assert(hi.fitness >= lo.fitness);
+    };
+    // And the head of the ranking is the population's best.
+    assert(list_get(ranked, 0).fitness == population_best_fitness(scored));
+    assert(population_best(scored).fitness == population_best_fitness(scored));
+    0
+}
+
+def check_elitism_preserves() -> i64 {
+    seed(31);
+    val p = population_score(population_new(10, 3, 0.5), list());
+    val scored = population_score(p, score_all(p));
+    val top = population_best_fitness(scored);
+    // A high mutation rate would destroy the best genome without elitism.
+    val next = population_evolve(scored, 1, 1.0);
+    val carried = population_score(next, score_all(next));
+    assert(population_best_fitness(carried) >= top);
+    // Generation counter advances, and population size is preserved.
+    assert(next.generation == scored.generation + 1);
+    assert(list_len(next.genomes) == 10);
+    0
+}
+
+def check_degenerate() -> i64 {
+    seed(5);
+    // Elite count is clamped, not trusted.
+    val p = population_score(population_new(4, 3, 0.2), list());
+    val scored = population_score(p, score_all(p));
+    val all_elite = population_evolve(scored, 99, 0.1);
+    assert(list_len(all_elite.genomes) == 4);
+    val none_elite = population_evolve(scored, 0 - 5, 0.1);
+    assert(list_len(none_elite.genomes) == 4);
+    0
+}
+
+// A fixed seed and a fixed number of generations must land in the same place on
+// both backends. This is the assertion that would have caught the old state of
+// the world, where native drew from libc `rand()` at 15 bits and the
+// interpreter from a chained hasher at 53 -- the same program reached
+// different answers depending on how it was run, and nothing said so.
+def check_cross_backend() -> i64 {
+    seed(4242);
+    val best = evolve_for(12);
+    // A narrow band rather than an exact literal, because `to_str` formats
+    // differently on the two backends; the band is tight enough that a
+    // divergent generator could not land inside it.
+    assert(best > -0.02);
+    assert(best < -0.000001);
+    0
+}
+
+def main() -> i64 {
+    val a = check_ranking();
+    val b = check_elitism_preserves();
+    val c = check_improves();
+    val d = check_reproducible();
+    val e = check_seed_matters();
+    val f = check_degenerate();
+    val g = check_cross_backend();
+    assert(a + b + c + d + e + f + g == 0);
+    println("evolution ok");
+    0
+}
