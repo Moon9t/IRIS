@@ -1,0 +1,72 @@
+// c13 — FFI out-parameter cells.
+//
+// This is the mechanism that makes a system able to *perceive*: a great many C
+// functions return their result through a pointer argument, and none of them
+// was callable from IRIS. `ros2_bridge.c` already implements
+// iris_rcl_take_float64 / take_twist / take_pose / take_string; every one was
+// unreachable for exactly this reason.
+//
+// No real library is opened here — that would make the test depend on a ROS 2
+// installation. What is exercised is the part that was missing: owning memory,
+// naming its address, seeding it, and reading typed values back at an offset.
+// A C function writing into the cell is the same operation performed by the
+// callee instead of by us.
+
+bring std.ffi
+
+def main() -> i64 {
+    // A cell sized for six f64 — the shape a Twist arrives in.
+    val cell = out_f64_cell(6)
+    assert(cell != 0);
+
+    // Zeroed on allocation, which is what an unwritten out-param must look like.
+    assert(out_f64(cell, 0) == 0.0);
+    assert(out_f64(cell, 5) == 0.0);
+
+    // Seed it, as an in-out parameter would be seeded, then read it back.
+    out_set_f64(cell, 0, 1.5);
+    out_set_f64(cell, 1, -2.5);
+    out_set_f64(cell, 5, 42.0);
+    assert(out_f64(cell, 0) > 1.49);
+    assert(out_f64(cell, 0) < 1.51);
+    assert(out_f64(cell, 1) < -2.49);
+    assert(out_f64(cell, 5) > 41.9);
+
+    // Untouched slots stay zero — no bleed between indices.
+    assert(out_f64(cell, 2) == 0.0);
+    assert(out_f64(cell, 3) == 0.0);
+    assert(out_f64(cell, 4) == 0.0);
+
+    // Reading past the end is bounded, not undefined.
+    assert(out_f64(cell, 99) == 0.0);
+    assert(out_f64(cell, 0 - 1) == 0.0);
+
+    out_free(cell);
+
+    // Integer cell, same round trip.
+    val icell = out_i64_cell(3)
+    assert(icell != 0);
+    out_set_i64(icell, 0, 7);
+    out_set_i64(icell, 2, -9);
+    assert(out_i64(icell, 0) == 7);
+    assert(out_i64(icell, 1) == 0);
+    assert(out_i64(icell, 2) == -9);
+    out_free(icell);
+
+    // A zero-size request yields the null cell, and every operation on it is
+    // safe — the error path of a failed allocation must not be a crash.
+    val bad = out_new(0)
+    assert(bad == 0);
+    assert(out_f64(bad, 0) == 0.0);
+    assert(out_i64(bad, 0) == 0);
+    out_free(bad);
+
+    // Freeing twice is a no-op rather than undefined behaviour, because the
+    // error path of a foreign call often frees on the way out.
+    val twice = out_f64_cell(1)
+    out_free(twice);
+    out_free(twice);
+
+    println("c13 ok");
+    0
+}

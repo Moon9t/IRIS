@@ -6753,6 +6753,18 @@ impl<'m> Lowerer<'m> {
                 "ffi_call_str" => Some(("ffi_call_str", IrType::Str)),
                 "ffi_call_void" => Some(("ffi_call_void", IrType::Scalar(DType::I64))),
                 "ffi_call_args" => Some(("ffi_call_args", IrType::Scalar(DType::I64))),
+                // FFI out-parameter cells. A pointer fits in the int64 slot the
+                // dispatcher already passes, so these need no new calling
+                // convention — only a way for IRIS to own memory and name its
+                // address. Without them every C function returning through a
+                // pointer was unreachable.
+                "ffi_out_new" => Some(("ffi_out_new", IrType::Scalar(DType::I64))),
+                "ffi_out_free" => Some(("ffi_out_free", IrType::Scalar(DType::I64))),
+                "ffi_out_get_f64" => Some(("ffi_out_get_f64", IrType::Scalar(DType::F64))),
+                "ffi_out_get_i64" => Some(("ffi_out_get_i64", IrType::Scalar(DType::I64))),
+                "ffi_out_get_str" => Some(("ffi_out_get_str", IrType::Str)),
+                "ffi_out_set_f64" => Some(("ffi_out_set_f64", IrType::Scalar(DType::I64))),
+                "ffi_out_set_i64" => Some(("ffi_out_set_i64", IrType::Scalar(DType::I64))),
                 // Python FFI
                 "python_eval" => Some(("python_eval", IrType::Str)),
                 "python_exec" => Some(("python_exec", IrType::Scalar(DType::I64))),

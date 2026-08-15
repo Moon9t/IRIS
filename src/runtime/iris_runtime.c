@@ -5252,6 +5252,119 @@ void iris_ffi_call_void(void* handle, const char* func_name, int64_t* args, int 
     }
 }
 
+/* ---- FFI out-parameter cells -------------------------------------------
+ *
+ * A great many C functions return their result through a pointer argument:
+ *
+ *     int64_t iris_rcl_take_twist(int64_t sub, double* out);   // writes 6 doubles
+ *     int64_t iris_rcl_take_string(int64_t sub, char* buf, int32_t max);
+ *
+ * IRIS could not call any of those. `ffi_dispatch_i64` already passes an array
+ * of int64 slots, and on every supported target a pointer fits in one -- so the
+ * missing piece was never the calling convention. It was that IRIS had no way to
+ * own a piece of memory and name its address.
+ *
+ * These give it one. `iris_ffi_out_new` returns the address of a zeroed block as
+ * an int64, which is passed straight through as an ordinary argument; the
+ * typed readers then pull values back out. Indexed reads matter because a single
+ * out-pointer often receives several values (a Twist is six doubles).
+ *
+ * Ownership is explicit: the caller frees. That is deliberate -- these cells are
+ * handed to foreign code, so tying them to the refcounting GC would mean
+ * reasoning about a lifetime the GC cannot see.
+ */
+
+/* Every cell carries a 16-byte header immediately before the address handed
+ * out: a magic word and the payload length.
+ *
+ * That buys two properties the interpreter already had, and the two backends
+ * must agree or a policy behaves differently under `--emit eval` than in a
+ * built binary. Bounds are checked on every read, so an out-param the callee
+ * did not fill returns zero rather than garbage; and `out_free` is idempotent,
+ * because the magic is cleared on release and a second free sees it gone.
+ *
+ * Idempotence is not a nicety here: the error path of a foreign call typically
+ * frees on the way out, and a double free was corrupting the heap
+ * (exit 0xC0000409) where the interpreter simply ignored it.
+ *
+ * 16 bytes keeps the payload 16-byte aligned, which is enough for any scalar a
+ * C ABI will write through an out-pointer. */
+#define IRIS_CELL_MAGIC 0x4952495343454C4CULL
+#define IRIS_CELL_HDR   16
+
+int64_t iris_ffi_out_new(int64_t nbytes) {
+    if (nbytes <= 0) return 0;
+    unsigned char* base = (unsigned char*)calloc(1, (size_t)nbytes + IRIS_CELL_HDR);
+    if (!base) return 0;
+    *(uint64_t*)base = IRIS_CELL_MAGIC;
+    *(uint64_t*)(base + 8) = (uint64_t)nbytes;
+    return (int64_t)(intptr_t)(base + IRIS_CELL_HDR);
+}
+
+/* Returns the payload length, or 0 if `cell` is not a live cell. */
+static uint64_t iris_cell_len(int64_t cell) {
+    if (!cell) return 0;
+    unsigned char* base = (unsigned char*)(intptr_t)cell - IRIS_CELL_HDR;
+    if (*(uint64_t*)base != IRIS_CELL_MAGIC) return 0;
+    return *(uint64_t*)(base + 8);
+}
+
+void iris_ffi_out_free(int64_t cell) {
+    if (!cell) return;
+    unsigned char* base = (unsigned char*)(intptr_t)cell - IRIS_CELL_HDR;
+    if (*(uint64_t*)base != IRIS_CELL_MAGIC) return;   /* already freed */
+    *(uint64_t*)base = 0;
+    free(base);
+}
+
+int64_t iris_ffi_out_sizeof_f64(void) { return (int64_t)sizeof(double); }
+int64_t iris_ffi_out_sizeof_i64(void) { return (int64_t)sizeof(int64_t); }
+
+double iris_ffi_out_get_f64(int64_t cell, int64_t index) {
+    uint64_t len = iris_cell_len(cell);
+    if (index < 0 || (uint64_t)(index + 1) * sizeof(double) > len) return 0.0;
+    return ((double*)(intptr_t)cell)[index];
+}
+
+int64_t iris_ffi_out_get_i64(int64_t cell, int64_t index) {
+    uint64_t len = iris_cell_len(cell);
+    if (index < 0 || (uint64_t)(index + 1) * sizeof(int64_t) > len) return 0;
+    return ((int64_t*)(intptr_t)cell)[index];
+}
+
+int32_t iris_ffi_out_get_i32(int64_t cell, int64_t index) {
+    uint64_t len = iris_cell_len(cell);
+    if (index < 0 || (uint64_t)(index + 1) * sizeof(int32_t) > len) return 0;
+    return ((int32_t*)(intptr_t)cell)[index];
+}
+
+/* Read the cell as a NUL-terminated string, bounded by the payload length so an
+ * unterminated buffer cannot run off the end. Returns a fresh copy, so the cell
+ * may be freed immediately afterwards. */
+char* iris_ffi_out_get_str(int64_t cell) {
+    uint64_t len = iris_cell_len(cell);
+    if (!len) return xstrdup("");
+    const char* p = (const char*)(intptr_t)cell;
+    uint64_t n = 0;
+    while (n < len && p[n] != 0) n++;
+    char* out = (char*)xmalloc((size_t)n + 1);
+    memcpy(out, p, (size_t)n);
+    out[n] = 0;
+    return out;
+}
+
+void iris_ffi_out_set_f64(int64_t cell, int64_t index, double v) {
+    uint64_t len = iris_cell_len(cell);
+    if (index < 0 || (uint64_t)(index + 1) * sizeof(double) > len) return;
+    ((double*)(intptr_t)cell)[index] = v;
+}
+
+void iris_ffi_out_set_i64(int64_t cell, int64_t index, int64_t v) {
+    uint64_t len = iris_cell_len(cell);
+    if (index < 0 || (uint64_t)(index + 1) * sizeof(int64_t) > len) return;
+    ((int64_t*)(intptr_t)cell)[index] = v;
+}
+
 /* -- Python FFI -- */
 
 static char python_buf[65536];

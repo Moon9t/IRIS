@@ -236,7 +236,9 @@ impl Preprocessor {
                         // Unknown directive — pass through (or warn).
                         if skip_depth == 0 {
                             output.push_str(raw_line);
-                            output.push('\n');
+                            if had_newline {
+                                output.push('\n');
+                            }
                         }
                         continue;
                     }
@@ -245,7 +247,9 @@ impl Preprocessor {
 
             if skip_depth == 0 {
                 output.push_str(raw_line);
-                output.push('\n');
+                if had_newline {
+                    output.push('\n');
+                }
             }
         }
 

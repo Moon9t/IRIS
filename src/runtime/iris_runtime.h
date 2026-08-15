@@ -872,6 +872,20 @@ int64_t   iris_ffi_call_i64(void* handle, const char* func_name, int64_t* args, 
 double    iris_ffi_call_f64(void* handle, const char* func_name, int64_t* args, int nargs);
 const char* iris_ffi_call_str(void* handle, const char* func_name, int64_t* args, int nargs);
 void      iris_ffi_call_void(void* handle, const char* func_name, int64_t* args, int nargs);
+
+/* FFI out-parameter cells — let IRIS own memory and pass its address, so C
+ * functions that return through a pointer become callable. See the block
+ * comment in iris_runtime.c. */
+int64_t      iris_ffi_out_new(int64_t nbytes);
+void         iris_ffi_out_free(int64_t cell);
+int64_t      iris_ffi_out_sizeof_f64(void);
+int64_t      iris_ffi_out_sizeof_i64(void);
+double       iris_ffi_out_get_f64(int64_t cell, int64_t index);
+int64_t      iris_ffi_out_get_i64(int64_t cell, int64_t index);
+int32_t      iris_ffi_out_get_i32(int64_t cell, int64_t index);
+char*        iris_ffi_out_get_str(int64_t cell);
+void         iris_ffi_out_set_f64(int64_t cell, int64_t index, double v);
+void         iris_ffi_out_set_i64(int64_t cell, int64_t index, int64_t v);
 // Python FFI
 const char* iris_python_eval(const char* code);
 int64_t   iris_python_exec(const char* code_or_path);

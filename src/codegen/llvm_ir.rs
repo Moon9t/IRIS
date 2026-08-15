@@ -6472,6 +6472,13 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare i1 @iris_ffi_close(ptr)",
         // Expanded C FFI
         "declare i64 @iris_ffi_call_i64(ptr, ptr, ptr, i32)",
+        "declare i64 @iris_ffi_out_new(i64)",
+        "declare void @iris_ffi_out_free(i64)",
+        "declare double @iris_ffi_out_get_f64(i64, i64)",
+        "declare i64 @iris_ffi_out_get_i64(i64, i64)",
+        "declare ptr @iris_ffi_out_get_str(i64)",
+        "declare void @iris_ffi_out_set_f64(i64, i64, double)",
+        "declare void @iris_ffi_out_set_i64(i64, i64, i64)",
         "declare double @iris_ffi_call_f64(ptr, ptr, ptr, i32)",
         "declare ptr @iris_ffi_call_str(ptr, ptr, ptr, i32)",
         "declare void @iris_ffi_call_void(ptr, ptr, ptr, i32)",

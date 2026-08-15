@@ -5054,6 +5054,34 @@ fn i64_arg(v: &IrValue) -> i64 {
     }
 }
 
+fn f64_arg(v: &IrValue) -> f64 {
+    match v {
+        IrValue::F64(f) => *f,
+        IrValue::F32(f) => *f as f64,
+        IrValue::I64(n) => *n as f64,
+        IrValue::I32(n) => *n as f64,
+        _ => 0.0,
+    }
+}
+
+/// Live FFI out-parameter cells: address -> byte length.
+///
+/// A process-wide registry because `interp_builtin` is a free function, and
+/// because the addresses are handed to foreign code — these are deliberately
+/// outside the refcounting GC, whose lifetime analysis cannot follow a pointer
+/// that has crossed into C. Tracking the length lets every read be
+/// bounds-checked and makes a double free a no-op rather than undefined
+/// behaviour.
+fn ffi_out_cells() -> std::sync::MutexGuard<'static, std::collections::HashMap<i64, usize>> {
+    static CELLS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<i64, usize>>,
+    > = std::sync::OnceLock::new();
+    CELLS
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
 fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> {
     match name {
         // ---- File Streams ----
@@ -5969,6 +5997,89 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
         }
 
         // ---- Expanded FFI: C with typed arguments ----
+        // FFI out-parameter cells.
+        //
+        // Implemented for real rather than stubbed: the interpreter and the
+        // native backend must agree, and a stub here would make every
+        // sensor-reading policy silently return zeros under `--emit eval` —
+        // which is the default path. The cell is a genuine heap allocation
+        // whose address is handed to foreign code, so ownership is the
+        // caller's, exactly as in the C runtime.
+        "ffi_out_new" => {
+            let n = i64_arg(&args[0]);
+            if n <= 0 {
+                return Ok(IrValue::I64(0));
+            }
+            let mut buf = vec![0u8; n as usize].into_boxed_slice();
+            let addr = buf.as_mut_ptr() as i64;
+            std::mem::forget(buf);
+            ffi_out_cells().insert(addr, n as usize);
+            Ok(IrValue::I64(addr))
+        }
+        "ffi_out_free" => {
+            let addr = i64_arg(&args[0]);
+            if let Some(len) = ffi_out_cells().remove(&addr) {
+                unsafe {
+                    let _ = Box::from_raw(std::slice::from_raw_parts_mut(addr as *mut u8, len));
+                }
+            }
+            Ok(IrValue::I64(0))
+        }
+        "ffi_out_get_f64" | "ffi_out_get_i64" | "ffi_out_get_str" => {
+            let addr = i64_arg(&args[0]);
+            if addr == 0 || !ffi_out_cells().contains_key(&addr) {
+                return Ok(match name {
+                    "ffi_out_get_f64" => IrValue::F64(0.0),
+                    "ffi_out_get_str" => IrValue::Str(String::new()),
+                    _ => IrValue::I64(0),
+                });
+            }
+            let len = ffi_out_cells()[&addr];
+            let idx = if args.len() > 1 { i64_arg(&args[1]) } else { 0 };
+            match name {
+                "ffi_out_get_str" => {
+                    let bytes = unsafe { std::slice::from_raw_parts(addr as *const u8, len) };
+                    let end = bytes.iter().position(|b| *b == 0).unwrap_or(len);
+                    Ok(IrValue::Str(
+                        String::from_utf8_lossy(&bytes[..end]).into_owned(),
+                    ))
+                }
+                "ffi_out_get_f64" => {
+                    if idx < 0 || (idx as usize + 1) * 8 > len {
+                        return Ok(IrValue::F64(0.0));
+                    }
+                    let v = unsafe { *(addr as *const f64).offset(idx as isize) };
+                    Ok(IrValue::F64(v))
+                }
+                _ => {
+                    if idx < 0 || (idx as usize + 1) * 8 > len {
+                        return Ok(IrValue::I64(0));
+                    }
+                    let v = unsafe { *(addr as *const i64).offset(idx as isize) };
+                    Ok(IrValue::I64(v))
+                }
+            }
+        }
+        "ffi_out_set_f64" | "ffi_out_set_i64" => {
+            let addr = i64_arg(&args[0]);
+            let idx = i64_arg(&args[1]);
+            if addr == 0 || !ffi_out_cells().contains_key(&addr) || idx < 0 {
+                return Ok(IrValue::I64(0));
+            }
+            let len = ffi_out_cells()[&addr];
+            if (idx as usize + 1) * 8 > len {
+                return Ok(IrValue::I64(0));
+            }
+            unsafe {
+                if name == "ffi_out_set_f64" {
+                    *(addr as *mut f64).offset(idx as isize) = f64_arg(&args[2]);
+                } else {
+                    *(addr as *mut i64).offset(idx as isize) = i64_arg(&args[2]);
+                }
+            }
+            Ok(IrValue::I64(0))
+        }
+
         "ffi_call_i64" | "ffi_call_f64" | "ffi_call_str" | "ffi_call_void" | "ffi_call_args" => {
             // ffi_call_i64(handle, func_name, arg1, arg2, ...) -> i64/f64/str
             // Supports up to 6 i64 arguments via transmuted function pointers.

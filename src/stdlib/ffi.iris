@@ -36,6 +36,67 @@ pub def lib_close(handle: i64) -> bool effect ffi {
     ffi_close(handle)
 }
 
+// ── Out-parameter cells ──────────────────────────────────────────────────────
+//
+// A great many C functions return their result through a pointer argument:
+//
+//     int64_t iris_rcl_take_twist(int64_t sub, double* out);   // writes 6 doubles
+//     int64_t iris_rcl_take_string(int64_t sub, char* buf, int32_t max);
+//
+// None of those were callable from IRIS. The dispatcher already passes an array
+// of i64 slots and a pointer fits in one, so the gap was never the calling
+// convention -- it was that IRIS had no way to own memory and name its address.
+//
+// `out_new` returns that address as an ordinary i64, so it is passed with the
+// existing `call_i64_2` / `call_i64_3`. Ownership is the caller's: always pair a
+// successful `out_new` with `out_free`, including on the error path.
+
+/// Allocate a zeroed cell of `nbytes` and return its address.
+/// Returns 0 on failure. The caller must `out_free` it.
+pub def out_new(nbytes: i64) -> i64 effect ffi, alloc {
+    ffi_out_new(nbytes)
+}
+
+/// Allocate a cell sized for `n` f64 values.
+pub def out_f64_cell(n: i64) -> i64 effect ffi, alloc {
+    ffi_out_new(n * 8)
+}
+
+/// Allocate a cell sized for `n` i64 values.
+pub def out_i64_cell(n: i64) -> i64 effect ffi, alloc {
+    ffi_out_new(n * 8)
+}
+
+/// Read the f64 at `index` from a cell.
+pub def out_f64(cell: i64, index: i64) -> f64 effect ffi {
+    ffi_out_get_f64(cell, index)
+}
+
+/// Read the i64 at `index` from a cell.
+pub def out_i64(cell: i64, index: i64) -> i64 effect ffi {
+    ffi_out_get_i64(cell, index)
+}
+
+/// Read the cell as a NUL-terminated string.
+pub def out_str(cell: i64) -> str effect ffi {
+    ffi_out_get_str(cell)
+}
+
+/// Seed an f64 before the call, for in-out parameters.
+pub def out_set_f64(cell: i64, index: i64, v: f64) -> i64 effect ffi {
+    ffi_out_set_f64(cell, index, v)
+}
+
+/// Seed an i64 before the call, for in-out parameters.
+pub def out_set_i64(cell: i64, index: i64, v: i64) -> i64 effect ffi {
+    ffi_out_set_i64(cell, index, v)
+}
+
+/// Release a cell. Safe on 0 and safe to call twice.
+pub def out_free(cell: i64) -> i64 effect ffi {
+    ffi_out_free(cell)
+}
+
 // ── Python FFI ──
 
 /// Evaluate a Python expression and return the result as a string.

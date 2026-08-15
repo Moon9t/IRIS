@@ -877,6 +877,56 @@ declaration and use.
 
 ---
 
+## 23. FFI out-parameters — **IMPLEMENTED**
+
+> Not previously numbered, but recorded across several entries as *the* reason
+> ROS 2 subscriptions could not read a payload.
+
+A large fraction of C APIs return their result through a pointer argument:
+
+```c
+int64_t iris_rcl_take_twist(int64_t sub, double* out);      /* writes 6 doubles */
+int64_t iris_rcl_take_string(int64_t sub, char* buf, int32_t max);
+```
+
+None was callable from IRIS. `ros2_bridge.c` has implemented
+`take_float64` / `take_int64_val` / `take_string` / `take_vector3` /
+`take_twist` / `take_pose` since the bridge was written, and every one was
+unreachable — a subscriber could observe only `wait_for_message`'s bool.
+
+**The gap was never the calling convention.** `ffi_dispatch_i64` already passes
+an array of `int64_t` slots, and on every supported target a pointer fits in
+one. What was missing was a way for IRIS to *own* memory and name its address.
+
+Added: `ffi_out_new` / `ffi_out_free`, typed indexed readers
+(`ffi_out_get_f64` / `_i64` / `_str`) and setters for in-out parameters, in the
+runtime, the lowerer, codegen and the interpreter, plus `std.ffi` wrappers.
+Indexed access matters because one out-pointer often receives several values —
+a `Twist` is six doubles.
+
+Each cell carries a 16-byte header holding a magic word and the payload length.
+That gives bounds-checked reads (an out-param the callee never filled reads as
+zero, not garbage) and an idempotent `out_free`. Idempotence is not a nicety:
+the error path of a foreign call typically frees on the way out, and the first
+implementation corrupted the heap (`exit 0xC0000409`) on a double free while the
+interpreter silently tolerated it. The two backends must agree, so both now do.
+
+`src/stdlib/ros2.iris` gains `take_f64`, `take_i64`, `take_str`,
+`take_vector3`, `take_twist` and `take_pose`, each returning `option` so that
+"no message" and "a message whose value is zero" stay distinguishable.
+
+**Not yet verified against a live ROS 2 installation** — that needs one
+present. What is verified on both backends: the cell round trip
+(`tests/conformance/c13`), and that every `take_*` returns `none()` safely when
+the middleware is absent, which is the error path a real deployment hits when
+it goes down.
+
+Still open for ROS 2: the publish path scales f64 by `1e8` into an i64
+fixed-point trampoline, and tf2, QoS, executors, services, actions and
+lifecycle nodes remain absent.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:
