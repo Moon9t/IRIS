@@ -1106,7 +1106,7 @@ impl Writer {
                 self.vid(*operand);
                 self.vid(*count);
             }
-            IrInstr::Panic { msg } => {
+            IrInstr::Panic { msg, .. } => {
                 self.u8(OP_PANIC);
                 self.vid(*msg);
             }
@@ -2491,7 +2491,9 @@ impl<'a> Reader<'a> {
             }
             OP_PANIC => {
                 let msg = self.vid()?;
-                IrInstr::Panic { msg }
+                // The serial format carries no source position; a deserialised
+                // panic falls back to the span table.
+                IrInstr::Panic { msg, span_byte: None }
             }
             OP_VALUE_TO_STR => {
                 let result = self.vid()?;

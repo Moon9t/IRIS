@@ -377,7 +377,19 @@ mod tests {
     }
 
     #[test]
-    fn div_by_power_of_two_reduced_to_shr() {
+    fn div_by_power_of_two_is_not_reduced_to_shr() {
+        // This test previously asserted the opposite, and the behaviour it
+        // asserted was a miscompilation.
+        //
+        // `x / 2^n → x >> n` holds only for non-negative dividends. An
+        // arithmetic shift right floors; IRIS division truncates toward zero.
+        // So -7 / 2 is -3, while -7 >> 1 is -4 — and because the rewrite only
+        // fired when the divisor was a visible constant, whether you got the
+        // right answer depended on inlining. It also broke the identity
+        // (a/b)*b + (a%b) == a, since `%` was left truncating.
+        //
+        // Codegen emits LLVM `sdiv`, and LLVM performs this reduction itself,
+        // correctly, whenever it is sound. See known-issues #19.
         let mut m = build_div_module(4); // 4 = 2^2
         StrengthReducePass.run(&mut m).unwrap();
 
@@ -386,7 +398,16 @@ mod tests {
             .instrs
             .iter()
             .any(|i| matches!(i, IrInstr::BinOp { op: BinOp::Shr, .. }));
-        assert!(has_shr, "div by 4 should be reduced to shr");
+        assert!(
+            !has_shr,
+            "signed div must NOT be rewritten to shr — it floors where division truncates"
+        );
+
+        let has_div = block
+            .instrs
+            .iter()
+            .any(|i| matches!(i, IrInstr::BinOp { op: BinOp::Div, .. }));
+        assert!(has_div, "the division must survive the pass intact");
     }
 
     #[test]

@@ -4934,7 +4934,7 @@ fn emit_instr_ir(
                 }
             }
         }
-        IrInstr::Panic { msg } => {
+        IrInstr::Panic { msg, .. } => {
             // iris_panic is declared noreturn; LLVM will treat this as a terminating call.
             // We emit unreachable so the block has a proper terminator after it.
             writeln!(out, "  call void @iris_panic(ptr {})", val(*msg))?;

@@ -2405,7 +2405,17 @@ impl<'m> Interpreter<'m> {
                             return Ok(results);
                         }
 
-                        IrInstr::Panic { msg } => {
+                        IrInstr::Panic { msg, span_byte } => {
+                            // Prefer the position carried on the instruction over
+                            // the sticky `last_byte`. `span_table` is keyed by
+                            // (block, instr_idx) and no pass maintains it, so once
+                            // const-folding deletes the ConstStr holding the panic
+                            // message every later index shifts and the panic is
+                            // attributed to the preceding statement — a line that
+                            // succeeded. See known-issues #20.
+                            if let Some(byte) = span_byte {
+                                self.last_byte = Some(*byte);
+                            }
                             let msg_val = self
                                 .values
                                 .get(msg)

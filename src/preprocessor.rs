@@ -103,7 +103,21 @@ impl Preprocessor {
         // Stack of "was the active branch taken?" for each #if/#elif level.
         let mut taken_stack: Vec<bool> = Vec::new();
 
-        for (line_no, raw_line) in source.lines().enumerate() {
+        // Split with `split_inclusive` on the newline rather than `lines()`.
+        //
+        // `lines()` strips the carriage return of a CRLF terminator, so every
+        // kept line came out one byte shorter than the input. The lexer then
+        // computed spans against that shortened text while diagnostics rendered
+        // against the caller's original source, and every reported position
+        // drifted by one byte per preceding line — on Windows, in every file,
+        // growing with file length. It is why an assertion failure named the
+        // previous statement. See known-issues #20.
+        //
+        // Keeping the terminator makes the preprocessor byte-faithful for every
+        // line it passes through, which is what span fidelity requires of it.
+        for (line_no, raw_with_term) in source.split_inclusive('\n').enumerate() {
+            let raw_line = raw_with_term.strip_suffix('\n').unwrap_or(raw_with_term);
+            let had_newline = raw_with_term.ends_with('\n');
             let line = raw_line.trim_start();
 
             if line.starts_with('#') {

@@ -681,6 +681,19 @@ pub enum IrInstr {
     /// Unconditional abort with a message string. Terminates execution.
     Panic {
         msg: ValueId,
+        /// Source byte offset of the `panic(...)` or `assert(...)` that produced
+        /// this instruction.
+        ///
+        /// Carried *on the instruction* rather than in `IrFunction::span_table`,
+        /// which is keyed by `(block_id, instr_idx)` and which no optimisation
+        /// pass maintains. Const-folding routinely deletes the `ConstStr` holding
+        /// the panic message, every following index in the block shifts down, and
+        /// the table then attributes the panic to whichever instruction moved
+        /// into its slot — in practice the preceding statement. Reporting a line
+        /// that succeeded is worse than reporting none, and assertions are the
+        /// primary failure signal in every `.iris` test, so this one position is
+        /// worth making immune to instruction motion. See known-issues #20.
+        span_byte: Option<u32>,
     },
     /// Convert any scalar or string value to its string representation.
     ValueToStr {
@@ -1332,7 +1345,7 @@ impl IrInstr {
             IrInstr::StrToLower { operand, .. } => vec![*operand],
             IrInstr::StrTrim { operand, .. } => vec![*operand],
             IrInstr::StrRepeat { operand, count, .. } => vec![*operand, *count],
-            IrInstr::Panic { msg } => vec![*msg],
+            IrInstr::Panic { msg, .. } => vec![*msg],
             IrInstr::ValueToStr { operand, .. } => vec![*operand],
             IrInstr::ReadLine { .. } => vec![],
             IrInstr::ReadI64 { .. } => vec![],

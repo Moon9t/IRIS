@@ -5846,7 +5846,10 @@ impl<'m> Lowerer<'m> {
             }
             let (msg, _) = self.lower_expr(&args[0])?;
             if !self.builder.is_current_block_terminated() {
-                self.builder.push_instr(IrInstr::Panic { msg }, None);
+                self.builder.push_instr(
+                    IrInstr::Panic { msg, span_byte: Some(span.start.0) },
+                    None,
+                );
             }
             // Return a dummy value so the type-checker is happy.
             let dummy = self.builder.fresh_value();
@@ -5887,8 +5890,25 @@ impl<'m> Lowerer<'m> {
                 },
                 Some(IrType::Str),
             );
-            self.builder
-                .push_instr(IrInstr::Panic { msg: msg_val }, None);
+            // Attach the assert's own source position to the Panic.
+            //
+            // Without this the failure reported the *previous* statement — a line
+            // that succeeded, which is worse than no location at all. The span
+            // recorded by `lower_stmt` is consumed by the first instruction the
+            // condition emits, and when the condition is const-foldable that
+            // instruction is then deleted by DCE. `span_table` is keyed by
+            // (block_id, instr_idx) and no pass maintains it, so the entry is
+            // simply lost and the interpreter's sticky `last_byte` still holds
+            // the previous statement's position.
+            //
+            // Recording it here is robust because `assert_fail` holds exactly two
+            // instructions, both live: the message and the Panic that consumes it.
+            // See known-issues #20 for the general span-table staleness, which
+            // this does not fix.
+            self.builder.push_instr(
+                IrInstr::Panic { msg: msg_val, span_byte: Some(span.start.0) },
+                None,
+            );
             // then_block: jump to merge
             self.builder.set_current_block(then_block);
             self.builder.push_instr(
@@ -8706,7 +8726,7 @@ impl<'m> Lowerer<'m> {
             Some(IrType::Str),
         );
         self.builder
-            .push_instr(IrInstr::Panic { msg: panic_msg }, None);
+            .push_instr(IrInstr::Panic { msg: panic_msg, span_byte: None }, None);
         // Panic is now a terminator; we do not need a dummy branch to merge_bb.
 
         self.scope = outer_scope;

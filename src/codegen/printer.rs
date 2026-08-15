@@ -715,7 +715,7 @@ fn emit_instr(out: &mut String, instr: &IrInstr) -> Result<(), CodegenError> {
             write!(out, "{} = str_repeat {}, {}", result, operand, count)?;
         }
 
-        IrInstr::Panic { msg } => {
+        IrInstr::Panic { msg, .. } => {
             write!(out, "panic {}", msg)?;
         }
 

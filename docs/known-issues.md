@@ -672,7 +672,44 @@ runtime paths turned out to be the compiler, not the test.
 
 ---
 
-## 20. Assertion failures point at the *previous* statement — **open, DX**
+## 20. Every diagnostic in a CRLF file was misplaced — **FIXED**
+
+> **Fixed** in `src/preprocessor.rs` (byte-faithful line splitting) and
+> `src/ir/instr.rs` / `src/lower/mod.rs` / `src/interp/mod.rs` (`Panic` carries
+> its own source position). Verified: five separate cases now report the exact
+> line *and* column.
+>
+> **The reported symptom was much narrower than the defect.** It looked like
+> "assertion failures are off by one statement". The actual cause:
+> `Preprocessor::process` iterated with `source.lines()`, which **strips the
+> carriage return** of a CRLF terminator. Every kept line came out one byte
+> shorter, the lexer computed spans against that shortened text, and diagnostics
+> rendered against the caller's original source — so **every reported position in
+> every CRLF file drifted by one byte per preceding line**. On Windows that is
+> every file, and the drift grows with file length: a failure 60 lines down
+> reports roughly a line early, one 200 lines down about three.
+>
+> That explains the whole family of "the span points at a comment / two lines
+> early" observations recorded while writing the conformance corpus. They were
+> not separate bugs.
+>
+> Two changes, both needed:
+>
+> 1. `split_inclusive` on the newline instead of `lines()`, preserving the
+>    original terminator, so the preprocessor is byte-faithful for every line it
+>    passes through.
+> 2. `IrInstr::Panic` gained `span_byte: Option<u32>`. `span_table` is keyed by
+>    `(block_id, instr_idx)` and **no optimisation pass maintains it**, so
+>    const-folding the `ConstStr` holding a panic message shifted every later
+>    index in the block and orphaned the entry. Carrying the position on the
+>    instruction makes it immune to instruction motion.
+>
+> The general `span_table` staleness under optimisation remains — see the note
+> below. Only `Panic` is currently immune.
+
+### Original report
+
+## 20a. Assertion failures point at the *previous* statement
 
 ```iris
 def main() -> i64 {
@@ -705,8 +742,36 @@ single most-encountered diagnostic in the language. Worth fixing before the
 corpus grows to 125 asserting files, because every one of them will report the
 wrong line when it breaks.
 
-Likely the `SpanTable` entry recorded for the assert's `CondBr`/`Panic` rather
-than for the assert expression itself — see `src/ir/function.rs` `SpanTable`.
+**Status:** fixed — see above.
+
+---
+
+## 20b. `span_table` is invalidated by every optimisation pass — **open**
+
+Uncovered while fixing #20 and worth recording separately, because `Panic` is
+now immune but nothing else is.
+
+`IrFunction::span_table` is keyed by `(block_id, instr_idx)`. Every pass that
+inserts or removes an instruction shifts those indices, and **no pass maintains
+the table**:
+
+| Pass | References `span_table` |
+|---|---|
+| `const_fold` | none |
+| `opt` (DCE, CSE) | none |
+| `strength_reduce` | none |
+| `inline` | none |
+| `copy_prop` | none |
+
+So any diagnostic or debugger position derived from the table is unreliable in an
+optimised function — it silently names whichever instruction happens to occupy
+that index afterwards. This affects the DAP debugger's step/breakpoint mapping
+(`src/debugger.rs`, `TraceEntry`) as well as runtime error locations.
+
+**Fix directions:** carry the position on the instruction (as `Panic` now does)
+for anything that reports a location; or key the table by result `ValueId`, which
+is stable across index shifts; or remap in each pass, which is the most fragile
+since every future pass must remember.
 
 **Status:** open.
 

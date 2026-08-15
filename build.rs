@@ -205,9 +205,18 @@ fn emit_prebuilt_runtime_table() {
 /// prebuilts require running this on (or cross-compiling from) each target, which
 /// is what the CI matrix is for.
 fn generate_prebuilt_runtime() {
-    let target = std::env::var("TARGET").unwrap_or_default();
+    // Key the directory by the *LLVM* triple codegen will ask for, not Cargo's
+    // TARGET.
+    //
+    // These differ on Windows — Cargo says `x86_64-pc-windows-msvc` while
+    // `codegen::native_target_triple()` returns `x86_64-pc-windows-gnu` — so
+    // objects generated under the Cargo name were looked up under a name that
+    // never occurs and the prebuilt path silently never fired. Worse, compiling
+    // without `-target` produced MSVC-ABI objects that the MinGW link step could
+    // not have used anyway.
+    let target = llvm_host_triple();
     if target.is_empty() {
-        println!("cargo:warning=IRIS_GENERATE_PREBUILT set but TARGET is unknown; skipping");
+        println!("cargo:warning=IRIS_GENERATE_PREBUILT set but the target is unknown; skipping");
         return;
     }
 
@@ -229,13 +238,29 @@ fn generate_prebuilt_runtime() {
         .or_else(|_| std::env::var("CC"))
         .unwrap_or_else(|_| "clang".to_owned());
 
+    // MinGW targets need the ucrt64 headers (pthread.h in particular), exactly as
+    // the link-time path does. Overridable for non-standard installs.
+    let msys2_inc = std::env::var("IRIS_MSYS2_INCLUDE")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "C:/msys64/ucrt64/include".to_owned());
+
     for (src, obj) in units {
         let dest = out_dir.join(obj);
-        let status = std::process::Command::new(&cc)
-            .args(["-O2", "-c", src, "-o"])
+        let mut cmd = std::process::Command::new(&cc);
+        // `-target` matters: without it clang uses its host default, which on
+        // Windows is the MSVC ABI, and the resulting objects cannot link against
+        // a MinGW-targeted module.
+        cmd.args(["-target", &target]);
+        cmd.args(["-O2", "-c", src, "-o"])
             .arg(&dest)
-            .args(["-I", "src/runtime", "-I", "src/runtime/vendor", "-Wno-pragma-pack"])
-            .status();
+            .args(["-I", "src/runtime", "-I", "src/runtime/vendor", "-Wno-pragma-pack"]);
+        if target.contains("windows") && !target.contains("msvc") {
+            if std::path::Path::new(&msys2_inc).is_dir() {
+                cmd.args(["-I", &msys2_inc]);
+            }
+        }
+        let status = cmd.status();
         match status {
             Ok(s) if s.success() => {}
             Ok(s) => {
@@ -260,6 +285,29 @@ fn generate_prebuilt_runtime() {
         "cargo:warning=generated prebuilt runtime for {} ({})",
         target, hash
     );
+}
+
+/// The LLVM target triple this compiler will hand to clang at *run* time.
+///
+/// Must agree with `codegen::native_target_triple()` in `src/codegen/llvm_ir.rs`.
+/// The prebuilt objects are looked up by that name, so a disagreement here does
+/// not fail loudly — it just means the lookup never matches and every user keeps
+/// paying for a C compile. Derived from `CARGO_CFG_TARGET_*` rather than the
+/// build host's own `cfg!`, so it stays correct under cross-compilation.
+fn llvm_host_triple() -> String {
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    match (os.as_str(), arch.as_str()) {
+        ("windows", "x86_64") => "x86_64-pc-windows-gnu",
+        ("windows", "aarch64") => "aarch64-pc-windows-gnu",
+        ("macos", "x86_64") => "x86_64-apple-macosx14.0",
+        ("macos", "aarch64") => "aarch64-apple-macosx14.0",
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("linux", "riscv64") => "riscv64gc-unknown-linux-gnu",
+        _ => "",
+    }
+    .to_owned()
 }
 
 /// FNV-1a 64 over every C source that contributes to the prebuilt objects.

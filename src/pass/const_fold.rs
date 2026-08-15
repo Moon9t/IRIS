@@ -913,7 +913,7 @@ fn apply_reps(instr: &mut IrInstr, reps: &HashMap<ValueId, ValueId>) {
             replace(operand);
             replace(count);
         }
-        IrInstr::Panic { msg } => {
+        IrInstr::Panic { msg, .. } => {
             replace(msg);
         }
         IrInstr::ValueToStr { operand, .. } => {

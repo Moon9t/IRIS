@@ -600,7 +600,7 @@ pub(crate) fn apply_replacements(instr: &mut IrInstr, reps: &HashMap<ValueId, Va
             replace(operand);
             replace(count);
         }
-        IrInstr::Panic { msg } => {
+        IrInstr::Panic { msg, .. } => {
             replace(msg);
         }
         IrInstr::ValueToStr { operand, .. } => {
