@@ -57,6 +57,14 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 thread_local! {
+    /// Function names defined by the source currently being lowered.
+    ///
+    /// `fn_sigs` cannot answer "did the user write this?" because it is
+    /// pre-populated with builtin return types (println, print, sleep_ms, ...)
+    /// so call sites get concrete types. Deciding whether a definition shadows
+    /// a builtin needs the set the *source* actually declares. See #15.
+    static CURRENT_USER_FNS: RefCell<std::collections::HashSet<String>> =
+        RefCell::new(std::collections::HashSet::new());
     static CURRENT_BRING_PREFIXES: RefCell<Vec<Vec<String>>> = const { RefCell::new(Vec::new()) };
     static CURRENT_BRING_MAPPINGS: RefCell<Vec<HashMap<String, String>>> = const { RefCell::new(Vec::new()) };
 }
@@ -423,10 +431,18 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
     // Generic functions (with type_params) are excluded from fn_sigs; they're
     // monomorphized on demand during lower_call.
     let mut fn_sigs: HashMap<String, IrType> = HashMap::new();
+    // Names this program actually defines.
+    //
+    // Distinct from `fn_sigs`, which is pre-populated below with builtin return
+    // types (println, print, sleep_ms, ...) so call sites get concrete types.
+    // That makes `fn_sigs` useless for answering "did the user write this?",
+    // which is what deciding a builtin shadow requires.
+    let mut user_fn_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut generic_fn_map: HashMap<String, crate::parser::ast::AstFunction> = HashMap::new();
     let mut fn_defaults_map: HashMap<String, Vec<Option<crate::parser::ast::AstExpr>>> =
         HashMap::new();
     for func in &ast.functions {
+        user_fn_names.insert(func.name.name.clone());
         if func.type_params.is_empty() {
             let mut ret_ty = lower_type_with_structs(&func.return_ty, &module);
             if func.is_async {
@@ -448,6 +464,9 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
         }
     }
     let generic_fns = std::rc::Rc::new(generic_fn_map);
+    CURRENT_USER_FNS.with(|u| {
+        *u.borrow_mut() = user_fn_names;
+    });
     let fn_defaults = std::rc::Rc::new(fn_defaults_map);
 
     // Pre-populate built-in / runtime function return types so call sites
@@ -3742,6 +3761,32 @@ impl<'m> Lowerer<'m> {
     ) -> Result<(ValueId, IrType), LowerError> {
         let callee_name = self.resolve_unqualified_name(&callee.name);
 
+        // A user (or stdlib) definition of this name shadows the builtin.
+        //
+        // The builtin used to win unconditionally and silently:
+        //
+        //     def band(a: i64, b: i64) -> i64 { 999 }
+        //     band(12, 10)   ->  8      // the builtin ran; the user's fn never did
+        //
+        // No error, no warning. 203 builtin names are effectively reserved this
+        // way — among them len, min, max, map, filter, get, set, push, pop —
+        // and none is a keyword, so nothing stops a program choosing one. If the
+        // arity differs the failure is at least loud, but it names the builtin
+        // the programmer never intended to call.
+        //
+        // Thirteen *stdlib* functions collide with a builtin too, so their IRIS
+        // implementations were dead code as well.
+        //
+        // Blanking the dispatch name routes the call to the general
+        // user-function path, which is the one the programmer wrote.
+        // See known-issues #15.
+        let shadows_builtin = CURRENT_USER_FNS.with(|u| {
+            let set = u.borrow();
+            set.contains(&callee.name) || set.contains(&callee_name)
+        }) || self.generic_fns.contains_key(&callee.name)
+            || self.generic_fns.contains_key(&callee_name);
+        let dispatch_name: &str = if shadows_builtin { "" } else { callee.name.as_str() };
+
         // Built-in: resume continuation call.
         // When lowering inside a handler arm with `has_resume`, a call to the
         // resume_param name (e.g. `v(x)`) lowers to a `ResumeCont` instruction
@@ -3773,7 +3818,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: println(x) / print(x) → Print instruction
-        if callee.name == "println" || callee.name == "print" || callee.name == "eprintln" {
+        if dispatch_name == "println" || callee.name == "print" || callee.name == "eprintln" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: format!("{}() requires exactly 1 argument", callee.name),
@@ -3797,7 +3842,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: task_group() → TaskGroupNew
-        if callee.name == "task_group" {
+        if dispatch_name == "task_group" {
             let result = self.builder.fresh_value();
             self.builder
                 .push_instr(IrInstr::TaskGroupNew { result }, Some(IrType::TaskGroup));
@@ -3805,7 +3850,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: task_group_join(tg) → TaskGroupJoin
-        if callee.name == "task_group_join" {
+        if dispatch_name == "task_group_join" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "task_group_join() requires exactly 1 argument".into(),
@@ -3819,7 +3864,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: task_group_cancel(tg) → TaskGroupCancel
-        if callee.name == "task_group_cancel" {
+        if dispatch_name == "task_group_cancel" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "task_group_cancel() requires exactly 1 argument".into(),
@@ -3833,7 +3878,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: channel() → ChanNew
-        if callee.name == "channel" {
+        if dispatch_name == "channel" {
             let elem_ty = if let Some(IrType::Chan(inner)) = &self.binding_ty {
                 (**inner).clone()
             } else {
@@ -3861,7 +3906,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: send(ch, v) / chan_send(ch, v) → ChanSend (returns unit, use dummy i64 0)
-        if callee.name == "send" || callee.name == "chan_send" {
+        if dispatch_name == "send" || callee.name == "chan_send" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "send() requires exactly 2 arguments (channel, value)".into(),
@@ -3896,7 +3941,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: recv(ch) → ChanRecv
-        if callee.name == "recv" {
+        if dispatch_name == "recv" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "recv() requires exactly 1 argument (channel)".into(),
@@ -3925,7 +3970,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: tape(x) → mark scalar value as a reverse-mode leaf.
-        if callee.name == "tape" {
+        if dispatch_name == "tape" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "tape() requires exactly 1 argument".into(),
@@ -3944,7 +3989,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: backward(loss) → run reverse-mode backprop from a taped scalar.
-        if callee.name == "backward" {
+        if dispatch_name == "backward" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "backward() requires exactly 1 argument".into(),
@@ -3982,7 +4027,7 @@ impl<'m> Lowerer<'m> {
         // Built-in: grad(x) → extract d(loss)/d(x) after backward(loss).
         // Only activates when `x` is a taped value (reverse-mode AD context).
         // For forward-mode dual numbers `grad(literal)` falls through to MakeGrad.
-        if callee.name == "grad" && args.len() == 1 {
+        if dispatch_name == "grad" && args.len() == 1 {
             let (value, _) = self.lower_expr(&args[0])?;
             if self.taped_values.contains(&value) {
                 let result = self.builder.fresh_value();
@@ -4002,7 +4047,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: atomic(v) / atomic_new(v) → AtomicNew
-        if callee.name == "atomic" || callee.name == "atomic_new" {
+        if dispatch_name == "atomic" || callee.name == "atomic_new" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "atomic_new() requires exactly 1 argument".into(),
@@ -4024,7 +4069,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: atomic_load(a) → AtomicLoad
-        if callee.name == "atomic_load" {
+        if dispatch_name == "atomic_load" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "atomic_load() requires exactly 1 argument".into(),
@@ -4050,7 +4095,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: atomic_store(a, v) → AtomicStore
-        if callee.name == "atomic_store" {
+        if dispatch_name == "atomic_store" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "atomic_store() requires exactly 2 arguments".into(),
@@ -4080,7 +4125,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: mutex_new(v) → MutexNew
-        if callee.name == "mutex_new" {
+        if dispatch_name == "mutex_new" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "mutex_new() requires exactly 1 argument".into(),
@@ -4102,7 +4147,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: mutex_lock(m) → MutexLock
-        if callee.name == "mutex_lock" {
+        if dispatch_name == "mutex_lock" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "mutex_lock() requires exactly 1 argument".into(),
@@ -4128,7 +4173,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: barrier() → Barrier (sync point, no-op in interpreter)
-        if callee.name == "barrier" {
+        if dispatch_name == "barrier" {
             self.builder.push_instr(IrInstr::Barrier, None);
             let dummy = self.builder.fresh_value();
             let dummy_ty = IrType::Scalar(DType::I64);
@@ -4144,7 +4189,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: mutex_unlock(m) → MutexUnlock (no-op in interpreter, returns unit)
-        if callee.name == "mutex_unlock" {
+        if dispatch_name == "mutex_unlock" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "mutex_unlock() requires exactly 1 argument".into(),
@@ -4168,7 +4213,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: atomic_add(a, v) → AtomicAdd (returns new value)
-        if callee.name == "atomic_add" {
+        if dispatch_name == "atomic_add" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "atomic_add() requires exactly 2 arguments".into(),
@@ -4196,7 +4241,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: some(v) → MakeSome
-        if callee.name == "some" {
+        if dispatch_name == "some" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "some() requires exactly 1 argument".into(),
@@ -4218,7 +4263,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: none() → MakeNone (also handled as identifier)
-        if callee.name == "none" {
+        if dispatch_name == "none" {
             let result_ty = IrType::Option(Box::new(IrType::Infer));
             let result = self.builder.fresh_value();
             self.builder.push_instr(
@@ -4232,7 +4277,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: is_some(v) → IsSome
-        if callee.name == "is_some" {
+        if dispatch_name == "is_some" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "is_some() requires exactly 1 argument".into(),
@@ -4253,7 +4298,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: unwrap(v) → OptionUnwrap (option<T>) or ResultUnwrap (result<T,E>)
-        if callee.name == "unwrap" {
+        if dispatch_name == "unwrap" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "unwrap() requires exactly 1 argument".into(),
@@ -4303,7 +4348,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: ok(v) → MakeOk
-        if callee.name == "ok" {
+        if dispatch_name == "ok" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "ok() requires exactly 1 argument".into(),
@@ -4325,7 +4370,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: err(v) → MakeErr
-        if callee.name == "err" {
+        if dispatch_name == "err" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "err() requires exactly 1 argument".into(),
@@ -4347,7 +4392,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: is_ok(v) → IsOk
-        if callee.name == "is_ok" {
+        if dispatch_name == "is_ok" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "is_ok() requires exactly 1 argument".into(),
@@ -4368,7 +4413,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: is_none(v) → !IsSome
-        if callee.name == "is_none" {
+        if dispatch_name == "is_none" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "is_none() requires exactly 1 argument".into(),
@@ -4399,7 +4444,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: is_err(v) → !IsOk
-        if callee.name == "is_err" {
+        if dispatch_name == "is_err" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "is_err() requires exactly 1 argument".into(),
@@ -4430,7 +4475,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: unwrap_err(v) → ResultUnwrapErr
-        if callee.name == "unwrap_err" {
+        if dispatch_name == "unwrap_err" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "unwrap_err() requires exactly 1 argument".into(),
@@ -4455,7 +4500,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in intrinsic: einsum("notation", inputs...)
-        if callee.name == "einsum" {
+        if dispatch_name == "einsum" {
             return self.lower_einsum(args, span);
         }
 
@@ -4482,7 +4527,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: len(s) → StrLen or ListLen depending on argument type
-        if callee.name == "len" {
+        if dispatch_name == "len" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "len() requires exactly 1 argument".into(),
@@ -4511,7 +4556,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: concat(s, t) → StrConcat
-        if callee.name == "concat" {
+        if dispatch_name == "concat" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "concat() requires exactly 2 arguments".into(),
@@ -4527,7 +4572,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: to_str(v) → ValueToStr
-        if callee.name == "to_str" {
+        if dispatch_name == "to_str" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "to_str() requires exactly 1 argument".into(),
@@ -4542,7 +4587,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: to_f64(v) → Cast to f64
-        if callee.name == "to_f64" {
+        if dispatch_name == "to_f64" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "to_f64() requires exactly 1 argument".into(),
@@ -4564,7 +4609,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: format("...", args...) — split on "{}" and concat with args
-        if callee.name == "format" {
+        if dispatch_name == "format" {
             if args.is_empty() {
                 return Err(LowerError::Unsupported {
                     detail: "format() requires at least 1 argument (the format string)".into(),
@@ -4656,7 +4701,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: print(v) → Print (returns unit, we return a dummy i64 zero for now)
-        if callee.name == "print" {
+        if dispatch_name == "print" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "print() requires exactly 1 argument".into(),
@@ -4680,7 +4725,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: read_line() → ReadLine
-        if callee.name == "read_line" {
+        if dispatch_name == "read_line" {
             if !args.is_empty() {
                 return Err(LowerError::Unsupported {
                     detail: "read_line() takes no arguments".into(),
@@ -4694,7 +4739,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: read_i64() → ReadI64
-        if callee.name == "read_i64" {
+        if dispatch_name == "read_i64" {
             if !args.is_empty() {
                 return Err(LowerError::Unsupported {
                     detail: "read_i64() takes no arguments".into(),
@@ -4709,7 +4754,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: read_f64() → ReadF64
-        if callee.name == "read_f64" {
+        if dispatch_name == "read_f64" {
             if !args.is_empty() {
                 return Err(LowerError::Unsupported {
                     detail: "read_f64() takes no arguments".into(),
@@ -4724,7 +4769,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: parse_i64(s) → ParseI64 → option<i64>
-        if callee.name == "parse_i64" {
+        if dispatch_name == "parse_i64" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "parse_i64() requires exactly 1 argument".into(),
@@ -4740,7 +4785,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: parse_f64(s) → ParseF64 → option<f64>
-        if callee.name == "parse_f64" {
+        if dispatch_name == "parse_f64" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "parse_f64() requires exactly 1 argument".into(),
@@ -4756,7 +4801,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: str_index(s, i) → StrIndex → i64
-        if callee.name == "str_index" {
+        if dispatch_name == "str_index" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "str_index() requires 2 arguments: (str, i64)".into(),
@@ -4779,7 +4824,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: slice(s, start, end) → StrSlice → str
-        if callee.name == "slice" {
+        if dispatch_name == "slice" {
             if args.len() != 3 {
                 return Err(LowerError::Unsupported {
                     detail: "slice() requires 3 arguments: (str, i64, i64)".into(),
@@ -4803,7 +4848,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: find(s, sub) → StrFind → option<i64>
-        if callee.name == "find" {
+        if dispatch_name == "find" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "find() requires 2 arguments: (str, str)".into(),
@@ -4826,7 +4871,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: str_replace(s, old, new) → StrReplace → str
-        if callee.name == "str_replace" {
+        if dispatch_name == "str_replace" {
             if args.len() != 3 {
                 return Err(LowerError::Unsupported {
                     detail: "str_replace() requires 3 arguments: (str, str, str)".into(),
@@ -4850,7 +4895,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: list() or list(a, b, c) → ListNew + optional ListPush
-        if callee.name == "list" {
+        if dispatch_name == "list" {
             // Determine element type from binding_ty annotation or first arg
             let elem_ty = if let Some(IrType::List(inner)) = &self.binding_ty {
                 *inner.clone()
@@ -4884,7 +4929,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: push(lst, val) / list_push(lst, val) → ListPush — append to list
-        if callee.name == "push" || callee.name == "list_push" {
+        if dispatch_name == "push" || callee.name == "list_push" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "push() requires 2 arguments: (list, value)".into(),
@@ -4909,7 +4954,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: pop(lst) → ListPop → elem  (alias for list_pop)
-        if callee.name == "pop" {
+        if dispatch_name == "pop" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "pop() requires 1 argument: (list)".into(),
@@ -4935,7 +4980,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: list_len(lst) → ListLen → i64
-        if callee.name == "list_len" {
+        if dispatch_name == "list_len" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "list_len() requires 1 argument".into(),
@@ -4951,7 +4996,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: list_get(lst, i) → ListGet → elem
-        if callee.name == "list_get" {
+        if dispatch_name == "list_get" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "list_get() requires 2 arguments: (list, index)".into(),
@@ -4979,7 +5024,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: list_set(lst, i, val) → ListSet
-        if callee.name == "list_set" {
+        if dispatch_name == "list_set" {
             if args.len() != 3 {
                 return Err(LowerError::Unsupported {
                     detail: "list_set() requires 3 arguments: (list, index, value)".into(),
@@ -5005,7 +5050,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: list_pop(lst) → ListPop → elem
-        if callee.name == "list_pop" {
+        if dispatch_name == "list_pop" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "list_pop() requires 1 argument".into(),
@@ -5031,7 +5076,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: list_remove(lst, idx) → ListRemove → elem
-        if callee.name == "list_remove" {
+        if dispatch_name == "list_remove" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "list_remove() requires 2 arguments (list, index)".into(),
@@ -5059,7 +5104,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: list_insert(lst, idx, val) → ListInsert → i64 0 (side-effecting)
-        if callee.name == "list_insert" {
+        if dispatch_name == "list_insert" {
             if args.len() != 3 {
                 return Err(LowerError::Unsupported {
                     detail: "list_insert() requires 3 arguments (list, index, value)".into(),
@@ -5084,7 +5129,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: array_to_list(arr) → convert [T; N] to list<T>
-        if callee.name == "array_to_list" {
+        if dispatch_name == "array_to_list" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "array_to_list() requires exactly 1 argument (an array)".into(),
@@ -5133,7 +5178,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: map() → MapNew — create an empty hash map (keys: str, values: i64 default)
-        if callee.name == "map" {
+        if dispatch_name == "map" {
             if !args.is_empty() {
                 return Err(LowerError::Unsupported {
                     detail: "map() takes no arguments — it creates an empty hash map".into(),
@@ -5160,7 +5205,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: map_set(m, k, v) → MapSet
-        if callee.name == "map_set" {
+        if dispatch_name == "map_set" {
             if args.len() != 3 {
                 return Err(LowerError::Unsupported {
                     detail: "map_set() requires 3 arguments: (map, key, value)".into(),
@@ -5186,7 +5231,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: map_get(m, k) → MapGet → option<val_ty>
-        if callee.name == "map_get" {
+        if dispatch_name == "map_get" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "map_get() requires 2 arguments: (map, key)".into(),
@@ -5215,7 +5260,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: map_contains(m, k) → MapContains → bool
-        if callee.name == "map_contains" {
+        if dispatch_name == "map_contains" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "map_contains() requires 2 arguments: (map, key)".into(),
@@ -5232,7 +5277,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: map_remove(m, k) → MapRemove
-        if callee.name == "map_remove" {
+        if dispatch_name == "map_remove" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "map_remove() requires 2 arguments: (map, key)".into(),
@@ -5257,7 +5302,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: map_len(m) → MapLen → i64
-        if callee.name == "map_len" {
+        if dispatch_name == "map_len" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "map_len() requires 1 argument".into(),
@@ -5275,7 +5320,7 @@ impl<'m> Lowerer<'m> {
         // ── Phase 56: File I/O builtins ──────────────────────────────────────
 
         // Built-in: file_read_all(path) → FileReadAll → result<str, str>
-        if callee.name == "file_read_all" {
+        if dispatch_name == "file_read_all" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "file_read_all() requires 1 argument".into(),
@@ -5291,7 +5336,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: file_write_all(path, content) → FileWriteAll → result<i64, str>
-        if callee.name == "file_write_all" {
+        if dispatch_name == "file_write_all" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "file_write_all() requires 2 arguments".into(),
@@ -5315,7 +5360,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: file_exists(path) → FileExists → bool
-        if callee.name == "file_exists" {
+        if dispatch_name == "file_exists" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "file_exists() requires 1 argument".into(),
@@ -5331,7 +5376,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: file_lines(path) → FileLines → list<str>
-        if callee.name == "file_lines" {
+        if dispatch_name == "file_lines" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "file_lines() requires 1 argument".into(),
@@ -5347,7 +5392,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // ── Database operations ─────────────────────────────────────────────
-        if callee.name == "db_open" {
+        if dispatch_name == "db_open" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "db_open(path) requires 1 argument".into(),
@@ -5361,7 +5406,7 @@ impl<'m> Lowerer<'m> {
                 .push_instr(IrInstr::DbOpen { result, path }, Some(ty.clone()));
             return Ok((result, ty));
         }
-        if callee.name == "db_exec" {
+        if dispatch_name == "db_exec" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "db_exec(db, sql) requires 2 arguments".into(),
@@ -5376,7 +5421,7 @@ impl<'m> Lowerer<'m> {
                 .push_instr(IrInstr::DbExec { result, db, sql }, Some(ty.clone()));
             return Ok((result, ty));
         }
-        if callee.name == "db_exec_params" {
+        if dispatch_name == "db_exec_params" {
             if args.len() != 3 {
                 return Err(LowerError::Unsupported {
                     detail: "db_exec_params(db, sql, params) requires 3 arguments".into(),
@@ -5399,7 +5444,7 @@ impl<'m> Lowerer<'m> {
             );
             return Ok((result, ty));
         }
-        if callee.name == "db_query" {
+        if dispatch_name == "db_query" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "db_query(db, sql) requires 2 arguments".into(),
@@ -5414,7 +5459,7 @@ impl<'m> Lowerer<'m> {
                 .push_instr(IrInstr::DbQuery { result, db, sql }, Some(ty.clone()));
             return Ok((result, ty));
         }
-        if callee.name == "db_query_params" {
+        if dispatch_name == "db_query_params" {
             if args.len() != 3 {
                 return Err(LowerError::Unsupported {
                     detail: "db_query_params(db, sql, params) requires 3 arguments".into(),
@@ -5437,7 +5482,7 @@ impl<'m> Lowerer<'m> {
             );
             return Ok((result, ty));
         }
-        if callee.name == "db_close" {
+        if dispatch_name == "db_close" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "db_close(db) requires 1 argument".into(),
@@ -5457,7 +5502,7 @@ impl<'m> Lowerer<'m> {
         // cell_get(c) → read element 0
         // cell_set(c, v) → write element 0
 
-        if callee.name == "cell" {
+        if dispatch_name == "cell" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "cell(v) requires 1 argument".into(),
@@ -5478,7 +5523,7 @@ impl<'m> Lowerer<'m> {
                 .push_instr(IrInstr::ListPush { list, value: val_v }, None);
             return Ok((list, list_ty));
         }
-        if callee.name == "cell_get" {
+        if dispatch_name == "cell_get" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "cell_get(c) requires 1 argument".into(),
@@ -5512,7 +5557,7 @@ impl<'m> Lowerer<'m> {
             );
             return Ok((result, elem_ty));
         }
-        if callee.name == "cell_set" {
+        if dispatch_name == "cell_set" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "cell_set(c, v) requires 2 arguments".into(),
@@ -5552,7 +5597,7 @@ impl<'m> Lowerer<'m> {
 
         // ── Phase 88: TCP network I/O ────────────────────────────────────────
 
-        if callee.name == "tcp_connect" {
+        if dispatch_name == "tcp_connect" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "tcp_connect(host, port) requires 2 args".into(),
@@ -5567,7 +5612,7 @@ impl<'m> Lowerer<'m> {
                 .push_instr(IrInstr::TcpConnect { result, host, port }, Some(ty.clone()));
             return Ok((result, ty));
         }
-        if callee.name == "tcp_listen" {
+        if dispatch_name == "tcp_listen" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "tcp_listen(port) requires 1 arg".into(),
@@ -5581,7 +5626,7 @@ impl<'m> Lowerer<'m> {
                 .push_instr(IrInstr::TcpListen { result, port }, Some(ty.clone()));
             return Ok((result, ty));
         }
-        if callee.name == "tcp_accept" {
+        if dispatch_name == "tcp_accept" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "tcp_accept(listener) requires 1 arg".into(),
@@ -5595,7 +5640,7 @@ impl<'m> Lowerer<'m> {
                 .push_instr(IrInstr::TcpAccept { result, listener }, Some(ty.clone()));
             return Ok((result, ty));
         }
-        if callee.name == "tcp_read" {
+        if dispatch_name == "tcp_read" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "tcp_read(conn) requires 1 arg".into(),
@@ -5609,7 +5654,7 @@ impl<'m> Lowerer<'m> {
                 .push_instr(IrInstr::TcpRead { result, conn }, Some(ty.clone()));
             return Ok((result, ty));
         }
-        if callee.name == "tcp_write" {
+        if dispatch_name == "tcp_write" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "tcp_write(conn, data) requires 2 args".into(),
@@ -5632,7 +5677,7 @@ impl<'m> Lowerer<'m> {
             );
             return Ok((unit, IrType::Scalar(DType::I64)));
         }
-        if callee.name == "tcp_close" {
+        if dispatch_name == "tcp_close" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "tcp_close(conn) requires 1 arg".into(),
@@ -5656,7 +5701,7 @@ impl<'m> Lowerer<'m> {
         // ── Phase 58: Extended collection builtins ───────────────────────────
 
         // Built-in: list_contains(list, val) → ListContains → bool
-        if callee.name == "list_contains" {
+        if dispatch_name == "list_contains" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "list_contains() requires 2 arguments".into(),
@@ -5679,7 +5724,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: list_sort(list) → ListSort (side-effecting, returns unit-like dummy)
-        if callee.name == "list_sort" {
+        if dispatch_name == "list_sort" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "list_sort() requires 1 argument".into(),
@@ -5702,7 +5747,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: map_keys(map) → MapKeys → list<str>
-        if callee.name == "map_keys" {
+        if dispatch_name == "map_keys" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "map_keys() requires 1 argument".into(),
@@ -5718,7 +5763,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: map_values(map) → MapValues → list<?>
-        if callee.name == "map_values" {
+        if dispatch_name == "map_values" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "map_values() requires 1 argument".into(),
@@ -5739,7 +5784,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: list_concat(a, b) → ListConcat → list
-        if callee.name == "list_concat" {
+        if dispatch_name == "list_concat" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "list_concat() requires 2 arguments".into(),
@@ -5757,7 +5802,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: list_slice(list, start, end) → ListSlice → list
-        if callee.name == "list_slice" {
+        if dispatch_name == "list_slice" {
             if args.len() != 3 {
                 return Err(LowerError::Unsupported {
                     detail: "list_slice() requires 3 arguments".into(),
@@ -5783,7 +5828,7 @@ impl<'m> Lowerer<'m> {
         // ── Phase 59: Process / environment builtins ─────────────────────────
 
         // Built-in: exit(code) → ProcessExit (does not return)
-        if callee.name == "exit" {
+        if dispatch_name == "exit" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "exit() requires 1 argument".into(),
@@ -5806,7 +5851,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: args() → ProcessArgs → list<str>
-        if callee.name == "args" {
+        if dispatch_name == "args" {
             if !args.is_empty() {
                 return Err(LowerError::Unsupported {
                     detail: "args() takes no arguments".into(),
@@ -5821,7 +5866,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: env_var(name) → EnvVar → option<str>
-        if callee.name == "env_var" {
+        if dispatch_name == "env_var" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "env_var() requires 1 argument".into(),
@@ -5837,7 +5882,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: panic(msg) → Panic (terminator; does not return)
-        if callee.name == "panic" {
+        if dispatch_name == "panic" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "panic() requires exactly 1 argument".into(),
@@ -5858,7 +5903,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: assert(cond) — lowers to: if cond { continue } else { panic("assertion failed") }
-        if callee.name == "assert" {
+        if dispatch_name == "assert" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "assert() requires exactly 1 argument".into(),
@@ -5934,7 +5979,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: grad(v) → MakeGrad(value=v, tangent=1.0)
-        if callee.name == "grad" {
+        if dispatch_name == "grad" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "grad() requires exactly 1 argument".into(),
@@ -5968,7 +6013,7 @@ impl<'m> Lowerer<'m> {
 
         // Built-in: grad_of(closure, x) → numerical derivative via central finite differences
         // Returns (f(x+h) - f(x-h)) / (2*h)  where h = 1e-7
-        if callee.name == "grad_of" {
+        if dispatch_name == "grad_of" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "grad_of() requires exactly 2 arguments: grad_of(closure, x)".into(),
@@ -6156,7 +6201,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: sparsify(arr) → Sparsify (convert dense array to sparse representation)
-        if callee.name == "sparsify" {
+        if dispatch_name == "sparsify" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "sparsify() requires exactly 1 argument".into(),
@@ -6185,7 +6230,7 @@ impl<'m> Lowerer<'m> {
         // every one of those, and that the native backend did not implement the
         // same way, so a program's meaning depended on how it was run. The count
         // is now `nnz(s)` below.
-        if callee.name == "densify" {
+        if dispatch_name == "densify" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "densify() requires exactly 1 argument".into(),
@@ -6217,7 +6262,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: nnz(sparse) → count of stored non-zero elements.
-        if callee.name == "nnz" {
+        if dispatch_name == "nnz" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "nnz() requires exactly 1 argument".into(),
@@ -6238,7 +6283,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: split(s, delim) → list<str>
-        if callee.name == "split" {
+        if dispatch_name == "split" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "split() requires exactly 2 arguments".to_owned(),
@@ -6261,7 +6306,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: join(lst, delim) → str
-        if callee.name == "join" {
+        if dispatch_name == "join" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "join() requires exactly 2 arguments".to_owned(),
@@ -6284,7 +6329,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Phase 97: time_now_ms() -> i64
-        if callee.name == "time_now_ms" {
+        if dispatch_name == "time_now_ms" {
             let result = self.builder.fresh_value();
             let ty = IrType::Scalar(DType::I64);
             self.builder
@@ -6293,7 +6338,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Phase 97: sleep_ms(n: i64) -> i64
-        if callee.name == "sleep_ms" {
+        if dispatch_name == "sleep_ms" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "sleep_ms() requires exactly 1 argument".into(),
@@ -6311,7 +6356,7 @@ impl<'m> Lowerer<'m> {
         // Built-in string predicates: contains(s, sub), starts_with(s, p), ends_with(s, p)
         {
             let str_pred: Option<fn(ValueId, ValueId, ValueId) -> IrInstr> =
-                match callee.name.as_str() {
+                match dispatch_name {
                     "contains" => Some(|result, haystack, needle| IrInstr::StrContains {
                         result,
                         haystack,
@@ -6348,7 +6393,7 @@ impl<'m> Lowerer<'m> {
 
         // Built-in string transforms: to_upper(s), to_lower(s), trim(s)
         {
-            let str_xform: Option<fn(ValueId, ValueId) -> IrInstr> = match callee.name.as_str() {
+            let str_xform: Option<fn(ValueId, ValueId) -> IrInstr> = match dispatch_name {
                 "to_upper" => Some(|result, operand| IrInstr::StrToUpper { result, operand }),
                 "to_lower" => Some(|result, operand| IrInstr::StrToLower { result, operand }),
                 "trim" => Some(|result, operand| IrInstr::StrTrim { result, operand }),
@@ -6371,7 +6416,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in: repeat(s, n) → StrRepeat
-        if callee.name == "repeat" {
+        if dispatch_name == "repeat" {
             if args.len() != 2 {
                 return Err(LowerError::Unsupported {
                     detail: "repeat() requires exactly 2 arguments".into(),
@@ -6395,7 +6440,7 @@ impl<'m> Lowerer<'m> {
 
         // Built-in bitwise binary: band(a,b), bor(a,b), bxor(a,b), shl(a,b), shr(a,b)
         {
-            let bitbin: Option<BinOp> = match callee.name.as_str() {
+            let bitbin: Option<BinOp> = match dispatch_name {
                 "band" => Some(BinOp::BitAnd),
                 "bor" => Some(BinOp::BitOr),
                 "bxor" => Some(BinOp::BitXor),
@@ -6428,7 +6473,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // Built-in bitwise unary: bitnot(x)
-        if callee.name == "bitnot" {
+        if dispatch_name == "bitnot" {
             if args.len() != 1 {
                 return Err(LowerError::Unsupported {
                     detail: "bitnot() requires exactly 1 argument".into(),
@@ -6451,7 +6496,7 @@ impl<'m> Lowerer<'m> {
 
         // Built-in math unary: sqrt, abs, floor, ceil, sin, cos, tan, exp, log, log2, round, sign
         {
-            let math_unary: Option<ScalarUnaryOp> = match callee.name.as_str() {
+            let math_unary: Option<ScalarUnaryOp> = match dispatch_name {
                 "sqrt" => Some(ScalarUnaryOp::Sqrt),
                 "abs" => Some(ScalarUnaryOp::Abs),
                 "floor" => Some(ScalarUnaryOp::Floor),
@@ -6501,7 +6546,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // clamp(x, lo, hi) → min(max(x, lo), hi)
-        if callee.name == "clamp" {
+        if dispatch_name == "clamp" {
             if args.len() != 3 {
                 return Err(LowerError::Unsupported {
                     detail: "clamp() requires exactly 3 arguments".into(),
@@ -6538,7 +6583,7 @@ impl<'m> Lowerer<'m> {
 
         // Built-in math binary: pow(base, exp), min(a, b), max(a, b)
         {
-            let math_bin: Option<BinOp> = match callee.name.as_str() {
+            let math_bin: Option<BinOp> = match dispatch_name {
                 "pow" => Some(BinOp::Pow),
                 "min" => Some(BinOp::Min),
                 "max" => Some(BinOp::Max),
@@ -6578,7 +6623,7 @@ impl<'m> Lowerer<'m> {
             callee.name.as_str(),
             "list_map" | "list_filter" | "list_reduce" | "list_any" | "list_all"
         ) {
-            match callee.name.as_str() {
+            match dispatch_name {
                 "list_map" => {
                     // list_map(list, closure)
                     if args.len() != 2 {
@@ -6662,7 +6707,7 @@ impl<'m> Lowerer<'m> {
         // ── Phase 104: New runtime builtins (HTTP, JSON, Regex, DateTime, OS, etc.) ──
         // NOTE: set_*, json_parse, path_exists are NOT here — they are stdlib .iris functions.
         {
-            let builtin_info: Option<(&str, IrType)> = match callee.name.as_str() {
+            let builtin_info: Option<(&str, IrType)> = match dispatch_name {
                 // HTTP
                 "http_get" => Some(("http_get", IrType::Str)),
                 "http_post" => Some(("http_post", IrType::Str)),
@@ -6898,7 +6943,7 @@ impl<'m> Lowerer<'m> {
             };
 
             // Special handling: chan_try_recv — use the channel's element type.
-            if callee.name == "chan_try_recv" {
+            if dispatch_name == "chan_try_recv" {
                 if args.len() != 1 {
                     return Err(LowerError::Unsupported {
                         detail: "chan_try_recv() requires exactly 1 argument".into(),
@@ -6929,7 +6974,7 @@ impl<'m> Lowerer<'m> {
             }
 
             // Special handling: recv_timeout(ch, ms) — returns option<elem_ty>
-            if callee.name == "recv_timeout" {
+            if dispatch_name == "recv_timeout" {
                 if args.len() != 2 {
                     return Err(LowerError::Unsupported {
                         detail: "recv_timeout() requires 2 arguments (channel, timeout_ms)".into(),
@@ -6959,7 +7004,7 @@ impl<'m> Lowerer<'m> {
             }
 
             // Special handling: weak_upgrade(w) — returns option<Infer>
-            if callee.name == "weak_upgrade" {
+            if dispatch_name == "weak_upgrade" {
                 if args.len() != 1 {
                     return Err(LowerError::Unsupported {
                         detail: "weak_upgrade() requires exactly 1 argument".into(),
@@ -7351,7 +7396,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // ML/AI intrinsics (Phases 77–80)
-        match callee.name.as_str() {
+        match dispatch_name {
             "zeros" => return self.lower_ml_zeros(args, span),
             "ones" => return self.lower_ml_ones(args, span),
             "fill" => return self.lower_ml_fill(args, span),

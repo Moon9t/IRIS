@@ -402,7 +402,44 @@ cannot, so the annotation is required rather than merely usual.
 
 ---
 
-## 15. A user function is silently discarded when a builtin shares its name — **critical**
+## 15. A user function is silently discarded when a builtin shares its name — **FIXED**
+
+> **Fixed** in `src/lower/mod.rs`: a name the source defines now routes to the
+> general user-function path instead of the builtin. Verified — `def band(a,b)
+> { 999 }` called as `band(12,10)` returns 999, where it previously returned 8.
+>
+> **The obvious implementation is wrong.** `fn_sigs` looks like "user functions"
+> and is not: it is pre-populated with builtin return types (`println`, `print`,
+> `sleep_ms`, …) so call sites get concrete types. Using it as the shadow test
+> makes every program that prints fail to compile. The check needs the set of
+> names the *source* declares, published through a thread-local alongside the
+> existing bring-prefix context.
+>
+> ### What the fix uncovered
+>
+> **Thirteen stdlib functions were being shadowed too**, so their IRIS
+> implementations were dead code: `contains`, `cross_entropy`, `http_get`,
+> `http_post`, `http_post_json`, `http_request`, `is_empty`, `len`, `list_mean`,
+> `list_std`, `max`, `min`.
+>
+> At least one pair genuinely disagrees:
+>
+> | `list_std([2,4,6,8])` | |
+> |---|---|
+> | builtin | 2.2360 — population, ÷n |
+> | `std.ais` | 2.5820 — sample, ÷n−1 |
+>
+> Two implementations under one name, different answers, and the winner decided
+> by an unwritten rule. `tests/conformance/c14` was asserting the builtin's value
+> without knowing it.
+>
+> **Follow-up, not yet done:** audit the other twelve pairs for the same
+> divergence and delete or rename the loser in each. Two implementations of
+> `min` is a defect whichever one wins.
+>
+> The original report follows.
+
+### Original report
 
 ```iris
 def band(a: i64, b: i64) -> i64 { 999 }

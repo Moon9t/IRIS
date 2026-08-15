@@ -17,8 +17,16 @@ def main() -> i64 {
     val m = list_mean(xs)
     assert(m > 4.99); assert(m < 5.01);
 
+    // std.ais computes the *sample* standard deviation (divides by n-1), so
+    // [2,4,6,8] gives 2.5820 rather than the population 2.2360.
+    //
+    // Worth knowing why this assertion changed: there are two implementations
+    // of `list_std` — a builtin and this one — and they disagree. Until #15 was
+    // fixed the builtin silently won and the std.ais version was dead code, so
+    // this file originally asserted 2.2360. Same name, two answers, and which
+    // one ran was decided by a shadowing rule nobody had written down.
     val sd = list_std(xs)
-    assert(sd > 2.23); assert(sd < 2.24);     // population sd of 2,4,6,8
+    assert(sd > 2.58); assert(sd < 2.59);
 
     // ── argmax ──
     val logits: list<f64> = list()
