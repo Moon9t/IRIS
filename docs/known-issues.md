@@ -2369,3 +2369,53 @@ express a loop-accumulated loss. Forward mode (dual numbers) is unaffected.
 limit stated alongside.
 
 **Pre-existing**, confirmed against the pre-#47 compiler.
+
+---
+
+## 50. The prebuilt runtime generator never ran, and its hash tracked the checkout — **FIXED**
+
+> **Fixed** on 2026-08-16. Two independent defects in the same mechanism, both
+> of which made the shipped prebuilt objects useless without ever failing
+> loudly. The build printed
+> `prebuilt runtime for x86_64-pc-windows-gnu is stale (built from different C
+> sources) — falling back to compiling it`, which reads like a warning about
+> *those* objects rather than a defect in the machinery that produced them.
+
+**The generator never re-ran.** `IRIS_GENERATE_PREBUILT` had no
+`cargo:rerun-if-env-changed` declaration, so setting it did nothing: cargo
+considered the build script fresh and skipped it. The generator only ran when
+some *other* build-script input happened to change in the same invocation.
+
+Every "regeneration" after the first was therefore a no-op. The objects
+committed alongside the #48 leaf-pinning fix were built from the *pre-#48* C
+sources — a runtime without the fix. Nothing announced this; the objects were
+simply never rebuilt. It was caught only because the hash check refused them,
+which is the one part of this mechanism that worked as designed.
+
+**The hash described the checkout, not the content.** `runtime_sources_hash`
+read raw bytes of text files that git rewrites on checkout (`core.autocrlf`).
+The working tree ends up with *mixed* line endings — some files rewritten,
+some not — so the recorded hash matched neither the LF nor the CRLF form of any
+committed revision:
+
+```text
+recorded          5c50191b539dd4dd
+on-disk (mixed)   6096bb856166d794
+HEAD as LF        5f0dc3ff0a95f4dc
+HEAD as CRLF      ee064f4487b65ae0
+```
+
+Even with the generator fixed, a set generated on one machine would be rejected
+on any machine with a different `autocrlf` setting — which defeats the entire
+purpose of shipping the objects, since the point is that a *user* needs no C
+compiler. The hash now normalises CRLF to LF before hashing, and
+`.gitattributes` pins the runtime sources to LF so the compiled objects are
+reproducible too.
+
+**Consequence for anything claimed earlier:** a suite run that reported
+"using prebuilt runtime objects (no C compiler required)" was accurate for that
+run, but the claim that this made the result *reproducible from a clean
+checkout* was not — on a fresh clone the hash would not have matched and the
+build would have fallen back to compiling. Do not describe IRIS as
+C-compiler-free until a clean clone has been observed accepting the prebuilt
+set.

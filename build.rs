@@ -74,6 +74,13 @@ fn main() {
     // Opt-in: regenerate the prebuilt runtime objects for this host, then embed
     // them. Two-stage by design — CI runs it once with a C compiler available so
     // that released binaries need none.
+    //
+    // Without this rerun trigger, setting the variable does nothing: cargo
+    // considers the build script fresh and skips it, so the generator only ran
+    // when some *other* input happened to change in the same invocation. That
+    // silently shipped objects built from older C sources -- caught only because
+    // the hash check below refused them. See known-issues #50.
+    println!("cargo:rerun-if-env-changed=IRIS_GENERATE_PREBUILT");
     if std::env::var("IRIS_GENERATE_PREBUILT").is_ok() {
         generate_prebuilt_runtime();
     }
@@ -330,7 +337,30 @@ fn runtime_sources_hash() -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for path in SOURCES {
         println!("cargo:rerun-if-changed={}", path);
-        let bytes = std::fs::read(path).unwrap_or_default();
+        // Normalise line endings before hashing. These are text files, and git
+        // rewrites them on checkout (`core.autocrlf`), so raw bytes describe the
+        // *checkout*, not the content. Hashing them raw made a committed
+        // prebuilt set read as "built from different C sources" on the very
+        // machine that generated it -- and would never match across two
+        // machines with different autocrlf settings, which defeats the point of
+        // shipping the objects at all. See known-issues #50.
+        let raw = std::fs::read(path).unwrap_or_default();
+        // CR (13) and LF (10) by value, so this file contains no escape that a
+        // rewrite could turn into a literal newline.
+        let bytes: Vec<u8> = {
+            let mut out = Vec::with_capacity(raw.len());
+            let mut i = 0;
+            while i < raw.len() {
+                let is_crlf = raw[i] == 13u8 && raw.get(i + 1) == Some(&10u8);
+                if is_crlf {
+                    i += 1; // drop the CR, keep the LF
+                    continue;
+                }
+                out.push(raw[i]);
+                i += 1;
+            }
+            out
+        };
         // Mix the name too, so moving content between files changes the hash.
         for b in path.as_bytes().iter().chain(bytes.iter()) {
             hash ^= *b as u64;
