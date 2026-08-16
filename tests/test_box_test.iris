@@ -1,56 +1,45 @@
-// Full HKT test: F[_] inference from arg types and binding_ty
+// Generic return types resolved from a binding annotation.
+//
+// This file was called a "Full HKT test" and claimed `F[_]` inference from
+// argument types. That does not work: `container_count[F[_], T](c: F<T>)`
+// called with a `list<i64>` fails with "cannot infer type parameter T -- no
+// argument mentions it", even though the parameter type `F<T>` mentions it.
+// HKT parameters cannot be inferred from an argument at all; only explicit
+// instantiation works, as in test_hkt.iris. See known-issues #36.
+//
+// What remains here is the part that does work, asserted.
 
 record Box[T] {
     item: T,
 }
 
-// HKT: F[_] inferred from arg type
-def container_count[F[_], T](container: F<T>) -> i64 {
-    1
-}
-
-// HKT: F[_] in both arg and return — F inferred from arg, return type resolved
-def passthrough[F[_], T](container: F<T>) -> F<T> {
-    container
-}
-
-// HKT: F[_] return type inferred from binding_ty
+// An ordinary generic whose return type is resolved from the binding.
 def wrap_in[T](x: T) -> Box<T> {
     Box { item: x }
 }
 
-def test_hkt_multi_container() -> i64 {
-    // container_count with list — F = list
-    val nums: list<i64> = list();
-    list_push(nums, 1);
-    list_push(nums, 2);
-    list_push(nums, 3);
-    val r1 = container_count(nums);
-
-    // container_count with option — F = option
-    val opt: option<i64> = some(42);
-    val r2 = container_count(opt);
-
-    // passthrough with list — F = list, T = i64
-    val lst: list<i64> = list();
-    list_push(lst, 10);
-    list_push(lst, 20);
-    val r3 = passthrough(lst);
-    val r4 = list_get(r3, 0);
-
-    // passthrough with option — F = option, T = str
-    val s: option<str> = some("hi");
-    val r5 = passthrough(s);
-
-    // wrap_in — Box<T> return from binding_ty
-    val b: Box<i64> = wrap_in(7);
-    val r6 = b.item;
-
-    println("HKT multi-container PASSED");
-    r1 + r2 + r4 + r6
+def unwrap_box[T](b: Box<T>) -> T {
+    b.item
 }
 
 def main() -> i64 {
-    test_hkt_multi_container();
+    val b: Box<i64> = wrap_in(7);
+    assert(b.item == 7);
+    assert(unwrap_box(b) == 7);
+
+    val bs: Box<str> = wrap_in("z");
+    assert(bs.item == "z");
+    assert(unwrap_box(bs) == "z");
+    // The earlier instantiation is undisturbed by the later one.
+    assert(b.item == 7);
+
+    // A nested `Box<Box<i64>>` belongs here and is deliberately omitted: a
+    // generic instantiated at a generic type is still non-deterministic
+    // (known-issues #21), so including it would make this file pass about
+    // eight times in ten. A flaky test is worse than no test -- it teaches
+    // readers to ignore red. `tests/conformance/c21_loop_carried_type.iris`
+    // and the #21 entry carry the reproduction instead.
+
+    println("test_box_test ok");
     0
 }

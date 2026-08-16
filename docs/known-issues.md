@@ -1688,6 +1688,43 @@ further down.
 
 ---
 
+## 36. Higher-kinded type parameters cannot be inferred from arguments — **open, claim correction**
+
+```iris
+def passthrough[F[_], T](c: F<T>) -> F<T> { c }
+
+val lst: list<i64> = list();
+passthrough(lst)
+// error: cannot infer type parameter `T` for `passthrough` -- no argument
+//        mentions it, so annotate the binding
+```
+
+The parameter type `F<T>` plainly mentions `T`; the compiler cannot decompose a
+concrete `list<i64>` into `F = list, T = i64`. The diagnostic is also wrong
+about the cause, and suggests an annotation that cannot help -- `passthrough`
+returns `F<T>`, but `container_count` returns `i64`, so there is no binding
+whose annotation would resolve anything (#28 again).
+
+**What does work** is declaration plus *explicit* instantiation:
+
+```iris
+record Wrapper[F[_], A] { value: F<A> }
+val w: Wrapper<Box, i64> = Wrapper { value: Box { item: 100 } }   // fine
+```
+
+`tests/test_hkt.iris` uses exactly that form, which is why HKT was graded
+"Actually supported -- safe to claim". The grading needs narrowing: **HKT is
+supported for declaration and explicit instantiation, not for inference.** A
+function generic over a container cannot be called without spelling out its type
+arguments, which is most of the reason to want HKT.
+
+`tests/test_box_test.iris` claimed to demonstrate the inference case and had
+never compiled. It now asserts the forms that work and documents the gap.
+
+**Status:** open.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:

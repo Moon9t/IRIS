@@ -1,19 +1,39 @@
+// A MinHeap<str>, checking that the backing list is kept in heap order.
+//
+// Did not compile: it called `heap_new("x")` to seed, but `heap_new[T]()` now
+// takes no arguments and `heap_of[T](v)` is the seeding constructor. The
+// original also only printed the contents, so a heap that stored its elements
+// in insertion order would have looked correct.
 bring std.heap
 
 def main() -> i64 {
-    val sh1 = heap.heap_new("x")
-    val sh2 = heap.heap_push(sh1, "cherry")
-    val sh3 = heap.heap_push(sh2, "apple")
-    val sh4 = heap.heap_push(sh3, "banana")
-    val peek_s = heap.heap_peek(sh4)
-    println("peek=" + peek_s);
+    val sh1 = heap_of("x")
+    val sh2 = heap_push(sh1, "cherry")
+    val sh3 = heap_push(sh2, "apple")
+    val sh4 = heap_push(sh3, "banana")
+
+    assert(heap_len(sh4) == 4);
+    // "apple" was pushed third, so a heap returning the first or last inserted
+    // element would give "x" or "banana" here.
+    assert(heap_peek(sh4) == "apple");
+
+    // The minimum lives at index 0 of the backing list, which is what makes
+    // peek O(1).
     val hdata = sh4.data
-    val n = heap.heap_len(sh4)
-    println("len=" + to_str(n));
-    var i = 0
-    while i < n {
-        println(to_str(i) + "=" + list_get(hdata, i));
-        i = i + 1
-    }
+    assert(list_len(hdata) == 4);
+    assert(list_get(hdata, 0) == "apple");
+
+    // Draining yields ascending order.
+    val (p1, r1) = heap_pop(sh4)
+    val (p2, r2) = heap_pop(r1)
+    val (p3, r3) = heap_pop(r2)
+    val (p4, r4) = heap_pop(r3)
+    assert(p1 == "apple");
+    assert(p2 == "banana");
+    assert(p3 == "cherry");
+    assert(p4 == "x");
+    assert(heap_is_empty(r4));
+
+    println("test_str_heap_debug ok");
     0
 }
