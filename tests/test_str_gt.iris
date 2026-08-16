@@ -1,13 +1,22 @@
+// Lexicographic `>` on strings.
 def main() -> i64 {
-    val a = "x"
-    val b = "cherry"
-    val r1 = a > b
-    println("x > cherry = " + to_str(r1));
-    val r2 = "cherry" > "apple"
-    println("cherry > apple = " + to_str(r2));
-    val r3 = "banana" > "apple"
-    println("banana > apple = " + to_str(r3));
-    val r4 = "x" > "banana"
-    println("x > banana = " + to_str(r4));
+    // 'x' > 'c', so the first character decides regardless of length.
+    assert(("x" > "cherry") == true);
+    assert(("cherry" > "apple") == true);
+    assert(("banana" > "apple") == true);
+    assert(("x" > "banana") == true);
+
+    // And the converse direction, which the original never checked -- a
+    // comparison stuck at `true` would have passed every case above.
+    assert(("apple" > "cherry") == false);
+    assert(("apple" > "x") == false);
+
+    // Equal strings are not greater than each other.
+    assert(("apple" > "apple") == false);
+    // A prefix is less than the longer string that extends it.
+    assert(("apple" > "app") == true);
+    assert(("app" > "apple") == false);
+
+    println("test_str_gt ok");
     0
 }

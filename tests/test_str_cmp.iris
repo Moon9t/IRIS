@@ -1,14 +1,26 @@
+// Lexicographic `<` and `>` on strings, in both directions.
 def main() -> i64 {
     val a = "apple"
     val b = "banana"
     val c = "cherry"
+
     val r1 = if a < b { 1 } else { 0 };
     val r2 = if b < c { 1 } else { 0 };
     val r3 = if a > b { 1 } else { 0 };
     val r4 = if "apple" > "x" { 1 } else { 0 };
-    println(to_str(r1));
-    println(to_str(r2));
-    println(to_str(r3));
-    println(to_str(r4));
-    r1 + r2 + r3 + r4
+
+    assert(r1 == 1);
+    assert(r2 == 1);
+    assert(r3 == 0);
+    assert(r4 == 0);
+    // The original returned this sum and checked nothing; 2 is the only
+    // correct total.
+    assert(r1 + r2 + r3 + r4 == 2);
+
+    // Ordering must be transitive across the three.
+    assert(a < c);
+    assert(c > a);
+
+    println("test_str_cmp ok");
+    0
 }

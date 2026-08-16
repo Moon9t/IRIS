@@ -1,7 +1,24 @@
+// Minimal binary-heap use through the module-qualified call syntax.
+//
+// The original called `heap.heap_new(0)` -- with an argument, when the
+// signature is `heap_new[T]() -> MinHeap<T>` and takes none -- and never
+// compiled. Nothing globs `tests/*.iris`, so a test that could not even be
+// parsed sat in the tree indistinguishable from a passing one.
+//
+// The binding is annotated because `T` appears only in the return type and so
+// cannot be inferred from the arguments (known-issues #14).
 bring std.heap
 
 def main() -> i64 {
-    var h = heap.heap_new(0)
-    var h2 = heap.heap_push(h, 5)
-    heap.heap_len(h2)
+    val h: MinHeap<i64> = heap_new();
+    assert(heap_len(h) == 0);
+
+    val h2 = heap_push(h, 5);
+    assert(heap_len(h2) == 1);
+
+    val h3 = heap_push(h2, 3);
+    assert(heap_len(h3) == 2);
+
+    println("test_heap_min ok");
+    0
 }

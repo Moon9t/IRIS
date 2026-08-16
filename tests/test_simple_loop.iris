@@ -1,8 +1,20 @@
+// A counting `while` loop leaves its variable at the bound.
 def main() -> i64 {
     var i = 0
     while i < 3 {
         i = i + 1
     }
-    println("done");
+    // The original asserted nothing, so a loop that ran zero times or four
+    // times was indistinguishable from a correct one.
+    assert(i == 3);
+
+    // A loop whose condition is false at entry must not execute at all.
+    var j = 10
+    while j < 3 {
+        j = j + 1
+    }
+    assert(j == 10);
+
+    println("test_simple_loop ok");
     0
 }

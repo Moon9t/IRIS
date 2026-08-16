@@ -1,9 +1,19 @@
+// Selective import: `bring std.math.{gcd, lcm}` pulls in exactly two names.
 bring std.math.{gcd, lcm}
 
 def main() -> i64 {
     val g = gcd(12, 8);
     println("gcd=" + to_str(g));
+    assert(g == 4);
+
     val l = lcm(12, 8);
     println("lcm=" + to_str(l));
-    g + l
+    assert(l == 24);
+
+    // The identity that ties them together, which a wrong lcm would break
+    // even when it looked plausible.
+    assert(g * l == 12 * 8);
+
+    println("test_selective_simple ok");
+    0
 }

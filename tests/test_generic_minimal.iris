@@ -1,3 +1,4 @@
+// The smallest generic function: read a field out of a generic record.
 record Box[T] { value: T }
 
 def get_val[T](b: Box<T>) -> T {
@@ -6,6 +7,14 @@ def get_val[T](b: Box<T>) -> T {
 
 def main() -> i64 {
     var b = Box { value: 42 }
-    val x = get_val(b)
-    x
+    assert(get_val(b) == 42);
+
+    // A second instantiation at another type, to catch a monomorphisation that
+    // reuses one specialisation for both.
+    val s = Box { value: "hi" }
+    assert(get_val(s) == "hi");
+    assert(get_val(b) == 42);
+
+    println("test_generic_minimal ok");
+    0
 }

@@ -1,3 +1,10 @@
-def main() -> i64 {
+// The smallest possible function body: a bare literal as the tail expression.
+def answer() -> i64 {
     42
+}
+
+def main() -> i64 {
+    assert(answer() == 42);
+    println("test_simple ok");
+    0
 }

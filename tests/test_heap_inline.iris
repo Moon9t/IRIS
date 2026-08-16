@@ -1,4 +1,4 @@
-// tests/test_heap_inline.iris -- inline generic MinHeap test
+// An inline generic record with a list field, no stdlib involved.
 record MinHeap[T] { data: list<T> }
 
 pub def heap_new[T](v: T) -> MinHeap<T> {
@@ -9,6 +9,16 @@ pub def heap_new[T](v: T) -> MinHeap<T> {
 
 def main() -> i64 {
     val h = heap_new(42)
-    val v = list_get(h.data, 0)
-    v
+    assert(list_len(h.data) == 1);
+    assert(list_get(h.data, 0) == 42);
+
+    // A second instantiation at `str`, so the generic is exercised at more
+    // than one type.
+    val s = heap_new("x")
+    assert(list_len(s.data) == 1);
+    assert(list_get(s.data, 0) == "x");
+    assert(list_get(h.data, 0) == 42);
+
+    println("test_heap_inline ok");
+    0
 }

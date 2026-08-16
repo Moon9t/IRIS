@@ -1,7 +1,16 @@
+// A spawned task runs and its effect is observable from the parent.
+//
+// The original printed from inside `spawn` and printed "done" after, asserting
+// nothing -- it passed whether or not the task ever ran. A channel makes the
+// hand-off deterministic and the result checkable.
 def main() -> i64 {
+    val ch = channel();
     spawn {
-        println("hello from spawn")
+        send(ch, 7)
     };
-    println("done");
+    val got = recv(ch);
+    assert(got == 7);
+
+    println("test_spawn_simple ok");
     0
 }

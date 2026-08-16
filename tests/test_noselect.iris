@@ -1,7 +1,16 @@
+// `gcd` from std.math, called unqualified after `bring`.
 bring std.math
 
 def main() -> i64 {
     val g = gcd(12, 8);
     println("gcd=" + to_str(g));
+    assert(g == 4);
+
+    // Order must not matter, and gcd(n, 0) is n.
+    assert(gcd(8, 12) == 4);
+    assert(gcd(7, 0) == 7);
+    assert(gcd(13, 7) == 1);
+
+    println("test_noselect ok");
     0
 }

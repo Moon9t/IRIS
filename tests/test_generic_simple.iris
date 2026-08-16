@@ -1,6 +1,17 @@
+// A generic record instantiated at one concrete type.
 record Box[T] { value: T }
 
 def main() -> i64 {
     val b: Box<i64> = Box { value: 42 }
-    b.value
+    assert(b.value == 42);
+
+    // A second instantiation at a different type must not disturb the first --
+    // monomorphisation bugs in this compiler have historically shown up as one
+    // instantiation overwriting another.
+    val s: Box<str> = Box { value: "hi" }
+    assert(s.value == "hi");
+    assert(b.value == 42);
+
+    println("test_generic_simple ok");
+    0
 }

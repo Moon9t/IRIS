@@ -1,11 +1,24 @@
+// Destructuring a tuple in a `for` binding.
 def main() -> i64 {
     val pairs: list<(str, i64)> = list();
     list_push(pairs, ("a", 1));
     list_push(pairs, ("b", 2));
-    val result = 0
+
+    var letters = "";
+    var total = 0;
+    var count = 0;
     for (letter, num) in pairs {
-        val _ = letter
-        val _ = num
+        letters = letters + letter;
+        total = total + num;
+        count = count + 1;
     }
+
+    // The original bound both halves to `_` and checked nothing, so a
+    // destructuring that produced the wrong element -- or none -- looked fine.
+    assert(count == 2);
+    assert(letters == "ab");
+    assert(total == 3);
+
+    println("test_for_destructure2 ok");
     0
 }

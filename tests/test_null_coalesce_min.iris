@@ -1,7 +1,18 @@
+// `??` returns the contained value for `some`, and the default for `none`.
 def main() -> i64 {
     val a: i64 = some(42) ?? 0;
+    // The original file computed `a` and never checked it, so the half of the
+    // operator that unwraps a present value was untested.
+    assert(a == 42);
+
     val b: i64 = none ?? 99;
-    if b != 99 { return 1 };
-    println("ALL PASS");
+    assert(b == 99);
+
+    // Zero must come through as zero rather than being treated as absent --
+    // the classic failure for a coalescing operator.
+    val z: i64 = some(0) ?? 7;
+    assert(z == 0);
+
+    println("test_null_coalesce_min ok");
     0
 }

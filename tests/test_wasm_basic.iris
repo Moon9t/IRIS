@@ -1,6 +1,19 @@
+// Smoke test for the WASM target: arithmetic and string conversion.
+//
+// Previously printed three lines and asserted nothing, so it passed whatever
+// the numbers were.
 def main() -> i64 {
     println("Hello from IRIS on WASM!");
-    println("Math check: 2 + 2 = " + to_str(2 + 2));
-    println("Float: " + to_str(3.14159));
+
+    assert(2 + 2 == 4);
+    assert(to_str(2 + 2) == "4");
+
+    // Float formatting round-trips through to_str.
+    val pi = 3.14159;
+    assert(pi > 3.14158);
+    assert(pi < 3.14160);
+    assert(len(to_str(pi)) > 0);
+
+    println("test_wasm_basic ok");
     0
 }

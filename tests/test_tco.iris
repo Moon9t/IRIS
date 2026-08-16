@@ -1,5 +1,16 @@
-// Test tail-call optimization (TCO) in the interpreter.
-// Deep recursion that would overflow the stack without TCO.
+// Tail-recursive functions -- and an honest note about what this does NOT show.
+//
+// This file was called a tail-call-optimisation test and its comment claimed
+// "deep recursion that would overflow the stack without TCO". It does not
+// demonstrate TCO. There is no tail-call optimisation in either backend: the
+// original `sum_to(50000)` runs only when the interpreter's depth limit is
+// raised (`--max-depth 100000`), because it really does build 50,000 frames.
+// With the default limit it stops with "call depth exceeded 250".
+//
+// A genuine TCO test would recurse unboundedly in constant stack. Until that
+// exists, the depths here are kept inside the default limit and the file
+// asserts that tail-recursive *arithmetic* is correct, which is what it can
+// honestly check. See known-issues #35.
 
 def factorial(n: i64, acc: i64) -> i64 {
     if n <= 1 {
@@ -25,36 +36,30 @@ def gcd_tco(a: i64, b: i64) -> i64 {
     }
 }
 
-def count_down(n: i64) -> i64 {
-    if n == 0 {
-        0
-    } else {
-        count_down(n - 1)
-    }
-}
-
 def main() -> i64 {
-    // Test 1: factorial(12) = 479001600 (fits in i64)
+    // 12! = 479001600, the largest factorial that fits comfortably here.
     val f = factorial(12, 1);
     println("factorial(12) = " + to_str(f));
+    assert(f == 479001600);
 
-    // Test 2: sum_to(50000, 0) = 1250025000 (fits in i64)
-    val s = sum_to(50000, 0);
-    println("sum_to(50000) = " + to_str(s));
+    // Base case must terminate rather than recursing forever.
+    assert(factorial(1, 1) == 1);
+    assert(factorial(0, 1) == 1);
 
-    // Test 3: gcd with large values
-    val g = gcd_tco(462, 1071);
-    println("gcd(462, 1071) = " + to_str(g));
+    // sum_to(200) = 200 * 201 / 2 = 20100. Chosen to sit inside the default
+    // interpreter depth limit; raising it is what the original relied on.
+    val s = sum_to(200, 0);
+    println("sum_to(200) = " + to_str(s));
+    assert(s == 20100);
+    assert(sum_to(0, 0) == 0);
+    assert(sum_to(1, 0) == 1);
 
-    // Test 4: Deep recursion without return value (stress test TCO)
-    count_down(500000);
-    println("count_down(500000) completed");
+    // Euclid, which is genuinely tail-recursive and shallow.
+    assert(gcd_tco(48, 18) == 6);
+    assert(gcd_tco(18, 48) == 6);
+    assert(gcd_tco(17, 5) == 1);
+    assert(gcd_tco(9, 0) == 9);
 
-    if f == 479001600 && s == 1250025000 && g == 21 {
-        println("All TCO tests passed!");
-        0
-    } else {
-        println("TCO tests FAILED");
-        1
-    }
+    println("test_tco ok");
+    0
 }

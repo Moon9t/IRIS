@@ -1,8 +1,26 @@
+// `while let` binds while the option is `some` and stops at `none`.
 def main() -> i64 {
     var counter = some(3);
+    var seen = 0;
+    var iterations = 0;
     while let some(v) = counter {
-        println(v);
+        seen = v;
+        iterations = iterations + 1;
         counter = none()
     };
+    // Exactly one iteration, and the bound value was the one inside the option.
+    assert(iterations == 1);
+    assert(seen == 3);
+
+    // Starting at `none` must not enter the body.
+    var empty: option<i64> = none();
+    var never = 0;
+    while let some(v) = empty {
+        never = never + 1;
+        empty = none()
+    };
+    assert(never == 0);
+
+    println("test_while_let_min ok");
     0
 }

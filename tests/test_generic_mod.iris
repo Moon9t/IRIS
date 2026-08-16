@@ -1,11 +1,23 @@
+// Generic heap reached through the module-qualified call syntax.
+//
+// The original called `heap.heap_new(0)` with an argument when the signature
+// is `heap_new[T]() -> MinHeap<T>` and takes none, so it never compiled. The
+// binding is annotated because `T` appears only in the return type
+// (known-issues #14).
 bring std.heap
 
 def main() -> i64 {
-    var h = heap.heap_new(0)
-    h = heap.heap_push(h, 5);
-    h = heap.heap_push(h, 3);
-    h = heap.heap_push(h, 7);
-    val len = heap.heap_len(h)
-    val peek = heap.heap_peek(h)
-    len + peek
+    val h0: MinHeap<i64> = heap_new();
+    val h1 = heap_push(h0, 5);
+    val h2 = heap_push(h1, 3);
+    val h3 = heap_push(h2, 7);
+
+    assert(heap_len(h3) == 3);
+    // A min-heap peeks at its smallest element, not its first or last -- 3 was
+    // pushed second, so a heap that returned either end would look right for
+    // the wrong reason.
+    assert(heap_peek(h3) == 3);
+
+    println("test_generic_mod ok");
+    0
 }

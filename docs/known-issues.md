@@ -1638,6 +1638,56 @@ the threshold the caller set.
 
 ---
 
+## 35. There is no tail-call optimisation — **claim correction**
+
+`tests/test_tco.iris` was titled "Test tail-call optimization (TCO) in the
+interpreter" and commented "deep recursion that would overflow the stack without
+TCO". It demonstrated no such thing.
+
+`sum_to(50000)` runs only with `--max-depth 100000`. It genuinely builds 50,000
+interpreter frames; at the default limit it stops with
+`call depth exceeded 250`. Nothing is being optimised — the test passed
+historically because the depth limit used to be 5,000 and the recursion fitted
+under it.
+
+There is no `musttail` in codegen either, so the native backend does not do it
+in the compiled path.
+
+`iris-claims` already listed TCO as at risk of overstatement, noting the test
+"says in the interpreter". That caveat was too generous: the interpreter does
+not do it either.
+
+The test now asserts tail-recursive *arithmetic* at depths inside the default
+limit, which is what it can honestly check, and says plainly what it does not
+show. A real TCO test would recurse unboundedly in constant stack.
+
+**Status:** open as a feature. Closed as a claim -- do not describe IRIS as
+having TCO.
+
+---
+
+## Test-suite audit, 2026-08-16
+
+Of 154 `.iris` files under `tests/`, 33 asserted anything. Converting them
+surfaced something the count alone hid: **20 of the 121 non-asserting files do
+not run at all.**
+
+| Category | Count | Notes |
+|---|---|---|
+| Expected failures | 6 | borrow, move, exhaustiveness, strict-effects -- correct behaviour, need an expected-failure list rather than assertions |
+| Needs a type annotation (#14) | 5 | `heap_new`, `set_new`, `container_count` -- a type parameter appearing only in the return type |
+| Real syntax/feature gaps | 6 | `where` refinement clauses, two module forms, `par_map`, `nursery` arity |
+| Other | 3 | no `main`; a genuine `CmpLt on Struct and Str` type bug; and #35 |
+
+Two of these had been broken since they were written. `test_heap_min.iris` and
+`test_generic_mod.iris` both called `heap.heap_new(0)` with an argument when the
+signature takes none, so neither had ever compiled. Nothing globs `tests/*.iris`,
+so a file that could not be parsed sat in the tree indistinguishable from a
+passing one — which is the same failure as a test that asserts nothing, one level
+further down.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:

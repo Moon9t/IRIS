@@ -1,8 +1,16 @@
+// `while let` over an option, draining it in one iteration.
 def main() -> i64 {
     var x = some(10);
+    var seen = 0;
+    var iterations = 0;
     while let some(v) = x {
-        println(v);
+        seen = v;
+        iterations = iterations + 1;
         x = none()
     };
+    assert(iterations == 1);
+    assert(seen == 10);
+
+    println("test_while_let_simple ok");
     0
 }

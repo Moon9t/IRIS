@@ -1,9 +1,20 @@
+// A task group runs its spawned task and `join` waits for it.
+//
+// The original printed from inside the task and printed "done" after, asserting
+// nothing -- it passed whether or not the task ever ran, and whether or not
+// `join` actually waited. A channel makes both observable.
 def main() -> i64 {
+    val ch = channel();
     val tg = task_group();
     spawn(tg) {
-        println("hello from spawn")
+        send(ch, 11)
     };
     task_group_join(tg);
-    println("done");
+
+    // If join did not wait, this receive would block or read nothing.
+    val got = recv(ch);
+    assert(got == 11);
+
+    println("test_task_group_simple ok");
     0
 }
