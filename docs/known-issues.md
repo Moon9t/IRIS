@@ -1878,6 +1878,55 @@ nothing. Any trait method would fail that proof regardless of what it does.
 
 ---
 
+## 40. ROS 2 subscriptions returned nothing, or the wrong thing — **FIXED**
+
+Three defects, all found by running against a live ROS 2 Humble install.
+
+**(a) Inverted success convention.** All six `take_*` functions tested
+`rc == 0` while the bridge returns **1** on success. A successful take produced
+`none()`; a *failed* take produced `some()` wrapping whatever was in the
+out-cell — so a subscription could report a reading it never received. These
+were the six functions graded *Present, not Verified* earlier in the session.
+
+**(b) Wrong register class.** `iris_rcl_publish_float64` was declared to take a
+`double`, but `iris_ffi_call_i64` dispatches through an all-integer function
+pointer, so on x86-64 Windows the value was read from XMM1 rather than RDX. The
+IRIS side already scaled by 1e8 to work around exactly that, and the C side
+never unscaled it. Published `42.5` arrived as `1.00138e-307`.
+
+**(c) The interpreter passed strings as null.** `i64_arg` returns 0 for a
+`Str`, so `node_create(ctx, "probe", "")` was called with two null pointers.
+Zero-argument calls worked, which made it look like the interpreter could not do
+FFI at all rather than that it could not pass strings. Interpreter-side mirror of
+#33; both backends now marshal identically.
+
+**Verified** end to end on both backends — publish, wait, take for `Float64`,
+`Int64` and `String`, asserting the values. `examples/10_ros2/roundtrip.iris`.
+
+---
+
+## ROS 2 — regraded 2/10 → 4/10, 2026-08-16
+
+| | Status |
+|---|---|
+| `rcl_init`, node, publisher, subscription | Verified, both backends |
+| publish + take: `Float64`, `Int64`, `String` | Verified, values asserted |
+| `Vector3`, `Twist`, `Pose` | Present, untested |
+| QoS profiles | Absent |
+| Services (request/response) | Absent |
+| Actions | Absent |
+| tf2 transforms | Absent |
+| Lifecycle nodes | Absent |
+| Executors, callback groups, timers | Absent |
+| Parameters | Absent |
+
+**IRIS can now sense and command a topic. It cannot drive a robot.** The gap to
+10/10 is a robotics stack, not test coverage — services, actions, tf2 and
+lifecycle are each substantial features, and several need more than one node to
+verify meaningfully.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:

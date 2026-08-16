@@ -6107,7 +6107,36 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
             // Supports up to 6 i64 arguments via transmuted function pointers.
             let _handle = i64_arg(&args[0]);
             let _func_name = str_arg(&args[1]);
-            let extra_args: Vec<i64> = args[2..].iter().map(i64_arg).collect();
+            // Marshal each argument the way the callee expects to receive it.
+            //
+            // `i64_arg` returns 0 for a `Str`, so every string argument arrived
+            // as a null pointer: `iris_rcl_node_create(ctx, "probe", "")` was
+            // called with two nulls and returned 0. Zero-argument calls worked,
+            // which is why the failure looked like "the interpreter cannot do
+            // FFI" rather than "the interpreter cannot pass strings".
+            //
+            // This is the interpreter-side mirror of known-issues #33, where
+            // native codegen passed FFI arguments flat instead of as an array.
+            // Both backends now marshal identically: strings become pointers,
+            // doubles are passed by bit pattern.
+            let mut keepalive: Vec<std::ffi::CString> = Vec::new();
+            let extra_args: Vec<i64> = args[2..]
+                .iter()
+                .map(|a| match a {
+                    IrValue::Str(sv) => {
+                        let cs = std::ffi::CString::new(sv.as_str()).unwrap_or_default();
+                        let ptr = cs.as_ptr() as i64;
+                        // Held until after the call: the callee borrows this
+                        // buffer, and dropping it here would hand over a
+                        // dangling pointer.
+                        keepalive.push(cs);
+                        ptr
+                    }
+                    IrValue::F64(f) => f.to_bits() as i64,
+                    IrValue::F32(f) => (*f as f64).to_bits() as i64,
+                    other => i64_arg(other),
+                })
+                .collect();
 
             let result_raw: i64;
             #[cfg(windows)]

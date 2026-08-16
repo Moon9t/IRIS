@@ -261,12 +261,27 @@ __declspec(dllexport) int64_t iris_rcl_subscription_destroy(int64_t sub_handle, 
 /* ========================================================================== */
 /* Typed Publish Functions                                                    */
 /* ========================================================================== */
-__declspec(dllexport) int64_t iris_rcl_publish_float64(int64_t pub_handle, double val) {
+/*
+ * Takes a fixed-point scaled integer, not a double.
+ *
+ * `iris_ffi_call_i64` dispatches through an all-integer function pointer, so a
+ * `double` parameter would be read from the wrong register class -- on x86-64
+ * Windows integers arrive in RCX/RDX and floats in XMM, so the callee saw
+ * whatever XMM1 happened to hold. The IRIS side already scaled by 1e8 to work
+ * around that, but this function was declared `double` and never unscaled, so
+ * the two halves disagreed twice over and a published 42.5 arrived as garbage.
+ *
+ * Scaling by 1e8 is exact for values with up to eight decimal places and covers
+ * roughly +/- 9.2e10, which is ample for sensor data. The alternative -- passing
+ * the double's bit pattern -- needs matching bitcasts on both backends and is
+ * the better long-term answer once the FFI can carry mixed argument classes.
+ */
+__declspec(dllexport) int64_t iris_rcl_publish_float64(int64_t pub_handle, int64_t scaled) {
     rcl_publisher_t* pub = (rcl_publisher_t*)(intptr_t)pub_handle;
     if (!pub) return -1;
     std_msgs__msg__Float64 msg;
     std_msgs__msg__Float64__init(&msg);
-    msg.data = val;
+    msg.data = (double)scaled / 100000000.0;
     rcl_ret_t rc = rcl_publish(pub, &msg, NULL);
     std_msgs__msg__Float64__fini(&msg);
     return rc == RCL_RET_OK ? 0 : -1;

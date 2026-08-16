@@ -1,0 +1,106 @@
+// ROS 2 publish -> subscribe -> take, end to end.
+//
+// REQUIRES A ROS 2 INSTALLATION. Build `iris_ros2.dll` per docs/ros2-build.md,
+// put it where the loader can find it, and put ROS 2's own bin directory on
+// PATH. Without those this file cannot run, which is why it lives in examples/
+// rather than tests/ -- the suite must not depend on a robotics stack being
+// present.
+//
+// Verified against ROS 2 Humble on 2026-08-16.
+//
+// This is the half that makes IRIS able to *sense* rather than only command.
+// Until today `wait_for_message` returned a bool and the six `take_*` functions
+// were graded Present-not-Verified. Running them found two defects that no
+// amount of reading would have shown:
+//
+//   * all six tested `rc == 0` for success while the bridge returns 1, so a
+//     successful take produced `none()` -- and a *failed* take produced
+//     `some()` wrapping whatever was in the out-cell. A subscription could
+//     report a reading it never received.
+//   * `iris_rcl_publish_float64` was declared to take a `double`, but
+//     `iris_ffi_call_i64` dispatches through an all-integer function pointer,
+//     so the value arrived in the wrong register class. The IRIS side scaled by
+//     1e8 to work around exactly that, and the C side never unscaled it.
+
+bring std.ros2
+
+def check_float64(node: ROS2Node) -> i64 {
+    val p = publisher_create(node, "/iris_rt_f64", "std_msgs/msg/Float64");
+    val s = subscription_create(node, "/iris_rt_f64", "std_msgs/msg/Float64");
+
+    assert(publish_float64_obj(p, 42.5));
+    assert(wait_for_message(s, 2000));
+
+    val v = take_f64(s);
+    assert(is_some(v));
+    // The exact value, not merely "something arrived". The old code returned
+    // a bit pattern read as a double -- 1.00138e-307 -- which `is_some` alone
+    // would have accepted.
+    assert(unwrap(v) == 42.5);
+
+    // A negative and a fractional value, since the transport is fixed-point
+    // scaled by 1e8 and sign or rounding errors would show here.
+    assert(publish_float64_obj(p, -3.25));
+    assert(wait_for_message(s, 2000));
+    assert(unwrap(take_f64(s)) == -3.25);
+
+    publisher_destroy(p);
+    subscription_destroy(s);
+    0
+}
+
+def check_int64(node: ROS2Node) -> i64 {
+    val p = publisher_create(node, "/iris_rt_i64", "std_msgs/msg/Int64");
+    val s = subscription_create(node, "/iris_rt_i64", "std_msgs/msg/Int64");
+
+    assert(publish_int64(p, 1234));
+    assert(wait_for_message(s, 2000));
+    val v = take_i64(s);
+    assert(is_some(v));
+    assert(unwrap(v) == 1234);
+
+    // Zero must be distinguishable from "nothing received" -- the value a
+    // silent failure most often produces.
+    assert(publish_int64(p, 0));
+    assert(wait_for_message(s, 2000));
+    val z = take_i64(s);
+    assert(is_some(z));
+    assert(unwrap(z) == 0);
+
+    publisher_destroy(p);
+    subscription_destroy(s);
+    0
+}
+
+def check_string(node: ROS2Node) -> i64 {
+    val p = publisher_create(node, "/iris_rt_str", "std_msgs/msg/String");
+    val s = subscription_create(node, "/iris_rt_str", "std_msgs/msg/String");
+
+    assert(publish_string(p, "hello-iris"));
+    assert(wait_for_message(s, 2000));
+    val v = take_str(s, 256);
+    assert(is_some(v));
+    assert(unwrap(v) == "hello-iris");
+
+    publisher_destroy(p);
+    subscription_destroy(s);
+    0
+}
+
+def main() -> i64 {
+    val ctx = context_create();
+    assert(ctx.handle != 0);
+    val node = node_create(ctx, "iris_roundtrip", "");
+    assert(node.handle != 0);
+
+    val a = check_float64(node);
+    val b = check_int64(node);
+    val c = check_string(node);
+    assert(a + b + c == 0);
+
+    node_destroy(node);
+    context_destroy(ctx);
+
+    println("ros2 roundtrip ok");
+    0
+}

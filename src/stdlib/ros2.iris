@@ -232,6 +232,16 @@ pub def wait_for_message(sub: ROS2Sub, timeout_ms: i64) -> bool {
 // happens to be zero" stay distinguishable — the distinction a sentinel return
 // destroys.
 
+// The `take_*` family returns `some` only when the bridge reports success.
+//
+// `iris_rcl_take_*` returns **1 on success and 0 on failure** -- not rcl's own
+// convention, where RCL_RET_OK is 0. All six of these tested `rc == 0`, so a
+// successful take produced `none()` and, worse, a *failed* take produced
+// `some()` wrapping whatever happened to be in the out-cell. A subscription
+// could therefore report a reading it never received.
+//
+// Verified against a live ROS 2 Humble installation: publish 42.5, wait, take,
+// and get 42.5 back.
 pub def take_f64(sub: ROS2Sub) -> option<f64> effect ffi, alloc {
     val h = ffi_open(get_rcl_lib())
     if h == -1 { return none() };
@@ -240,7 +250,7 @@ pub def take_f64(sub: ROS2Sub) -> option<f64> effect ffi, alloc {
     val rc = ffi_call_i64(h, "iris_rcl_take_float64", sub.handle, cell)
     val v = ffi_out_get_f64(cell, 0)
     ffi_out_free(cell);
-    if rc == 0 { some(v) } else { none() }
+    if rc == 1 { some(v) } else { none() }
 }
 
 pub def take_i64(sub: ROS2Sub) -> option<i64> effect ffi, alloc {
@@ -251,7 +261,7 @@ pub def take_i64(sub: ROS2Sub) -> option<i64> effect ffi, alloc {
     val rc = ffi_call_i64(h, "iris_rcl_take_int64_val", sub.handle, cell)
     val v = ffi_out_get_i64(cell, 0)
     ffi_out_free(cell);
-    if rc == 0 { some(v) } else { none() }
+    if rc == 1 { some(v) } else { none() }
 }
 
 pub def take_str(sub: ROS2Sub, max_len: i64) -> option<str> effect ffi, alloc {
@@ -262,7 +272,7 @@ pub def take_str(sub: ROS2Sub, max_len: i64) -> option<str> effect ffi, alloc {
     val rc = ffi_call_i64(h, "iris_rcl_take_string", sub.handle, cell, max_len)
     val v = ffi_out_get_str(cell)
     ffi_out_free(cell);
-    if rc == 0 { some(v) } else { none() }
+    if rc == 1 { some(v) } else { none() }
 }
 
 pub def take_vector3(sub: ROS2Sub) -> option<Vector3> effect ffi, alloc {
@@ -273,7 +283,7 @@ pub def take_vector3(sub: ROS2Sub) -> option<Vector3> effect ffi, alloc {
     val rc = ffi_call_i64(h, "iris_rcl_take_vector3", sub.handle, cell)
     val v = make_vector3(ffi_out_get_f64(cell, 0), ffi_out_get_f64(cell, 1), ffi_out_get_f64(cell, 2))
     ffi_out_free(cell);
-    if rc == 0 { some(v) } else { none() }
+    if rc == 1 { some(v) } else { none() }
 }
 
 pub def take_twist(sub: ROS2Sub) -> option<Twist> effect ffi, alloc {
@@ -287,7 +297,7 @@ pub def take_twist(sub: ROS2Sub) -> option<Twist> effect ffi, alloc {
         ffi_out_get_f64(cell, 3), ffi_out_get_f64(cell, 4), ffi_out_get_f64(cell, 5)
     )
     ffi_out_free(cell);
-    if rc == 0 { some(t) } else { none() }
+    if rc == 1 { some(t) } else { none() }
 }
 
 pub def take_pose(sub: ROS2Sub) -> option<Pose> effect ffi, alloc {
@@ -301,7 +311,7 @@ pub def take_pose(sub: ROS2Sub) -> option<Pose> effect ffi, alloc {
         ffi_out_get_f64(cell, 3), ffi_out_get_f64(cell, 4), ffi_out_get_f64(cell, 5), ffi_out_get_f64(cell, 6)
     )
     ffi_out_free(cell);
-    if rc == 0 { some(p) } else { none() }
+    if rc == 1 { some(p) } else { none() }
 }
 
 // ===== Helper Constructors =====
