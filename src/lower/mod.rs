@@ -1128,7 +1128,10 @@ impl<'m> Lowerer<'m> {
                 op: "leaf".to_owned(),
                 parents: vec![],
             },
-            Some(ty.clone()),
+            // The handle is a pointer into the runtime tape, not the primal.
+            // Typing it as the primal made it emit as `double`, so a taped value
+            // crossing a block boundary stopped being a handle (#49).
+            Some(IrType::TapeRef),
         );
         self.taped_values.insert(value);
         self.tape_nodes.insert(value, tape_result);
@@ -1162,7 +1165,7 @@ impl<'m> Lowerer<'m> {
                 op: op.to_owned(),
                 parents: tape_parents,
             },
-            Some(primal_ty.clone()),
+            Some(IrType::TapeRef),
         );
         self.taped_values.insert(primal_result);
         self.tape_nodes.insert(primal_result, tape_result);
@@ -10183,7 +10186,22 @@ impl<'m> Lowerer<'m> {
             }
         }
 
-        let initial_vals: Vec<ValueId> = loop_vars.iter().map(|(_, v, _)| *v).collect();
+        let mut initial_vals: Vec<ValueId> = loop_vars.iter().map(|(_, v, _)| *v).collect();
+
+        // A loop variable holding a taped value carries *two* things across the
+        // back-edge: the primal and the handle to its tape node. Only the primal
+        // used to be threaded, so on the second iteration the handle was gone and
+        // `backward` was rejected -- a loop-accumulated loss could not be written
+        // at all (#49). The handles ride along as extra block parameters,
+        // appended after the primals so the existing indices are undisturbed.
+        let taped_loop_vars: Vec<(usize, ValueId)> = loop_vars
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (_, v, _))| self.tape_nodes.get(v).map(|h| (i, *h)))
+            .collect();
+        for (_, handle) in &taped_loop_vars {
+            initial_vals.push(*handle);
+        }
 
         // Create the three blocks.
         let header_bb = self.builder.create_block(Some("while_header"));
@@ -10198,6 +10216,14 @@ impl<'m> Lowerer<'m> {
                 .add_block_param(header_bb, Some(name), ty.clone());
             header_params.push(p);
         }
+        let header_handle_params: Vec<ValueId> = taped_loop_vars
+            .iter()
+            .map(|(i, _)| {
+                let name = format!("{}$tape", loop_vars[*i].0);
+                self.builder
+                    .add_block_param(header_bb, Some(&name), IrType::TapeRef)
+            })
+            .collect();
 
         // Add block params to merge (receive exit values from header's else path).
         let mut merge_params: Vec<ValueId> = Vec::new();
@@ -10207,6 +10233,14 @@ impl<'m> Lowerer<'m> {
                 .add_block_param(merge_bb, Some(name), ty.clone());
             merge_params.push(p);
         }
+        let merge_handle_params: Vec<ValueId> = taped_loop_vars
+            .iter()
+            .map(|(i, _)| {
+                let name = format!("{}$tape", loop_vars[*i].0);
+                self.builder
+                    .add_block_param(merge_bb, Some(&name), IrType::TapeRef)
+            })
+            .collect();
 
         // From the current block, branch to header with initial values.
         self.builder.push_instr(
@@ -10222,6 +10256,13 @@ impl<'m> Lowerer<'m> {
         for ((name, _, ty), &param_val) in loop_vars.iter().zip(header_params.iter()) {
             self.scope.insert(name.clone(), (param_val, ty.clone()));
         }
+        // Re-point the tape mapping at this iteration's parameters, so a taped
+        // value read inside the body resolves to the handle that came round the
+        // back-edge rather than to the one from before the loop.
+        for ((i, _), &hp) in taped_loop_vars.iter().zip(header_handle_params.iter()) {
+            self.taped_values.insert(header_params[*i]);
+            self.tape_nodes.insert(header_params[*i], hp);
+        }
 
         let (cond_val, _) = self.lower_expr(cond)?;
 
@@ -10232,7 +10273,11 @@ impl<'m> Lowerer<'m> {
                 then_block: body_bb,
                 then_args: vec![],
                 else_block: merge_bb,
-                else_args: header_params.clone(),
+                else_args: header_params
+                    .iter()
+                    .copied()
+                    .chain(header_handle_params.iter().copied())
+                    .collect(),
             },
             None,
         );
@@ -10247,7 +10292,7 @@ impl<'m> Lowerer<'m> {
 
         // Emit back-edge Br if the body wasn't terminated by break/continue.
         if !self.builder.is_current_block_terminated() {
-            let updated_vals: Vec<ValueId> = loop_vars
+            let mut updated_vals: Vec<ValueId> = loop_vars
                 .iter()
                 .map(|(name, original_val, _)| {
                     self.scope
@@ -10256,6 +10301,13 @@ impl<'m> Lowerer<'m> {
                         .unwrap_or(*original_val)
                 })
                 .collect();
+            // Whatever the body last assigned to a taped loop variable has its
+            // own tape node; that handle is what the next iteration must see.
+            for (i, incoming) in &taped_loop_vars {
+                let current = updated_vals[*i];
+                let handle = self.tape_nodes.get(&current).copied().unwrap_or(*incoming);
+                updated_vals.push(handle);
+            }
             self.builder.push_instr(
                 IrInstr::Br {
                     target: header_bb,
@@ -10269,6 +10321,12 @@ impl<'m> Lowerer<'m> {
         self.builder.set_current_block(merge_bb);
         for ((name, _, ty), &merge_val) in loop_vars.iter().zip(merge_params.iter()) {
             self.scope.insert(name.clone(), (merge_val, ty.clone()));
+        }
+        // The whole point: after the loop, the accumulated value still has a
+        // handle, so `backward(acc)` sees a tape node rather than a bare f64.
+        for ((i, _), &hp) in taped_loop_vars.iter().zip(merge_handle_params.iter()) {
+            self.taped_values.insert(merge_params[*i]);
+            self.tape_nodes.insert(merge_params[*i], hp);
         }
 
         let _ = span;
@@ -10336,7 +10394,18 @@ impl<'m> Lowerer<'m> {
             }
         }
 
-        let initial_vals: Vec<ValueId> = loop_vars.iter().map(|(_, v, _)| *v).collect();
+        let mut initial_vals: Vec<ValueId> = loop_vars.iter().map(|(_, v, _)| *v).collect();
+
+        // A taped loop variable carries its tape handle across the back-edge as
+        // well as its primal; see the same treatment in `lower_while` (#49).
+        let taped_loop_vars: Vec<(usize, ValueId)> = loop_vars
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (_, v, _))| self.tape_nodes.get(v).map(|h| (i, *h)))
+            .collect();
+        for (_, handle) in &taped_loop_vars {
+            initial_vals.push(*handle);
+        }
 
         // 4. Create blocks.
         let header_bb = self.builder.create_block(Some("for_header"));
@@ -10351,6 +10420,14 @@ impl<'m> Lowerer<'m> {
                 .add_block_param(header_bb, Some(name), ty.clone());
             header_params.push(p);
         }
+        let header_handle_params: Vec<ValueId> = taped_loop_vars
+            .iter()
+            .map(|(i, _)| {
+                let name = format!("{}$tape", loop_vars[*i].0);
+                self.builder
+                    .add_block_param(header_bb, Some(&name), IrType::TapeRef)
+            })
+            .collect();
 
         // 6. Merge block params (receive final values on loop exit).
         let mut merge_params: Vec<ValueId> = Vec::new();
@@ -10360,6 +10437,14 @@ impl<'m> Lowerer<'m> {
                 .add_block_param(merge_bb, Some(name), ty.clone());
             merge_params.push(p);
         }
+        let merge_handle_params: Vec<ValueId> = taped_loop_vars
+            .iter()
+            .map(|(i, _)| {
+                let name = format!("{}$tape", loop_vars[*i].0);
+                self.builder
+                    .add_block_param(merge_bb, Some(&name), IrType::TapeRef)
+            })
+            .collect();
 
         // 7. Branch from current block to header with initial values.
         self.builder.push_instr(
@@ -10374,6 +10459,10 @@ impl<'m> Lowerer<'m> {
         self.builder.set_current_block(header_bb);
         for ((name, _, ty), &param_val) in loop_vars.iter().zip(header_params.iter()) {
             self.scope.insert(name.clone(), (param_val, ty.clone()));
+        }
+        for ((i, _), &hp) in taped_loop_vars.iter().zip(header_handle_params.iter()) {
+            self.taped_values.insert(header_params[*i]);
+            self.tape_nodes.insert(header_params[*i], hp);
         }
         let loop_var_param = header_params[0]; // first param is always the loop var
         let cond_result = self.builder.fresh_value();
@@ -10393,7 +10482,11 @@ impl<'m> Lowerer<'m> {
                 then_block: body_bb,
                 then_args: vec![],
                 else_block: merge_bb,
-                else_args: header_params.clone(),
+                else_args: header_params
+                    .iter()
+                    .copied()
+                    .chain(header_handle_params.iter().copied())
+                    .collect(),
             },
             None,
         );
@@ -10442,7 +10535,7 @@ impl<'m> Lowerer<'m> {
             self.scope
                 .insert(var.name.clone(), (incremented, loop_var_ty));
 
-            let updated_vals: Vec<ValueId> = loop_vars
+            let mut updated_vals: Vec<ValueId> = loop_vars
                 .iter()
                 .map(|(name, original_val, _)| {
                     self.scope
@@ -10451,6 +10544,11 @@ impl<'m> Lowerer<'m> {
                         .unwrap_or(*original_val)
                 })
                 .collect();
+            for (i, incoming) in &taped_loop_vars {
+                let current = updated_vals[*i];
+                let handle = self.tape_nodes.get(&current).copied().unwrap_or(*incoming);
+                updated_vals.push(handle);
+            }
             self.builder.push_instr(
                 IrInstr::Br {
                     target: header_bb,
@@ -10469,6 +10567,12 @@ impl<'m> Lowerer<'m> {
                 self.scope.remove(name);
             } else {
                 self.scope.insert(name.clone(), (merge_val, ty.clone()));
+            }
+        }
+        for ((i, _), &hp) in taped_loop_vars.iter().zip(merge_handle_params.iter()) {
+            if loop_vars[*i].0 != var.name {
+                self.taped_values.insert(merge_params[*i]);
+                self.tape_nodes.insert(merge_params[*i], hp);
             }
         }
 
@@ -16999,6 +17103,7 @@ fn ir_type_dispatch_name(ty: &IrType) -> String {
 /// output and replaces whitespace/commas/brackets with `_`.
 pub(crate) fn mangle_ir_type(ty: &IrType) -> String {
     let s = match ty {
+        IrType::TapeRef => "taperef".to_owned(),
         IrType::Scalar(d) => format!("{}", d),
         IrType::Str => "str".to_owned(),
         IrType::Struct { name, .. } => name.clone(),

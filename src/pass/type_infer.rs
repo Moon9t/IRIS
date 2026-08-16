@@ -14,6 +14,8 @@ use crate::pass::Pass;
 fn contains_infer(ty: &IrType) -> bool {
     match ty {
         IrType::Infer => true,
+        // Opaque tape handle: no inner type to be unresolved.
+        IrType::TapeRef => false,
         IrType::Option(inner)
         | IrType::Chan(inner)
         | IrType::Atomic(inner)

@@ -2234,7 +2234,28 @@ history is not worth it when the fix should shrink it by roughly 98%.
 
 ---
 
-## 48. A second `backward()` silently corrupts the first tape's gradients — **open**
+## 48. A second `backward()` silently corrupts the first tape's gradients — **FIXED**
+
+> **Fixed** on 2026-08-16 by pinning leaves. Leaf nodes — the only nodes a
+> program holds a handle to after a pass returns — now live in their own region
+> that `iris_backward` never recycles. Intermediates still reset, which is what
+> keeps a training loop from growing without bound.
+>
+> `dx` now reports `0` for a pass `x` took no part in, rather than borrowing
+> `y`'s answer. Zero is the correct partial derivative here — `x` is not in
+> `y2`'s graph — and gradients remain valid for the most recent pass, which is
+> the existing epoch semantics.
+>
+> Exceeding the leaf budget returns NULL (a zero gradient) rather than recycling
+> a live leaf: a missing answer, never another leaf's answer reported as yours.
+>
+> **Tested by** `a_later_tape_does_not_alias_an_earlier_leaf`,
+> `the_second_pass_gradient_is_still_correct`,
+> `sequential_passes_each_report_their_own_gradient` and
+> `multiple_live_leaves_get_distinct_gradients` in
+> `tests/autodiff_tape_chunks.rs`.
+
+### Original report
 
 `iris_backward` resets the arena index to zero when it finishes ("deterministic
 memory reuse in the next training step"). The next `tape(...)` therefore hands
@@ -2267,7 +2288,43 @@ built immediately before the #47 chunked-tape change.
 
 ---
 
-## 49. A tape handle does not survive a function call or a `var` — **open**
+## 49. A tape handle does not survive a function call or a `var` — **PARTIALLY FIXED**
+
+> **Loops fixed** on 2026-08-16; **function boundaries still open.**
+>
+> The cause was that a tape handle had no IR type: `TapeRecord`'s result was
+> typed as the *primal* (`f64`), so it emitted as `double`. A taped value
+> crossing a loop back-edge became an ordinary float and `backward` was rejected
+> at codegen. `IrType::TapeRef` now exists — an opaque pointer type — and a
+> taped loop variable carries its handle across the back-edge as an extra block
+> parameter alongside its primal, in both `while` and `for`.
+>
+> A loop-accumulated loss therefore works, which is the shape a training loop
+> actually takes:
+>
+> ```iris
+> val m = tape(1.0);
+> var total = tape(0.0);
+> for s in 1..5 { val pred = m * to_f64(s); total = total + pred * pred; };
+> val _ = backward(total);   // loss = 30, grad(m) = 60 — both verified
+> ```
+>
+> **Still open: passing a taped value into a function.** `sq(x)` where
+> `def sq(v: f64)` loses the handle and reports the same error. Fixing it means
+> tape-typed parameters in function signatures, so a function would need either
+> two forms or a signature that admits both — a change of a different size from
+> the loop threading, and not attempted here.
+>
+> So: **reverse-mode AD now expresses a training loop, but the loss must be
+> computed inline rather than in a helper.** State that limit alongside the
+> capability.
+>
+> **Tested by** `a_while_loop_can_accumulate_a_loss`,
+> `a_for_loop_can_accumulate_a_loss`,
+> `a_per_sample_loss_accumulates_the_right_gradient` and
+> `an_ordinary_loop_is_unchanged` (the untaped case, which must be untouched).
+
+### Original report
 
 Reverse-mode AD works only on straight-line code inside a single function.
 Passing a taped value to a function, or accumulating into a `var`, loses the

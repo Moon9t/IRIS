@@ -2126,9 +2126,26 @@ typedef struct {
 
 // Thread-local state is now a chunk table rather than the chunks themselves:
 // 32 pointers and a few counters, ~300 bytes instead of 12.6 MB.
+// Two regions, because they have different lifetimes.
+//
+// `iris_backward` resets the arena index when it finishes, so the next
+// `tape(...)` used to hand back an address the previous leaf was still holding
+// -- `grad(x)` then read a later node's gradient and returned a plausible wrong
+// number with no error (known-issues #48):
+//
+//   dx=6 dy=6        <- dx should be 4
+//
+// Leaves are the only nodes a program keeps a handle to across a backward pass,
+// so leaves are now *pinned*: they live in their own region and are never
+// recycled. Intermediates, which nothing outlives the pass to reference, still
+// reset -- that is what keeps a training loop from growing without bound.
 static IRIS_THREAD_LOCAL IrisTapeNode* iris_tape_chunks[IRIS_TAPE_MAX_CHUNKS];
 static IRIS_THREAD_LOCAL size_t iris_tape_chunk_count = 0;
 static IRIS_THREAD_LOCAL size_t iris_tape_arena_index = 0;
+
+static IRIS_THREAD_LOCAL IrisTapeNode* iris_leaf_chunks[IRIS_TAPE_MAX_CHUNKS];
+static IRIS_THREAD_LOCAL size_t iris_leaf_chunk_count = 0;
+static IRIS_THREAD_LOCAL size_t iris_leaf_index = 0;
 static IRIS_THREAD_LOCAL IrisTapeNode** iris_topo_buffer = NULL;
 static IRIS_THREAD_LOCAL size_t iris_topo_buffer_cap = 0;
 
@@ -2144,6 +2161,12 @@ static void iris_tape_thread_free(void) {
     }
     iris_tape_chunk_count = 0;
     iris_tape_arena_index = 0;
+    for (size_t i = 0; i < iris_leaf_chunk_count; i++) {
+        free(iris_leaf_chunks[i]);
+        iris_leaf_chunks[i] = NULL;
+    }
+    iris_leaf_chunk_count = 0;
+    iris_leaf_index = 0;
     free(iris_topo_buffer);
     iris_topo_buffer = NULL;
     iris_topo_buffer_cap = 0;
@@ -2178,27 +2201,48 @@ static void iris_tape_tls_arm(void) {
 static void iris_tape_tls_arm(void) {}
 #endif
 
-// Hands out the next node, allocating a chunk only when one is actually needed.
-// Returns NULL if allocation fails; callers must tolerate that, and do, because
-// iris_is_tape_node(NULL) is false and every consumer checks it.
-static IrisTapeNode* iris_tape_alloc_node(void) {
-    if (iris_tape_arena_index >= IRIS_TAPE_ARENA_SIZE) {
-        iris_tape_arena_index = 0;
+// Hands out the next node from one of the two regions, allocating a chunk only
+// when one is actually needed. Returns NULL if allocation fails; callers must
+// tolerate that, and do, because iris_is_tape_node(NULL) is false and every
+// consumer checks it.
+static IrisTapeNode* iris_tape_alloc_from(IrisTapeNode** chunks,
+                                          size_t* chunk_count,
+                                          size_t* index,
+                                          int recycle) {
+    if (*index >= IRIS_TAPE_ARENA_SIZE) {
+        // Intermediates wrap, as before. Leaves must not: recycling a leaf is
+        // exactly the aliasing that #48 was, so a program that exceeds the leaf
+        // budget gets NULL -- a gradient of zero -- rather than another leaf's
+        // gradient reported as its own.
+        if (!recycle) return NULL;
+        *index = 0;
     }
-    size_t idx   = iris_tape_arena_index;
+    size_t idx   = *index;
     size_t chunk = idx / IRIS_TAPE_CHUNK_NODES;
     size_t off   = idx % IRIS_TAPE_CHUNK_NODES;
 
-    if (chunk >= iris_tape_chunk_count) {
+    if (chunk >= *chunk_count) {
         // Indices advance by one and wrap, so this is always the next chunk.
         IrisTapeNode* c = (IrisTapeNode*)calloc(IRIS_TAPE_CHUNK_NODES, sizeof(IrisTapeNode));
         if (!c) return NULL;
         iris_tape_tls_arm();
-        iris_tape_chunks[chunk] = c;
-        iris_tape_chunk_count   = chunk + 1;
+        chunks[chunk] = c;
+        *chunk_count  = chunk + 1;
     }
-    iris_tape_arena_index++;
-    return &iris_tape_chunks[chunk][off];
+    (*index)++;
+    return &chunks[chunk][off];
+}
+
+// A leaf is a value the program holds a handle to and reads a gradient from
+// after `backward` returns, so its address must stay stable. Everything else is
+// internal to one backward pass and is recycled.
+static IrisTapeNode* iris_tape_alloc_node(int is_leaf) {
+    if (is_leaf) {
+        return iris_tape_alloc_from(iris_leaf_chunks, &iris_leaf_chunk_count,
+                                    &iris_leaf_index, 0);
+    }
+    return iris_tape_alloc_from(iris_tape_chunks, &iris_tape_chunk_count,
+                                &iris_tape_arena_index, 1);
 }
 
 static int iris_is_tape_node(const void* ptr) {
@@ -2243,7 +2287,10 @@ static void iris_tape_accumulate(IrisTapeNode* parent, double delta, uint64_t gr
 
 void* iris_tape_record(double value, const char* op, int64_t parent_count,
                        void* const* parents, const double* parent_primals) {
-    IrisTapeNode* node = iris_tape_alloc_node();
+    // A leaf is recorded with op "leaf" by the lowerer (ensure_taped_leaf), and
+    // is the only kind of node whose handle outlives the backward pass.
+    int is_leaf = (op && strcmp(op, "leaf") == 0);
+    IrisTapeNode* node = iris_tape_alloc_node(is_leaf);
     if (!node) return NULL;
     node->magic = IRIS_TAPE_MAGIC;
     node->primal = value;
@@ -2275,7 +2322,7 @@ void iris_backward(void* loss) {
     // Size the topological buffer to the tape actually in use, not to the
     // ceiling. A thread that recorded 300 nodes needs one chunk's worth, not
     // 1 MB.
-    size_t needed = iris_tape_chunk_count * IRIS_TAPE_CHUNK_NODES;
+    size_t needed = (iris_tape_chunk_count + iris_leaf_chunk_count) * IRIS_TAPE_CHUNK_NODES;
     if (needed == 0) return;
     if (iris_topo_buffer_cap < needed) {
         IrisTapeNode** grown =
@@ -2394,7 +2441,9 @@ void iris_backward(void* loss) {
         }
     }
 
-    // Reset tape arena index for deterministic memory reuse in the next training step
+    // Recycle the intermediates for the next training step. The leaf region is
+    // deliberately untouched: the program still holds handles to those nodes
+    // and reads gradients from them after this returns. Recycling them was #48.
     iris_tape_arena_index = 0;
 }
 

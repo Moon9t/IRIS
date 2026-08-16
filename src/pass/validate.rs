@@ -15,6 +15,8 @@ use crate::pass::Pass;
 fn contains_infer(ty: &IrType) -> bool {
     match ty {
         IrType::Infer => true,
+        // Opaque tape handle: no inner type to be unresolved.
+        IrType::TapeRef => false,
         // Deferred-type containers: element type resolved at use site.
         IrType::Option(_)
         | IrType::ResultType(..)

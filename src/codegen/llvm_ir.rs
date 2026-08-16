@@ -6263,6 +6263,10 @@ fn emit_struct_eq(
 
 pub fn llvm_type_complete(ty: &IrType) -> Result<String, CodegenError> {
     match ty {
+        // A tape handle is a pointer into the runtime's tape. This is what lets
+        // a taped value cross a block boundary and still satisfy the `ptr`
+        // requirement at `backward`/`grad` (known-issues #49).
+        IrType::TapeRef => Ok("ptr".to_owned()),
         IrType::Scalar(DType::F32) => Ok("float".to_owned()),
         IrType::Scalar(DType::F64) => Ok("double".to_owned()),
         IrType::Scalar(DType::I32) => Ok("i32".to_owned()),

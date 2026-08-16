@@ -159,6 +159,15 @@ pub enum IrType {
     TaskGroup,
     /// WeakRef type: `weak_ref<T>` — non-owning reference.
     WeakRef(Box<IrType>),
+    /// A handle to a reverse-mode autodiff tape node.
+    ///
+    /// Opaque: a pointer into the runtime's tape, not a value the program can
+    /// take apart. It exists as a type so a tape handle can flow through a block
+    /// parameter — without it, a taped value crossing a loop back-edge became an
+    /// ordinary `f64` and `backward` was rejected at codegen with "requires a
+    /// lowered tape handle", which is why a loop-accumulated loss could not be
+    /// expressed at all (known-issues #49).
+    TapeRef,
     /// `dyn Trait` — fat pointer { data_ptr, vtable_ptr }.
     /// At the IR level, we store the trait name and the method signatures
     /// (param types + return type) so the codegen can lay out the vtable
@@ -183,6 +192,7 @@ impl std::fmt::Display for IrType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             IrType::Scalar(d) => write!(f, "{}", d),
+            IrType::TapeRef => f.write_str("tape_ref"),
             IrType::Tensor { dtype, shape } => write!(f, "tensor<{}, {}>", dtype, shape),
             IrType::Fn { params, ret } => {
                 f.write_str("fn(")?;

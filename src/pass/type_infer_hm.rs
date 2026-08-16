@@ -31,6 +31,8 @@ use crate::pass::Pass;
 fn local_contains_infer(ty: &IrType) -> bool {
     match ty {
         IrType::Infer => true,
+        // Opaque tape handle: no inner type to be unresolved.
+        IrType::TapeRef => false,
         IrType::Option(inner) => local_contains_infer(inner),
         IrType::ResultType(ok, err) => local_contains_infer(ok) || local_contains_infer(err),
         IrType::Chan(inner) => local_contains_infer(inner),

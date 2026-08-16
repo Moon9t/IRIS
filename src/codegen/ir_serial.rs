@@ -241,6 +241,8 @@ impl Writer {
 
     fn ty(&mut self, t: &IrType) {
         match t {
+            // Opaque tape handle: a tag and nothing else to encode.
+            IrType::TapeRef => self.u8(0x16),
             IrType::Scalar(d) => {
                 self.u8(0x01);
                 self.dtype(*d);

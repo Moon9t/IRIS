@@ -41,6 +41,9 @@ fn onnx_op(iris_op: &str) -> &str {
 /// Format an `IrType` as a compact ONNX type string.
 fn fmt_onnx_type(ty: &IrType) -> String {
     match ty {
+        // Not representable in ONNX: autodiff tape handles are a host-runtime
+        // concept and never appear in an exported graph's signature.
+        IrType::TapeRef => "tape_ref".to_owned(),
         IrType::Tensor { dtype, shape } => {
             let elem = dtype_to_onnx_elem(*dtype);
             let dims: Vec<String> = shape
