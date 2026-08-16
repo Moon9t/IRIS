@@ -6,11 +6,10 @@
 // LLVM backend, so every value they should have defined dangled and the module
 // failed verification.
 //
-// Still narrower than it should be: a concrete value is coerced to a trait
-// object at an *annotated binding* and nowhere else. Passing a concrete value
-// to a `dyn Trait` parameter fails at runtime, and pushing one into
-// `list<dyn Trait>` fails at compile time (#18). A heterogeneous collection is
-// the main reason trait objects exist, so this should grow when #18 is fixed.
+// Coercion now happens at three sites, not one: an annotated binding, a call
+// argument, and a push into `list<dyn Trait>` (known-issues #18). The last is
+// the one that matters -- a heterogeneous collection is the main reason trait
+// objects exist, and until it worked the feature was close to decorative.
 
 record Cat { name: str }
 record Dog { name: str }
@@ -64,6 +63,40 @@ def main() -> i64 {
     assert(describe(sc) == "tom says meow");
     assert(describe(sd) == "rex says woof");
     assert(describe(sr) == "unit says beep");
+
+    // Passing a *concrete* value where `dyn Speaker` is expected. This used to
+    // compile and then fail at runtime with "DynCall on non-trait-object",
+    // deferring a compile-time-knowable mistake to execution (#18).
+    assert(describe(c) == "tom says meow");
+    assert(describe(d) == "rex says woof");
+    assert(describe(Robot { id: 9 }) == "unit says beep");
+
+    // The heterogeneous collection: three unrelated record types in one list,
+    // dispatched by their own impls. This is the reason trait objects exist,
+    // and it failed to compile at all until #18 was fixed.
+    val zoo: list<dyn Speaker> = list()
+    list_push(zoo, c);
+    list_push(zoo, d);
+    list_push(zoo, r);
+    assert(list_len(zoo) == 3);
+    assert(list_get(zoo, 0).speak() == "meow");
+    assert(list_get(zoo, 1).speak() == "woof");
+    assert(list_get(zoo, 2).speak() == "beep");
+
+    // Iterating the collection dispatches per element rather than picking one
+    // implementation and applying it to everything -- the failure a vtable bug
+    // would most plausibly produce.
+    val expected: list<str> = list()
+    list_push(expected, "meow");
+    list_push(expected, "woof");
+    list_push(expected, "beep");
+    for i in 0 .. 3 {
+        assert(list_get(zoo, i).speak() == list_get(expected, i));
+    };
+
+    // And a trait object drawn out of the collection still works as a call
+    // argument, so coercion is not lost on the way through the list.
+    assert(describe(list_get(zoo, 0)) == "tom says meow");
 
     println("c08 ok");
     0

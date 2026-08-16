@@ -446,6 +446,11 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
     // Kept separate from `fn_defaults`, which is only populated for functions
     // that actually have defaults.
     let mut fn_param_names_map: HashMap<String, Vec<String>> = HashMap::new();
+    // Declared parameter types, used to coerce a concrete value to a trait
+    // object at a call site. Built from the AST rather than read back from
+    // `IrModule`, because a callee defined later in the file has not been
+    // lowered yet when its caller is.
+    let mut fn_param_types_map: HashMap<String, Vec<IrType>> = HashMap::new();
     for func in &ast.functions {
         user_fn_names.insert(func.name.name.clone());
         if func.type_params.is_empty() {
@@ -465,6 +470,13 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
             func.name.name.clone(),
             func.params.iter().map(|p| p.name.name.clone()).collect(),
         );
+        fn_param_types_map.insert(
+            func.name.name.clone(),
+            func.params
+                .iter()
+                .map(|p| lower_type_with_structs(&p.ty, &module))
+                .collect(),
+        );
         if func.params.iter().any(|p| p.default.is_some()) {
             fn_defaults_map.insert(
                 func.name.name.clone(),
@@ -478,6 +490,7 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
     });
     let fn_defaults = std::rc::Rc::new(fn_defaults_map);
     let fn_param_names = std::rc::Rc::new(fn_param_names_map);
+    let fn_param_types = std::rc::Rc::new(fn_param_types_map);
 
     // Pre-populate built-in / runtime function return types so call sites
     // get concrete types instead of Infer.
@@ -745,6 +758,7 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
             trait_dispatch.clone(),
             fn_defaults.clone(),
             fn_param_names.clone(),
+            fn_param_types.clone(),
             lambda_counter.clone(),
         )?;
         module
@@ -819,6 +833,7 @@ struct Lowerer<'m> {
     fn_defaults: std::rc::Rc<HashMap<String, Vec<Option<crate::parser::ast::AstExpr>>>>,
     /// Declared parameter names per function, for resolving named arguments.
     fn_param_names: std::rc::Rc<HashMap<String, Vec<String>>>,
+    fn_param_types: std::rc::Rc<HashMap<String, Vec<IrType>>>,
     /// Expected type from a `val x: T = expr` annotation — used by collection
     /// constructors (e.g. `list()`, `map()`) to infer the element/key/value type.
     binding_ty: Option<IrType>,
@@ -957,6 +972,7 @@ impl<'m> Lowerer<'m> {
             std::rc::Rc::new(HashMap::new()),
             std::rc::Rc::new(HashMap::new()),
             std::rc::Rc::new(HashMap::new()),
+            std::rc::Rc::new(HashMap::new()),
         )
     }
 
@@ -975,6 +991,7 @@ impl<'m> Lowerer<'m> {
         trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
         fn_defaults: std::rc::Rc<HashMap<String, Vec<Option<crate::parser::ast::AstExpr>>>>,
         fn_param_names: std::rc::Rc<HashMap<String, Vec<String>>>,
+        fn_param_types: std::rc::Rc<HashMap<String, Vec<IrType>>>,
     ) -> Self {
         Self {
             builder,
@@ -993,6 +1010,7 @@ impl<'m> Lowerer<'m> {
             trait_dispatch,
             fn_defaults,
             fn_param_names,
+            fn_param_types,
             binding_ty: None,
             current_return_ty: None,
             expected_expr_ty: None,
@@ -5113,8 +5131,25 @@ impl<'m> Lowerer<'m> {
                     span,
                 });
             }
-            let (list, _) = self.lower_expr(&args[0])?;
-            let (value, _) = self.lower_expr(&args[1])?;
+            let (list, list_ty) = self.lower_expr(&args[0])?;
+            let (value, value_ty) = self.lower_expr(&args[1])?;
+            // Pushing a concrete struct into a `list<dyn Trait>` coerces it
+            // rather than failing validation with "type mismatch: dyn Trait vs
+            // Struct". A heterogeneous collection is the main reason trait
+            // objects exist, so refusing this made the feature close to
+            // useless. See known-issues #18.
+            let elem_expected = match &list_ty {
+                IrType::List(elem) if matches!(**elem, IrType::TraitObject { .. }) => {
+                    Some((**elem).clone())
+                }
+                _ => None,
+            };
+            let value = match elem_expected {
+                Some(exp) => {
+                    self.coerce_to_trait_object(value, value_ty, &exp, args[1].span())?.0
+                }
+                None => value,
+            };
             self.builder
                 .push_instr(IrInstr::ListPush { list, value }, None);
             let dummy = self.builder.fresh_value();
@@ -7529,6 +7564,7 @@ impl<'m> Lowerer<'m> {
                     self.trait_dispatch.clone(),
                     self.fn_defaults.clone(),
                     self.fn_param_names.clone(),
+                    self.fn_param_types.clone(),
                     self.lambda_counter.clone(),
                 )?;
 
@@ -7634,6 +7670,14 @@ impl<'m> Lowerer<'m> {
             });
         }
 
+        // Declared parameter types, so a concrete struct passed where a
+        // `dyn Trait` is expected becomes a trait object here. Without this it
+        // reached `DynCall` as a bare struct and failed at *runtime* with
+        // "DynCall on non-trait-object" -- a mistake knowable at compile time,
+        // deferred to execution. See known-issues #18.
+        let callee_param_tys: Option<Vec<IrType>> =
+            self.fn_param_types.get(&callee_name).cloned();
+
         // Build argument list, expanding splat args (`..expr`).
         let defaults = self.fn_defaults.get(&callee_name).cloned();
         let mut arg_vals = Vec::new();
@@ -7674,7 +7718,17 @@ impl<'m> Lowerer<'m> {
                     arg_vals.push(elem_val);
                 }
             } else {
-                let (v, _) = self.lower_expr(arg)?;
+                let (v, vty) = self.lower_expr(arg)?;
+                let slot = arg_vals.len();
+                let expected = callee_param_tys
+                    .as_ref()
+                    .and_then(|ts| ts.get(slot))
+                    .filter(|t| matches!(t, IrType::TraitObject { .. }))
+                    .cloned();
+                let v = match expected {
+                    Some(exp) => self.coerce_to_trait_object(v, vty, &exp, arg.span())?.0,
+                    None => v,
+                };
                 arg_vals.push(v);
             }
         }
@@ -16208,6 +16262,7 @@ fn lower_function_with_generics(
     trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
     fn_defaults: std::rc::Rc<HashMap<String, Vec<Option<AstExpr>>>>,
     fn_param_names: std::rc::Rc<HashMap<String, Vec<String>>>,
+    fn_param_types: std::rc::Rc<HashMap<String, Vec<IrType>>>,
     lambda_counter: std::rc::Rc<std::cell::Cell<u32>>,
 ) -> Result<
     (
@@ -16228,6 +16283,7 @@ fn lower_function_with_generics(
         trait_dispatch,
         fn_defaults,
         fn_param_names,
+        fn_param_types,
         lambda_counter,
     )
 }
@@ -16245,6 +16301,7 @@ fn lower_function_with_generics_and_subs(
     trait_dispatch: std::rc::Rc<HashMap<String, Vec<(IrType, String)>>>,
     fn_defaults: std::rc::Rc<HashMap<String, Vec<Option<AstExpr>>>>,
     fn_param_names: std::rc::Rc<HashMap<String, Vec<String>>>,
+    fn_param_types: std::rc::Rc<HashMap<String, Vec<IrType>>>,
     lambda_counter: std::rc::Rc<std::cell::Cell<u32>>,
 ) -> Result<
     (
@@ -16288,6 +16345,7 @@ fn lower_function_with_generics_and_subs(
             trait_dispatch.clone(),
             fn_defaults.clone(),
             fn_param_names.clone(),
+            fn_param_types.clone(),
             lambda_counter.clone(),
         )?;
         // Preserve attributes on the inner implementation only.
@@ -16420,6 +16478,7 @@ fn lower_function_with_generics_and_subs(
         trait_dispatch,
         fn_defaults,
         fn_param_names,
+        fn_param_types,
     );
     lowerer.current_return_ty = Some(return_ty.clone());
 

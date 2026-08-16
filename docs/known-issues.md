@@ -681,7 +681,46 @@ did.
 
 ---
 
-## 18. Trait objects only work through an annotated intermediate binding — **open**
+## 18. `dyn Trait` coercion only at an annotated binding — **FIXED**
+
+> A value became a trait object only where a binding said so:
+>
+> ```iris
+> val sc: dyn Speaker = c            // worked
+> describe(c)                        // runtime: "DynCall on non-trait-object"
+> list_push(zoo, c)                  // compile: "type mismatch: dyn Speaker vs Struct"
+> ```
+>
+> The first failure is the worse one: a mistake knowable at compile time was
+> deferred to execution, so an untested branch shipped broken. The second ruled
+> out heterogeneous collections, which is the main reason to want trait objects
+> at all -- the feature was close to decorative without them.
+>
+> **The mechanism was already present.** `coerce_to_trait_object` existed as a
+> general helper and did exactly the right thing; it simply was not called at
+> these sites, and both sites discarded the type information they needed:
+>
+> ```rust
+> let (v, _) = self.lower_expr(arg)?;          // call argument
+> let (list, _) = self.lower_expr(&args[0])?;  // list_push
+> let (value, _) = self.lower_expr(&args[1])?;
+> ```
+>
+> **Fixed** by capturing those types and calling the existing helper. Call sites
+> need the callee's declared parameter types, so `fn_param_types` is built in
+> the same loop as `fn_param_names` — from the **AST**, not read back from
+> `IrModule`, because a callee defined later in the file has not been lowered
+> when its caller is.
+>
+> No second site was needed for `list_get`: the element type survives, so
+> `list_get(zoo, 0).speak()` dispatches through the vtable correctly.
+>
+> `tests/conformance/c08_trait_objects.iris` now covers all three coercion
+> sites, a three-type heterogeneous collection, per-element dispatch in a loop
+> (the failure a vtable bug would most plausibly produce is applying one impl to
+> everything), and a trait object drawn back out of the list and passed on.
+
+### Original report
 
 A concrete value is coerced to a trait object at an annotated `val`, and nowhere
 else.
