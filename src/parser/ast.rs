@@ -1055,6 +1055,12 @@ pub struct AstEffectDef {
 /// A file may contain any mix of `def`, `record`, `choice`, `model`, `const`, `type`, `trait`, `impl`, `effect`, `bring`, and `extern def` definitions.
 #[derive(Debug, Clone)]
 pub struct AstModule {
+    /// Mangled names (`module__item`) of non-`pub` items brought in from other
+    /// modules. Brought modules are merged into one flat AST, so the module
+    /// boundary is gone by the time anything is resolved; this is what is left
+    /// of it. Carried on the AST rather than in a global because compilation
+    /// runs on a spawned thread and the merged AST is cached. See #13.
+    pub private_items: std::collections::HashSet<String>,
     pub enums: Vec<AstEnumDef>,
     pub structs: Vec<AstStructDef>,
     pub functions: Vec<AstFunction>,

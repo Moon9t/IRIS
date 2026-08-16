@@ -9,11 +9,17 @@ fn format_undef(name: &str, suggestion: Option<&str>) -> String {
         name
     );
     if let Some(s) = suggestion {
-        format!(
-            "{}
-  help: did you mean '{}'?",
-            base, s
-        )
+        // A single-word suggestion is a name the user probably meant to type,
+        // so "did you mean 'foo'?" fits. Anything longer is already a sentence
+        // (e.g. the `pub` visibility hint) and reads as nonsense inside that
+        // template, so it is emitted as a plain help line.
+        if s.contains(' ') {
+            format!("{}
+  help: {}", base, s)
+        } else {
+            format!("{}
+  help: did you mean '{}'?", base, s)
+        }
     } else {
         base
     }

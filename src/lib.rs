@@ -93,6 +93,7 @@ pub fn compile_with_recovery(
             // Lexer error — return empty module + the lex error.
             (
                 crate::parser::ast::AstModule {
+            private_items: std::collections::HashSet::new(),
                     enums: vec![],
                     structs: vec![],
                     functions: vec![],
@@ -226,6 +227,7 @@ pub fn compile_multi_to_ast(
                 }
             }
             // Merge all functions (including internal ones) and other definitions
+            main_ast.private_items.extend(dep.private_items);
             main_ast.extern_fns.extend(dep.extern_fns);
             main_ast.functions.extend(dep.functions);
             main_ast.structs.extend(dep.structs);

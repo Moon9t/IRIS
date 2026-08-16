@@ -292,6 +292,7 @@ impl FileCompiler {
     }
 
     fn merge_dep(&self, main_ast: &mut AstModule, dep: AstModule) {
+        main_ast.private_items.extend(dep.private_items);
         main_ast.extern_fns.extend(dep.extern_fns);
         main_ast.functions.extend(dep.functions);
         main_ast.structs.extend(dep.structs);
@@ -789,7 +790,55 @@ fn rewrite_stmt(stmt: &mut AstStmt, symbols: &HashSet<String>, prefix: &str) {
     }
 }
 
+/// Records the mangled names of this module's non-`pub` items **onto the module
+/// itself**, so the information survives the merge into the flat AST.
+///
+/// Brought modules are merged into one flat AST and every symbol is renamed to
+/// `module__name`. References *inside* the defining module are rewritten to the
+/// mangled name directly, so they keep working; a reference from another module
+/// goes through `resolve_unqualified_name`, which used to accept any
+/// `prefix__name` match regardless of visibility. That is how a private function
+/// stayed callable across a module boundary (#13).
+///
+/// This lived in a `thread_local` first, which silently never fired: compilation
+/// runs on a spawned thread (`lib.rs` gives it a larger stack), so the mangling
+/// and the resolution happen on *different* threads and the set read back was
+/// always empty. A process-global would have worked but is shared by tests
+/// compiling concurrently. Carrying it on the AST is both thread-safe and
+/// correct when the merged AST is served from cache.
+///
+/// Traits are absent because `AstTraitDef` carries no `is_pub` — a trait cannot
+/// currently be declared private, so there is nothing to enforce.
+fn record_private_items(ast: &mut AstModule, mod_name: &str) {
+    let mut found: Vec<String> = Vec::new();
+    {
+        let mut note = |is_pub: bool, name: &str| {
+            if !is_pub {
+                found.push(format!("{}__{}", mod_name, name));
+            }
+        };
+        for f in &ast.functions {
+            note(f.is_pub, &f.name.name);
+        }
+        for st in &ast.structs {
+            note(st.is_pub, &st.name.name);
+        }
+        for e in &ast.enums {
+            note(e.is_pub, &e.name.name);
+        }
+        for c in &ast.consts {
+            note(c.is_pub, &c.name.name);
+        }
+        for ta in &ast.type_aliases {
+            note(ta.is_pub, &ta.name);
+        }
+    }
+    ast.private_items.extend(found);
+}
+
 pub(crate) fn mangle_module_symbols(ast: &mut AstModule, mod_name: &str) {
+    // Before renaming, while the original names are still in place.
+    record_private_items(ast, mod_name);
     let symbols = collect_local_symbols(ast);
     if symbols.is_empty() {
         return;
@@ -1966,6 +2015,7 @@ fn flatten_inline_modules_for(m: &mut AstModuleDef) {
 
     // Build a module-level AstModule from this module's items for mangling.
     let mut mod_ast = AstModule {
+            private_items: std::collections::HashSet::new(),
         enums: std::mem::take(&mut m.enums),
         structs: std::mem::take(&mut m.structs),
         functions: std::mem::take(&mut m.functions),
@@ -2017,6 +2067,7 @@ fn resolve_inline_module_bring(ast: &mut AstModule) {
             flatten_inline_modules_for(&mut mod_def);
             // Mangle symbols with module name.
             let mut mod_ast = AstModule {
+            private_items: std::collections::HashSet::new(),
                 enums: std::mem::take(&mut mod_def.enums),
                 structs: std::mem::take(&mut mod_def.structs),
                 functions: std::mem::take(&mut mod_def.functions),

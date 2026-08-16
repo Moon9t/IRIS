@@ -624,6 +624,7 @@ impl<'t> Parser<'t> {
             }
         }
         AstModule {
+            private_items: std::collections::HashSet::new(),
             enums,
             structs,
             functions,

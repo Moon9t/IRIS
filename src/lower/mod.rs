@@ -74,6 +74,12 @@ thread_local! {
     /// argument values carries the mapping across for free. See #49.
     static CURRENT_FN_ASTS: RefCell<HashMap<String, crate::parser::ast::AstFunction>> =
         RefCell::new(HashMap::new());
+    /// Mangled names of non-`pub` items of brought modules, published from the
+    /// merged AST at the start of lowering. It has to be set here rather than
+    /// where the mangling happens, because compilation runs on a spawned thread
+    /// and the two are not the same thread. See #13.
+    static CURRENT_PRIVATE_ITEMS: RefCell<std::collections::HashSet<String>> =
+        RefCell::new(std::collections::HashSet::new());
     static CURRENT_BRING_PREFIXES: RefCell<Vec<Vec<String>>> = const { RefCell::new(Vec::new()) };
     static CURRENT_BRING_MAPPINGS: RefCell<Vec<HashMap<String, String>>> = const { RefCell::new(Vec::new()) };
 }
@@ -503,6 +509,9 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
     let generic_fns = std::rc::Rc::new(generic_fn_map);
     CURRENT_USER_FNS.with(|u| {
         *u.borrow_mut() = user_fn_names;
+    });
+    CURRENT_PRIVATE_ITEMS.with(|p| {
+        *p.borrow_mut() = ast.private_items.clone();
     });
     CURRENT_FN_ASTS.with(|m| {
         let mut map = m.borrow_mut();
@@ -953,6 +962,19 @@ fn get_qualified_enum_name(base: &AstExpr) -> Option<String> {
 }
 
 impl<'m> Lowerer<'m> {
+    /// If `name` is unresolvable only because the matching item is not `pub`,
+    /// returns the module that defines it. Turns "cannot find 'secret'" into a
+    /// message that names the actual cause. See #13.
+    fn private_item_hint(&self, name: &str) -> Option<String> {
+        let suffix = format!("__{}", name);
+        CURRENT_PRIVATE_ITEMS.with(|p| {
+            p.borrow()
+                .iter()
+                .find(|m| m.ends_with(&suffix))
+                .map(|m| m[..m.len() - suffix.len()].to_owned())
+        })
+    }
+
     fn resolve_unqualified_name(&self, name: &str) -> String {
         if self.scope.contains_key(name) {
             return name.to_string();
@@ -961,6 +983,14 @@ impl<'m> Lowerer<'m> {
             if let Some(prefixes) = prefixes_stack.borrow().last() {
                 for prefix in prefixes.iter() {
                     let candidate = format!("{}__{}", prefix, name);
+                    // A non-`pub` item of a brought module is not reachable by
+                    // its unqualified name from another module. The defining
+                    // module's own references were rewritten to the mangled name
+                    // during the merge, so they do not come through here and are
+                    // unaffected. See known-issues #13.
+                    if CURRENT_PRIVATE_ITEMS.with(|p| p.borrow().contains(&candidate)) {
+                        continue;
+                    }
                     if self.fn_sigs.contains_key(&candidate)
                         || self.mono_sigs.borrow().contains_key(&candidate)
                         || self.generic_fns.contains_key(&candidate)
@@ -1017,6 +1047,16 @@ impl<'m> Lowerer<'m> {
                 candidates.push(key.clone());
             }
         }
+        // This fallback exists for *transitive* brings, where the prefix of the
+        // defining module is not among the current module's own bring prefixes.
+        // It matched on the suffix alone, so it also resolved private items --
+        // and it ran after the prefix loop, which meant refusing them there
+        // achieved nothing. Filtering here is what actually enforces `pub`.
+        // See known-issues #13.
+        CURRENT_PRIVATE_ITEMS.with(|p| {
+            let priv_set = p.borrow();
+            candidates.retain(|c| !priv_set.contains(c));
+        });
         for key in self.mono_sigs.borrow().keys() {
             if key.ends_with(&suffix) {
                 candidates.push(key.clone());
@@ -1130,6 +1170,35 @@ impl<'m> Lowerer<'m> {
                     | DType::USize
             ) | IrType::Tensor { .. }
         )
+    }
+
+    /// A real unit value (`0`) for a construct that yields nothing.
+    ///
+    /// The fallback used to be a bare `fresh_value()` -- a `ValueId` that no
+    /// instruction ever defines. Anything that then consumed it failed
+    /// validation with "variable '%N' is used before it has been assigned a
+    /// value", pointing at an internal SSA name rather than at the source. A
+    /// `when` arm with a braced body (`{ a = 1; }`) has no tail expression and
+    /// so hit this on every backend path -- enum, option and result alike.
+    /// See known-issues #3.
+    ///
+    /// When the current block is already terminated no instruction can be
+    /// emitted, and the value is unreachable by construction, so the phantom is
+    /// harmless and retained for that case only.
+    fn emit_unit_value(&mut self) -> (ValueId, IrType) {
+        let ty = IrType::Scalar(DType::I64);
+        let v = self.builder.fresh_value();
+        if !self.builder.is_current_block_terminated() {
+            self.builder.push_instr(
+                IrInstr::ConstInt {
+                    result: v,
+                    value: 0,
+                    ty: ty.clone(),
+                },
+                Some(ty.clone()),
+            );
+        }
+        (v, ty)
     }
 
     fn tape_ref_for(&self, value: ValueId) -> ValueId {
@@ -1640,7 +1709,7 @@ impl<'m> Lowerer<'m> {
                     // The value is only used to satisfy type requirements; the
                     // current block is already sealed, so we cannot emit more
                     // instructions.
-                    Ok((self.builder.fresh_value(), IrType::Scalar(DType::I64)))
+                    Ok(self.emit_unit_value())
                 }
             }
 
@@ -1651,7 +1720,7 @@ impl<'m> Lowerer<'m> {
                 } else if let Some((param_id, param_ty)) = self.builder.current_block_first_param() {
                     Ok((param_id, param_ty))
                 } else {
-                    Ok((self.builder.fresh_value(), IrType::Scalar(DType::I64)))
+                    Ok(self.emit_unit_value())
                 }
             }
 
@@ -4241,7 +4310,7 @@ impl<'m> Lowerer<'m> {
             let (group_val, _) = self.lower_expr(&args[0])?;
             self.builder
                 .push_instr(IrInstr::TaskGroupJoin { group: group_val }, None);
-            return Ok((self.builder.fresh_value(), IrType::Scalar(DType::I64)));
+            return Ok(self.emit_unit_value());
         }
 
         // Built-in: task_group_cancel(tg) → TaskGroupCancel
@@ -4255,7 +4324,7 @@ impl<'m> Lowerer<'m> {
             let (group_val, _) = self.lower_expr(&args[0])?;
             self.builder
                 .push_instr(IrInstr::TaskGroupCancel { group: group_val }, None);
-            return Ok((self.builder.fresh_value(), IrType::Scalar(DType::I64)));
+            return Ok(self.emit_unit_value());
         }
 
         // Built-in: channel() → ChanNew
@@ -7953,10 +8022,16 @@ impl<'m> Lowerer<'m> {
         // Emit a compile-time error rather than silently producing bad IR.
         if ret_ty == IrType::Infer && !self.module.extern_fns.iter().any(|e| e.name == callee_name)
         {
+            let suggestion = self.private_item_hint(&callee_name).map(|module| {
+                format!(
+                    "'{}' is defined in module '{}' but is not marked `pub`, so it is not visible here. Add `pub` to its definition to export it.",
+                    callee_name, module
+                )
+            });
             return Err(LowerError::UndefinedVariable {
                 name: callee_name,
                 span,
-                suggestion: None,
+                suggestion,
             });
         }
 
@@ -8716,6 +8791,18 @@ impl<'m> Lowerer<'m> {
             .unwrap_or_default();
 
         let outer_scope = self.scope.clone();
+
+        // Variables the arms assign to must travel to the merge block as block
+        // arguments, exactly as the option and result paths already do. Without
+        // this the assignment was simply *lost*: `when c { C.X => { a = 1; } }`
+        // restored the outer scope afterwards, so `a` kept its old value and the
+        // program silently computed the wrong answer. See known-issues #3.
+        let mut rebound_names: Vec<String> = Vec::new();
+        for arm in arms {
+            collect_rebound_vars_in_expr(&arm.body, &mut rebound_names);
+        }
+        rebound_names.retain(|name| outer_scope.contains_key(name));
+
         let mut result_ty: Option<IrType> = None;
         for (arm, &arm_bb) in arms.iter().zip(arm_blocks.iter()) {
             self.scope = outer_scope.clone();
@@ -8759,10 +8846,22 @@ impl<'m> Lowerer<'m> {
                 result_ty = Some(arm_ty);
             }
             if !self.builder.is_current_block_terminated() {
+                let mut branch_args = vec![arm_val];
+                let arm_scope = self.scope.clone();
+                for name in &rebound_names {
+                    // An arm that did not touch the variable passes the value it
+                    // came in with, so every predecessor supplies one argument.
+                    let val = arm_scope
+                        .get(name)
+                        .or_else(|| outer_scope.get(name))
+                        .map(|(v, _)| *v)
+                        .expect("rebound variable missing from arm and outer scope");
+                    branch_args.push(val);
+                }
                 self.builder.push_instr(
                     IrInstr::Br {
                         target: merge_bb,
-                        args: vec![arm_val],
+                        args: branch_args,
                     },
                     None,
                 );
@@ -8772,11 +8871,24 @@ impl<'m> Lowerer<'m> {
 
         let result_ty = result_ty.unwrap();
 
-        // 7. Merge block receives the result.
+        // 7. Merge block receives the result, then the rebound variables.
         let result = self
             .builder
             .add_block_param(merge_bb, Some("when_result"), result_ty.clone());
+        let mut rebound_params = Vec::new();
+        for name in &rebound_names {
+            let Some((_, ty)) = self.scope.get(name).cloned() else {
+                continue;
+            };
+            let param = self
+                .builder
+                .add_block_param(merge_bb, Some(name), ty.clone());
+            rebound_params.push((name.clone(), param, ty));
+        }
         self.builder.set_current_block(merge_bb);
+        for (name, param, ty) in rebound_params {
+            self.scope.insert(name, (param, ty));
+        }
 
         Ok((result, result_ty))
     }

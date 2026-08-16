@@ -69,7 +69,21 @@ wrong. See issue 4.
 
 ---
 
-## 2. `str` field in a record inside `result<T, E>` — **open**
+## 2. `str` field in a record inside `result<T, E>` — **FIXED**
+
+> **No longer reproduces**, confirmed 2026-08-16. A record with a `str` field
+> constructed inside `ok(...)` and returned as `result<Record, str>` round-trips
+> correctly on both backends, and `projects/autonomous_regulator/` — which this
+> issue said it blocked — now runs end to end, which also satisfies that item
+> of the release gate.
+>
+> Fixed incidentally by the `MakeStruct` field-store work recorded under #6,
+> which made the store take the value's *emitted* type as authoritative. Pinned
+> by `a_str_record_field_survives_a_result_round_trip` and
+> `the_err_arm_of_a_str_record_result_still_carries_its_message` in
+> `tests/when_arm_assignment.rs` so it cannot regress unnoticed.
+
+### Original report
 
 A record containing a `str` field, constructed inside `ok(...)` and returned as
 `result<Record, str>`, mis-types the string as `i64` and fails LLVM verification:
@@ -86,7 +100,33 @@ Currently blocks `projects/autonomous_regulator/` from running.
 
 ---
 
-## 3. Assigning to an enclosing `var` from `when` arms — **workaround exists**
+## 3. Assigning to an enclosing `var` from `when` arms — **FIXED**
+
+> **Fixed** on 2026-08-16. Two defects were stacked here, and the second was
+> worse than the one reported.
+>
+> **The compile failure.** A braced arm body (`{ a = 1; }`) has no tail
+> expression, and the fallback for a block with no value returned a bare
+> `fresh_value()` — a `ValueId` that no instruction defines. Anything consuming
+> it failed validation with "variable '%N' is used before it has been assigned",
+> naming an internal SSA value rather than the source. It now emits a real `0`,
+> and the same phantom was fixed in three other places (`Mask` bodies,
+> `task_group_join`, `task_group_cancel`) where it was latent.
+>
+> **The silent wrong answer underneath.** With that fixed, `choice` arms
+> compiled but produced the *old* value: `lower_when_expr` never threaded
+> assigned variables to the merge block, so the assignment was simply lost. The
+> option and result paths already threaded them, which is why only `choice` was
+> wrong once it compiled. `when c { C.X => { a = 1; } }` left `a == 0`.
+>
+> The workaround (`when` as an expression) remains better style and is still
+> tested, but it is no longer required.
+>
+> **Tested by** 9 tests in `tests/when_arm_assignment.rs`, including an arm that
+> does *not* assign — every predecessor must still supply an argument for the
+> merge parameter.
+
+### Original report
 
 ```iris
 var applied = 0.0;
@@ -433,7 +473,55 @@ exercising `par for` and atomics separately.
 
 ---
 
-## 13. `pub` is not enforced across module boundaries — **open, needs design**
+## 13. `pub` is not enforced across module boundaries — **FIXED**
+
+> **Fixed** on 2026-08-16. The design the original report asked for was mostly
+> present already: `mangle_module_symbols` renames every brought symbol to
+> `module__name` and rewrites the defining module's own references to the
+> mangled name directly. Internal calls therefore never go through name
+> resolution and only *cross-module* references do, so visibility can be
+> enforced in one place without reconstructing the module boundary.
+>
+> `resolve_unqualified_name` now refuses a `prefix__name` candidate when the
+> item is not `pub`. Note there are **two** resolution paths, and fixing only
+> the obvious one changed nothing: a fallback below it scans every signature for
+> any `*__name` suffix to support transitive brings, and that is what was
+> actually resolving the private call.
+>
+> Two false starts worth recording, because both failed *silently*:
+>
+> * A `thread_local` for the private set never fired — compilation runs on a
+>   spawned thread (`lib.rs` gives it a larger stack), so the mangling and the
+>   resolution are on different threads and the set read back was always empty.
+> * Clearing that set per compilation broke it a second way: the merged AST is
+>   cached, so a later compilation reuses it *without* re-mangling, leaving the
+>   set empty again.
+>
+> The visibility set is therefore carried **on the merged AST** and published to
+> the lowering thread when lowering begins. That is correct under a cache hit
+> and safe when tests compile concurrently.
+>
+> The diagnostic names the cause rather than only the symptom:
+>
+> ```text
+> error[E0100]: cannot find 'secret' - this variable or function is not defined...
+>   help: 'secret' is defined in module 'utils' but is not marked `pub`, so it is
+>         not visible here. Add `pub` to its definition to export it.
+> ```
+>
+> `format_undef` no longer wraps a sentence-length suggestion in
+> "did you mean '...'?", which read as nonsense.
+>
+> **Limit, stated:** traits are not covered, because `AstTraitDef` carries no
+> `is_pub` — a trait cannot currently be declared private, so there is nothing
+> to enforce. Functions, records, choices, consts and type aliases are.
+>
+> Verified: `test_bring_file_private_not_visible` passes — it was the **only**
+> failing test in the suite — and the other 7 module tests, exercising `pub`
+> functions, records, consts and transitive brings, still pass. No stdlib module
+> declares a non-`pub` item, so nothing there relied on the old behaviour.
+
+### Original report
 
 A non-`pub` function in a brought module is callable from the importing module.
 
