@@ -1013,6 +1013,14 @@ impl<'t> Parser<'t> {
         let start = self.current_span();
         self.expect(&Token::Trait)?;
         let name = self.expect_ident()?;
+        // `trait Container[T]` / `trait Mappable[F[_]]`. Reuses the same
+        // parameter parser as functions and impls, so `F[_]` is accepted
+        // wherever `T` is.
+        let type_params = if matches!(self.peek_tok(), Token::LBracket) {
+            self.parse_generic_params()?
+        } else {
+            Vec::new()
+        };
         self.expect(&Token::LBrace)?;
         let mut assoc_types = Vec::new();
         let mut methods = Vec::new();
@@ -1090,6 +1098,7 @@ impl<'t> Parser<'t> {
         let end = self.expect(&Token::RBrace)?;
         Ok(AstTraitDef {
             name,
+            type_params,
             assoc_types,
             methods,
             span: start.merge(end),
@@ -1115,6 +1124,41 @@ impl<'t> Parser<'t> {
         // Disambiguate: if the token after the first ident is `for`, it's a trait impl.
         // Otherwise it's a standalone struct impl block.
         let first_name = self.parse_type_name_str()?;
+        // `impl Container[i64] for IntBox` -- arguments for the trait's own
+        // generic parameters. Distinct from `impl[T] Trait for X`, which is a
+        // blanket impl and puts its brackets before the trait name.
+        let trait_args = if matches!(self.peek_tok(), Token::LBracket) {
+            self.advance();
+            let mut args = Vec::new();
+            while !matches!(self.peek_tok(), Token::RBracket | Token::Eof) {
+                // A bare constructor name is a legitimate argument for a
+                // higher-kinded parameter -- `impl Mappable[list] for X` binds
+                // `F` to the *constructor* `list`, not to a complete type.
+                // `parse_type` cannot accept it, because on its own `list`
+                // demands an element: it would report "expected '<'".
+                let bare_ctor = matches!(self.peek_at(1), Token::Comma | Token::RBracket);
+                if bare_ctor {
+                    let span = self.current_span();
+                    let n = match self.peek_tok().clone() {
+                        Token::Ident(name) => {
+                            self.advance();
+                            name
+                        }
+                        _ => self.parse_type_name_str()?,
+                    };
+                    args.push(AstType::Named(n, span));
+                } else {
+                    args.push(self.parse_type()?);
+                }
+                if matches!(self.peek_tok(), Token::Comma) {
+                    self.advance();
+                }
+            }
+            self.expect(&Token::RBracket)?;
+            args
+        } else {
+            Vec::new()
+        };
         let (trait_name, type_name) = if matches!(self.peek_tok(), Token::For) {
             self.advance(); // consume `for`
             let type_name = self.parse_type_name_str()?;
@@ -1140,6 +1184,7 @@ impl<'t> Parser<'t> {
         let end = self.expect(&Token::RBrace)?;
         Ok(AstImplDef {
             trait_name,
+            trait_args,
             type_name,
             generic_params,
             assoc_type_bindings,

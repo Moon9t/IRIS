@@ -972,6 +972,14 @@ pub struct AstAssocTypeDecl {
 #[derive(Debug, Clone)]
 pub struct AstTraitDef {
     pub name: Ident,
+    /// Generic parameters on the trait itself: `trait Container[T]`, or
+    /// `trait Mappable[F[_]]` for a parameter that is a type *constructor*.
+    ///
+    /// Traits accepted no generic parameters at all before this, so
+    /// `trait Container[T]` was a parse error exactly like
+    /// `trait Mappable[F[_]]` -- there were no type classes of any kind, over a
+    /// constructor or otherwise. See known-issues #37.
+    pub type_params: Vec<AstGenericParam>,
     pub assoc_types: Vec<AstAssocTypeDecl>,
     pub methods: Vec<AstTraitMethod>,
     pub span: Span,
@@ -984,6 +992,9 @@ pub struct AstTraitDef {
 pub struct AstImplDef {
     /// The trait being implemented.
     pub trait_name: String,
+    /// Arguments supplied to the trait's generic parameters:
+    /// `impl Container[i64] for IntBox` binds the trait's `T` to `i64`.
+    pub trait_args: Vec<AstType>,
     /// The type being implemented for (e.g. "i64", "Point", or "T" for blanket impls).
     pub type_name: String,
     /// Generic parameters (for blanket impls): `impl[T where T: Show] ...`.

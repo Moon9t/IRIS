@@ -1,0 +1,80 @@
+// Generic traits, including traits parameterised by a type *constructor*.
+//
+// Traits accepted no generic parameters at all before this. `trait Container[T]`
+// was a parse error exactly like `trait Mappable[F[_]]` -- so there were no type
+// classes of any kind, and the missing HKT half was not an HKT problem but a
+// missing feature underneath it. See known-issues #37.
+
+// ---------------------------------------------------------------------------
+// A trait generic over an ordinary type parameter.
+// ---------------------------------------------------------------------------
+
+trait Container[T] {
+    def get(self) -> T
+}
+
+record IntBox { v: i64 }
+record StrBox { s: str }
+
+impl Container[i64] for IntBox {
+    def get(self) -> i64 { self.v }
+}
+
+impl Container[str] for StrBox {
+    def get(self) -> str { self.s }
+}
+
+// ---------------------------------------------------------------------------
+// A trait generic over a type constructor -- a type class over `F[_]`.
+// ---------------------------------------------------------------------------
+
+record Box[T] { item: T }
+
+trait Mappable[F[_]] {
+    def describe(self) -> str
+    def size(self) -> i64
+}
+
+record ListHolder { xs: list<i64> }
+record BoxHolder { b: Box<i64> }
+
+impl Mappable[list] for ListHolder {
+    def describe(self) -> str { "list" }
+    def size(self) -> i64 { list_len(self.xs) }
+}
+
+impl Mappable[Box] for BoxHolder {
+    def describe(self) -> str { "box" }
+    def size(self) -> i64 { 1 }
+}
+
+def main() -> i64 {
+    // Two impls of the same trait at different type arguments, dispatching to
+    // their own methods rather than one shadowing the other.
+    val a = IntBox { v: 3 };
+    val b = StrBox { s: "hi" };
+    assert(a.get() == 3);
+    assert(b.get() == "hi");
+
+    // The constructor argument distinguishes the impls: `Mappable[list]` and
+    // `Mappable[Box]` are different implementations of one trait.
+    val lh = ListHolder { xs: list() };
+    list_push(lh.xs, 10);
+    list_push(lh.xs, 20);
+    val bh = BoxHolder { b: Box { item: 7 } };
+
+    assert(lh.describe() == "list");
+    assert(bh.describe() == "box");
+
+    // A second method on the same trait, to catch dispatch that resolves the
+    // trait correctly but always picks the first method.
+    assert(lh.size() == 2);
+    assert(bh.size() == 1);
+
+    // Earlier values still dispatch correctly after later ones are created.
+    assert(a.get() == 3);
+    assert(lh.describe() == "list");
+
+    println("test_generic_traits ok");
+    0
+}

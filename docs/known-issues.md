@@ -1756,6 +1756,56 @@ never compiled. It now asserts the forms that work and documents the gap.
 
 ---
 
+## 37. Traits accepted no generic parameters — **FIXED**
+
+`trait Container[T]` was a parse error, exactly like `trait Mappable[F[_]]`.
+`parse_trait_def` went straight from the trait name to `{`. There were no type
+classes of any kind — so the "no type classes over a constructor" limit recorded
+when rating HKT was not an HKT gap at all, but a missing feature underneath it.
+
+**Fixed.** Traits parse `[params]` using the same parser functions and impls
+already use, so `F[_]` is accepted wherever `T` is. Impls gained the matching
+half: `impl Container[i64] for IntBox` parses its trait arguments.
+
+`impl Mappable[list] for ListHolder` needed one special case — `list` binds `F`
+to a *constructor*, which is not a complete type, and `parse_type` would demand
+`list<...>`. A bare name followed by `,` or `]` is read as a constructor.
+
+Dispatch needed no change: it already keys on the concrete type and method name,
+and an impl supplies concrete signatures. The trait's parameters are interface,
+not dispatch.
+
+Asserted in `tests/test_generic_traits.iris`, both backends.
+
+---
+
+## 38. An impl target cannot be a generic type — **open**
+
+```iris
+impl Sized2 for list<i64> { ... }          // parse error: expected '{', found '<'
+impl[T] Sized2 for Wrap<T> { ... }         // same
+impl Sized2 for Wrap { ... }               // parses, then: undefined function 'Wrap__i64_...'
+```
+
+`parse_type_name_str` accepts only a bare type name after `for`, and the third
+form parses but is never monomorphised per instantiation.
+
+**This is what blocks a container-generic standard library.** With #36 and #37
+in place, a function generic over `F` can *consume* an `F<T>` and *return* the
+same `F<T>`, but it cannot construct an `F<B>` — there is no way to give `list`
+and `option` a shared interface, because neither can be the target of an impl.
+So `map`, `filter` and `fold` still have to be written once per constructor.
+
+Fixing it needs two things: an impl target that may carry type arguments, and
+monomorphisation of impl methods per instantiation of the target — the machinery
+that already exists for blanket impls, applied to the target rather than to the
+impl's own parameters.
+
+**Status:** open. This is the remaining step for "generic functions over
+containers" in the useful sense.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:
