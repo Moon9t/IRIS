@@ -344,6 +344,30 @@ impl IrFunctionBuilder {
     }
 
     /// Returns true if the current block already ends with a terminator.
+    /// Appends an argument to the `Br` terminating `block`, when it targets
+    /// `target`. Returns whether it did.
+    ///
+    /// Needed because a branch's arguments are emitted before its sibling has
+    /// been lowered, so whether a value carries an autodiff tape handle is not
+    /// known until both arms exist. See known-issues #50.
+    pub(crate) fn append_br_arg(
+        &mut self,
+        block: BlockId,
+        target: BlockId,
+        arg: ValueId,
+    ) -> bool {
+        let Some(b) = self.func.blocks.get_mut(block.0 as usize) else {
+            return false;
+        };
+        match b.instrs.last_mut() {
+            Some(IrInstr::Br { target: t, args }) if *t == target => {
+                args.push(arg);
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn is_current_block_terminated(&self) -> bool {
         if let Some(block_id) = self.current_block {
             self.func.blocks[block_id.0 as usize].is_sealed()

@@ -251,3 +251,161 @@ def f() -> i64 {
     let result = compile(src, "test", EmitKind::Eval).unwrap();
     assert_eq!(result.trim(), "5050");
 }
+
+// ── #49: a tape handle must survive a function call ────────────────────────
+
+/// A tape handle cannot be passed in an `f64` parameter, and multi-value
+/// returns are unsupported, so it cannot come back out either. A call carrying
+/// a taped argument is therefore lowered inline: `tape_nodes` is keyed by
+/// `ValueId`, so binding the callee's parameters to the caller's argument
+/// values carries the mapping across.
+#[test]
+fn a_gradient_flows_through_a_function_call() {
+    let src = r#"
+def sq(v: f64) -> f64 { v * v }
+def f() -> f64 {
+    val a = tape(3.0);
+    val y = sq(a);
+    val _ = backward(y);
+    grad(a)
+}
+"#;
+    // d/dv v^2 = 2v = 6
+    let result = compile(src, "test", EmitKind::Eval).unwrap();
+    assert_eq!(result.trim(), "6");
+}
+
+/// A helper with a local binding, which is the usual shape of a loss function.
+#[test]
+fn a_gradient_flows_through_a_helper_with_a_local() {
+    let src = r#"
+def mse(pred: f64, target: f64) -> f64 { val d = pred - target; d * d }
+def f() -> f64 {
+    val p = tape(5.0);
+    val l = mse(p, 3.0);
+    val _ = backward(l);
+    grad(p)
+}
+"#;
+    // 2(p - t) = 4
+    let result = compile(src, "test", EmitKind::Eval).unwrap();
+    assert_eq!(result.trim(), "4");
+}
+
+/// Calls nested two deep, each carrying the tape through.
+#[test]
+fn a_gradient_flows_through_nested_calls() {
+    let src = r#"
+def sq(v: f64) -> f64 { v * v }
+def cube(v: f64) -> f64 { v * v * v }
+def outer(v: f64) -> f64 { sq(v) + cube(v) }
+def f() -> f64 {
+    val n = tape(2.0);
+    val y = outer(n);
+    val _ = backward(y);
+    grad(n)
+}
+"#;
+    // 2v + 3v^2 = 4 + 12
+    let result = compile(src, "test", EmitKind::Eval).unwrap();
+    assert_eq!(result.trim(), "16");
+}
+
+/// A loop and a helper together -- what a training step actually looks like.
+#[test]
+fn a_training_step_shape_works_end_to_end() {
+    let src = r#"
+def mse(pred: f64, target: f64) -> f64 { val d = pred - target; d * d }
+def f() -> f64 {
+    val w = tape(1.0);
+    var total = tape(0.0);
+    for s in 1..5 { total = total + mse(w * to_f64(s), 0.0); };
+    val _ = backward(total);
+    grad(w)
+}
+"#;
+    // sum 2*k*k*w for k=1..4 = 2*30 = 60
+    let result = compile(src, "test", EmitKind::Eval).unwrap();
+    assert_eq!(result.trim(), "60");
+}
+
+/// A taped `if` merges two arms through a block parameter, which dropped the
+/// handle exactly as a loop back-edge did. This failed with no helper and no
+/// inlining involved, so it was its own defect.
+#[test]
+fn a_gradient_flows_through_an_if_expression() {
+    let src = r#"
+def f() -> f64 {
+    val v = tape(4.0);
+    val y = if v > 0.0 { v * 2.0 } else { v * 0.5 };
+    val _ = backward(y);
+    grad(v)
+}
+"#;
+    let result = compile(src, "test", EmitKind::Eval).unwrap();
+    assert_eq!(result.trim(), "2");
+}
+
+/// The other arm, so the merge is not passing one side's handle for both.
+#[test]
+fn the_other_if_arm_reports_its_own_gradient() {
+    let src = r#"
+def f() -> f64 {
+    val v = tape(0.0 - 4.0);
+    val y = if v > 0.0 { v * 2.0 } else { v * 0.5 };
+    val _ = backward(y);
+    grad(v)
+}
+"#;
+    let result = compile(src, "test", EmitKind::Eval).unwrap();
+    assert_eq!(result.trim(), "0.5");
+}
+
+// ── The declines, which matter more than the successes ────────────────────
+
+/// A helper containing `return` must NOT be inlined: its `Return` would
+/// terminate the *caller*. The whitelist declines it, so the call stays a call.
+/// The property under test is that `f` runs to completion and returns 99 --
+/// a miscompile would return 6 (the helper's value) instead.
+#[test]
+fn a_helper_containing_return_is_not_inlined_into_its_caller() {
+    let src = r#"
+def with_return(v: f64) -> f64 { if v > 0.0 { return v * 3.0; }; v }
+def f() -> i64 {
+    val a = tape(2.0);
+    val y = with_return(a);
+    val ignored = y;
+    99
+}
+"#;
+    let result = compile(src, "test", EmitKind::Eval).unwrap();
+    assert_eq!(result.trim(), "99", "the helper's return escaped into its caller");
+}
+
+/// A recursive taped call must not expand forever at lowering time.
+#[test]
+fn a_recursive_taped_call_terminates() {
+    let src = r#"
+def countdown(v: f64, n: i64) -> f64 {
+    if n == 0 { v } else { countdown(v * 1.0, n - 1) }
+}
+def f() -> f64 {
+    val a = tape(2.0);
+    countdown(a, 3)
+}
+"#;
+    let result = compile(src, "test", EmitKind::Eval).unwrap();
+    assert_eq!(result.trim(), "2");
+}
+
+/// An ordinary untaped call must be completely unaffected -- the inline path
+/// is only entered when an argument carries a tape handle.
+#[test]
+fn an_untaped_call_is_unchanged() {
+    let src = r#"
+def add3(a: i64, b: i64, c: i64) -> i64 { a + b + c }
+def f() -> i64 { add3(1, 2, 3) * add3(10, 20, 30) }
+"#;
+    let result = compile(src, "test", EmitKind::Eval).unwrap();
+    assert_eq!(result.trim(), "360");
+}

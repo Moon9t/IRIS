@@ -65,6 +65,15 @@ thread_local! {
     /// a builtin needs the set the *source* actually declares. See #15.
     static CURRENT_USER_FNS: RefCell<std::collections::HashSet<String>> =
         RefCell::new(std::collections::HashSet::new());
+    /// Every non-generic function's AST, so a call carrying a reverse-mode tape
+    /// value can be lowered inline and keep its handle. A tape handle cannot be
+    /// passed as an ordinary argument -- it has no place in an `f64` parameter --
+    /// and multi-value returns are not supported, so the handle cannot come back
+    /// out either. Inlining at lowering time sidesteps both: `tape_nodes` is
+    /// keyed by `ValueId`, so binding the callee's parameters to the caller's
+    /// argument values carries the mapping across for free. See #49.
+    static CURRENT_FN_ASTS: RefCell<HashMap<String, crate::parser::ast::AstFunction>> =
+        RefCell::new(HashMap::new());
     static CURRENT_BRING_PREFIXES: RefCell<Vec<Vec<String>>> = const { RefCell::new(Vec::new()) };
     static CURRENT_BRING_MAPPINGS: RefCell<Vec<HashMap<String, String>>> = const { RefCell::new(Vec::new()) };
 }
@@ -495,6 +504,15 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
     CURRENT_USER_FNS.with(|u| {
         *u.borrow_mut() = user_fn_names;
     });
+    CURRENT_FN_ASTS.with(|m| {
+        let mut map = m.borrow_mut();
+        map.clear();
+        for func in &ast.functions {
+            if func.type_params.is_empty() {
+                map.insert(func.name.name.clone(), func.clone());
+            }
+        }
+    });
     let fn_defaults = std::rc::Rc::new(fn_defaults_map);
     let fn_param_names = std::rc::Rc::new(fn_param_names_map);
     let fn_param_types = std::rc::Rc::new(fn_param_types_map);
@@ -847,6 +865,9 @@ struct Lowerer<'m> {
     builder: IrFunctionBuilder,
     /// Current lexical scope: name → (ValueId, IrType).
     scope: HashMap<String, (ValueId, IrType)>,
+    /// Functions currently being inlined for a taped call, innermost last.
+    /// Guards against a recursive taped call expanding forever (#49).
+    taped_inline_stack: Vec<String>,
     /// Stack of (header_block, merge_block, loop_var_names, label) for nested loops.
     loop_stack: Vec<(BlockId, BlockId, BlockId, Vec<String>, Option<String>, bool)>,
     /// Reference to the module for struct/enum type lookups.
@@ -1063,6 +1084,7 @@ impl<'m> Lowerer<'m> {
         Self {
             builder,
             scope: HashMap::new(),
+            taped_inline_stack: Vec::new(),
             loop_stack: Vec::new(),
             module,
             fn_sigs,
@@ -8020,6 +8042,16 @@ impl<'m> Lowerer<'m> {
             return Ok((result, ret_ty));
         }
 
+        // A call carrying a taped argument is lowered inline, so the tape graph
+        // continues through the callee's body instead of stopping at its
+        // signature. Without this, `sq(x)` on a taped `x` produced an untaped
+        // result and `backward` was rejected outright (#49).
+        if arg_vals.iter().any(|v| self.tape_nodes.contains_key(v)) {
+            if let Some(inlined) = self.try_lower_taped_call(&callee_name, &arg_vals)? {
+                return Ok(inlined);
+            }
+        }
+
         let result = self.builder.fresh_value();
         self.builder.push_instr(
             IrInstr::Call {
@@ -8031,6 +8063,50 @@ impl<'m> Lowerer<'m> {
             Some(ret_ty.clone()),
         );
         Ok((result, ret_ty))
+    }
+
+    /// Lowers `callee`'s body directly into the current function, with its
+    /// parameters bound to `arg_vals`.
+    ///
+    /// Returns `Ok(None)` when the callee is not a candidate, in which case the
+    /// caller emits an ordinary call and the handle is lost as before -- a
+    /// rejected program rather than a wrong gradient.
+    ///
+    /// Declined deliberately when:
+    /// * the body uses any form outside the inliner's whitelist -- notably
+    ///   `return`, which would terminate the *caller*;
+    /// * the function is already being inlined on this path -- a recursive taped
+    ///   call would otherwise expand forever;
+    /// * the arity does not match, so defaults and splats keep the normal path.
+    fn try_lower_taped_call(
+        &mut self,
+        callee_name: &str,
+        arg_vals: &[ValueId],
+    ) -> Result<Option<(ValueId, IrType)>, LowerError> {
+        if self.taped_inline_stack.iter().any(|n| n == callee_name) {
+            return Ok(None);
+        }
+        let Some(func) = CURRENT_FN_ASTS.with(|m| m.borrow().get(callee_name).cloned()) else {
+            return Ok(None);
+        };
+        if func.params.len() != arg_vals.len() || !taped_inline_ok_block(&func.body) {
+            return Ok(None);
+        }
+
+        let saved_scope = self.scope.clone();
+        self.taped_inline_stack.push(callee_name.to_owned());
+        for (param, val) in func.params.iter().zip(arg_vals.iter()) {
+            // Bind the parameter to the caller's *value*, not a copy. That is
+            // what carries `tape_nodes` across: the body sees the very ValueId
+            // whose tape node the caller recorded.
+            let ty = self.resolve_ty(&param.ty);
+            self.scope.insert(param.name.name.clone(), (*val, ty));
+        }
+        let lowered = self.lower_block(&func.body);
+        self.taped_inline_stack.pop();
+        self.scope = saved_scope;
+
+        Ok(lowered?)
     }
 
     fn lower_einsum(
@@ -8151,6 +8227,11 @@ impl<'m> Lowerer<'m> {
                 None,
             );
 
+            // Which block each arm's `Br` ended up in, so its arguments can be
+            // extended once both arms are known (autodiff handles, #50).
+            let mut then_br_block: Option<BlockId> = None;
+            let mut else_br_block: Option<BlockId> = None;
+
             // Lower THEN branch.
             self.builder.set_current_block(then_bb);
             self.scope = outer_scope.clone();
@@ -8174,6 +8255,7 @@ impl<'m> Lowerer<'m> {
                         .expect("rebound variable missing from then-scope");
                     then_args.push(rebound_val);
                 }
+                then_br_block = Some(self.builder.current_block());
                 self.builder.push_instr(
                     IrInstr::Br {
                         target: merge_bb,
@@ -8207,6 +8289,7 @@ impl<'m> Lowerer<'m> {
                         .expect("rebound variable missing from else-scope");
                     else_args.push(rebound_val);
                 }
+                else_br_block = Some(self.builder.current_block());
                 self.builder.push_instr(
                     IrInstr::Br {
                         target: merge_bb,
@@ -8237,6 +8320,32 @@ impl<'m> Lowerer<'m> {
                     .add_block_param(merge_bb, Some(name), ty.clone());
                 rebound_params.push((name.clone(), param, ty.clone()));
             }
+            // If both arms produced a taped value, the merged result must carry a
+            // handle too -- otherwise it arrives at `backward` as a bare f64 and
+            // is rejected. Threaded as a trailing merge parameter, appended to
+            // both branch arguments after the fact because the arms were emitted
+            // before their sibling was known. Only when *both* arms are taped:
+            // a one-sided graph would silently drop the other path's gradient.
+            let then_handle = then_result
+                .as_ref()
+                .and_then(|(v, _)| self.tape_nodes.get(v).copied());
+            let else_handle = else_result
+                .as_ref()
+                .and_then(|(v, _)| self.tape_nodes.get(v).copied());
+            if let (Some(th), Some(eh), Some(tb), Some(eb)) =
+                (then_handle, else_handle, then_br_block, else_br_block)
+            {
+                let handle_param =
+                    self.builder
+                        .add_block_param(merge_bb, Some("if_result$tape"), IrType::TapeRef);
+                let patched_then = self.builder.append_br_arg(tb, merge_bb, th);
+                let patched_else = self.builder.append_br_arg(eb, merge_bb, eh);
+                if patched_then && patched_else {
+                    self.taped_values.insert(result);
+                    self.tape_nodes.insert(result, handle_param);
+                }
+            }
+
             self.builder.set_current_block(merge_bb);
             for (name, param, ty) in rebound_params {
                 self.scope.insert(name, (param, ty));
@@ -17387,6 +17496,73 @@ fn derive_einsum_result_type(notation: &str, input_tys: &[IrType]) -> IrType {
 /// targets, and `for`-loop variables.
 /// In nested blocks: recursively collects `x = expr` mutations so that outer
 /// variables modified inside inner loops are threaded through as SSA params.
+/// True when `block` is built only from forms this inliner fully traverses.
+///
+/// A whitelist, not a `return` detector, and deliberately so. A `return` can
+/// only be reached through a block, and blocks appear in exactly two expression
+/// forms (`If` and `Mask`) -- but reaching those means recursing through every
+/// expression variant, and the nearest existing walker
+/// (`collect_rebound_vars_in_expr`) covers 33 of roughly a hundred. Missing one
+/// branch would mean inlining a body whose `return` terminates the *caller*: a
+/// miscompile, not a missed optimisation. Whitelisting inverts the failure --
+/// an unrecognised form declines the inline, and the program merely gets the
+/// same error it did before.
+fn taped_inline_ok_block(block: &AstBlock) -> bool {
+    let stmts_ok = block.stmts.iter().all(|st| match st {
+        AstStmt::Let { init, .. } => taped_inline_ok_expr(init),
+        AstStmt::LetTuple { init, .. } => taped_inline_ok_expr(init),
+        AstStmt::Expr(e) => taped_inline_ok_expr(e),
+        AstStmt::Assign { target, value, .. } => {
+            taped_inline_ok_expr(target) && taped_inline_ok_expr(value)
+        }
+        // `return` is the case this exists to reject. `break`/`continue` are
+        // rejected because in an inlined body they would bind to whatever loop
+        // encloses the *call site*. Everything else is simply not traversed.
+        _ => false,
+    });
+    stmts_ok && block.tail.as_deref().is_some_and(taped_inline_ok_expr)
+}
+
+fn taped_inline_ok_expr(expr: &AstExpr) -> bool {
+    match expr {
+        AstExpr::Ident(_)
+        | AstExpr::IntLit { .. }
+        | AstExpr::FloatLit { .. }
+        | AstExpr::BoolLit { .. }
+        | AstExpr::StringLit { .. } => true,
+        AstExpr::BinOp { lhs, rhs, .. } => {
+            taped_inline_ok_expr(lhs) && taped_inline_ok_expr(rhs)
+        }
+        AstExpr::UnaryOp { expr, .. } => taped_inline_ok_expr(expr),
+        AstExpr::Cast { expr, .. } => taped_inline_ok_expr(expr),
+        AstExpr::FieldAccess { base, .. } => taped_inline_ok_expr(base),
+        AstExpr::Tuple { elements, .. } => elements.iter().all(taped_inline_ok_expr),
+        AstExpr::Index { base, indices, .. } => {
+            taped_inline_ok_expr(base) && indices.iter().all(taped_inline_ok_expr)
+        }
+        AstExpr::Call { args, named_args, .. } => {
+            args.iter().all(taped_inline_ok_expr)
+                && named_args.iter().all(|(_, e)| taped_inline_ok_expr(e))
+        }
+        AstExpr::MethodCall { base, args, .. } => {
+            taped_inline_ok_expr(base) && args.iter().all(taped_inline_ok_expr)
+        }
+        // The one block-bearing form worth supporting: a helper whose body is
+        // `if cond { a } else { b }`. Both arms are checked by the same rule.
+        AstExpr::If {
+            cond,
+            then_block,
+            else_block,
+            ..
+        } => {
+            taped_inline_ok_expr(cond)
+                && taped_inline_ok_block(then_block)
+                && else_block.as_ref().is_none_or(taped_inline_ok_block)
+        }
+        _ => false,
+    }
+}
+
 fn find_rebound_vars(block: &AstBlock) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     collect_rebound_vars_in_block(block, &mut names, true);

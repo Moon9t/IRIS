@@ -2288,41 +2288,58 @@ built immediately before the #47 chunked-tape change.
 
 ---
 
-## 49. A tape handle does not survive a function call or a `var` — **PARTIALLY FIXED**
+## 49. A tape handle does not survive a function call or a `var` — **FIXED**
 
-> **Loops fixed** on 2026-08-16; **function boundaries still open.**
+> **Fixed** on 2026-08-16, in three parts. The cause throughout was that a tape
+> handle had no IR type: `TapeRecord`'s result was typed as the *primal*
+> (`f64`), so it emitted as `double` and stopped being a handle the moment it
+> crossed a block boundary. `IrType::TapeRef` now exists as an opaque pointer
+> type, added by declaring the variant and letting the compiler enumerate the
+> eight sites that needed an arm.
 >
-> The cause was that a tape handle had no IR type: `TapeRecord`'s result was
-> typed as the *primal* (`f64`), so it emitted as `double`. A taped value
-> crossing a loop back-edge became an ordinary float and `backward` was rejected
-> at codegen. `IrType::TapeRef` now exists — an opaque pointer type — and a
-> taped loop variable carries its handle across the back-edge as an extra block
-> parameter alongside its primal, in both `while` and `for`.
+> **Loops.** A taped loop variable carries its handle across the back-edge as an
+> extra block parameter beside its primal, in both `while` and `for`.
 >
-> A loop-accumulated loss therefore works, which is the shape a training loop
-> actually takes:
+> **Function calls.** A handle cannot be passed in an `f64` parameter, and
+> multi-value returns are unsupported (`Return` emits `values[0]` only), so it
+> cannot come back out either. A call carrying a taped argument is therefore
+> lowered *inline*. `tape_nodes` is keyed by `ValueId`, so binding the callee's
+> parameters to the caller's argument values carries the mapping across for
+> free — no specialised function, no new instruction, no runtime change.
+>
+> Inlining is gated by a **whitelist** of expression and statement forms rather
+> than by scanning for `return`. A `return` is reachable only through a block,
+> and blocks appear in just two expression forms — but finding those means
+> recursing through every variant, and the nearest existing walker covers 33 of
+> roughly a hundred. Missing one branch would inline a body whose `return`
+> terminates the *caller*: a miscompile. The whitelist inverts the failure — an
+> unrecognised form declines the inline and the program gets the same error it
+> did before. Recursive taped calls are declined by a guard stack.
+>
+> **`if` expressions.** Found while testing the above and confirmed to fail with
+> no helper and no inlining involved, so it was its own defect: a taped `if`
+> merges its arms through a block parameter, dropping the handle exactly as a
+> loop back-edge did. Branch arguments are emitted before the sibling arm has
+> been lowered, so `IrFunctionBuilder::append_br_arg` extends them once both
+> arms are known. Threaded only when *both* arms are taped — a one-sided graph
+> would silently drop the other path's gradient.
+>
+> So a real training step now works end to end:
 >
 > ```iris
-> val m = tape(1.0);
+> def mse(pred: f64, target: f64) -> f64 { val d = pred - target; d * d }
+>
+> val w = tape(1.0);
 > var total = tape(0.0);
-> for s in 1..5 { val pred = m * to_f64(s); total = total + pred * pred; };
-> val _ = backward(total);   // loss = 30, grad(m) = 60 — both verified
+> for s in 1..5 { total = total + mse(w * to_f64(s), 0.0); };
+> val _ = backward(total);      // loss 30, grad(w) 60 — both asserted
 > ```
 >
-> **Still open: passing a taped value into a function.** `sq(x)` where
-> `def sq(v: f64)` loses the handle and reports the same error. Fixing it means
-> tape-typed parameters in function signatures, so a function would need either
-> two forms or a signature that admits both — a change of a different size from
-> the loop threading, and not attempted here.
->
-> So: **reverse-mode AD now expresses a training loop, but the loss must be
-> computed inline rather than in a helper.** State that limit alongside the
-> capability.
->
-> **Tested by** `a_while_loop_can_accumulate_a_loss`,
-> `a_for_loop_can_accumulate_a_loss`,
-> `a_per_sample_loss_accumulates_the_right_gradient` and
-> `an_ordinary_loop_is_unchanged` (the untaped case, which must be untouched).
+> **Tested by** 22 tests in `tests/autodiff_tape_chunks.rs`. The three that
+> matter most are the declines: a helper containing `return` must not be inlined
+> (asserted by its caller running to completion), a recursive taped call must
+> terminate, and untaped calls and loops must be bit-for-bit unaffected, since
+> the threading touches every loop and every call the lowerer emits.
 
 ### Original report
 
