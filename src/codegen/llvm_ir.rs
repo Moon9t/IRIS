@@ -5925,6 +5925,83 @@ fn emit_instr_ir(
                 arg_strs.insert(0, format!("i64 {}", args.len()));
             }
 
+            // `iris_ffi_call_i64(void* handle, const char* name,
+            //                    int64_t* args, int nargs)` -- and its _f64,
+            // _str and _void siblings -- take a *pointer to an array* of
+            // arguments plus a count. The generic path above passed the
+            // arguments flat, so the callee read the first user argument as the
+            // `args` pointer and the second as `nargs`:
+            //
+            //   declare i64 @iris_ffi_call_i64(ptr, ptr, ptr, i32)
+            //   call   i64 @iris_ffi_call_i64(i64 %h, ptr %n, i64 %pub, i64 %v)
+            //
+            // then dereferenced it. Every FFI call carrying arguments crashed
+            // natively with an access violation, while the interpreter -- which
+            // marshals properly -- returned the right answer. Found by calling
+            // a real ROS 2 publisher: node and publisher creation take no
+            // arguments and worked, and the first two-argument call segfaulted.
+            // See known-issues #33.
+            //
+            // Third instance of this exact bug class in this function, after
+            // `select` and `json_stringify`: a runtime signature that codegen
+            // does not honour. The declarations are right there, a few hundred
+            // lines below, and nothing checks a call against them.
+            if matches!(
+                name.as_str(),
+                "ffi_call_i64" | "ffi_call_f64" | "ffi_call_str" | "ffi_call_void"
+            ) && args.len() >= 2
+            {
+                let n = args.len() - 2;
+                let slots = n.max(1);
+                let arr = format!("%ffiargs{}", gep_counter);
+                *gep_counter += 1;
+                writeln!(out, "  {} = alloca [{} x i64], align 8", arr, slots)?;
+                for (i, a) in args.iter().skip(2).enumerate() {
+                    let slot = format!("%ffislot{}_{}", gep_counter, i);
+                    writeln!(
+                        out,
+                        "  {} = getelementptr inbounds [{} x i64], ptr {}, i32 0, i32 {}",
+                        slot, slots, arr, i
+                    )?;
+                    // Every slot is an int64_t on the C side, so a double is
+                    // reinterpreted and a pointer is narrowed rather than
+                    // silently passed in the wrong register class.
+                    let aty = emitted_types.get(a).map(|t| t.as_str()).unwrap_or("i64");
+                    let av = val(*a);
+                    let as_i64 = if aty == "double" || aty == "float" {
+                        let tmp = format!("%ffibits{}_{}", gep_counter, i);
+                        let widened = if aty == "float" {
+                            let w = format!("%ffiext{}_{}", gep_counter, i);
+                            writeln!(out, "  {} = fpext float {} to double", w, av)?;
+                            w
+                        } else {
+                            av.clone()
+                        };
+                        writeln!(out, "  {} = bitcast double {} to i64", tmp, widened)?;
+                        tmp
+                    } else if aty == "ptr" {
+                        let tmp = format!("%ffiptr{}_{}", gep_counter, i);
+                        writeln!(out, "  {} = ptrtoint ptr {} to i64", tmp, av)?;
+                        tmp
+                    } else if aty == "i1" {
+                        let tmp = format!("%ffibool{}_{}", gep_counter, i);
+                        writeln!(out, "  {} = zext i1 {} to i64", tmp, av)?;
+                        tmp
+                    } else if aty != "i64" {
+                        let tmp = format!("%ffiint{}_{}", gep_counter, i);
+                        writeln!(out, "  {} = sext {} {} to i64", tmp, aty, av)?;
+                        tmp
+                    } else {
+                        av.clone()
+                    };
+                    writeln!(out, "  store i64 {}, ptr {}, align 8", as_i64, slot)?;
+                }
+                *gep_counter += 1;
+                arg_strs.truncate(2);
+                arg_strs.push(format!("ptr {}", arr));
+                arg_strs.push(format!("i32 {}", n));
+            }
+
             // `iris_json_stringify(IrisVal*)` takes a *boxed* value, but the
             // generic path above passes each argument in its own emitted form —
             // for a `str` that is the raw `char*` of the string constant. The C

@@ -1483,6 +1483,70 @@ corpus was two files, both of which were depending on the fabricated zero.
 
 ---
 
+## 33. Every native FFI call carrying arguments crashed — **FIXED**
+
+`iris_ffi_call_i64(void* handle, const char* name, int64_t* args, int nargs)` --
+and its `_f64`, `_str` and `_void` siblings -- take a **pointer to an array** of
+arguments plus a count. Codegen passed the arguments flat:
+
+```llvm
+declare i64 @iris_ffi_call_i64(ptr, ptr, ptr, i32)
+call   i64 @iris_ffi_call_i64(i64 %h, ptr %name, i64 %pub, i64 %val)
+```
+
+so the callee read the first user argument as the `args` pointer and the second
+as `nargs`, then dereferenced it. **Any FFI call with arguments crashed
+natively** with an access violation, while the interpreter -- which marshals
+correctly -- returned the right answer.
+
+**Found by running against a real ROS 2 Humble installation.** `rcl_init`, node
+creation and publisher creation take no arguments and all worked; the first
+two-argument call, `iris_rcl_publish(handle, value)`, segfaulted. Nothing in the
+tree exercised an FFI call with arguments on the native backend, so this had
+never been observed.
+
+**Fixed** by allocating an `[N x i64]`, storing each argument into it -- doubles
+bitcast, pointers narrowed, bools zero-extended, so nothing is passed in the
+wrong register class -- and passing the array pointer with the count.
+
+This is the **third** instance of the same bug class in `emit_instr_ir`, after
+`iris_select` (channel count not prepended) and `json_stringify` (value not
+boxed). In each case a runtime signature is declared a few hundred lines below
+the call site and nothing checks one against the other. **A check that every
+emitted call matches its own `declare` would have caught all three**, and is
+worth more than fixing them one at a time.
+
+**Verified after the fix:** a native IRIS binary creates a ROS 2 node and
+publisher and publishes 20 messages, matching the interpreter.
+
+---
+
+## ROS 2 support — regraded 2026-08-16
+
+Previously graded on inspection alone. With ROS 2 Humble installed and the
+bridge built, the following are now **Verified** on both backends:
+
+| | Status |
+|---|---|
+| `rcl_init` | Verified -- returns 0 against real rcl |
+| node creation | Verified -- real node handle |
+| publisher creation | Verified -- real publisher handle |
+| publish (`std_msgs/Float64`) | Verified -- 20-message burst, both backends |
+
+Still **not** verified: subscriptions and the six `take_*` payload functions, QoS,
+services, actions, tf2, lifecycle nodes. The 2/10 rating in
+`docs/autonomy-stack-assessment.md` covered the whole stack and remains broadly
+right; what changed is that the publish path is now demonstrated rather than
+assumed.
+
+**Build note.** The bridge links only against MSVC-built ROS 2 binaries. ROS 2's
+Windows headers put `__attribute__((dllimport))` on enums under `__GNUC__`, so
+the MinGW toolchain cannot compile them; and the MSVC BuildTools install on this
+machine has headers but no CRT import libraries, so `memcpy` and `_fltused` were
+supplied by a two-function shim. Reproduced in `docs/ros2-build.md`.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:
