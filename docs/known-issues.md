@@ -1927,6 +1927,54 @@ verify meaningfully.
 
 ---
 
+## 41–44. Five FFI and HTTP defects found by exercising the modules — **FIXED**
+
+Taking `std.ffi` and `std.http` to full coverage meant calling every function
+against something real: a purpose-built test library, a live Python, and a local
+echo server. That found five defects, none visible from reading the code.
+
+**#41 — `lib_open` returns different sentinels per backend.** A missing library
+gives `-1` interpreted and `0` natively. `std.ros2` guarded only on `== -1`, so
+natively a failed open passed the guard and every later call failed separately,
+far from the cause. Guards now reject both.
+
+**#42 — `std.http`'s client wrappers were unbounded recursion.**
+
+```iris
+pub def http_get(url: str) -> str effect net { http_get(url) }
+```
+
+A self-call, not a forward. It worked only while a builtin silently beat a
+same-named user function; once that was fixed (#15) every call recursed to the
+depth limit. The four wrappers added nothing — the builtins are already
+available — and are deleted.
+
+**#43 — `http_request` dropped its body unless the method was `POST`.** The
+interpreter attached a body only for that exact verb, so `PUT` and `PATCH` sent
+a well-formed request with no payload; the server answered 200 and the caller
+could not tell. Now keyed on whether there *is* a body.
+
+*Still open natively:* `iris_http_request` delegates to `iris_http_post`, whose
+request line hardcodes `POST`, so a native `PUT` arrives as a `POST`. The
+interpreter builds its own request line and is correct. The arity mismatch that
+crashed it — a four-parameter `declare` called with three arguments, the
+**fourth** instance of that class after `iris_select`, `json_stringify` and #33 —
+is fixed.
+
+**#44 — native `py_call1` did not quote its argument.** It generated
+`basename(/a/b/c.txt)`, a `SyntaxError`. The interpreter quoted it, so the
+backends disagreed on every non-numeric argument.
+
+**Also fixed, both in the interpreter's FFI:** a `f64`-returning call read RAX
+instead of XMM0 (`call_f64` returned `6.95e-310` instead of `4.5`), and the
+`rust_call_*` family was left out of #33's argument-array packing, so
+`rust_i64` and `rust_f64` crashed natively. The second is the more instructive:
+fixing that class by enumerating names got it wrong twice.
+
+`std.ffi` is now **27/27** covered, `std.http` **12/12**, both backends.
+
+---
+
 ## Verified working
 
 Confirmed correct by running and asserting output:

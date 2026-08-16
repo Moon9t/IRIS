@@ -1,0 +1,172 @@
+// std.ffi -- the whole call surface, asserted against known answers.
+//
+// REQUIRES `iris_ffitest.dll` in the working directory. Built from
+// tests/fixtures/ffitest.c; see the header there. It exports functions whose
+// results are fixed and unambiguous, so every assertion below checks a value
+// rather than "the call returned".
+//
+// That distinction is the point. Two FFI defects found on 2026-08-16 both
+// returned *something*: native codegen passed arguments flat instead of as an
+// array (#33), and the interpreter passed every string as a null pointer
+// (#40c). Neither crashed; both produced plausible-looking numbers. A test that
+// only checked "did not crash" would have passed throughout.
+
+bring std.ffi
+
+def check_open_and_zero_arg() -> i64 {
+    val h = lib_open("iris_ffitest.dll");
+    assert(h != -1);
+    assert(h != 0);
+
+    // Zero-argument call. This is the shape that kept working while every
+    // argument-carrying call was broken, which is why the failures looked like
+    // "FFI is unavailable" rather than "arguments are mismarshalled".
+    assert(lib_call(h, "t_zero") == 7);
+
+    lib_close(h);
+    0
+}
+
+def check_integer_args() -> i64 {
+    val h = lib_open("iris_ffitest.dll");
+    assert(h != -1);
+
+    // One, two and three arguments. Each result depends on *every* argument,
+    // so a call that dropped or reordered one cannot produce the right answer.
+    assert(call_i64(h, "t_one", 21) == 42);
+    assert(call_i64(h, "t_one", 0) == 0);
+    assert(call_i64(h, "t_one", 0 - 5) == 0 - 10);
+
+    assert(call_i64_2(h, "t_two", 30, 12) == 42);
+    // Asymmetric arguments, so a swapped pair would still be caught.
+    assert(call_i64_2(h, "t_two", 1, 100) == 101);
+
+    assert(call_i64_3(h, "t_three", 1, 2, 3) == 6);
+    assert(call_i64_3(h, "t_three", 100, 20, 3) == 123);
+
+    lib_close(h);
+    0
+}
+
+def check_float_returns() -> i64 {
+    val h = lib_open("iris_ffitest.dll");
+    assert(h != -1);
+
+    // A double return travels back in a different register class from an
+    // integer, so this exercises a path the i64 calls do not.
+    assert(call_f64(h, "t_f64_one", 9) == 4.5);
+    assert(call_f64(h, "t_f64_one", 0) == 0.0);
+
+    assert(call_f64_2(h, "t_f64_two", 3, 5) == 2.0);
+    assert(call_f64_2(h, "t_f64_two", 1, 1) == 0.5);
+
+    lib_close(h);
+    0
+}
+
+def check_string_return() -> i64 {
+    val h = lib_open("iris_ffitest.dll");
+    assert(h != -1);
+    assert(call_str(h, "t_str") == "hello-ffi");
+    lib_close(h);
+    0
+}
+
+def check_out_cells() -> i64 {
+    val h = lib_open("iris_ffitest.dll");
+    assert(h != -1);
+
+    // An out-parameter: IRIS allocates the buffer, C fills it.
+    val cell = out_new(64);
+    assert(cell != 0);
+    val rc = call_i64_2(h, "t_fill", cell, 64);
+    assert(rc == 1);
+    assert(out_str(cell) == "world");
+    out_free(cell);
+
+    // The integer out-cell accessors round-trip, including zero -- which must
+    // be distinguishable from an unwritten cell.
+    val c2 = out_new(16);
+    out_set_i64(c2, 0, 1234);
+    assert(out_i64(c2, 0) == 1234);
+    out_set_i64(c2, 0, 0);
+    assert(out_i64(c2, 0) == 0);
+    out_set_i64(c2, 1, 0 - 99);
+    assert(out_i64(c2, 1) == 0 - 99);
+    // Writing slot 1 must not disturb slot 0.
+    assert(out_i64(c2, 0) == 0);
+    out_free(c2);
+
+    val c3 = out_new(16);
+    out_set_f64(c3, 0, 2.5);
+    assert(out_f64(c3, 0) == 2.5);
+    out_set_f64(c3, 1, 0.0 - 0.25);
+    assert(out_f64(c3, 1) == 0.0 - 0.25);
+    assert(out_f64(c3, 0) == 2.5);
+    out_free(c3);
+    0
+}
+
+def check_rust_aliases() -> i64 {
+    // `rust_open`/`rust_i64`/`rust_f64` are the same dispatch under a name that
+    // documents intent -- a Rust cdylib exports C symbols like any other
+    // library. Asserted against the same fixture so the aliasing is proven
+    // rather than assumed.
+    val h = rust_open("iris_ffitest.dll");
+    assert(h != -1);
+    assert(rust_i64(h, "t_one", 21) == 42);
+    assert(rust_f64(h, "t_f64_one", 9) == 4.5);
+    lib_close(h);
+    0
+}
+
+def check_missing_symbol_is_not_a_wrong_answer() -> i64 {
+    val h = lib_open("iris_ffitest.dll");
+    assert(h != -1);
+    // A symbol that does not exist must not come back as a plausible number.
+    // -1 is the documented sentinel; the important property is that it is not
+    // a value the real functions could return.
+    val bad = call_i64(h, "t_does_not_exist", 21);
+    assert(bad != 42);
+    lib_close(h);
+
+    // Opening a library that is not there reports failure rather than handing
+    // back a handle that fails later at the call site.
+    //
+    // Asserted as "not a usable handle" rather than "== -1", because the two
+    // backends return different sentinels: -1 interpreted, 0 native. Every
+    // guard in std.ffi now rejects both. See known-issues #41.
+    val bad_handle = lib_open("definitely_not_a_real_library.dll");
+    assert(bad_handle == -1 || bad_handle == 0);
+    0
+}
+
+def check_python_bridge() -> i64 {
+    // Requires a Python installation, which this machine has (3.14.4). The
+    // bridge shells out rather than embedding, so these are asserted on their
+    // observable results.
+    assert(py_exec("x = 1 + 1") == 0);
+    assert(len(py_version()) > 0);
+    assert(starts_with(py_version(), "Python"));
+
+    // A module function called with one string argument, returning a string.
+    // `basename` is chosen because its answer is unambiguous and would not
+    // arise by accident from a call that silently did nothing.
+    assert(py_call1("os.path", "basename", "/a/b/c.txt") == "c.txt");
+    assert(py_call1("builtins", "str", "42") == "42");
+    0
+}
+
+def main() -> i64 {
+    val a = check_open_and_zero_arg();
+    val b = check_integer_args();
+    val c = check_float_returns();
+    val d = check_string_return();
+    val e = check_out_cells();
+    val f = check_rust_aliases();
+    val g = check_missing_symbol_is_not_a_wrong_answer();
+    val p = check_python_bridge();
+    assert(a + b + c + d + e + f + g + p == 0);
+    println("ffi full ok");
+    0
+}

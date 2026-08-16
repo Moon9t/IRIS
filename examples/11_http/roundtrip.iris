@@ -1,0 +1,73 @@
+// std.http -- the network half, against a real server.
+//
+// REQUIRES a local echo server on 127.0.0.1:8765 that reflects what it
+// received. See examples/11_http/server.py; start it before running this.
+// It lives in examples/ rather than tests/ because the suite must not depend
+// on a listening socket.
+//
+// Verified 2026-08-16. Running it found two defects that no amount of reading
+// would have shown:
+//
+//   * `http_get`, `http_post`, `http_request` and `http_post_json` were
+//     declared in std.http as wrappers of the form
+//     `pub def http_get(url) { http_get(url) }` -- a self-call, not a forward.
+//     They worked only while a builtin silently beat a same-named user
+//     function; once that was fixed (#15) every call recursed until the depth
+//     limit stopped it (#42).
+//   * `http_request` sent a body only when the method was literally "POST", so
+//     PUT and PATCH sent a well-formed request with no payload. The server
+//     answered 200 and the caller had no way to tell (#43).
+
+bring std.http
+
+def check_get() -> i64 {
+    val r = http_get("http://127.0.0.1:8765/hello");
+    // The server echoes the path, so this proves the request line was built
+    // and sent correctly -- not merely that something came back.
+    assert(r == "GET:/hello");
+    0
+}
+
+def check_post() -> i64 {
+    val r = http_post("http://127.0.0.1:8765/p", "payload");
+    assert(r == "POST:payload");
+
+    // An empty body must still produce a well-formed request.
+    val e = http_post("http://127.0.0.1:8765/p", "");
+    assert(e == "POST:");
+    0
+}
+
+def check_request_carries_its_body() -> i64 {
+    // GET through the generic entry point, which both backends agree on.
+    val g = http_request("GET", "http://127.0.0.1:8765/g", "");
+    assert(g == "GET:/g");
+
+    // PUT is deliberately NOT asserted here, and the reason is worth stating.
+    //
+    // The interpreter now sends the body for any method (it used to attach one
+    // only when the verb was literally "POST", so PUT and PATCH sent a
+    // well-formed request with no payload). Natively the verb is still lost:
+    // `iris_http_request` delegates to `iris_http_post`, whose request line
+    // hardcodes POST, so a PUT arrives as a POST.
+    //
+    // Asserting it would fail natively; omitting it silently would hide a
+    // backend divergence. See known-issues #43 for the reproduction.
+    0
+}
+
+def check_post_json() -> i64 {
+    val r = http_post_json("http://127.0.0.1:8765/j", "{\"a\":1}");
+    assert(r == "POST:{\"a\":1}");
+    0
+}
+
+def main() -> i64 {
+    val a = check_get();
+    val b = check_post();
+    val c = check_request_carries_its_body();
+    val d = check_post_json();
+    assert(a + b + c + d == 0);
+    println("http roundtrip ok");
+    0
+}

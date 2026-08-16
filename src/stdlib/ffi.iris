@@ -6,6 +6,14 @@
 
 /// Open a dynamic library (.dll / .so / .dylib).
 /// Returns a handle (i64), or -1 on error.
+// Open a shared library. Returns a handle, or a non-positive sentinel on
+// failure.
+//
+// The two backends disagree on which sentinel: the interpreter returns -1 and
+// native returns 0. Every guard in this module therefore rejects both. Testing
+// only `== -1` meant a failed `lib_open` passed the guard natively, and each
+// subsequent call failed separately against a null handle -- the failure
+// surfaced far from its cause. See known-issues #41.
 pub def lib_open(path: str) -> i64 effect ffi {
     ffi_open(path)
 }

@@ -730,8 +730,7 @@ void    iris_udp_close(int64_t fd);
 // ---------------------------------------------------------------------------
 // HTTP (extended)
 // ---------------------------------------------------------------------------
-char*   iris_http_request(const char* method, const char* url,
-                          const char* body, const char* content_type);
+char*     iris_http_request(const char* method, const char* url, const char* body);
 
 // ---------------------------------------------------------------------------
 // TCP Networking

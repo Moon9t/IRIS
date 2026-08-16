@@ -3476,8 +3476,21 @@ void iris_udp_close(int64_t fd) { (void)fd; }
 /*  HTTP (extended)                                                          */
 /* ======================================================================== */
 
+/* Three parameters, matching the IRIS-level `http_request(method, url, body)`.
+ *
+ * This took a `content_type` fourth parameter that IRIS never passed, so
+ * codegen emitted a three-argument call against a four-parameter declaration
+ * and the callee read a garbage pointer -- an access violation on every native
+ * `http_request`. Fourth instance of a call disagreeing with its own `declare`,
+ * after iris_select, json_stringify and the FFI argument array (#33).
+ *
+ * KNOWN LIMITATION: any non-GET method is still sent as POST, because this
+ * delegates to `iris_http_post`, whose request line hardcodes the verb. The
+ * interpreter builds the line itself and honours the method, so the two
+ * backends disagree for PUT and PATCH. See known-issues #43. */
 char* iris_http_request(const char* method, const char* url,
-                        const char* body, const char* content_type) {
+                        const char* body) {
+    const char* content_type = "text/plain";
 #ifdef __IRIS_WASM_STUB
     (void)method;(void)url;(void)body;(void)content_type;
     { char* e = (char*)xmalloc(1); *e = '\0'; return e; }
@@ -5602,7 +5615,12 @@ const char* iris_python_call(const char* module, const char* func, const char* a
     char cmd[8192];
     const char* a = args_json ? args_json : "";
     snprintf(cmd, sizeof(cmd),
-        "%s -c \"import %s; print(%s.%s(%s))\"",
+        /* The argument is quoted. Without the quotes it was interpolated as
+         * a bare Python expression, so `py_call1("os.path", "basename",
+         * "/a/b/c.txt")` generated `basename(/a/b/c.txt)` -- a SyntaxError.
+         * The interpreter quotes it, so the two backends disagreed on every
+         * non-numeric argument. See known-issues #44. */
+        "%s -c \"import %s; print(%s.%s('%s'))\"",
         py, module, module, func, a);
 #ifdef _WIN32
     FILE* fp = _popen(cmd, "r");

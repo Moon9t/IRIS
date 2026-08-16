@@ -1,0 +1,59 @@
+// std.http -- the parsing and building half, asserted with no network.
+//
+// These functions are pure string work, so they can be checked anywhere. The
+// network half lives in examples/11_http/roundtrip.iris, which needs a server.
+
+bring std.http
+
+def check_header_lookup() -> i64 {
+    val raw = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nX-Iris-Test: marker-value\r\nContent-Length: 5\r\n\r\nhello";
+
+    assert(http_header(raw, "Content-Type") == "text/plain");
+    assert(http_header(raw, "X-Iris-Test") == "marker-value");
+    assert(http_header(raw, "Content-Length") == "5");
+
+    // A header that is not present must come back empty rather than as the
+    // next header's value -- an off-by-one in the scan would do exactly that.
+    assert(http_header(raw, "X-Not-Present") == "");
+
+    // A name that is a prefix of a real header must not match it.
+    assert(http_header(raw, "Content") == "");
+    0
+}
+
+def check_request_building() -> i64 {
+    val g = http_get_request("example.com", "/index.html");
+    assert(starts_with(g, "GET /index.html HTTP/1.1"));
+    assert(contains(g, "Host: example.com"));
+
+    val p = http_post_request("example.com", "/submit", "a=1");
+    assert(starts_with(p, "POST /submit HTTP/1.1"));
+    assert(contains(p, "Host: example.com"));
+    // The body must be present and its length declared, or the server hangs
+    // waiting for bytes that never arrive.
+    assert(contains(p, "a=1"));
+    assert(contains(p, "Content-Length: 3"));
+    0
+}
+
+def check_request_parsing() -> i64 {
+    val raw = "POST /api/v1/items HTTP/1.1\r\nHost: h\r\n\r\nbody";
+    assert(http_request_method(raw) == "POST");
+    assert(http_request_path(raw) == "/api/v1/items");
+
+    val g = "GET / HTTP/1.1\r\nHost: h\r\n\r\n";
+    assert(http_request_method(g) == "GET");
+    // The root path is a single slash, not the empty string -- collapsing it
+    // would route every request to the wrong handler.
+    assert(http_request_path(g) == "/");
+    0
+}
+
+def main() -> i64 {
+    val a = check_header_lookup();
+    val b = check_request_building();
+    val c = check_request_parsing();
+    assert(a + b + c == 0);
+    println("http parsing ok");
+    0
+}

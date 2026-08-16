@@ -4977,6 +4977,48 @@ mod udp_store {
 
 /// Helper: dispatch a C/Rust FFI call with up to 6 i64 arguments via transmuted pointers.
 /// The function pointer `proc` must point to a valid extern "C" function.
+/// Call through a pointer typed to return `f64`.
+///
+/// A double is returned in XMM0 on every ABI IRIS targets, while
+/// `ffi_dispatch_call` reads RAX. Calling a double-returning function through
+/// the integer dispatcher therefore produced whatever happened to be in RAX --
+/// `call_f64(h, "t_f64_one", 9)` came back as 6.95e-310 instead of 4.5. It is
+/// not a conversion that can be fixed after the fact: the value was never in
+/// the register being read.
+unsafe fn ffi_dispatch_call_f64(proc: *const u8, args: &[i64]) -> f64 {
+    match args.len() {
+        0 => {
+            let f: extern "C" fn() -> f64 = std::mem::transmute(proc);
+            f()
+        }
+        1 => {
+            let f: extern "C" fn(i64) -> f64 = std::mem::transmute(proc);
+            f(args[0])
+        }
+        2 => {
+            let f: extern "C" fn(i64, i64) -> f64 = std::mem::transmute(proc);
+            f(args[0], args[1])
+        }
+        3 => {
+            let f: extern "C" fn(i64, i64, i64) -> f64 = std::mem::transmute(proc);
+            f(args[0], args[1], args[2])
+        }
+        4 => {
+            let f: extern "C" fn(i64, i64, i64, i64) -> f64 = std::mem::transmute(proc);
+            f(args[0], args[1], args[2], args[3])
+        }
+        5 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64) -> f64 = std::mem::transmute(proc);
+            f(args[0], args[1], args[2], args[3], args[4])
+        }
+        _ => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64) -> f64 =
+                std::mem::transmute(proc);
+            f(args[0], args[1], args[2], args[3], args[4], args[5])
+        }
+    }
+}
+
 unsafe fn ffi_dispatch_call(proc: *const u8, args: &[i64]) -> i64 {
     match args.len() {
         0 => {
@@ -6153,6 +6195,12 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
                         _ => Ok(IrValue::I64(-1)),
                     };
                 }
+                if name == "ffi_call_f64" {
+                    // Read the value from the register it is actually in.
+                    return Ok(IrValue::F64(unsafe {
+                        ffi_dispatch_call_f64(proc, &extra_args)
+                    }));
+                }
                 result_raw = unsafe { ffi_dispatch_call(proc, &extra_args) };
             }
             #[cfg(unix)]
@@ -6166,6 +6214,11 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
                         "ffi_call_f64" => Ok(IrValue::F64(0.0)),
                         _ => Ok(IrValue::I64(-1)),
                     };
+                }
+                if name == "ffi_call_f64" {
+                    return Ok(IrValue::F64(unsafe {
+                        ffi_dispatch_call_f64(sym, &extra_args)
+                    }));
                 }
                 result_raw = unsafe { ffi_dispatch_call(sym, &extra_args) };
             }
@@ -6394,8 +6447,13 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
                 if proc.is_null() {
                     return Ok(IrValue::F64(0.0));
                 }
-                let raw = unsafe { ffi_dispatch_call(proc, &extra_args) };
-                Ok(IrValue::F64(f64::from_bits(raw as u64)))
+                // Not `f64::from_bits` on the integer dispatcher's result: a
+                // double is returned in XMM0, so reinterpreting RAX yields
+                // whatever was left there. See the note on
+                // `ffi_dispatch_call_f64`.
+                Ok(IrValue::F64(unsafe {
+                    ffi_dispatch_call_f64(proc, &extra_args)
+                }))
             }
             #[cfg(unix)]
             {
@@ -6405,8 +6463,9 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
                 if sym.is_null() {
                     return Ok(IrValue::F64(0.0));
                 }
-                let raw = unsafe { ffi_dispatch_call(sym, &extra_args) };
-                Ok(IrValue::F64(f64::from_bits(raw as u64)))
+                Ok(IrValue::F64(unsafe {
+                    ffi_dispatch_call_f64(sym, &extra_args)
+                }))
             }
             #[cfg(not(any(windows, unix)))]
             {
@@ -7151,7 +7210,14 @@ fn http_request(method: &str, url: &str, body: &str) -> String {
         ),
         None => (hostport, 80u16),
     };
-    let req = if method == "POST" {
+    // A body is sent whenever there is one -- not only for POST.
+    //
+    // Keying on the verb meant `http_request("PUT", url, body)` sent a
+    // well-formed PUT with no payload: the server saw the right method and an
+    // empty body, answered 200, and the caller had no way to tell the body had
+    // been dropped. PATCH and DELETE-with-body were truncated the same way.
+    // See known-issues #43.
+    let req = if !body.is_empty() {
         format!("{} {} HTTP/1.0\r\nHost: {}\r\nContent-Length: {}\r\nContent-Type: application/x-www-form-urlencoded\r\nConnection: close\r\n\r\n{}",
             method, path, host, body.len(), body)
     } else {

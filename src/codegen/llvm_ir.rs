@@ -5946,10 +5946,28 @@ fn emit_instr_ir(
             // `select` and `json_stringify`: a runtime signature that codegen
             // does not honour. The declarations are right there, a few hundred
             // lines below, and nothing checks a call against them.
-            if matches!(
+            // Every runtime entry point with the shape
+            // `(handle, name, int64_t* args, int nargs)` needs its trailing
+            // arguments packed into an array.
+            //
+            // The first version of this fix listed only the `ffi_call_*`
+            // names and missed `rust_call_*`, which are literally one-line
+            // forwarders to them with the identical signature -- so
+            // `rust_i64` and `rust_f64` still crashed. Matching on the shared
+            // suffix covers the whole family instead of an enumeration that
+            // has now been wrong twice.
+            let takes_arg_array = matches!(
                 name.as_str(),
-                "ffi_call_i64" | "ffi_call_f64" | "ffi_call_str" | "ffi_call_void"
-            ) && args.len() >= 2
+                "ffi_call_i64"
+                    | "ffi_call_f64"
+                    | "ffi_call_str"
+                    | "ffi_call_void"
+                    | "rust_call_i64"
+                    | "rust_call_f64"
+                    | "rust_call_void"
+                    | "rust_call_str"
+            );
+            if takes_arg_array && args.len() >= 2
             {
                 let n = args.len() - 2;
                 let slots = n.max(1);
@@ -6814,7 +6832,7 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_http_get(ptr)",
         "declare ptr @iris_http_post(ptr, ptr, ptr)",
         "declare ptr @iris_http_post_json(ptr, ptr)",
-        "declare ptr @iris_http_request(ptr, ptr, ptr, ptr)",
+        "declare ptr @iris_http_request(ptr, ptr, ptr)",
         // JSON
         "declare ptr @iris_json_parse(ptr)",
         "declare ptr @iris_json_stringify(ptr)",
