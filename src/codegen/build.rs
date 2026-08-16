@@ -637,10 +637,36 @@ fn build_binary_impl(
         support_objs.push(obj);
     }
 
-    // Compile .ll → .o: try clang first (safe, always works), fall back to
-    // LLVM C API only when clang is unavailable. The LLVM C API conflicts with
-    // TensorFlow in the same process (both embed LLVM), so we prefer clang.
+    // Compile .ll -> .o.
+    //
+    // The LLVM C API is preferred: it needs no external compiler, which is what
+    // lets `iris build` work on a machine with only LLVM installed. clang
+    // remains the fallback.
+    //
+    // OPT-IN, via `IRIS_NO_CLANG=1`, and deliberately not the default.
+    //
+    // Preferring it was tried and reverted on 2026-08-16: the object it emits
+    // for `x86_64-pc-windows-gnu` is accepted by `compile_llvm_ir_to_object`
+    // but rejected at link time, and the failure did not surface -- `iris build`
+    // exited 0 and produced no binary at all. Silently building nothing is a
+    // much worse failure than requiring a compiler, so clang stays the default
+    // until the emitted object links. See known-issues #45.
+    //
+    // There is a second reason for caution: the LLVM C API and TensorFlow both
+    // embed LLVM, and loading both into one process can conflict.
     let mod_obj = tmp_dir.join("module.o");
+    let prefer_clang = std::env::var("IRIS_NO_CLANG").is_err();
+    if !prefer_clang
+        && crate::codegen::llvm_c_api::is_llvm_c_api_available()
+        && crate::codegen::llvm_c_api::compile_llvm_ir_to_object(
+            &llvm_ir,
+            &mod_obj,
+            Some(&resolved_target),
+        )
+        .is_ok()
+    {
+        // Object emitted without invoking any external compiler.
+    } else {
     let mut ir_cmd = Command::new(&clang);
     ir_cmd.args(&target_args);
     ir_cmd.args([
@@ -671,6 +697,7 @@ fn build_binary_impl(
                 ),
             });
         }
+    }
     }
 
     // 6. Link module.o + iris_runtime.o → native binary.

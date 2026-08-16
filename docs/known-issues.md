@@ -2137,7 +2137,45 @@ catch-all that absorbs the next variant silently. `apply_replacements` in
 
 ---
 
-## 47. Every thread reserves 12.6 MB for an autodiff tape it never uses — **open**
+## 47. Every thread reserves 12.6 MB for an autodiff tape it never uses — **FIXED**
+
+> **Fixed** on 2026-08-16. The tape is now allocated lazily in 4096-node chunks
+> instead of as a fixed thread-local array, and is freed on thread exit via a
+> pthread TLS destructor (`spawn` calls the user function directly, so there is
+> no wrapper to free from; the destructor is the one hook covering every thread
+> the runtime creates, including `par_for` workers).
+>
+> **Chunked rather than a single growable block on purpose:** nodes reference
+> their parents by *pointer*, so reallocating one block would invalidate every
+> parent pointer already recorded — corrupting the graph silently rather than
+> failing. Chunk addresses are stable for the life of the tape. The node ceiling
+> and wrap-around behaviour are unchanged.
+>
+> **Measured, same binaries and method as the original report:**
+>
+> | | before | after |
+> |---|---|---|
+> | `.tls$` in `iris_runtime.o` | 12,747,312 | **164,688** (−98.7%) |
+> | `iris_runtime.o` | 12,910,081 | **329,192** |
+> | a built IRIS binary | 13,035,008 | **453,120** (−96.5%) |
+> | peak RSS, 4 threads | 77.4 MB | **6.1 MB** |
+> | peak RSS, 64 threads | 808.1 MB | **16.6 MB** (−97.9%) |
+>
+> Per-thread cost is now ~175 KB, down from 12.2 MB — a 70× reduction. What
+> remains is `handler_frames`, a 164 KB thread-local array of the same shape;
+> worth the same treatment, but it is 1.3% of what this was.
+>
+> **Correctness verified, not assumed:** `tests/autodiff_tape_chunks.rs` asserts
+> gradients through chains of 100, 4095, 4096, 4097 and 5000 nodes — the last
+> spanning two chunks, which is precisely where a relocating allocator would
+> produce a wrong gradient rather than a crash.
+>
+> Two **pre-existing** autodiff defects surfaced while verifying this, both
+> confirmed identical on the compiler built immediately beforehand: see #48
+> (a second `backward()` silently corrupts the first tape's gradients) and #49
+> (a tape handle does not survive a function call or a `var`).
+
+### Original report
 
 The reverse-mode autodiff tape is a **statically sized thread-local array**:
 
@@ -2193,3 +2231,67 @@ bundled into the tail-call work that found it.
 — a 12.9 MB `iris_runtime.o` was the symptom that led here. Those objects are
 therefore **deliberately left uncommitted**: baking a 12.9 MB artifact into git
 history is not worth it when the fix should shrink it by roughly 98%.
+
+---
+
+## 48. A second `backward()` silently corrupts the first tape's gradients — **open**
+
+`iris_backward` resets the arena index to zero when it finishes ("deterministic
+memory reuse in the next training step"). The next `tape(...)` therefore hands
+back **the same node address** the previous leaf is still holding, so the older
+handle silently starts reading the newer node's gradient.
+
+```iris
+val x = tape(2.0);  val fx = x * x;   val _  = backward(fx);   // d/dx = 4
+val y = tape(3.0);  val y2 = y * y;   val _2 = backward(y2);   // d/dy = 6
+println("dx=" + to_str(grad(x)) + " dy=" + to_str(grad(y)));
+```
+
+```text
+dx=6 dy=6        <- dx should be 4
+```
+
+No error, no crash — just a wrong number, and one that looks plausible. Any
+program running more than one backward pass and reading a gradient from before
+the last one gets silently wrong answers. That is the shape of an optimiser loop
+that keeps per-parameter handles across steps, which is exactly what the ML
+story requires.
+
+The epoch machinery already exists to detect this — `iris_tape_grad` returns 0
+when `grad_epoch` is stale — but reuse defeats it, because the recycled node
+carries the *new* epoch. A fix has to either stop reusing addresses while
+handles are live, or give each node an identity the handle can check.
+
+**Pre-existing**, and confirmed as such: identical output from the compiler
+built immediately before the #47 chunked-tape change.
+
+---
+
+## 49. A tape handle does not survive a function call or a `var` — **open**
+
+Reverse-mode AD works only on straight-line code inside a single function.
+Passing a taped value to a function, or accumulating into a `var`, loses the
+handle and native codegen rejects the program:
+
+```iris
+var acc = tape(0.0);
+while i < 10 { acc = acc + z * z; i = i + 1; };
+val _ = backward(acc);
+```
+
+```text
+error[E0300]: reverse-mode AD backward requires a lowered tape handle;
+              use tape(...) on leaf values before calling backward(...)
+```
+
+The message is misleading: `tape(...)` *was* called on the leaf. What actually
+failed is that the handle did not survive the reassignment.
+
+This rules out the ordinary shapes of a training loop — accumulating a loss over
+a batch, or computing it in a helper — so reverse-mode AD cannot currently
+express a loop-accumulated loss. Forward mode (dual numbers) is unaffected.
+
+**Do not describe reverse-mode autodiff as usable for training** without this
+limit stated alongside.
+
+**Pre-existing**, confirmed against the pre-#47 compiler.

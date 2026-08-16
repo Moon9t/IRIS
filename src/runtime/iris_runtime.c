@@ -2082,7 +2082,29 @@ int64_t iris_sparse_nnz(IrisSparse* sp) {
 #endif
 
 #define IRIS_TAPE_MAGIC ((uint64_t)0x4952495354415045ULL)
-#define IRIS_TAPE_ARENA_SIZE 131072
+
+// The tape was a *fixed thread-local array* of IRIS_TAPE_ARENA_SIZE nodes, plus
+// a topological buffer of the same length. At 88 bytes a node that is 11.5 MB +
+// 1 MB reserved per thread, whether or not the thread ever called `grad`:
+//
+//   $ size -A iris_runtime.o
+//   .tls$    12747312        <- 12.7 MB, against 86896 bytes of .text
+//
+// Measured at 77.4 MB for 4 threads and 808.1 MB for 64 -- ~12.2 MB per thread
+// of committed working set, for threads that only slept and sent an integer.
+// It also put a 12.7 MB TLS template in every binary IRIS produced. See
+// known-issues #47.
+//
+// Now allocated lazily, in chunks. Chunked rather than a single growable block
+// because nodes reference their parents by *pointer*: reallocating one block
+// would invalidate every parent pointer already recorded, silently corrupting
+// the graph rather than failing. Chunk addresses are stable for the life of the
+// tape, so growth is safe.
+//
+// The ceiling is unchanged, so wrap-around behaviour is exactly as before.
+#define IRIS_TAPE_CHUNK_NODES 4096
+#define IRIS_TAPE_MAX_CHUNKS  32
+#define IRIS_TAPE_ARENA_SIZE  (IRIS_TAPE_CHUNK_NODES * IRIS_TAPE_MAX_CHUNKS)
 
 typedef struct IrisTapeNode {
     uint64_t               magic;
@@ -2102,12 +2124,82 @@ typedef struct {
     size_t         cap;
 } IrisTapeVec;
 
-static IRIS_THREAD_LOCAL IrisTapeNode iris_tape_arena[IRIS_TAPE_ARENA_SIZE];
+// Thread-local state is now a chunk table rather than the chunks themselves:
+// 32 pointers and a few counters, ~300 bytes instead of 12.6 MB.
+static IRIS_THREAD_LOCAL IrisTapeNode* iris_tape_chunks[IRIS_TAPE_MAX_CHUNKS];
+static IRIS_THREAD_LOCAL size_t iris_tape_chunk_count = 0;
 static IRIS_THREAD_LOCAL size_t iris_tape_arena_index = 0;
-static IRIS_THREAD_LOCAL IrisTapeNode* iris_topo_buffer[IRIS_TAPE_ARENA_SIZE];
+static IRIS_THREAD_LOCAL IrisTapeNode** iris_topo_buffer = NULL;
+static IRIS_THREAD_LOCAL size_t iris_topo_buffer_cap = 0;
 
 static IRIS_THREAD_LOCAL uint64_t iris_tape_grad_epoch  = 0;
 static IRIS_THREAD_LOCAL uint64_t iris_tape_visit_epoch = 0;
+
+// Releases this thread's tape. Called from a TLS destructor on thread exit and
+// from iris_runtime_cleanup for the main thread.
+static void iris_tape_thread_free(void) {
+    for (size_t i = 0; i < iris_tape_chunk_count; i++) {
+        free(iris_tape_chunks[i]);
+        iris_tape_chunks[i] = NULL;
+    }
+    iris_tape_chunk_count = 0;
+    iris_tape_arena_index = 0;
+    free(iris_topo_buffer);
+    iris_topo_buffer = NULL;
+    iris_topo_buffer_cap = 0;
+}
+
+// Without this, a thread that used autodiff would leak its chunks on exit --
+// which the old fixed array never had to worry about, because it was never
+// allocated. `spawn` calls the user function directly (no wrapper to free
+// from), and par_for workers are separate threads again, so a TLS destructor is
+// the one hook that covers every thread the runtime creates.
+#if !defined(_MSC_VER) && !defined(__wasm__)
+static pthread_key_t  iris_tape_tls_key;
+static pthread_once_t iris_tape_tls_once = PTHREAD_ONCE_INIT;
+
+static void iris_tape_tls_dtor(void* unused) {
+    (void)unused;
+    // Runs on the exiting thread, so the thread-local pointers are still ours.
+    iris_tape_thread_free();
+}
+static void iris_tape_tls_init(void) {
+    pthread_key_create(&iris_tape_tls_key, iris_tape_tls_dtor);
+}
+static void iris_tape_tls_arm(void) {
+    pthread_once(&iris_tape_tls_once, iris_tape_tls_init);
+    // The value is a sentinel; the destructor reads the thread-locals directly.
+    // It must be non-NULL or the destructor is not run.
+    if (!pthread_getspecific(iris_tape_tls_key)) {
+        pthread_setspecific(iris_tape_tls_key, (void*)1);
+    }
+}
+#else
+static void iris_tape_tls_arm(void) {}
+#endif
+
+// Hands out the next node, allocating a chunk only when one is actually needed.
+// Returns NULL if allocation fails; callers must tolerate that, and do, because
+// iris_is_tape_node(NULL) is false and every consumer checks it.
+static IrisTapeNode* iris_tape_alloc_node(void) {
+    if (iris_tape_arena_index >= IRIS_TAPE_ARENA_SIZE) {
+        iris_tape_arena_index = 0;
+    }
+    size_t idx   = iris_tape_arena_index;
+    size_t chunk = idx / IRIS_TAPE_CHUNK_NODES;
+    size_t off   = idx % IRIS_TAPE_CHUNK_NODES;
+
+    if (chunk >= iris_tape_chunk_count) {
+        // Indices advance by one and wrap, so this is always the next chunk.
+        IrisTapeNode* c = (IrisTapeNode*)calloc(IRIS_TAPE_CHUNK_NODES, sizeof(IrisTapeNode));
+        if (!c) return NULL;
+        iris_tape_tls_arm();
+        iris_tape_chunks[chunk] = c;
+        iris_tape_chunk_count   = chunk + 1;
+    }
+    iris_tape_arena_index++;
+    return &iris_tape_chunks[chunk][off];
+}
 
 static int iris_is_tape_node(const void* ptr) {
     if (!ptr) return 0;
@@ -2151,10 +2243,8 @@ static void iris_tape_accumulate(IrisTapeNode* parent, double delta, uint64_t gr
 
 void* iris_tape_record(double value, const char* op, int64_t parent_count,
                        void* const* parents, const double* parent_primals) {
-    if (iris_tape_arena_index >= IRIS_TAPE_ARENA_SIZE) {
-        iris_tape_arena_index = 0;
-    }
-    IrisTapeNode* node = &iris_tape_arena[iris_tape_arena_index++];
+    IrisTapeNode* node = iris_tape_alloc_node();
+    if (!node) return NULL;
     node->magic = IRIS_TAPE_MAGIC;
     node->primal = value;
     node->op = op ? op : "";
@@ -2182,10 +2272,24 @@ void iris_backward(void* loss) {
     IrisTapeNode* loss_node = iris_is_tape_node(loss) ? (IrisTapeNode*)loss : NULL;
     if (!loss_node) return;
 
+    // Size the topological buffer to the tape actually in use, not to the
+    // ceiling. A thread that recorded 300 nodes needs one chunk's worth, not
+    // 1 MB.
+    size_t needed = iris_tape_chunk_count * IRIS_TAPE_CHUNK_NODES;
+    if (needed == 0) return;
+    if (iris_topo_buffer_cap < needed) {
+        IrisTapeNode** grown =
+            (IrisTapeNode**)realloc(iris_topo_buffer, needed * sizeof(IrisTapeNode*));
+        if (!grown) return;
+        iris_tape_tls_arm();
+        iris_topo_buffer     = grown;
+        iris_topo_buffer_cap = needed;
+    }
+
     IrisTapeVec topo;
     topo.data = iris_topo_buffer;
     topo.len = 0;
-    topo.cap = IRIS_TAPE_ARENA_SIZE;
+    topo.cap = iris_topo_buffer_cap;
 
     uint64_t visit_epoch = iris_tape_next_epoch(&iris_tape_visit_epoch);
     uint64_t grad_epoch = iris_tape_next_epoch(&iris_tape_grad_epoch);
@@ -6325,6 +6429,9 @@ int64_t iris_gc_stats_freed(void) {
  * Also frees the RC side-table itself.  Registered via atexit() in the
  * constructor below so that sanitizers (ASAN/Valgrind) report a clean heap. */
 static void iris_runtime_cleanup(void) {
+    /* The main thread has no TLS destructor to run, so free its tape here. */
+    iris_tape_thread_free();
+
     /* Run cycle collector one final time before cleanup. */
     pthread_mutex_lock(&rc_global_mu);
     iris_gc_cycle_collect_locked();
