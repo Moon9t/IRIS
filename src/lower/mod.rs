@@ -559,8 +559,25 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
     let mut struct_method_map: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut impl_fns: Vec<crate::parser::ast::AstFunction> = Vec::new();
     for impl_def in &ast.impls {
+        // A generic *target* -- `impl[T] Show for list<T>` -- is not a blanket
+        // impl. A blanket impl enumerates the concrete types satisfying a bound
+        // and emits one copy per type; here the parameter belongs to the target
+        // container, and the method body is usually indifferent to it
+        // (`list_len(self)` works for any element type). Registering it once
+        // against `list<_>` and letting dispatch match on the constructor is
+        // both correct and far cheaper than an instantiation per element type.
+        //
+        // Without this the blanket path caught it, searched for concrete types
+        // satisfying a bound it does not have, found none, and emitted nothing.
+        // See known-issues #38.
+        let target_is_generic = impl_def.target_ty.is_some()
+            && !impl_def.generic_params.is_empty();
+
         // Handle blanket impls: monomorphize for each known concrete type.
-        if !impl_def.generic_params.is_empty() && !impl_def.trait_name.is_empty() {
+        if !impl_def.generic_params.is_empty()
+            && !impl_def.trait_name.is_empty()
+            && !target_is_generic
+        {
             // Find the type param name (e.g., "T" in `impl[T where T: Show]`).
             if let crate::parser::ast::AstGenericParam::Type(ref tp_name, ref bounds, _) =
                 &impl_def.generic_params[0]
@@ -16907,6 +16924,22 @@ pub fn lower_type(ty: &AstType) -> IrType {
 /// Used only to pick a trait impl for a receiver whose element type inference
 /// did not reach, and only when exactly one candidate matches.
 fn same_constructor_with_infer(a: &IrType, b: &IrType) -> bool {
+    // A struct with no fields is the lowerer's marker for an unsubstituted type
+    // parameter -- `impl[T] Show for list<T>` lowers its target to
+    // `list<%T>`. Treating it as a wildcard is what lets one generic impl serve
+    // every element type instead of needing one instantiation each.
+    //
+    // A user's genuinely empty record would also match here. That is tolerable
+    // because this helper is consulted only after an exact match has failed,
+    // and only when exactly one candidate matches -- so it can widen a lookup
+    // that would otherwise fail outright, never silently redirect one that
+    // would have succeeded.
+    fn is_param_marker(t: &IrType) -> bool {
+        matches!(t, IrType::Struct { fields, .. } if fields.is_empty())
+    }
+    if is_param_marker(a) || is_param_marker(b) {
+        return true;
+    }
     match (a, b) {
         (IrType::Infer, _) | (_, IrType::Infer) => true,
         (IrType::List(x), IrType::List(y)) => same_constructor_with_infer(x, y),

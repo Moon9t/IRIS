@@ -1,0 +1,122 @@
+// std.container -- one interface across `list` and `option`.
+//
+// This module could not be written until 2026-08-16. Three things had to land
+// first, and each was invisible behind the one before it:
+//
+//   * #36 -- a higher-kinded parameter could not be inferred from an argument,
+//     so `def f[F[_], T](c: F<T>)` could not be called at all;
+//   * #37 -- traits accepted no generic parameters, so there were no type
+//     classes of any kind;
+//   * #38 -- an impl target could not be a generic type, so neither `list` nor
+//     `option` could be given an interface, and method dispatch rejected a
+//     non-struct receiver before ever consulting the trait table.
+//
+// Each impl below is written **once**, generic in the element type. An earlier
+// version of #38 required one impl per element type, which would have made this
+// file a few hundred lines of duplication rather than a few dozen.
+
+// ---------------------------------------------------------------------------
+// Size
+// ---------------------------------------------------------------------------
+
+/// Anything with a countable number of elements.
+///
+/// `option` is a container of at most one element, which is the framing that
+/// makes it share an interface with `list` rather than being a special case.
+pub trait Sized {
+    // Number of elements held.
+    def size(self) -> i64 effect alloc
+    // True when there is nothing to iterate.
+    def is_empty(self) -> bool effect alloc
+    // True when there is at least one element -- the complement of
+    // `is_empty`, provided because reading `!c.is_empty()` at a call site is
+    // where off-by-one thinking creeps in.
+    def has_any(self) -> bool effect alloc
+}
+
+impl[T] Sized for list<T> {
+    def size(self) -> i64 effect alloc { list_len(self) }
+    def is_empty(self) -> bool effect alloc { list_len(self) == 0 }
+    def has_any(self) -> bool effect alloc { list_len(self) > 0 }
+}
+
+impl[T] Sized for option<T> {
+    def size(self) -> i64 effect alloc { if is_some(self) { 1 } else { 0 } }
+    def is_empty(self) -> bool effect alloc { !is_some(self) }
+    def has_any(self) -> bool effect alloc { is_some(self) }
+}
+
+// ---------------------------------------------------------------------------
+// Counting
+//
+// Kept separate from `Sized` so a type can report its size without committing
+// to being traversable.
+// ---------------------------------------------------------------------------
+
+/// Containers whose contents can be counted under a predicate.
+pub trait Countable {
+    // How many elements satisfy `pred`.
+    def count_where(self, pred: |i64| -> bool) -> i64 effect alloc
+    // True when every element satisfies `pred`. Vacuously true when empty,
+    // which is the convention that composes -- `all` over an empty container
+    // returning false is a classic source of wrong branches.
+    def all_of(self, pred: |i64| -> bool) -> bool effect alloc
+    // True when at least one element satisfies `pred`. Vacuously false when
+    // empty.
+    def any_of(self, pred: |i64| -> bool) -> bool effect alloc
+}
+
+impl Countable for list<i64> {
+    def count_where(self, pred: |i64| -> bool) -> i64 effect alloc {
+        var n = 0;
+        for i in 0 .. list_len(self) {
+            if pred(list_get(self, i)) { n = n + 1 };
+        };
+        n
+    }
+    def all_of(self, pred: |i64| -> bool) -> bool effect alloc {
+        for i in 0 .. list_len(self) {
+            if !pred(list_get(self, i)) { return false };
+        };
+        true
+    }
+    def any_of(self, pred: |i64| -> bool) -> bool effect alloc {
+        for i in 0 .. list_len(self) {
+            if pred(list_get(self, i)) { return true };
+        };
+        false
+    }
+}
+
+impl Countable for option<i64> {
+    def count_where(self, pred: |i64| -> bool) -> i64 effect alloc {
+        if is_some(self) {
+            if pred(unwrap(self)) { 1 } else { 0 }
+        } else {
+            0
+        }
+    }
+    def all_of(self, pred: |i64| -> bool) -> bool effect alloc {
+        if is_some(self) { pred(unwrap(self)) } else { true }
+    }
+    def any_of(self, pred: |i64| -> bool) -> bool effect alloc {
+        if is_some(self) { pred(unwrap(self)) } else { false }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Free functions over any `Sized` container
+//
+// These take the trait, not a concrete container, so they are written once and
+// work for every implementation -- present and future.
+// ---------------------------------------------------------------------------
+
+/// Total size across two containers of the same kind.
+pub def total_size(a: list<i64>, b: list<i64>) -> i64 effect alloc {
+    a.size() + b.size()
+}
+
+/// True when the container holds exactly one element.
+pub def is_singleton(c: list<i64>) -> bool effect alloc {
+    c.size() == 1
+}

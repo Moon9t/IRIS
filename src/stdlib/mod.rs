@@ -29,6 +29,7 @@ pub fn stdlib_source(name: &str) -> Option<&'static str> {
         "os" => Some(include_str!("os.iris")),
         "ffi" => Some(include_str!("ffi.iris")),
         "serial" => Some(include_str!("serial.iris")),
+        "container" => Some(include_str!("container.iris")),
         "queue" => Some(include_str!("queue.iris")),
         "path" => Some(include_str!("path.iris")),
         "table" => Some(include_str!("table.iris")),

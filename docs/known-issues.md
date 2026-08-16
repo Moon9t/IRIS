@@ -1779,7 +1779,7 @@ Asserted in `tests/test_generic_traits.iris`, both backends.
 
 ---
 
-## 38. An impl target cannot be a generic type — **FIXED for concrete element types**
+## 38. An impl target cannot be a generic type — **FIXED**
 
 > ```iris
 > impl Sized2 for list<i64>   { def sz(self) -> i64 { list_len(self) } }
@@ -1808,10 +1808,22 @@ Asserted in `tests/test_generic_traits.iris`, both backends.
 >
 > Asserted in `tests/test_impl_on_container.iris`, both backends.
 >
-> **Still open: element types must be concrete.** `impl[T] Sized2 for list<T>`
-> fails, because the blanket-impl path monomorphises over the *impl's* own
-> parameters rather than over the *target's*, so no per-element instantiation is
-> generated. A container library written today needs one impl per element type.
+> **Generic element types now work too.** `impl[T] Sized2 for list<T>` was being
+> caught by the blanket-impl path, which enumerates the concrete types
+> satisfying a trait bound — a bound it does not have — so it found none and
+> emitted nothing. But a generic *target* is not a blanket impl: the parameter
+> belongs to the container, not the impl, and the body is usually indifferent to
+> it (`list_len` works for any element). It is now registered **once** against
+> `list<_>`, and dispatch treats a type-parameter marker (a struct with no
+> fields, the lowerer's existing convention) as a wildcard.
+>
+> The widening is safe because it is consulted only after an exact match fails,
+> and only when exactly one candidate matches — it can rescue a lookup that
+> would otherwise fail, never redirect one that would have succeeded.
+>
+> `src/stdlib/container.iris` is the result: `Sized` and `Countable` across
+> `list` and `option`, each impl written once. Asserted in
+> `tests/test_container.iris`, both backends.
 
 ### Original report
 
@@ -1837,6 +1849,32 @@ impl's own parameters.
 
 **Status:** open. This is the remaining step for "generic functions over
 containers" in the useful sense.
+
+---
+
+## 39. Effect clauses are dropped when an impl method is mangled — **open**
+
+`src/stdlib/container.iris` declares `effect alloc` on every method that calls
+`list_len`, and on the trait declarations too. Compiling anything that brings it
+prints:
+
+```
+error[E0302]: function `list_len` requires effect `alloc`
+              but caller `container__Sized__list__size` has effects `pure`
+```
+
+The clause is present and correct in the source; it does not survive the rename
+into a module-prefixed, trait-mangled function, so the checker sees every impl
+method as `pure`.
+
+Currently warnings only, so programs still run. **Under `--strict-effects` they
+would be build failures**, which makes this a blocker for the one claim the
+effect system exists to support: that a control path can be proven to allocate
+nothing. Any trait method would fail that proof regardless of what it does.
+
+**Status:** open. The fix belongs wherever impl methods are renamed — the
+`renamed` copy carries `params` and `return_ty` through substitution but not
+`effects`.
 
 ---
 

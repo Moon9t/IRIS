@@ -1,0 +1,86 @@
+// std.container -- one interface across `list` and `option`.
+//
+// This file is the payoff for #36, #37 and #38. Each impl in std.container is
+// written once, generic in the element type; before #38's second half it would
+// have needed one impl per element type.
+//
+// NOTE: compiling this prints spurious `E0302` effect warnings. The impl
+// methods declare `effect alloc`, but the clause is dropped when a method is
+// mangled into a module-prefixed function, so the checker reports every one as
+// `pure`. They are warnings, not failures. See known-issues #39.
+
+bring std.container
+
+def check_list() -> i64 {
+    val xs: list<i64> = list();
+    list_push(xs, 1);
+    list_push(xs, 2);
+    list_push(xs, 3);
+    assert(xs.size() == 3);
+    assert(xs.is_empty() == false);
+    assert(xs.has_any());
+
+    val empty: list<i64> = list();
+    assert(empty.size() == 0);
+    assert(empty.is_empty());
+    assert(empty.has_any() == false);
+    0
+}
+
+def check_other_element_type() -> i64 {
+    // The same single generic impl serves a different element type. Needing a
+    // second impl here is exactly what the fix removed.
+    val ss: list<str> = list();
+    list_push(ss, "a");
+    list_push(ss, "b");
+    assert(ss.size() == 2);
+    assert(ss.has_any());
+    0
+}
+
+def check_option() -> i64 {
+    // `option` as a container of at most one element -- the framing that lets
+    // it share an interface with `list` instead of being a special case.
+    val o: option<i64> = some(5);
+    assert(o.size() == 1);
+    assert(o.is_empty() == false);
+    assert(o.has_any());
+
+    val n: option<i64> = none();
+    assert(n.size() == 0);
+    assert(n.is_empty());
+    assert(n.has_any() == false);
+    0
+}
+
+def check_predicates() -> i64 {
+    val xs: list<i64> = list();
+    list_push(xs, 2);
+    list_push(xs, 4);
+    list_push(xs, 5);
+    assert(xs.count_where(|v: i64| v > 3) == 2);
+    assert(xs.count_where(|v: i64| v > 99) == 0);
+    assert(xs.any_of(|v: i64| v == 4));
+    assert(xs.any_of(|v: i64| v == 99) == false);
+    assert(xs.all_of(|v: i64| v > 1));
+    assert(xs.all_of(|v: i64| v > 3) == false);
+
+    // Vacuous truth on an empty container: `all` is true, `any` is false.
+    // Getting this backwards is a classic source of wrong branches, so both
+    // are asserted rather than assumed.
+    val empty: list<i64> = list();
+    assert(empty.all_of(|v: i64| v > 100));
+    assert(empty.any_of(|v: i64| v > 0) == false);
+    assert(empty.count_where(|v: i64| v > 0) == 0);
+    0
+}
+
+def main() -> i64 {
+    val a = check_list();
+    val b = check_other_element_type();
+    val c = check_option();
+    val d = check_predicates();
+    assert(a + b + c + d == 0);
+    println("test_container ok");
+    0
+}
