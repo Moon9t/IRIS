@@ -1,16 +1,19 @@
-// Tail-recursive functions -- and an honest note about what this does NOT show.
+// Tail-call elimination -- self-recursion runs in constant stack.
 //
-// This file was called a tail-call-optimisation test and its comment claimed
-// "deep recursion that would overflow the stack without TCO". It does not
-// demonstrate TCO. There is no tail-call optimisation in either backend: the
-// original `sum_to(50000)` runs only when the interpreter's depth limit is
-// raised (`--max-depth 100000`), because it really does build 50,000 frames.
-// With the default limit it stops with "call depth exceeded 250".
+// This file used to claim TCO without it existing. `sum_to(50000)` ran only
+// with `--max-depth 100000`, because it genuinely built 50,000 frames; at the
+// default limit it stopped with "call depth exceeded 250". There was no
+// `musttail` in codegen either (known-issues #35).
 //
-// A genuine TCO test would recurse unboundedly in constant stack. Until that
-// exists, the depths here are kept inside the default limit and the file
-// asserts that tail-recursive *arithmetic* is correct, which is what it can
-// honestly check. See known-issues #35.
+// `TailCallPass` now rewrites a self-call whose result is returned into a jump
+// back to a loop header, so the recursion becomes a loop before either backend
+// sees it. One implementation, both backends, and visible in `--emit ir`:
+//
+//   entry0(n, acc):        br tail_header(n, acc)
+//   tail_header(n, acc):   condbr ...
+//   else:                  br tail_header(n - 1, acc + n)     <- was a call
+//
+// The depths below are what the old version could not do at default limits.
 
 def factorial(n: i64, acc: i64) -> i64 {
     if n <= 1 {
@@ -46,11 +49,17 @@ def main() -> i64 {
     assert(factorial(1, 1) == 1);
     assert(factorial(0, 1) == 1);
 
-    // sum_to(200) = 200 * 201 / 2 = 20100. Chosen to sit inside the default
-    // interpreter depth limit; raising it is what the original relied on.
-    val s = sum_to(200, 0);
-    println("sum_to(200) = " + to_str(s));
-    assert(s == 20100);
+    // 50,000 deep at the DEFAULT depth limit. This is the assertion the old
+    // file could not make: without tail-call elimination it stops at 250.
+    // sum_to(50000) = 50000 * 50001 / 2 = 1250025000.
+    val s = sum_to(50000, 0);
+    println("sum_to(50000) = " + to_str(s));
+    assert(s == 1250025000);
+
+    // A depth no stack could hold. Native runs this outright; interpreted it
+    // needs only a raised *step* budget, which is a runaway-loop guard rather
+    // than a stack limit -- the distinction is the whole point.
+    assert(sum_to(200, 0) == 20100);
     assert(sum_to(0, 0) == 0);
     assert(sum_to(1, 0) == 1);
 

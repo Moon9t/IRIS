@@ -13,6 +13,7 @@ pub mod loop_unroll;
 pub mod opt;
 pub mod shape_check;
 pub mod shape_infer_graph;
+pub mod tail_call;
 pub mod strength_reduce;
 pub mod type_infer;
 pub mod type_infer_hm;
@@ -253,6 +254,9 @@ pub fn build_standard_pipeline() -> PassManager {
     pm.add_pass(ConstFoldPass);
     pm.add_pass(CopyPropPass);
     // GraphPass (DeadNodePass) is skipped in this IR pipeline
+    // Tail calls become loops before LICM, so loop-invariant motion sees the
+    // recursion as the loop it now is.
+    pm.add_pass(crate::pass::tail_call::TailCallPass);
     pm.add_pass(LicmPass);
     pm.add_pass(LoopUnrollPass::default());
     pm.add_pass(StrengthReducePass);

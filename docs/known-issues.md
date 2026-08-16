@@ -1638,7 +1638,37 @@ the threshold the caller set.
 
 ---
 
-## 35. There is no tail-call optimisation — **claim correction**
+## 35. There is no tail-call optimisation — **FIXED**
+
+> There is now. `src/pass/tail_call.rs` rewrites a self-call whose result is
+> returned into a jump back to a loop header, so the recursion becomes a loop
+> before either backend sees it.
+>
+> Done as an **IR pass** rather than per-backend, so the interpreter and native
+> codegen get it from one implementation and cannot drift apart — and the
+> transformation is visible in `--emit ir` rather than having to be trusted:
+>
+> ```text
+>   entry0(n, acc):       br tail_header(n, acc)
+>   tail_header(n, acc):  condbr ...
+>   else2():              br tail_header(n - 1, acc + n)    <- was `call @sum_to`
+> ```
+>
+> The entry block cannot be a branch target (LLVM rejects it), so the body moves
+> into a fresh header and the entry block becomes a single jump into it.
+>
+> **Measured:** `sum_to(50000)` runs at the **default** depth limit on both
+> backends — it previously needed `--max-depth 100000` and stopped at 250.
+> Natively, 1,000,000 recursions complete outright. Interpreted, the same depth
+> needs only a raised `--max-steps`, which is a runaway-loop guard rather than a
+> stack limit; that distinction is the proof it is constant-stack.
+>
+> **Limits, deliberately:** only *self* recursion. Mutual recursion needs a
+> shared trampoline and is a different transformation, left alone rather than
+> half-done. A call whose result is used before being returned —
+> `n * fact(n - 1)` — is not a tail call and is untouched.
+
+### Original report
 
 `tests/test_tco.iris` was titled "Test tail-call optimization (TCO) in the
 interpreter" and commented "deep recursion that would overflow the stack without

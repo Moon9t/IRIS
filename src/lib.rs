@@ -597,6 +597,9 @@ pub fn compile_to_module_debug(source: &str, module_name: &str) -> Result<IrModu
     pm.add_pass(StrengthReducePass);
     pm.add_pass(CopyPropPass);
     pm.add_pass(OpExpandPass);
+    // Tail-call elimination before LICM, so a self-recursive function has
+    // become a loop by the time loop-invariant motion runs on it.
+    pm.add_pass(crate::pass::tail_call::TailCallPass);
     pm.add_pass(LicmPass);
     pm.add_pass(ExhaustivePass);
     pm.add_pass(ShapeCheckPass);
