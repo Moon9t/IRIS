@@ -1136,7 +1136,10 @@ impl<'m> Lowerer<'m> {
         self.tape_nodes.get(&value).copied().unwrap_or(value)
     }
 
-    fn ensure_taped_leaf(&mut self, value: ValueId, ty: &IrType) {
+    // `_ty` is the primal's type, no longer used now that the handle is typed
+    // `IrType::TapeRef` rather than as its primal. Kept in the signature because
+    // callers have it to hand and a future typed-tape (`tape<f32>`) would need it.
+    fn ensure_taped_leaf(&mut self, value: ValueId, _ty: &IrType) {
         if self.tape_nodes.contains_key(&value) {
             self.taped_values.insert(value);
             return;
