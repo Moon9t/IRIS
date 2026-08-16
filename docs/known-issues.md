@@ -156,7 +156,45 @@ an internal SSA value rather than at the assignment.
 
 ---
 
-## 4. 104 of 122 `.iris` tests assert nothing — **systemic**
+## 4. 104 of 122 `.iris` tests assert nothing — **GATED; backlog shrinking**
+
+> **The mechanism is fixed; the backlog is not yet cleared.** Two separate
+> problems were tangled here, and the one that was never stated is the one that
+> let the other persist.
+>
+> **Nothing globbed `tests/*.iris`.** The corpus was never executed by
+> `cargo test` at all, so a file could rot indefinitely with no run noticing.
+> `tests/iris_corpus.rs` now drives every file through the real CLI. On its
+> first run it found three native crashes (`test_methods`, `test_move`,
+> `test_pattern_guards`) that hand sweeps had missed, because those sweeps used
+> `IRIS_FORCE_INTERP=1`, which bypasses codegen — see #51.
+>
+> **Most files still assert nothing:** 96 of 139. That number is now *enforced
+> downward* rather than tracked by hand:
+>
+> | Gate | What it prevents |
+> |---|---|
+> | `every_iris_test_asserts_or_is_listed` | a **new** non-asserting file joining the backlog unnoticed |
+> | `the_needs_assertions_list_is_accurate` | the backlog list drifting out of date once a file is converted |
+> | `every_iris_test_runs` | a corpus file rotting without CI noticing |
+> | `negative_tests_still_fail` | a negative test silently starting to pass, i.e. losing the check it guards |
+> | `the_known_broken_list_is_accurate` | the debt register describing a state that is no longer true |
+>
+> The last of those failed on its first run — `test_adaptive.iris` was listed as
+> broken but runs natively — which is the register doing its job on day one.
+>
+> **What remains:** converting the 96. That is mechanical but cannot be
+> automated honestly, because each file has to be *run* and its real output
+> values read before an assertion can be written; guessing the expected value
+> would produce a test that passes while asserting the wrong thing, which is
+> worse than no assertion at all. `NEEDS_ASSERTIONS` in `tests/iris_corpus.rs`
+> is the live list.
+>
+> **Do not cite the corpus as evidence of correctness until that list is
+> empty.** A green corpus still demonstrates "compiles, runs, exits 0" for those
+> 96 files.
+
+### Original report
 
 Most `.iris` tests print results without asserting them. They pass whenever the
 program compiles and exits 0, regardless of whether the output is correct.
@@ -2507,3 +2545,59 @@ checkout* was not — on a fresh clone the hash would not have matched and the
 build would have fallen back to compiling. Do not describe IRIS as
 C-compiler-free until a clean clone has been observed accepting the prebuilt
 set.
+
+---
+
+## 51. Three corpus files crash natively; a `ptr` result is printed as `i64` — **open**
+
+Found by the corpus gate added for #4, on its first native run. The interpreter
+sweep had reported these files as passing, because `IRIS_FORCE_INTERP=1`
+bypasses codegen entirely.
+
+`test_methods.iris`, `test_move.iris` and `test_pattern_guards.iris` are killed
+by a signal (exit 139) under `--emit eval`. For `test_methods` the cause is
+visible: native codegen emits invalid LLVM IR, clang rejects it, and the
+*interpreter fallback then crashes* rather than recovering — so two defects
+stack, and the second hides the first.
+
+```text
+module.ll:436:33: error: '%v47' defined with type 'ptr' but expected 'i64'
+  call void @iris_print_i64(i64 %v47)
+```
+
+Three constructs reproduce the bad IR, all the same shape — a pointer-typed
+result passed to the `i64` print helper:
+
+```iris
+def main() -> i64 { val s = "hello world"; println(s.find("world")); 0 }   // option<i64>
+def main() -> i64 { val x = some(42); println(x.map(|v: i64| v * 2)); 0 }  // option<i64>
+def main() -> i64 { val c = channel(); c.send(99); println(c.recv()); 0 }  // chan payload
+```
+
+`s.index(0)`, `m.len()`, `m.contains(..)`, `l.get(..)` and `unwrap_or(..)` are
+all fine, so this is not "method calls are broken" — it is `Print` choosing its
+helper from a type that disagrees with the value's *emitted* type. That is the
+same class as the `emitted_types` mismatches fixed under #6 and the
+`OptionUnwrap`/`MapGet` eager-unboxing work.
+
+**The fallback crash is the more serious half.** `--emit eval` is documented as
+building natively and falling back to the interpreter; a fallback that
+segfaults removes the safety net exactly when it is needed.
+
+**Also found:** `tests/test_adaptive.iris` exits 0 natively and 1 interpreted —
+the same program, two answers. Recorded here rather than under #34, which is
+about the values `std.adaptive` reports rather than about a divergence.
+
+---
+
+## 52. The corpus gate covers only the native backend — **open, by design for now**
+
+`tests/iris_corpus.rs` runs every `.iris` file through `--emit eval`, which
+builds natively. It does **not** also run them under `IRIS_FORCE_INTERP=1`, so
+an interpreter-only failure still escapes CI — and #51 shows the two backends
+genuinely disagree, in both directions.
+
+Doing both doubles the gate's runtime (currently ~6 minutes for 139 files).
+Worth doing, and worth doing as a *divergence* check — asserting the two
+backends agree is a stronger and cheaper statement than asserting each
+separately passes.
