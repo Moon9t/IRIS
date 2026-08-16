@@ -953,6 +953,10 @@ pub struct AstTraitMethod {
     pub name: Ident,
     pub params: Vec<AstParam>,
     pub return_ty: AstType,
+    /// Effect bound declared on the method, e.g. `def read(self) -> i64 effect io`.
+    /// A trait could not state the effects its implementations may perform until
+    /// this existed -- the clause was a parse error. See known-issues #10.
+    pub effects: Vec<String>,
     pub body: Option<AstBlock>,
     pub span: Span,
 }

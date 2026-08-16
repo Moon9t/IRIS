@@ -305,7 +305,14 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
     // functions.  We use `lower_type_with_structs` (without Infer substitution)
     // so type params appear as `Struct { name: "T", fields: [] }` — a marker
     // that can be substituted with the concrete type at monomorphization time.
-    for (name, template) in &generic_struct_templates {
+    // Sorted, because `generic_struct_templates` is a `HashMap` and the order
+    // in which templates are registered decides the order their monomorphised
+    // instantiations are created. With a nested generic that changed the
+    // resulting IR between runs of the same program. See known-issues #21.
+    let mut template_names: Vec<&String> = generic_struct_templates.keys().collect();
+    template_names.sort();
+    for name in template_names {
+        let template = &generic_struct_templates[name];
         let fields: Vec<(String, IrType)> = template
             .fields
             .iter()
@@ -928,25 +935,47 @@ impl<'m> Lowerer<'m> {
         // nn.iris does `bring std.ml` and calls `xavier_init` which becomes
         // `ml__xavier_init` after mangling).
         let suffix = format!("__{}", name);
+
+        // Gather every candidate before choosing, rather than returning the
+        // first key a `HashMap` happens to yield.
+        //
+        // Returning the first match made this resolution depend on the
+        // per-process hash seed. With a nested generic, both `Box__i64` and
+        // `Box__Box__i64` end with the same suffix, so the winner changed
+        // between runs: `wrap(wrap(5))` compiled and ran correctly in about
+        // half of attempts and failed type validation in the rest -- 6 of 12
+        // when measured. See known-issues #21, and #17 for the same defect
+        // class in LICM and capture ordering.
+        //
+        // Ties are broken by taking the *longest* candidate, then
+        // lexicographically. Longest wins because a longer mangled name is the
+        // more specific instantiation: resolving `Box__Box__i64` to `Box__i64`
+        // loses a level of nesting, which is precisely the mismatch that was
+        // being reported.
+        let mut candidates: Vec<String> = Vec::new();
         for key in self.fn_sigs.keys() {
             if key.ends_with(&suffix) {
-                return key.clone();
+                candidates.push(key.clone());
             }
         }
         for key in self.mono_sigs.borrow().keys() {
             if key.ends_with(&suffix) {
-                return key.clone();
+                candidates.push(key.clone());
             }
         }
         for key in self.generic_fns.keys() {
             if key.ends_with(&suffix) {
-                return key.clone();
+                candidates.push(key.clone());
             }
         }
         for key in self.const_defs.keys() {
             if key.ends_with(&suffix) {
-                return key.clone();
+                candidates.push(key.clone());
             }
+        }
+        if !candidates.is_empty() {
+            candidates.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+            return candidates.remove(0);
         }
         name.to_string()
     }

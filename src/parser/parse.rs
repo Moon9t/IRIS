@@ -1054,6 +1054,23 @@ impl<'t> Parser<'t> {
             self.expect(&Token::RParen)?;
             self.expect(&Token::Arrow)?;
             let ret = self.parse_type()?;
+            // Effect bound on the declaration, mirroring `parse_function`. A
+            // trait method could not carry one at all before this: the clause
+            // was a parse error, so a trait had no way to state the effects its
+            // implementations are permitted to perform. See known-issues #10.
+            let m_effects = if self.peek_tok() == &Token::Effect || self.peek_tok() == &Token::With
+            {
+                self.advance();
+                let mut effs = Vec::new();
+                effs.push(self.expect_ident()?.name);
+                while self.peek_tok() == &Token::Comma {
+                    self.advance();
+                    effs.push(self.expect_ident()?.name);
+                }
+                effs
+            } else {
+                Vec::new()
+            };
             let (body, m_end) = if matches!(self.peek_tok(), Token::LBrace) {
                 let block = self.parse_block()?;
                 let end = block.span;
@@ -1065,6 +1082,7 @@ impl<'t> Parser<'t> {
                 name: m_name,
                 params,
                 return_ty: ret,
+                effects: m_effects,
                 body,
                 span: m_start.merge(m_end),
             });
@@ -2054,14 +2072,27 @@ impl<'t> Parser<'t> {
             // Not caught here — falls through to expression parser as AstExpr::Mask,
             // so it works as a tail expression (returns a value) like `if`/`when`/`block`.
 
-            // `handle <expr> with { ... }` effect handler block
-            if self.is_handle_stmt_at_pos() {
-                stmts.push(self.parse_handle_stmt()?);
-                if matches!(self.peek_tok(), Token::Semi) {
-                    self.advance();
-                }
-                continue;
-            }
+            // `handle <expr> with { ... }` effect handler block.
+            //
+            // Deliberately NOT captured here. It falls through to the
+            // expression parser, exactly as `with <effects> { }` does three
+            // lines above and for the same reason: so it can be a block's tail
+            // and produce a value.
+            //
+            // Routing it to `parse_handle_stmt` pushed it into `stmts`
+            // unconditionally, so `def run() -> str { handle { .. } with { .. } }`
+            // lowered to a body that computed the value, released it, and then
+            // returned nothing:
+            //
+            //     %1 = call_extern @echo(%0)
+            //     pop_handler
+            //     release %1, Str
+            //     return                      <- declared `-> str`
+            //
+            // Callers then read an undefined value. A `handle` followed by `;`
+            // is still a statement -- that is the ordinary
+            // expression-statement rule, which needs no special case. See
+            // known-issues #16.
 
             // `nursery { }` scoped concurrency block
             if matches!(self.peek_tok(), Token::Ident(name) if name == "nursery") && matches!(self.peek_next_tok(), Token::LBrace) {

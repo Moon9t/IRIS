@@ -28,14 +28,39 @@ impl super::Pass for InlinePass {
             .iter()
             .enumerate()
             .filter(|(_, f)| {
-                f.blocks.len() == 1 && {
-                    let non_term = f.blocks[0]
-                        .instrs
-                        .iter()
-                        .filter(|i| !i.is_terminator())
-                        .count();
-                    non_term <= threshold
-                }
+                // A body containing effect-handler machinery is not inlinable.
+                //
+                // `PushHandler` names a separately lifted handler function and
+                // `ResumeCont` resumes through a continuation created by the
+                // matching `PushHandler`; copying those instructions into a
+                // caller detaches them from that pairing. Inlining a function
+                // whose body is a `handle` expression produced IR referencing a
+                // value that no longer existed --
+                // "[after inline] operand[0] = %0 not defined" -- which only
+                // became visible once `verify_uses_defined` was widened past
+                // branch arguments. See known-issues #16.
+                //
+                // Skipping is a missed optimisation; inlining is a wrong answer.
+                let has_handler = f.blocks.iter().any(|b| {
+                    b.instrs.iter().any(|i| {
+                        matches!(
+                            i,
+                            IrInstr::PushHandler { .. }
+                                | IrInstr::PopHandler
+                                | IrInstr::ResumeCont { .. }
+                        )
+                    })
+                });
+                !has_handler
+                    && f.blocks.len() == 1
+                    && {
+                        let non_term = f.blocks[0]
+                            .instrs
+                            .iter()
+                            .filter(|i| !i.is_terminator())
+                            .count();
+                        non_term <= threshold
+                    }
             })
             .map(|(idx, f)| (f.name.clone(), idx))
             .collect();

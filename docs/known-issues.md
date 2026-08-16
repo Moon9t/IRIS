@@ -261,7 +261,19 @@ module directly. Brings are de-duplicated, so this is safe, just verbose.
 
 ---
 
-## 10. Effect clauses and traits — **open, two defects**
+## 10. Effect clauses and traits — **FIXED (declaration half)**
+
+> `def read(self) -> i64 effect io` inside a `trait` was a **parse error**, so a
+> trait had no way to state the effect bound its implementations must respect.
+> `parse_trait_def` went straight from the return type to looking for `{`.
+>
+> It now parses the clause exactly as `parse_function` does and stores it on a
+> new `AstTraitMethod::effects`. Verified on both backends.
+>
+> **Still open:** the stored bound is not yet *checked* against implementations,
+> and 10b (a cross-module trait impl treated as `pure`) is untouched.
+
+### Original report
 
 **10a. The parser rejects an `effect` clause on a trait method declaration.**
 
@@ -546,7 +558,31 @@ win with a warning. Either is acceptable; silence is not.
 
 ---
 
-## 16. A `handle` expression as a function's return value — **open, compiler bug**
+## 16. A `handle` expression as a function's return value — **FIXED**
+
+> The block parser routed `handle` to `parse_handle_stmt` unconditionally and
+> pushed it into `stmts`, so it could never be a block's tail. A function whose
+> body was a `handle` computed the value, released it, and returned nothing:
+>
+> ```
+> def run() -> str {
+>     %1 = call_extern @echo(%0)
+>     pop_handler
+>     release %1, Str
+>     return              <- declared `-> str`
+> }
+> ```
+>
+> Callers then read an undefined value. The comment three lines above the guilty
+> branch already explained that `with <effects> { }` deliberately falls through
+> to the expression parser "so it works as a tail expression (returns a value)
+> like `if`/`when`/`block`" -- `handle` now does the same. A `handle` followed by
+> `;` is still a statement by the ordinary expression-statement rule, which needs
+> no special case.
+>
+> Verified on both backends; all seven effect-handler tests pass.
+
+### Original report
 
 ```iris
 extern def echo(s: str) -> str
@@ -974,7 +1010,31 @@ since every future pass must remember.
 
 ---
 
-## 21. A generic instantiated at a generic type — **open**
+## 21. A generic instantiated at a generic type — **partially fixed, still non-deterministic**
+
+> `wrap(wrap(5))` failed with `type mismatch: %Box__Box__i64 vs %Box__Box__i64`
+> -- a message naming one type twice, because `try_unify` compared `IrType`
+> structurally and two `Struct` values sharing a mangled name can differ in their
+> `fields`.
+>
+> **Two fixes landed.** Nominal types now unify by name (`same_nominal_type`),
+> since a monomorphised name already encodes its type arguments; and the
+> diagnostic now says "two different types both named X" with the structural
+> difference, instead of printing the same string twice.
+>
+> Two ordering sources were also made deterministic: the four-`HashMap` suffix
+> scan in name resolution returned whichever key hashing happened to yield first
+> (now: collect all, longest then lexicographic -- longest because a longer
+> mangled name is the more specific instantiation), and generic struct templates
+> were registered in `HashMap` order.
+>
+> **Still open.** The case remains non-deterministic: measured 6 of 12 before,
+> 8 of 12 after, so at least one more ordering source exists. Same class as #17.
+> `--emit ir` fails consistently while `--emit eval` succeeds about two thirds of
+> the time, which is itself a clue -- the two paths do not run identical
+> pipelines.
+
+### Original report
 
 `Box<Box<i64>>` does not monomorphise correctly.
 
@@ -1544,6 +1604,37 @@ Windows headers put `__attribute__((dllimport))` on enums under `__GNUC__`, so
 the MinGW toolchain cannot compile them; and the MSVC BuildTools install on this
 machine has headers but no CRT import libraries, so `memcpy` and `_fltused` were
 supplied by a two-function shim. Reproduced in `docs/ros2-build.md`.
+
+---
+
+## 34. `std.adaptive` reports risk numbers it never measures — **open, silent**
+
+Three separate fabrications in the module whose entire purpose is deciding when
+an adaptive system is safe to act:
+
+| Reported | Reality |
+|---|---|
+| `risk_max_error` | The C side sets `m.max_error = 0.0` and never updates it. `adaptive_get_risk` then builds its tuple as `(err, err, obs, obs, err, ...)`, substituting the **mean** for the max. |
+| `risk_errors` | Substituted with `observation_count` -- the error count is not tracked separately. |
+| `adaptive_is_unsafe` | `return m.last_risk > 0.5 \|\| m.confidence < 0.3;` -- it **ignores `risk_threshold` entirely**. `adaptive_set_risk_threshold` has no effect on it. |
+
+The last is the serious one. A caller sets a threshold, sees a guard, and gets a
+guard answering a different question. That is a guard that cannot fire for the
+reason its user believes -- the fifth instance of that pattern in this tree,
+after effect subsumption, the recursion limit, use-before-def and `eval_rule`.
+
+`tests/test_adaptive.iris` **pins the current behaviour deliberately**
+(`risk_max_error(m) == risk_mean_error(m)`, and a tightened threshold changing
+nothing) so that fixing the module fails the test and forces the assertions to be
+updated, rather than the fabrication surviving another release.
+
+**Found by writing the first test that asserted this module's numbers rather
+than watching it not crash** -- and found late, because that test was committed
+before it had ever been run. It failed on the very first honest execution.
+
+**Status:** open. Needs `max_error` genuinely tracked in `IrisAdaptiveState`, an
+error counter distinct from the observation count, and `is_unsafe` to consult
+the threshold the caller set.
 
 ---
 

@@ -761,12 +761,43 @@ fn get_or_create_slot(
 }
 
 /// Helper to unify with better diagnostics when both sides are concrete.
+/// Nominal types are identified by name, not by structure.
+///
+/// A monomorphised struct name already encodes its type arguments
+/// (`Box__Box__i64`), so two `IrType::Struct` values carrying that name denote
+/// the same type even when their `fields` vectors were built at different points
+/// and differ in some detail. Comparing them structurally rejected
+/// `wrap(wrap(5))` -- a generic instantiated at a generic type -- with
+/// "type mismatch: %Box__Box__i64 vs %Box__Box__i64", a message naming one type
+/// twice. See known-issues #21.
+fn same_nominal_type(a: &IrType, b: &IrType) -> bool {
+    match (a, b) {
+        (IrType::Struct { name: na, .. }, IrType::Struct { name: nb, .. }) => na == nb,
+        (IrType::Enum { name: na, .. }, IrType::Enum { name: nb, .. }) => na == nb,
+        (IrType::TraitObject { name: na, .. }, IrType::TraitObject { name: nb, .. }) => na == nb,
+        _ => false,
+    }
+}
+
 fn try_unify(uf: &mut UnionFind, errors: &mut Vec<String>, a: usize, b: usize, ctx: &str) {
     let ta = uf.get_type(a);
     let tb = uf.get_type(b);
     if let (Some(ref ta2), Some(ref tb2)) = (ta.as_ref(), tb.as_ref()) {
-        if ta2 != tb2 {
-            errors.push(format!("type mismatch: {} vs {} -- {}", ta2, tb2, ctx));
+        if ta2 != tb2 && !same_nominal_type(ta2, tb2) {
+            // When both sides print identically the message is useless -- the
+            // old text for a nested generic was literally
+            // "type mismatch: %Box__Box__i64 vs %Box__Box__i64". Say so, rather
+            // than showing the reader the same string twice.
+            let (sa, sb) = (format!("{}", ta2), format!("{}", tb2));
+            if sa == sb {
+                errors.push(format!(
+                    "type mismatch: two different types both named {} -- {} \
+                     (structurally: {:?} vs {:?})",
+                    sa, ctx, ta2, tb2
+                ));
+            } else {
+                errors.push(format!("type mismatch: {} vs {} -- {}", sa, sb, ctx));
+            }
             return;
         }
     }
