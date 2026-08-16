@@ -1779,7 +1779,41 @@ Asserted in `tests/test_generic_traits.iris`, both backends.
 
 ---
 
-## 38. An impl target cannot be a generic type — **open**
+## 38. An impl target cannot be a generic type — **FIXED for concrete element types**
+
+> ```iris
+> impl Sized2 for list<i64>   { def sz(self) -> i64 { list_len(self) } }
+> impl Sized2 for option<i64> { def sz(self) -> i64 { if is_some(self) { 1 } else { 0 } } }
+> ```
+>
+> **Three changes, and the third was the hidden one.**
+>
+> 1. *Parser* — `for` accepted only a bare type name. It now parses type
+>    arguments, building `list<T>`, `option<T>` and `map<K,V>` as their own AST
+>    forms.
+> 2. *Lowering* — dispatch resolved the bare name, so `list` became
+>    `IrType::Infer` and matched nothing. It now lowers the whole target, and
+>    the mangled name includes the arguments, or two impls of one trait at
+>    different element types would collide on one symbol.
+> 3. *Method-call lowering* — **the receiver had to be a struct.** An impl on a
+>    container was registered in `trait_dispatch` and then never consulted; the
+>    call was rejected before reaching it. This is why the first two changes
+>    alone produced no visible effect.
+>
+> `val n: option<i64> = none()` produces `option<_>` — the annotation does not
+> reach the `none()` call — so dispatch tries an exact match first and falls
+> back to the constructor alone, but only when exactly one candidate matches.
+> Impls for `option<i64>` and `option<str>` therefore cannot silently resolve to
+> whichever was registered first.
+>
+> Asserted in `tests/test_impl_on_container.iris`, both backends.
+>
+> **Still open: element types must be concrete.** `impl[T] Sized2 for list<T>`
+> fails, because the blanket-impl path monomorphises over the *impl's* own
+> parameters rather than over the *target's*, so no per-element instantiation is
+> generated. A container library written today needs one impl per element type.
+
+### Original report
 
 ```iris
 impl Sized2 for list<i64> { ... }          // parse error: expected '{', found '<'

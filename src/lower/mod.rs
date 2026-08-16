@@ -646,16 +646,30 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
             }
         }
         // Normal (non-blanket) impl processing.
-        let dispatch_ty = type_name_to_ir_type(&impl_def.type_name, &module);
+        //
+        // A target carrying type arguments dispatches on the whole type, so
+        // `impl Show for list<i64>` registers `IrType::List(I64)` rather than
+        // resolving the bare name `list` to `Infer` and matching nothing.
+        let dispatch_ty = match &impl_def.target_ty {
+            Some(t) => lower_type_with_structs(t, &module),
+            None => type_name_to_ir_type(&impl_def.type_name, &module),
+        };
+        // The mangled name has to include the arguments, or two impls of one
+        // trait at different element types would collide on a single symbol --
+        // `Show__list__fmt` for both `list<i64>` and `list<str>`.
+        let impl_type_key = match &impl_def.target_ty {
+            Some(_) => format!("{}_{}", impl_def.type_name, mangle_ir_type(&dispatch_ty)),
+            None => impl_def.type_name.clone(),
+        };
         for method in &impl_def.methods {
             let mangled = if impl_def.trait_name.is_empty() {
                 // Standalone struct method: `TypeName__method`
-                format!("{}__{}", impl_def.type_name, method.name.name)
+                format!("{}__{}", impl_type_key, method.name.name)
             } else {
                 // Trait impl: `TraitName__TypeName__method`
                 format!(
                     "{}__{}__{}",
-                    impl_def.trait_name, impl_def.type_name, method.name.name
+                    impl_def.trait_name, impl_type_key, method.name.name
                 )
             };
             let mut ret_ty = lower_type_with_structs(&method.return_ty, &module);
@@ -681,6 +695,13 @@ pub fn lower(ast: &AstModule, module_name: &str) -> Result<IrModule, LowerError>
             renamed.name.name = mangled;
             for param in &mut renamed.params {
                 if param.name.name == "self" {
+                    // A generic target gives `self` the full type, so
+                    // `list_len(self)` inside the impl sees a list rather than
+                    // an unresolved name.
+                    if let Some(ref t) = impl_def.target_ty {
+                        param.ty = t.clone();
+                        continue;
+                    }
                     if let crate::parser::ast::AstType::Named(ref n, _) = param.ty {
                         if n == "self" {
                             param.ty = crate::parser::ast::AstType::Named(
@@ -3181,6 +3202,72 @@ impl<'m> Lowerer<'m> {
                         Some(ret_ty.clone()),
                     );
                     return Ok((result, ret_ty));
+                }
+
+                // A trait implemented for a non-struct receiver, e.g.
+                // `impl Show for list<i64>`.
+                //
+                // Method dispatch required the receiver to be a struct, so an
+                // impl on a container was registered in `trait_dispatch` and
+                // then never consulted -- the call was rejected before reaching
+                // it. That is what stopped `list` and `option` from sharing an
+                // interface. See known-issues #38.
+                if !matches!(base_ty, IrType::Struct { .. }) {
+                    if let Some(cands) = self.trait_dispatch.get(method) {
+                        // Exact match first; then, if the receiver's element
+                        // type is unresolved, fall back to the constructor
+                        // alone -- but only when that is unambiguous.
+                        //
+                        // `val n: option<i64> = none()` produces `option<_>`:
+                        // the annotation does not reach the `none()` call, so
+                        // an exact comparison against `option<i64>` fails even
+                        // though the program named the type. Matching on the
+                        // constructor recovers it; requiring uniqueness stops
+                        // `option<i64>` and `option<str>` impls from silently
+                        // resolving to whichever was registered first.
+                        let exact = cands.iter().find(|(recv_ty, _)| recv_ty == &base_ty);
+                        let chosen = match exact {
+                            Some(hit) => Some(hit),
+                            None => {
+                                let same_ctor: Vec<&(IrType, String)> = cands
+                                    .iter()
+                                    .filter(|(recv_ty, _)| {
+                                        same_constructor_with_infer(recv_ty, &base_ty)
+                                    })
+                                    .collect();
+                                if same_ctor.len() == 1 {
+                                    Some(same_ctor[0])
+                                } else {
+                                    None
+                                }
+                            }
+                        };
+                        if let Some((_, fname)) = chosen {
+                            let fname = fname.clone();
+                            let mut arg_vals = Vec::with_capacity(args.len() + 1);
+                            arg_vals.push(base_val);
+                            for arg in args {
+                                let (v, _) = self.lower_expr(arg)?;
+                                arg_vals.push(v);
+                            }
+                            let ret_ty = self
+                                .fn_sigs
+                                .get(&fname)
+                                .cloned()
+                                .unwrap_or(IrType::Infer);
+                            let result = self.builder.fresh_value();
+                            self.builder.push_instr(
+                                IrInstr::Call {
+                                    result: Some(result),
+                                    callee: fname,
+                                    args: arg_vals,
+                                    result_ty: Some(ret_ty.clone()),
+                                },
+                                Some(ret_ty.clone()),
+                            );
+                            return Ok((result, ret_ty));
+                        }
+                    }
                 }
 
                 // Determine the struct type name.
@@ -16814,6 +16901,24 @@ pub fn lower_type(ty: &AstType) -> IrType {
 }
 
 /// Converts a type name string (as written in `impl Trait for TypeName`) to an `IrType`.
+/// True when two types share a constructor and differ only where one side is
+/// still unresolved -- `option<_>` against `option<i64>`.
+///
+/// Used only to pick a trait impl for a receiver whose element type inference
+/// did not reach, and only when exactly one candidate matches.
+fn same_constructor_with_infer(a: &IrType, b: &IrType) -> bool {
+    match (a, b) {
+        (IrType::Infer, _) | (_, IrType::Infer) => true,
+        (IrType::List(x), IrType::List(y)) => same_constructor_with_infer(x, y),
+        (IrType::Option(x), IrType::Option(y)) => same_constructor_with_infer(x, y),
+        (IrType::Map(k1, v1), IrType::Map(k2, v2)) => {
+            same_constructor_with_infer(k1, k2) && same_constructor_with_infer(v1, v2)
+        }
+        (IrType::Struct { name: n1, .. }, IrType::Struct { name: n2, .. }) => n1 == n2,
+        _ => a == b,
+    }
+}
+
 fn type_name_to_ir_type(name: &str, module: &IrModule) -> IrType {
     match name {
         "i64" => IrType::Scalar(DType::I64),

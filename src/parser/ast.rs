@@ -997,6 +997,14 @@ pub struct AstImplDef {
     pub trait_args: Vec<AstType>,
     /// The type being implemented for (e.g. "i64", "Point", or "T" for blanket impls).
     pub type_name: String,
+    /// The full target type when it carries arguments: `impl Show for list<i64>`
+    /// stores `list<i64>` here and `"list"` in `type_name`.
+    ///
+    /// An impl target could only ever be a bare name, which is what stopped a
+    /// container from being given an interface -- neither `list` nor `option`
+    /// could be the target of an impl, so no trait could span them. See
+    /// known-issues #38.
+    pub target_ty: Option<AstType>,
     /// Generic parameters (for blanket impls): `impl[T where T: Show] ...`.
     pub generic_params: Vec<AstGenericParam>,
     /// Associated type bindings: `type AssocType = ConcreteType`.

@@ -1159,9 +1159,39 @@ impl<'t> Parser<'t> {
         } else {
             Vec::new()
         };
+        let mut target_ty: Option<AstType> = None;
         let (trait_name, type_name) = if matches!(self.peek_tok(), Token::For) {
             self.advance(); // consume `for`
+            let tspan = self.current_span();
             let type_name = self.parse_type_name_str()?;
+            // The target may be generic: `impl Show for list<i64>`. Only the
+            // bare name was accepted before, so a container could never be the
+            // target of an impl and no trait could span `list` and `option`.
+            if matches!(self.peek_tok(), Token::LAngle) {
+                self.advance();
+                let mut targs = Vec::new();
+                while !matches!(self.peek_tok(), Token::RAngle | Token::Eof) {
+                    targs.push(self.parse_type()?);
+                    if matches!(self.peek_tok(), Token::Comma) {
+                        self.advance();
+                    }
+                }
+                self.expect(&Token::RAngle)?;
+                target_ty = Some(match type_name.as_str() {
+                    "list" => AstType::List(Box::new(targs[0].clone()), tspan),
+                    "option" => AstType::Option(Box::new(targs[0].clone()), tspan),
+                    "map" if targs.len() >= 2 => AstType::Map(
+                        Box::new(targs[0].clone()),
+                        Box::new(targs[1].clone()),
+                        tspan,
+                    ),
+                    _ => AstType::Generic {
+                        name: type_name.clone(),
+                        args: targs,
+                        span: tspan,
+                    },
+                });
+            }
             (first_name, type_name)
         } else {
             // Standalone `impl TypeName { ... }` — no trait
@@ -1186,6 +1216,7 @@ impl<'t> Parser<'t> {
             trait_name,
             trait_args,
             type_name,
+            target_ty,
             generic_params,
             assoc_type_bindings,
             methods,

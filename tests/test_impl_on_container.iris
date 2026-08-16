@@ -1,0 +1,41 @@
+// Implementing a trait FOR a container type.
+//
+// An impl target could only ever be a bare name, so neither `list` nor
+// `option` could be the target of an impl and no trait could span them. That
+// is what stopped a container-generic library from existing: a function
+// generic over `F` could consume an `F<T>` and return the same `F<T>`, but
+// nothing could give the containers a shared interface. See known-issues #38.
+//
+// Three things had to change: the parser had to accept type arguments after
+// `for`; the impl had to dispatch on the whole target type rather than
+// resolving the bare name `list` to `Infer`; and method-call lowering had to
+// consult `trait_dispatch` for a non-struct receiver, which it never did --
+// the impl was registered and then unreachable.
+//
+// Element types here are concrete. `impl[T] Sized2 for list<T>` still requires
+// per-element monomorphisation of the target, which is the remaining half of
+// #38.
+
+trait Sized2 {
+    def sz(self) -> i64
+}
+
+// One trait, two containers -- the point of the exercise.
+impl Sized2 for list<i64> {
+    def sz(self) -> i64 { list_len(self) }
+}
+
+impl Sized2 for option<i64> {
+    def sz(self) -> i64 { if is_some(self) { 1 } else { 0 } }
+}
+
+def main() -> i64 {
+    val xs: list<i64> = list(); list_push(xs, 1); list_push(xs, 2);
+    assert(xs.sz() == 2);
+    val o: option<i64> = some(5);
+    assert(o.sz() == 1);
+    val n: option<i64> = none();
+    assert(n.sz() == 0);
+    println("test_impl_on_container ok");
+    0
+}
