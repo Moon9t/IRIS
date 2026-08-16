@@ -1,0 +1,132 @@
+// Mutual tail recursion -- the trampoline.
+//
+// `TailCallPass` handles a self-call by jumping to a loop header, which does
+// nothing for functions that hand control to *each other*. Before the
+// trampoline, `is_even(100000)` died interpreted with "call depth exceeded 250"
+// while passing natively, because clang applied its own tail-call optimisation
+// to the emitted IR -- the two backends disagreed about how deep a program
+// could go.
+//
+// The pass now merges a mutually tail-recursive SCC into one function with a
+// selector parameter, so the calls between members become branches. The
+// originals survive as forwarders, so nothing else about them changes.
+//
+// Every depth below 250 here would have passed before; the deep ones are the
+// assertions that could not previously be made.
+
+// --- two members, the canonical shape ------------------------------------
+
+def is_even(n: i64) -> i64 {
+    if n == 0 { 1 } else { is_odd(n - 1) }
+}
+
+def is_odd(n: i64) -> i64 {
+    if n == 0 { 0 } else { is_even(n - 1) }
+}
+
+// --- two members carrying an accumulator ---------------------------------
+
+def sum_even(n: i64, acc: i64) -> i64 {
+    if n == 0 { acc } else { sum_odd(n - 1, acc + n) }
+}
+
+def sum_odd(n: i64, acc: i64) -> i64 {
+    if n == 0 { acc } else { sum_even(n - 1, acc + n) }
+}
+
+// --- three members, exercising the dispatch chain -------------------------
+//
+// With three members the merged function needs two `sel ==` tests rather than
+// one, so this is the case where a wrong `else` target would show up.
+
+def m3_a(n: i64) -> i64 {
+    if n == 0 { 10 } else { m3_b(n - 1) }
+}
+
+def m3_b(n: i64) -> i64 {
+    if n == 0 { 20 } else { m3_c(n - 1) }
+}
+
+def m3_c(n: i64) -> i64 {
+    if n == 0 { 30 } else { m3_a(n - 1) }
+}
+
+// --- a non-i64 return type ------------------------------------------------
+
+def fadd_a(n: i64, acc: f64) -> f64 {
+    if n == 0 { acc } else { fadd_b(n - 1, acc + 1.5) }
+}
+
+def fadd_b(n: i64, acc: f64) -> f64 {
+    if n == 0 { acc } else { fadd_a(n - 1, acc + 1.5) }
+}
+
+// --- members whose signatures differ --------------------------------------
+//
+// Deliberately NOT merged: one signature cannot serve both, and the merged
+// function would need a synthesised dummy for the parameter the entering member
+// does not supply. These must still compute the right answer -- the pass has to
+// decline cleanly, not transform them wrongly. Kept shallow because they still
+// build real stack frames.
+
+def diff_a(n: i64) -> i64 {
+    if n == 0 { 7 } else { diff_b(n - 1, 1) }
+}
+
+def diff_b(n: i64, extra: i64) -> i64 {
+    if n == 0 { 8 + extra } else { diff_a(n - 1) }
+}
+
+def main() -> i64 {
+    // Parity, shallow. Both entry points, both answers, and the base cases.
+    assert(is_even(0) == 1);
+    assert(is_odd(0) == 0);
+    assert(is_even(1) == 0);
+    assert(is_odd(1) == 1);
+    assert(is_even(10) == 1);
+    assert(is_odd(10) == 0);
+    assert(is_even(7) == 0);
+    assert(is_odd(7) == 1);
+
+    // Deeper than any stack could hold. This is the assertion the old compiler
+    // could not make at all.
+    assert(is_even(100000) == 1);
+    assert(is_odd(100000) == 0);
+    assert(is_even(99999) == 0);
+
+    // The accumulator must survive the hand-off, not just the control flow --
+    // a merge that dropped an argument would still terminate, with 0.
+    assert(sum_even(10, 0) == 55);
+    assert(sum_odd(10, 0) == 55);
+    // 1 + 2 + ... + 100000 = 100000 * 100001 / 2.
+    assert(sum_even(100000, 0) == 5000050000);
+
+    // Three-way rotation: the member reached at n == 0 is (start - n) mod 3.
+    assert(m3_a(0) == 10);
+    assert(m3_a(1) == 20);
+    assert(m3_a(2) == 30);
+    assert(m3_a(3) == 10);
+    assert(m3_b(0) == 20);
+    assert(m3_c(0) == 30);
+    assert(m3_b(1) == 30);
+    assert(m3_c(1) == 10);
+    // 30000 is divisible by 3, so this lands back on m3_a's base case.
+    assert(m3_a(30000) == 10);
+    // 30001 lands one further round.
+    assert(m3_a(30001) == 20);
+
+    // f64 accumulator, to prove the merged signature is not assumed integral.
+    assert(fadd_a(0, 0.0) == 0.0);
+    assert(fadd_a(4, 0.0) == 6.0);
+    assert(fadd_a(10000, 0.0) == 15000.0);
+
+    // Declined SCC: correct answers, just not in constant stack.
+    assert(diff_a(0) == 7);
+    assert(diff_a(1) == 9);
+    assert(diff_a(2) == 7);
+    assert(diff_b(0, 5) == 13);
+    assert(diff_b(1, 5) == 7);
+
+    println("test_tco_mutual ok");
+    0
+}

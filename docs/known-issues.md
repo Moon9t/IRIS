@@ -136,12 +136,25 @@ would likely surface further defects of the same class as issue 1.
 
 ---
 
-## 5. Tail-call optimisation is interpreter-only — **documentation**
+## 5. Tail-call optimisation is interpreter-only — **FIXED (superseded by #35)**
 
-`tests/test_tco.iris` states it exercises TCO "in the interpreter". There is no
-`musttail` in codegen, so deeply recursive functions can still overflow the stack
-in native binaries. The capability should not be described without that
-qualification.
+> **Fixed** on 2026-08-16. The framing here was wrong in both directions, which
+> is why #35 was raised separately and carries the real account.
+>
+> TCO was not "interpreter-only" — it did not exist *anywhere*. The interpreter
+> had no such optimisation either; `test_tco.iris` only passed because the depth
+> limit used to be 5,000 and it genuinely built 50,000 frames. Meanwhile deep
+> recursion often *did* survive natively, because clang applies its own
+> tail-call optimisation to the emitted IR.
+>
+> `TailCallPass` now does it as an IR transformation, so the property belongs to
+> the language rather than to whichever backend happens to be running. See #35
+> for the transformation, the measurements and the remaining limit.
+
+**Original report:** `tests/test_tco.iris` states it exercises TCO "in the
+interpreter". There is no `musttail` in codegen, so deeply recursive functions
+can still overflow the stack in native binaries. The capability should not be
+described without that qualification.
 
 ---
 
@@ -1663,10 +1676,44 @@ the threshold the caller set.
 > needs only a raised `--max-steps`, which is a runaway-loop guard rather than a
 > stack limit; that distinction is the proof it is constant-stack.
 >
-> **Limits, deliberately:** only *self* recursion. Mutual recursion needs a
-> shared trampoline and is a different transformation, left alone rather than
-> half-done. A call whose result is used before being returned —
-> `n * fact(n - 1)` — is not a tail call and is untouched.
+> **Mutual recursion is now handled too**, by merging rather than by a returned
+> thunk. The classic trampoline needs a tagged return value, which would force
+> every mutually-recursive function to change its return type — unacceptable
+> when `is_even` must keep returning `i64`. So the SCC is merged into one
+> function with a leading selector parameter, and the calls between its members
+> become branches:
+>
+> ```text
+>   __tramp$is_even$is_odd(__sel: i64, n: i64) -> i64 {
+>     tramp_dispatch00(%0 __sel, %1 n):  condbr %0 == 0, bb1(%1), bb5(%1)
+>     is_even$else3():                   br bb5(%10)   <- was `call @is_odd`
+>     is_odd$else7():                    br bb1(%19)   <- was `call @is_even`
+>   }
+>   def is_even(n) { __tramp$is_even$is_odd(0, n) }    <- thin forwarder
+> ```
+>
+> The originals survive as forwarders, so non-tail calls, function values and
+> anything referring to them by name keep working; only the depth changes.
+>
+> **Measured:** `is_even(100000)` and `sum_even(100000, 0) == 5000050000` both
+> run interpreted, where they previously stopped at "call depth exceeded 250".
+> They already passed *natively* before this — because clang applied its own
+> tail-call optimisation to the emitted IR. That is the more interesting half of
+> the bug: the two backends disagreed about how deep a program could go, and the
+> native pass was luck rather than a property of the language.
+>
+> **Limits, deliberately:** the members of an SCC must share one parameter list
+> (same arity, same types) and one return type — that is what lets a single
+> merged signature serve all of them. Where they differ, the merged function
+> would need a synthesised dummy for every slot the entering member does not
+> supply, and for `str`, records or lists there is no dummy to synthesise; such
+> an SCC is declined rather than merged wrongly (asserted by
+> `mismatched_signatures_are_declined_but_still_correct`). A call whose result is
+> used before being returned — `n * fact(n - 1)` — is not a tail call in the
+> first place and is untouched.
+>
+> **Tested by** `tests/tail_call_elimination.rs` (10 tests, in the Rust suite so
+> CI actually runs them) and `tests/test_tco_mutual.iris`.
 
 ### Original report
 
@@ -2016,3 +2063,133 @@ Confirmed correct by running and asserting output:
 - Extension methods, including chaining and on user records
   (`examples/02_functions/extensions_and_defaults.iris`)
 - Default record fields, including partial override (same file)
+
+---
+
+## 45. The LLVM C API emits an object that will not link — **open**
+
+`codegen::llvm_c_api::compile_llvm_ir_to_object` returns `Ok` for
+`x86_64-pc-windows-gnu`, but the object it produces is rejected at link time.
+This is the last thing standing between IRIS and a clang-free `iris build`.
+
+Making it the preferred path was tried on 2026-08-16 and **reverted the same
+day**, because the failure did not surface: `iris build` exited **0 and produced
+no binary at all**. Silently building nothing is a far worse failure than
+requiring a compiler, so clang stays the default.
+
+It remains available opt-in via `IRIS_NO_CLANG=1`, for anyone diagnosing it.
+
+Two things need fixing, in this order:
+
+1. **The link failure must surface.** Exiting 0 with no output is the real
+   defect; the missing object format is only the trigger. Until this is fixed,
+   any further attempt at this path can fail the same silent way.
+2. **The object itself** — most likely a target-triple or object-format
+   mismatch between what the C API is told to emit and what the MinGW linker
+   expects.
+
+Note the C-shim half of the clang dependency **is** gone: `iris_runtime.c`,
+`onnx_shim.c` and `iris_ml_kernels.c` are now shipped as prebuilt objects
+(`src/runtime/prebuilt/x86_64-pc-windows-gnu/`), so a build prints
+"using prebuilt runtime objects … (no C compiler required)". Only `.ll` → `.o`
+and the link still need clang. Do not describe IRIS as clang-free.
+
+---
+
+## 46. `set_result` silently skipped 34 of 134 instructions — **FIXED**
+
+> **Fixed** on 2026-08-16 in `src/pass/inline.rs`. The catch-all is gone: every
+> variant is now listed, so adding an `IrInstr` fails the build here instead of
+> silently doing nothing.
+
+`set_result` renumbers an instruction's result when a function's body is copied
+into another. It matched 100 of the 134 `IrInstr` variants and ended in
+`_ => {}`. Five of the 34 it skipped — `TapeRecord`, `Backward`, `TapeGrad`,
+`SparseNnz`, `ResumeCont` — **do** define a result, so a callee containing any of
+them kept the *callee's* `ValueId` after being inlined into a caller that numbers
+its values independently.
+
+`nnz` in a one-line helper was enough to trigger it:
+
+```iris
+def count_nz(a: [i64; 6]) -> i64 { val s = sparsify(a); nnz(s) }
+```
+
+```text
+error[E0202]: [after inline] main: block0 instr17 operand[0] = %28
+              not defined in function 'main'
+```
+
+So any function calling a small helper that used `nnz`, the autodiff tape, or
+`resume` failed to compile. `InlinePass` inlines single-block callees of ten
+instructions or fewer, which is exactly the shape such helpers take.
+
+Found while building the mutual-recursion trampoline (#35), which renumbers
+values the same way and would have inherited the identical hole.
+
+**This is the fifth defect of this shape** — an enumeration a human has to
+remember to extend, which was wrong every time it mattered (see #33, #42, and
+the `iris_select` / `json_stringify` argument-count mismatches). The pattern is
+now explicit in the fix: prefer an exhaustive match that breaks the build over a
+catch-all that absorbs the next variant silently. `apply_replacements` in
+`src/pass/opt.rs` was checked at the same time and is genuinely exhaustive
+(134/134, no catch-all).
+
+---
+
+## 47. Every thread reserves 12.6 MB for an autodiff tape it never uses — **open**
+
+The reverse-mode autodiff tape is a **statically sized thread-local array**:
+
+```c
+#define IRIS_TAPE_ARENA_SIZE 131072
+static IRIS_THREAD_LOCAL IrisTapeNode  iris_tape_arena[IRIS_TAPE_ARENA_SIZE];
+static IRIS_THREAD_LOCAL IrisTapeNode* iris_topo_buffer[IRIS_TAPE_ARENA_SIZE];
+```
+
+`IrisTapeNode` is 88 bytes, so that is 11.5 MB + 1 MB per thread, plus 160 KB of
+handler frames — and the object file confirms it exactly:
+
+```text
+$ size -A iris_runtime.o
+.tls$    12747312        <- 12.7 MB of thread-local storage
+.text       86896
+```
+
+Every thread pays it whether or not it ever calls `grad`. **Measured**, with a
+program whose threads only sleep and send an integer:
+
+| threads | peak working set |
+|---|---|
+| 4  | 77.4 MB |
+| 64 | 808.1 MB |
+
+That is ~12.2 MB per thread by linear fit, against 12.58 MB predicted — this is
+committed working set, not merely reserved address space. It also means **every
+IRIS native binary is at least 13 MB**; the `tls_cost.iris` test binary, which
+spawns threads and adds numbers, is 13,035,008 bytes.
+
+Consequences, in the order they matter:
+
+1. **Concurrency does not scale.** A few hundred `spawn`s exhausts memory on an
+   ordinary machine. This undercuts the concurrency story directly.
+2. **Embedded and robotics targets are out of reach.** The stated direction
+   includes ESP32 and microcontroller-class hardware, where 12.6 MB per thread
+   is not a tuning problem but a disqualification.
+3. **It contradicts the memory positioning.** IRIS is pitched on deterministic,
+   bounded-latency memory; a fixed 12.6 MB per-thread reservation is neither
+   deterministic in aggregate nor bounded in any useful sense.
+
+**Do not describe IRIS's concurrency or memory footprint without this number**
+until it is fixed.
+
+The fix is to allocate the tape lazily on first autodiff use and grow it from
+the heap, rather than reserving the worst case per thread up front; the arena
+size should also be tunable rather than a compile-time constant. This is a
+runtime change with its own verification needs, so it is recorded rather than
+bundled into the tail-call work that found it.
+
+**Found while** deciding whether to commit the prebuilt runtime objects for #45
+— a 12.9 MB `iris_runtime.o` was the symptom that led here. Those objects are
+therefore **deliberately left uncommitted**: baking a 12.9 MB artifact into git
+history is not worth it when the fix should shrink it by roughly 98%.

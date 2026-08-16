@@ -308,6 +308,56 @@ pub(crate) fn set_result(instr: &mut IrInstr, v: ValueId) {
         IrInstr::TcpAccept { result, .. } => *result = v,
         IrInstr::TcpRead { result, .. } => *result = v,
         IrInstr::BuiltinCall { result, .. } => *result = v,
-        _ => {}
+
+        // These five defined a result but sat in a `_ => {}` catch-all, so a
+        // callee containing any of them kept the *callee's* ValueId after being
+        // inlined into a caller that numbers its values independently. `nnz` in
+        // a one-line helper was enough:
+        //
+        //   [after inline] main: block0 instr17 operand[0] = %28 not defined
+        //
+        // Found on 2026-08-16 while building the mutual-recursion trampoline,
+        // which needs the same renumbering and would have inherited the hole.
+        IrInstr::TapeRecord { result, .. } => *result = v,
+        IrInstr::Backward { result, .. } => *result = v,
+        IrInstr::TapeGrad { result, .. } => *result = v,
+        IrInstr::SparseNnz { result, .. } => *result = v,
+        IrInstr::ResumeCont { result, .. } => *result = v,
+
+        // Everything below defines no result. Listed explicitly rather than
+        // caught by `_`, so that adding an `IrInstr` variant fails the build
+        // here instead of silently doing nothing -- which is exactly how the
+        // five above were missed. This is the fifth defect of this shape in the
+        // codebase (see known-issues #33, #42); an enumeration a human has to
+        // remember to update has now been wrong every time it mattered.
+        IrInstr::Store { .. }
+        | IrInstr::Br { .. }
+        | IrInstr::CondBr { .. }
+        | IrInstr::Return { .. }
+        | IrInstr::Retain { .. }
+        | IrInstr::Release { .. }
+        | IrInstr::SwitchVariant { .. }
+        | IrInstr::ArrayStore { .. }
+        | IrInstr::ChanSend { .. }
+        | IrInstr::Spawn { .. }
+        | IrInstr::TaskGroupSpawn { .. }
+        | IrInstr::TaskGroupJoin { .. }
+        | IrInstr::TaskGroupCancel { .. }
+        | IrInstr::ParFor { .. }
+        | IrInstr::AtomicStore { .. }
+        | IrInstr::MutexUnlock { .. }
+        | IrInstr::Barrier
+        | IrInstr::Print { .. }
+        | IrInstr::Panic { .. }
+        | IrInstr::ListPush { .. }
+        | IrInstr::ListSet { .. }
+        | IrInstr::MapSet { .. }
+        | IrInstr::MapRemove { .. }
+        | IrInstr::ListSort { .. }
+        | IrInstr::ProcessExit { .. }
+        | IrInstr::TcpWrite { .. }
+        | IrInstr::TcpClose { .. }
+        | IrInstr::PushHandler { .. }
+        | IrInstr::PopHandler => {}
     }
 }
