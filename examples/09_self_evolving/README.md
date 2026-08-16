@@ -89,19 +89,29 @@ produced different sequences for the same program.
 
 ## Peripherals are optional
 
-`Source` is a `choice`:
+`Source` is a trait, and the implementations share one list:
 
 ```iris
-choice Source { Synthetic, SerialPort, Ros2Topic }
+val sources: list<dyn Source> = list()
+list_push(sources, Synthetic { count: 300 });
+list_push(sources, SerialPort { device: "/dev/ttyACM0" });
+list_push(sources, Ros2Topic { topic: "/sensor/temperature" });
 ```
 
-The stream here is synthetic so the example runs anywhere. A real deployment
-swaps in `std.serial` — an Arduino UNO or ESP32 on a USB port streaming
-readings — or `std.ros2`, without touching the policy or the evolution loop.
+The policy and the evolution loop are written against `dyn Source` and never
+learn which peripheral is on the other end. Adding a source is a new `impl`, not
+an edit to anything else.
 
-A `choice` rather than `dyn Trait` because trait objects have no native backend
-yet (known-issues #18b). When that lands this becomes a trait and the sources
-become independent implementations.
+Each source reports whether it is usable *here* rather than assuming:
+`Synthetic.available()` is `true`, and both `SerialPort` and `Ros2Topic` return
+`false` — `std.serial`'s port layer has never been run against physical
+hardware, and `std.ros2` needs a full ROS 2 installation. Selecting the usable
+ones is ordinary code over the trait, with no knowledge of the concrete types.
+
+This was a `choice` with a `when` until 2026-08-16. Trait objects had no native
+backend, and a concrete value could not be pushed into a `list<dyn Trait>` at
+all (known-issues #18, #18b). Both are fixed, so the design is now the one it
+should have been.
 
 ## Honest limits
 

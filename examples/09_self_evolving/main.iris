@@ -33,10 +33,11 @@
 // PERIPHERALS
 //
 // The stream here is synthetic so the example runs anywhere. `Source` is a
-// `choice`, so a real deployment swaps in `std.serial` (a microcontroller on a
-// USB port) or `std.ros2` without touching the policy or the evolution loop --
-// see `describe_source`. A `choice` rather than `dyn Trait` because trait
-// objects have no native backend yet (known-issues #18b).
+// trait, and the three implementations live in one `list<dyn Source>`, so a
+// real deployment adds `std.serial` (a microcontroller on a USB port) or
+// `std.ros2` as another `impl` without touching the policy or the evolution
+// loop. Each source reports whether it is actually usable here rather than
+// assuming it is.
 
 bring std.ais
 
@@ -51,21 +52,49 @@ record Reading {
     corrupt: bool,
 }
 
-// Where readings come from. Only Synthetic is exercised here; the others exist
-// to show the policy layer does not care.
-choice Source {
-    Synthetic,
-    SerialPort,
-    Ros2Topic,
+// Where readings come from.
+//
+// A trait, so the policy and the evolution loop are written once against
+// `dyn Source` and never learn which peripheral is on the other end. Adding a
+// new source is a new `impl`, not an edit to anything below.
+//
+// This was a `choice` with a `when` until 2026-08-16, because trait objects had
+// no native backend and could not be placed in a list (known-issues #18, #18b).
+// Both are fixed, so the design can be the one it should have been.
+trait Source {
+    def source_name(self) -> str
+    // Whether this source can actually be read on this machine right now.
+    // Reported rather than assumed: the honest answer for a serial port with
+    // no board attached is `false`, and a pipeline should be able to ask.
+    def available(self) -> bool
 }
 
-def describe_source(s: Source) -> str {
-    when s {
-        Source.Synthetic => "synthetic stream",
-        Source.SerialPort => "serial peripheral (std.serial)",
-        Source.Ros2Topic => "ROS 2 topic (std.ros2)",
-    }
+record Synthetic { count: i64 }
+record SerialPort { device: str }
+record Ros2Topic { topic: str }
+
+impl Source for Synthetic {
+    def source_name(self) -> str { "synthetic stream" }
+    def available(self) -> bool { true }
 }
+
+impl Source for SerialPort {
+    def source_name(self) -> str { "serial peripheral (std.serial)" }
+    // False, deliberately: std.serial's protocol layer is asserted but its port
+    // layer has never been run against physical hardware. Claiming otherwise
+    // from a machine with nothing plugged in is how a tree ends up with 122
+    // tests that assert nothing.
+    def available(self) -> bool { false }
+}
+
+impl Source for Ros2Topic {
+    def source_name(self) -> str { "ROS 2 topic (std.ros2)" }
+    // Needs a full ROS 2 installation -- std.ros2 dlopens a bridge that
+    // includes <rcl/rcl.h>.
+    def available(self) -> bool { false }
+}
+
+def name_of(s: dyn Source) -> str { s.source_name() }
 
 // A cleaning policy: an accepted band plus a spread multiplier. These are the
 // numbers a human would otherwise guess and then tune forever.
@@ -337,9 +366,35 @@ def check_reproducible() -> i64 {
 }
 
 def check_sources_are_pluggable() -> i64 {
-    assert(describe_source(Source.Synthetic) == "synthetic stream");
-    assert(describe_source(Source.SerialPort) == "serial peripheral (std.serial)");
-    assert(describe_source(Source.Ros2Topic) == "ROS 2 topic (std.ros2)");
+    // The heterogeneous collection is the point: three unrelated record types
+    // in one list, each dispatching to its own impl. The pipeline holds
+    // `dyn Source` and never asks which is which.
+    val sources: list<dyn Source> = list()
+    list_push(sources, Synthetic { count: 300 });
+    list_push(sources, SerialPort { device: "/dev/ttyACM0" });
+    list_push(sources, Ros2Topic { topic: "/sensor/temperature" });
+    assert(list_len(sources) == 3);
+
+    assert(list_get(sources, 0).source_name() == "synthetic stream");
+    assert(list_get(sources, 1).source_name() == "serial peripheral (std.serial)");
+    assert(list_get(sources, 2).source_name() == "ROS 2 topic (std.ros2)");
+
+    // Dispatch is per element rather than one impl applied to everything --
+    // the failure a vtable bug would most plausibly produce.
+    assert(list_get(sources, 0).available());
+    assert(list_get(sources, 1).available() == false);
+    assert(list_get(sources, 2).available() == false);
+
+    // Selecting the usable sources is ordinary code over the trait, with no
+    // knowledge of the concrete types.
+    var usable = 0;
+    for i in 0 .. 3 {
+        if list_get(sources, i).available() { usable = usable + 1 };
+    };
+    assert(usable == 1);
+
+    // And a concrete value passes straight into a `dyn Source` parameter.
+    assert(name_of(Synthetic { count: 1 }) == "synthetic stream");
     0
 }
 
