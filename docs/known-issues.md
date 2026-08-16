@@ -1688,7 +1688,38 @@ further down.
 
 ---
 
-## 36. Higher-kinded type parameters cannot be inferred from arguments — **open, claim correction**
+## 36. Higher-kinded type parameters could not be inferred from arguments — **FIXED**
+
+> ```iris
+> def ident[F[_], T](c: F<T>) -> F<T> { c }
+> ident(some_list)   // was: "cannot infer type parameter T -- no argument mentions it"
+> ```
+>
+> **Two causes, both in the monomorphiser.** `extract_from_ast_type` had no
+> case for a higher-kinded parameter -- and its caller built the list of
+> bindable names with a filter keeping only `AstGenericParam::Type`, dropping
+> every `Hkt` entry, so `F` was excluded from the names it was permitted to bind
+> at all. Substitution had the mirror problem: rebuilding `F<T>` only knew how
+> to form a user record name like `Box__i64`, so a bound `F` naming a builtin
+> constructor produced a struct defined nowhere -- the same shape as #14.
+>
+> A constructor now binds to a nameless-field struct marker (the convention
+> already used for unsubstituted type parameters) and `F<T>` rebuilds
+> `list<T>`, `option<T>` or `map<K,V>` directly. Decomposition handles list,
+> option, map and monomorphised user records.
+>
+> Verified in `tests/test_hkt_inference.iris`: inference over list and option,
+> at `i64` and `str`, with the returned `F<T>` rebuilt correctly and earlier
+> instantiations undisturbed. 8 of 8 interpreted, 4 of 4 native.
+>
+> **Two limits remain, and neither is an HKT defect:**
+> - A multi-parameter HKT record (`W[F[_], A]`) works most of the time but is
+>   still non-deterministic through the mangled-name ordering in #21.
+> - Traits accept no generic parameters at all -- `trait Container[T]` is a
+>   parse error exactly like `trait Mappable[F[_]]`. Type classes over a
+>   constructor need **generic traits**, which is a separate feature.
+
+### Original report
 
 ```iris
 def passthrough[F[_], T](c: F<T>) -> F<T> { c }

@@ -1689,7 +1689,22 @@ impl<'m> Lowerer<'m> {
                         *fty = resolve_concrete_field(fty, &self.type_param_subs, self.module);
                     }
                     // Compute mangled name: e.g. "MinHeap" → "MinHeap__i64"
-                    let mangle = self.type_param_subs.values().map(mangle_ir_type).collect::<Vec<_>>().join("_");
+                    //
+                    // Ordered by type-parameter name. `type_param_subs` is a
+                    // `HashMap`, and reading `.values()` directly built the
+                    // mangled name in hash order, so the same program produced
+                    // `unwrapw__i64_Box` on one run and `unwrapw__Box_i64` on
+                    // the next -- and the definition and use sites then
+                    // disagreed about the name. Measured 5 of 10 runs passing.
+                    // See known-issues #21.
+                    let mut mangle_keys: Vec<&String> = self.type_param_subs.keys().collect();
+                    mangle_keys.sort();
+                    let mangle = mangle_keys
+                        .iter()
+                        .filter_map(|k| self.type_param_subs.get(*k))
+                        .map(mangle_ir_type)
+                        .collect::<Vec<_>>()
+                        .join("_");
                     if !mangle.is_empty() {
                         resolved_name = format!("{}__{}", resolved_name, mangle);
                     }
@@ -1793,7 +1808,17 @@ impl<'m> Lowerer<'m> {
                         for (_, fty) in &mut struct_fields {
                             *fty = resolve_concrete_field(fty, &inferred_subs, self.module);
                         }
-                        let mangle = inferred_subs.values().map(mangle_ir_type).collect::<Vec<_>>().join("_");
+                        // Same ordering rule as above -- sorted by type-parameter
+                        // name, so the name built here matches the one the use
+                        // site computes. See known-issues #21.
+                        let mut inf_keys: Vec<&String> = inferred_subs.keys().collect();
+                        inf_keys.sort();
+                        let mangle = inf_keys
+                            .iter()
+                            .filter_map(|k| inferred_subs.get(*k))
+                            .map(mangle_ir_type)
+                            .collect::<Vec<_>>()
+                            .join("_");
                         if !mangle.is_empty() {
                             resolved_name = format!("{}__{}", name, mangle);
                             self.local_struct_defs.insert(resolved_name.clone(), struct_fields.clone());
@@ -7399,12 +7424,109 @@ impl<'m> Lowerer<'m> {
             // This handles cases where the struct name doesn't have a mangled suffix
             // (e.g. arg is `Box { value: T_marker }` instead of `Box__i64`).
             if subs.values().count() < generic_fn.type_params.len() {
+                // A type constructor is recorded as a nameless-field struct
+                // marker, the same convention the lowerer already uses for
+                // unsubstituted type parameters. `list`, `option` and `map` name
+                // the builtin constructors; anything else names a user record.
+                fn constructor_marker(name: &str) -> IrType {
+                    IrType::Struct {
+                        name: name.to_string(),
+                        fields: Vec::new(),
+                    }
+                }
+
+                // Decode one component of a mangled name such as the `i64` in
+                // `Box__i64`. Anything unrecognised is a nominal type.
+                fn ir_type_from_mangled_part(part: &str) -> IrType {
+                    match part {
+                        "i64" => IrType::Scalar(DType::I64),
+                        "i32" => IrType::Scalar(DType::I32),
+                        "f64" => IrType::Scalar(DType::F64),
+                        "f32" => IrType::Scalar(DType::F32),
+                        "bool" => IrType::Scalar(DType::Bool),
+                        "str" => IrType::Str,
+                        other => IrType::Struct {
+                            name: other.to_string(),
+                            fields: Vec::new(),
+                        },
+                    }
+                }
+
                 fn extract_from_ast_type(
                     ast_ty: &crate::parser::ast::AstType,
                     concrete_ty: &IrType,
                     type_params: &[String],
+                    hkt_params: &[String],
                     subs: &mut HashMap<String, IrType>,
                 ) {
+                    // Higher-kinded: the AST says `F<T>` and `F` is a declared
+                    // constructor parameter, so split the concrete type into
+                    // its constructor and its element and bind both.
+                    if let crate::parser::ast::AstType::Generic { name: gname, args: gargs, .. } = ast_ty {
+                        if hkt_params.contains(gname) {
+                            match concrete_ty {
+                                IrType::List(inner) => {
+                                    subs.entry(gname.clone())
+                                        .or_insert_with(|| constructor_marker("list"));
+                                    if let Some(a0) = gargs.first() {
+                                        extract_from_ast_type(a0, inner, type_params, hkt_params, subs);
+                                    }
+                                    return;
+                                }
+                                IrType::Option(inner) => {
+                                    subs.entry(gname.clone())
+                                        .or_insert_with(|| constructor_marker("option"));
+                                    if let Some(a0) = gargs.first() {
+                                        extract_from_ast_type(a0, inner, type_params, hkt_params, subs);
+                                    }
+                                    return;
+                                }
+                                IrType::Map(k, v) => {
+                                    subs.entry(gname.clone())
+                                        .or_insert_with(|| constructor_marker("map"));
+                                    if let Some(a0) = gargs.first() {
+                                        extract_from_ast_type(a0, k, type_params, hkt_params, subs);
+                                    }
+                                    if let Some(a1) = gargs.get(1) {
+                                        extract_from_ast_type(a1, v, type_params, hkt_params, subs);
+                                    }
+                                    return;
+                                }
+                                // A user record arrives already monomorphised as
+                                // `Box__i64`; the constructor is the part before
+                                // the separator and the element types follow it.
+                                IrType::Struct { name: sname, fields } => {
+                                    let (base, rest) = match sname.split_once("__") {
+                                        Some((b, r)) => (b.to_string(), Some(r.to_string())),
+                                        None => (sname.clone(), None),
+                                    };
+                                    subs.entry(gname.clone())
+                                        .or_insert_with(|| constructor_marker(&base));
+                                    if let Some(rest) = rest {
+                                        for (garg, part) in gargs.iter().zip(rest.split('_')) {
+                                            if let crate::parser::ast::AstType::Named(n, _) = garg {
+                                                if type_params.contains(n) && !subs.contains_key(n) {
+                                                    subs.insert(
+                                                        n.clone(),
+                                                        ir_type_from_mangled_part(part),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        // Not mangled: fall back to the field
+                                        // layout, which is what the existing
+                                        // non-HKT path does.
+                                        for (garg, (_, fty)) in gargs.iter().zip(fields.iter()) {
+                                            extract_from_ast_type(garg, fty, type_params, hkt_params, subs);
+                                        }
+                                    }
+                                    return;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     match ast_ty {
                         crate::parser::ast::AstType::Named(n, _) if type_params.contains(n) && !subs.contains_key(n) => {
                             subs.insert(n.clone(), concrete_ty.clone());
@@ -7412,30 +7534,30 @@ impl<'m> Lowerer<'m> {
                         crate::parser::ast::AstType::Generic { args: gargs, .. } => {
                             if let IrType::Struct { fields, .. } = concrete_ty {
                                 for (garg, (_, fty)) in gargs.iter().zip(fields.iter()) {
-                                    extract_from_ast_type(garg, fty, type_params, subs);
+                                    extract_from_ast_type(garg, fty, type_params, hkt_params, subs);
                                 }
                             }
                         }
                         crate::parser::ast::AstType::List(inner_ast, _) => {
                             if let IrType::List(inner_concrete) = concrete_ty {
-                                extract_from_ast_type(inner_ast, inner_concrete, type_params, subs);
+                                extract_from_ast_type(inner_ast, inner_concrete, type_params, hkt_params, subs);
                             }
                         }
                         crate::parser::ast::AstType::Map(k_ast, v_ast, _) => {
                             if let IrType::Map(k_concrete, v_concrete) = concrete_ty {
-                                extract_from_ast_type(k_ast, k_concrete, type_params, subs);
-                                extract_from_ast_type(v_ast, v_concrete, type_params, subs);
+                                extract_from_ast_type(k_ast, k_concrete, type_params, hkt_params, subs);
+                                extract_from_ast_type(v_ast, v_concrete, type_params, hkt_params, subs);
                             }
                         }
                         crate::parser::ast::AstType::Option(inner_ast, _) => {
                             if let IrType::Option(inner_concrete) = concrete_ty {
-                                extract_from_ast_type(inner_ast, inner_concrete, type_params, subs);
+                                extract_from_ast_type(inner_ast, inner_concrete, type_params, hkt_params, subs);
                             }
                         }
                         crate::parser::ast::AstType::Tuple(elems_ast, _) => {
                             if let IrType::Tuple(elems_concrete) = concrete_ty {
                                 for (a, c) in elems_ast.iter().zip(elems_concrete.iter()) {
-                                    extract_from_ast_type(a, c, type_params, subs);
+                                    extract_from_ast_type(a, c, type_params, hkt_params, subs);
                                 }
                             }
                         }
@@ -7445,8 +7567,15 @@ impl<'m> Lowerer<'m> {
                 let type_param_names: Vec<String> = generic_fn.type_params.iter().filter_map(|p| {
                     if let crate::parser::ast::AstGenericParam::Type(n, _, _) = p { Some(n.clone()) } else { None }
                 }).collect();
+                // Constructor parameters are collected separately: they bind to a
+                // constructor rather than to a type, so `extract_from_ast_type`
+                // has to treat them differently. Leaving them out of both lists
+                // is why `F` was never bound.
+                let hkt_param_names: Vec<String> = generic_fn.type_params.iter().filter_map(|p| {
+                    if let crate::parser::ast::AstGenericParam::Hkt(n, _, _, _) = p { Some(n.clone()) } else { None }
+                }).collect();
                 for (param2, arg_ty2) in generic_fn.params.iter().zip(arg_tys.iter()) {
-                    extract_from_ast_type(&param2.ty, arg_ty2, &type_param_names, &mut subs);
+                    extract_from_ast_type(&param2.ty, arg_ty2, &type_param_names, &hkt_param_names, &mut subs);
                 }
             }
 
@@ -17539,6 +17668,35 @@ pub fn resolve_ast_type_with_subs(
                 .iter()
                 .map(|arg| resolve_ast_type_with_subs(arg, subs, module))
                 .collect();
+
+            // `F` bound to a builtin constructor rebuilds the builtin type
+            // rather than looking for a record called `list__i64`. Without this
+            // the substitution silently produced a struct name that is defined
+            // nowhere, which is the same failure mode as #14.
+            if let Some(IrType::Struct { name: ctor, fields }) = subs.get(name) {
+                if fields.is_empty() {
+                    match ctor.as_str() {
+                        "list" => {
+                            return IrType::List(Box::new(
+                                resolved_args.first().cloned().unwrap_or(IrType::Infer),
+                            ))
+                        }
+                        "option" => {
+                            return IrType::Option(Box::new(
+                                resolved_args.first().cloned().unwrap_or(IrType::Infer),
+                            ))
+                        }
+                        "map" => {
+                            return IrType::Map(
+                                Box::new(resolved_args.first().cloned().unwrap_or(IrType::Infer)),
+                                Box::new(resolved_args.get(1).cloned().unwrap_or(IrType::Infer)),
+                            )
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
             let base_name = if let Some(concrete_ty) = subs.get(name) {
                 match concrete_ty {
                     IrType::Struct { name: s_name, .. } => s_name.clone(),
