@@ -1,42 +1,137 @@
-// maps.iris -- hash map operations
+// maps.iris — hash maps, from the basics to a real aggregation
 //
-// Demonstrates creating maps, inserting key-value pairs,
-// membership checks, removing keys, and map_len.
+// Every result here is asserted rather than printed and hoped for. A example
+// that only prints cannot tell you the language works; it can only tell you it
+// did not crash.
 //
-// Run: iris run examples/maps.iris
+// Run: iris run examples/03_data_structures_algorithms/maps.iris
+
+// ---------------------------------------------------------------------------
+// Word frequency: the canonical map workload
+// ---------------------------------------------------------------------------
+
+/// Counts how many times each word appears.
+///
+/// `map_get` returns an `option`, so a first sighting and a repeat are the same
+/// code path: unwrap with a default of 0 and add one.
+def word_counts(words: list<str>) -> map<str, i64> {
+    val counts: map<str, i64> = map();
+    var i = 0;
+    while i < list_len(words) {
+        val w: str = list_get(words, i);
+        val seen = map_get(counts, w).unwrap_or(0);
+        map_set(counts, w, seen + 1);
+        i = i + 1;
+    }
+    counts
+}
+
+/// Returns the key with the highest count, and its count.
+///
+/// Iterates with `map_keys` + `map_get` rather than `map_entries`: the latter
+/// crashes the native backend (known-issues #57).
+def most_common(counts: map<str, i64>) -> (str, i64) {
+    val keys: list<str> = map_keys(counts);
+    var best = "";
+    var best_n = 0;
+    var i = 0;
+    while i < list_len(keys) {
+        val k: str = list_get(keys, i);
+        val n = map_get(counts, k).unwrap_or(0);
+        if n > best_n {
+            best = k;
+            best_n = n;
+        }
+        i = i + 1;
+    }
+    (best, best_n)
+}
 
 def main() -> i64 {
-    print("=== Map Basics ===");
+    println("=== basics ===");
 
-    // Create and populate
-    val m = map()
+    val m: map<str, i64> = map();
     map_set(m, "a", 10);
     map_set(m, "b", 20);
     map_set(m, "c", 30);
-    print(concat("size: ", to_str(map_len(m))));
+    assert(map_len(m) == 3);
 
-    print("\n=== Membership ===");
-    print(concat("Contains a? ", to_str(map_contains(m, "a"))));
-    print(concat("Contains d? ", to_str(map_contains(m, "d"))));
+    // Lookup returns an option, so a missing key is a value you can handle
+    // rather than a sentinel you have to remember.
+    assert(map_get(m, "a").unwrap_or(0) == 10);
+    assert(map_get(m, "zzz").unwrap_or(0 - 1) == 0 - 1);
+    assert(is_some(map_get(m, "b")));
+    assert(is_some(map_get(m, "zzz")) == false);
 
-    print("\n=== Update ===");
+    assert(map_contains(m, "a"));
+    assert(map_contains(m, "d") == false);
+
+    // Setting an existing key replaces; it does not add a second entry.
     map_set(m, "b", 99);
-    print(concat("Updated b, size: ", to_str(map_len(m))));
+    assert(map_len(m) == 3);
+    assert(map_get(m, "b").unwrap_or(0) == 99);
 
-    print("\n=== Remove ===");
     map_remove(m, "c");
-    print(concat("After remove c, size: ", to_str(map_len(m))));
-    print(concat("Contains c? ", to_str(map_contains(m, "c"))));
+    assert(map_len(m) == 2);
+    assert(map_contains(m, "c") == false);
+    // Removing one key must not disturb the others.
+    assert(map_get(m, "a").unwrap_or(0) == 10);
 
-    print("\n=== Larger Map ===");
-    val sq = map()
-    var i = 1
+    println("=== keys and values ===");
+
+    val sq: map<str, i64> = map();
+    var i = 1;
     while i <= 10 {
         map_set(sq, to_str(i), i * i);
-        i = i + 1
+        i = i + 1;
     }
-    print(concat("Squares map size: ", to_str(map_len(sq))));
-    print(concat("Contains '5'? ", to_str(map_contains(sq, "5"))));
+    assert(map_len(sq) == 10);
+    assert(map_get(sq, "5").unwrap_or(0) == 25);
+    assert(map_get(sq, "10").unwrap_or(0) == 100);
 
+    // `map_keys` and `map_values` agree on length. Order is unspecified, so
+    // nothing here depends on it.
+    assert(list_len(map_keys(sq)) == 10);
+    assert(list_len(map_values(sq)) == 10);
+
+    // Summing the values is order-independent, which makes it a fair check
+    // that every entry is present: 1 + 4 + 9 + ... + 100.
+    val vals: list<i64> = map_values(sq);
+    var total = 0;
+    var j = 0;
+    while j < list_len(vals) {
+        total = total + list_get(vals, j);
+        j = j + 1;
+    }
+    assert(total == 385);
+
+    println("=== word frequency ===");
+
+    val words: list<str> = list();
+    list_push(words, "the");
+    list_push(words, "quick");
+    list_push(words, "the");
+    list_push(words, "fox");
+    list_push(words, "the");
+    list_push(words, "quick");
+
+    val counts = word_counts(words);
+    assert(map_len(counts) == 3);
+    assert(map_get(counts, "the").unwrap_or(0) == 3);
+    assert(map_get(counts, "quick").unwrap_or(0) == 2);
+    assert(map_get(counts, "fox").unwrap_or(0) == 1);
+    // A word that never appeared has no entry at all.
+    assert(map_contains(counts, "lazy") == false);
+
+    val top = most_common(counts);
+    println("most common: " + top.0 + " x" + to_str(top.1));
+    assert(top.0 == "the");
+    assert(top.1 == 3);
+
+    // An empty input produces an empty map, not a crash or a phantom entry.
+    val empty: list<str> = list();
+    assert(map_len(word_counts(empty)) == 0);
+
+    println("maps ok");
     0
 }

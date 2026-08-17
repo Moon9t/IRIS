@@ -1,13 +1,10 @@
-// traits.iris -- trait definitions and implementations
+// traits.iris — traits, dynamic dispatch, generic bounds and blanket impls
 //
-// Demonstrates defining traits with required methods, implementing
-// traits for different record types, and calling trait methods.
+// The point of this file is what happens when those four combine: a
+// heterogeneous `list<dyn Shape>` that computes over shapes it does not know
+// the concrete types of, and a `describe` method nobody wrote for any shape.
 //
-// Run: iris run examples/traits.iris
-
-// =====================
-//  Define records
-// =====================
+// Run: iris run examples/04_types_and_traits/traits.iris
 
 record Circle {
     radius: f64,
@@ -23,141 +20,163 @@ record Triangle {
     height: f64,
 }
 
-// =====================
-//  Define traits
-// =====================
+// ---------------------------------------------------------------------------
+// Traits
+// ---------------------------------------------------------------------------
 
-trait Area {
+trait Shape {
     def area(self: Self) -> f64
+    def name(self: Self) -> str
 }
 
-trait Perimeter {
-    def perimeter(self: Self) -> f64
-}
-
+/// Implemented for nothing directly. Every `Shape` gets it from the blanket
+/// impl below.
 trait Describe {
     def describe(self: Self) -> str
 }
 
-// =====================
-//  Implement traits for Circle
-// =====================
+// ---------------------------------------------------------------------------
+// Implementations
+// ---------------------------------------------------------------------------
 
-impl Area for Circle {
+impl Shape for Circle {
     def area(self: Circle) -> f64 {
         3.14159265 * self.radius * self.radius
     }
-}
-
-impl Perimeter for Circle {
-    def perimeter(self: Circle) -> f64 {
-        (2.0 to f64) * 3.14159265 * self.radius
+    def name(self: Circle) -> str {
+        "circle"
     }
 }
 
-impl Describe for Circle {
-    def describe(self: Circle) -> str {
-        val r = to_str(self.radius)
-        concat("Circle(r=", concat(r, ")"))
-    }
-}
-
-// =====================
-//  Implement traits for Rectangle
-// =====================
-
-impl Area for Rectangle {
+impl Shape for Rectangle {
     def area(self: Rectangle) -> f64 {
         self.width * self.height
     }
-}
-
-impl Perimeter for Rectangle {
-    def perimeter(self: Rectangle) -> f64 {
-        (2.0 to f64) * (self.width + self.height)
+    def name(self: Rectangle) -> str {
+        "rectangle"
     }
 }
 
-impl Describe for Rectangle {
-    def describe(self: Rectangle) -> str {
-        val w = to_str(self.width)
-        val h = to_str(self.height)
-        concat("Rectangle(", concat(w, concat("x", concat(h, ")"))))
-    }
-}
-
-// =====================
-//  Implement traits for Triangle
-// =====================
-
-impl Area for Triangle {
+impl Shape for Triangle {
     def area(self: Triangle) -> f64 {
-        (0.5 to f64) * self.base * self.height
+        0.5 * self.base * self.height
+    }
+    def name(self: Triangle) -> str {
+        "triangle"
     }
 }
 
-impl Describe for Triangle {
-    def describe(self: Triangle) -> str {
-        val b = to_str(self.base)
-        val h = to_str(self.height)
-        concat("Triangle(b=", concat(b, concat(", h=", concat(h, ")"))))
+/// A blanket impl: everything that is a `Shape` is also `Describe`, without a
+/// line of per-type code. Adding a fourth shape below would get `describe` for
+/// free.
+impl[T where T: Shape] Describe for T {
+    def describe(self: Self) -> str {
+        self.name() + " of area " + to_str(self.area())
     }
 }
 
-// =====================
-//  Helper to show shape info
-// =====================
+// ---------------------------------------------------------------------------
+// Generic function with a trait bound
+// ---------------------------------------------------------------------------
 
-def show_circle(c: Circle) -> i64 {
-    print(concat("  Shape:     ", c.describe()));
-    print(concat("  Area:      ", to_str(c.area())));
-    print(concat("  Perimeter: ", to_str(c.perimeter())));
-    0
+/// Works for any `Shape`, resolved statically at each call site.
+def is_larger_than[T where T: Shape](s: T, limit: f64) -> bool {
+    s.area() > limit
 }
 
-def show_rectangle(r: Rectangle) -> i64 {
-    print(concat("  Shape:     ", r.describe()));
-    print(concat("  Area:      ", to_str(r.area())));
-    print(concat("  Perimeter: ", to_str(r.perimeter())));
-    0
+// ---------------------------------------------------------------------------
+// Dynamic dispatch over a heterogeneous collection
+// ---------------------------------------------------------------------------
+
+/// The caller's shapes have three different concrete types and three different
+/// `area` implementations. This function knows none of them.
+def total_area(shapes: list<dyn Shape>) -> f64 {
+    var sum = 0.0;
+    var i = 0;
+    while i < list_len(shapes) {
+        val s: dyn Shape = list_get(shapes, i);
+        sum = sum + s.area();
+        i = i + 1;
+    }
+    sum
 }
 
-def show_triangle(t: Triangle) -> i64 {
-    print(concat("  Shape:     ", t.describe()));
-    print(concat("  Area:      ", to_str(t.area())));
-    0
+/// Counts the shapes whose area clears `limit`, again without knowing types.
+def count_larger(shapes: list<dyn Shape>, limit: f64) -> i64 {
+    var n = 0;
+    var i = 0;
+    while i < list_len(shapes) {
+        val s: dyn Shape = list_get(shapes, i);
+        if s.area() > limit {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
 }
-
-// =====================
-//  Main
-// =====================
 
 def main() -> i64 {
-    print("=== Traits: Shape Hierarchy ===");
+    println("=== static dispatch ===");
 
-    print("\nCircle:");
-    val c = Circle { radius: 5.0 }
-    show_circle(c);
+    val c = Circle { radius: 2.0 };
+    val r = Rectangle { width: 3.0, height: 4.0 };
+    val t = Triangle { base: 6.0, height: 2.0 };
 
-    print("\nRectangle:");
-    val r = Rectangle { width: 8.0, height: 3.0 }
-    show_rectangle(r);
+    // Each type's own implementation runs.
+    assert(r.area() == 12.0);
+    assert(t.area() == 6.0);
+    assert(c.name() == "circle");
+    assert(r.name() == "rectangle");
+    assert(t.name() == "triangle");
 
-    print("\nTriangle:");
-    val t = Triangle { base: 10.0, height: 6.0 }
-    show_triangle(t);
+    // The circle's area is irrational, so it is checked as a band rather than
+    // an equality: pi * 4 is about 12.566.
+    assert(c.area() > 12.56);
+    assert(c.area() < 12.57);
 
-    print("\n=== Comparing Areas ===");
-    val ca = c.area()
-    val ra = r.area()
-    val ta = t.area()
+    println("=== blanket impl ===");
 
-    val largest = if ca >= ra {
-        if ca >= ta { c.describe() } else { t.describe() }
-    } else {
-        if ra >= ta { r.describe() } else { t.describe() }
-    };
-    print(concat("Largest area: ", largest));
+    // Nobody wrote `describe` for Rectangle. It exists because Rectangle is a
+    // Shape, and every Shape is Describable.
+    println(r.describe());
+    assert(r.describe() == "rectangle of area 12");
+    assert(t.describe() == "triangle of area 6");
+    // The blanket impl must call through to each type's own `name` and `area`,
+    // so the three descriptions differ.
+    assert(r.describe() != t.describe());
 
+    println("=== generic bound ===");
+
+    assert(is_larger_than(r, 10.0));
+    assert(is_larger_than(t, 10.0) == false);
+    // The same generic function, instantiated at a third type.
+    assert(is_larger_than(c, 10.0));
+
+    println("=== dynamic dispatch ===");
+
+    // Three concrete types in one list, coerced to `dyn Shape` at the push.
+    val shapes: list<dyn Shape> = list();
+    list_push(shapes, r);
+    list_push(shapes, t);
+    list_push(shapes, Rectangle { width: 1.0, height: 5.0 });
+    assert(list_len(shapes) == 3);
+
+    // 12 + 6 + 5. If the vtable were stuck on one impl, this would be 36
+    // (all rectangles) or 18 (all triangles) instead.
+    val total = total_area(shapes);
+    println("total area = " + to_str(total));
+    assert(total == 23.0);
+
+    assert(count_larger(shapes, 4.0) == 3);
+    assert(count_larger(shapes, 5.5) == 2);
+    assert(count_larger(shapes, 100.0) == 0);
+
+    // A shape retrieved from the list still reports its own name.
+    val first: dyn Shape = list_get(shapes, 0);
+    assert(first.name() == "rectangle");
+    val second: dyn Shape = list_get(shapes, 1);
+    assert(second.name() == "triangle");
+
+    println("traits ok");
     0
 }

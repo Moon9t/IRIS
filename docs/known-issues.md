@@ -2772,3 +2772,32 @@ This was invisible because `tests/test_tier2.iris` guarded each comparison with
 still exited 0. It is listed in `KNOWN_BROKEN` now that its checks are real.
 
 Related: #26 records that tuples cannot be compared with `==` on either backend.
+
+---
+
+## 57. `map_entries` crashes the native backend — **open**
+
+```iris
+def main() -> i64 {
+    val m = map();
+    map_set(m, "a", 1);
+    println(to_str(list_len(map_entries(m))));
+    0
+}
+```
+
+```text
+runtime error (exit code 0xc0000409): iris: unbox_map type mismatch (tag=2078172688)
+```
+
+The program then completes only because `--emit eval` falls back to the
+interpreter, where it is correct. `map_set`, `map_get`, `map_keys`,
+`map_values`, `map_contains`, `map_len` and `map_remove` are all fine natively —
+this is specific to `map_entries`, which returns a list of key/value pairs and
+evidently unboxes the map with the wrong tag.
+
+`tests/test_map_entries.iris` passes, including the assertions added for #4,
+because the fallback hides it. Found while writing the map examples.
+
+Prefer `map_keys` plus `map_get` when iterating a map in code that must run
+natively.

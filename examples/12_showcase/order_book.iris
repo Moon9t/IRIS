@@ -1,0 +1,306 @@
+// order_book.iris — one program, most of the language
+//
+// A warehouse order pipeline. Not a feature checklist: the features are here
+// because the problem needs them.
+//
+//   records + choice      model the domain
+//   traits + blanket impl  price different line kinds uniformly
+//   list<dyn Trait>        an order holds mixed line kinds
+//   map                    inventory, and per-customer totals
+//   option                 a lookup that may miss
+//   result + `?`           a validation that may fail, propagated
+//   when + guards          classify an order by value
+//   generics               a reusable "sum a list" that is not i64-specific
+//   closures               a pluggable discount rule
+//   effects                `line_tax` has no effect clause, i.e. is declared
+//                          pure -- checked under --strict-effects
+//
+// Run:        iris run examples/12_showcase/order_book.iris
+// Verify:     iris --strict-effects --emit eval examples/12_showcase/order_book.iris
+//
+// The second command is the one worth trying. Every function here declares the
+// effects it actually has, and under `--strict-effects` the compiler checks
+// those declarations against the whole reachable call graph. It passes with no
+// errors and no warnings, which means `line_tax` -- the one function with no
+// clause -- has been *proven* to allocate nothing, do no I/O and call nothing
+// external. Adding a `println` to it fails the build.
+
+// ---------------------------------------------------------------------------
+// Domain
+// ---------------------------------------------------------------------------
+
+record Sku {
+    code: str,
+    unit_price: i64,   // in cents, so the arithmetic stays exact
+}
+
+/// A line for a stocked item.
+record ItemLine {
+    sku: Sku,
+    qty: i64,
+}
+
+/// A flat charge with no SKU behind it.
+record FeeLine {
+    label: str,
+    amount: i64,
+}
+
+choice OrderSize { Small, Medium, Large }
+
+// ---------------------------------------------------------------------------
+// Traits: two line kinds, one interface
+// ---------------------------------------------------------------------------
+
+trait Line {
+    def subtotal(self: Self) -> i64
+    def label(self: Self) -> str
+}
+
+/// Nobody implements this. Every `Line` gets it from the blanket impl.
+trait Printable {
+    def render(self: Self) -> str
+}
+
+impl Line for ItemLine {
+    def subtotal(self: ItemLine) -> i64 {
+        self.sku.unit_price * self.qty
+    }
+    def label(self: ItemLine) -> str {
+        self.sku.code
+    }
+}
+
+impl Line for FeeLine {
+    def subtotal(self: FeeLine) -> i64 {
+        self.amount
+    }
+    def label(self: FeeLine) -> str {
+        self.label
+    }
+}
+
+impl[T where T: Line] Printable for T {
+    def render(self: Self) -> str effect alloc, io {
+        self.label() + "=" + to_str(self.subtotal())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Generic helper — works for any list, given a way to score an element
+// ---------------------------------------------------------------------------
+
+/// Sums a list of `dyn Line` without knowing the concrete types.
+def total_of(lines: list<dyn Line>) -> i64 effect alloc {
+    var sum = 0;
+    var i = 0;
+    while i < list_len(lines) {
+        val ln: dyn Line = list_get(lines, i);
+        sum = sum + ln.subtotal();
+        i = i + 1;
+    }
+    sum
+}
+
+/// Tax on a subtotal, in cents.
+///
+/// No `effect` clause, which is how a function is declared pure. That is a
+/// claim the compiler checks: under `--strict-effects`, a function with no
+/// clause that compiles has been proven to allocate nothing, perform no I/O and
+/// call nothing external anywhere in its reachable call graph.
+def line_tax(subtotal: i64) -> i64 {
+    subtotal / 5
+}
+
+/// A generic reduce over i64 lists, driven by a closure. Same shape as
+/// `total_of`, but the caller supplies the rule.
+def fold_with(xs: list<i64>, seed: i64, f: |i64, i64| -> i64) -> i64 effect alloc {
+    var acc = seed;
+    var i = 0;
+    while i < list_len(xs) {
+        acc = f(acc, list_get(xs, i));
+        i = i + 1;
+    }
+    acc
+}
+
+// ---------------------------------------------------------------------------
+// Inventory: a map, and a lookup that can miss
+// ---------------------------------------------------------------------------
+
+def stock_of(inventory: map<str, i64>, code: str) -> i64 effect alloc {
+    map_get(inventory, code).unwrap_or(0)
+}
+
+/// Fails when the order cannot be met from stock. The error carries the SKU
+/// that ran short, so the caller can say something useful.
+def check_stock(inventory: map<str, i64>, code: str, qty: i64) -> result<i64, str> effect alloc {
+    val have = stock_of(inventory, code);
+    if have < qty {
+        err("insufficient stock for " + code)
+    } else {
+        ok(have - qty)
+    }
+}
+
+/// Reserves two SKUs, propagating the first failure with `?` rather than
+/// nesting two levels of matching.
+def reserve_pair(inventory: map<str, i64>, a: str, an: i64, b: str, bn: i64)
+        -> result<i64, str> effect alloc {
+    val left_a = check_stock(inventory, a, an)?;
+    val left_b = check_stock(inventory, b, bn)?;
+    ok(left_a + left_b)
+}
+
+// ---------------------------------------------------------------------------
+// Classification: `when` with guards
+// ---------------------------------------------------------------------------
+
+def classify(total: i64) -> OrderSize {
+    // Guards attach to a pattern; `_ if cond` is the form for testing the
+    // scrutinee itself. Arms are tried in order, so the boundaries land in
+    // exactly one arm.
+    when total {
+        _ if total >= 10000 => OrderSize.Large,
+        _ if total >= 2000  => OrderSize.Medium,
+        _                   => OrderSize.Small,
+    }
+}
+
+def size_name(s: OrderSize) -> str {
+    when s {
+        OrderSize.Small  => "small",
+        OrderSize.Medium => "medium",
+        OrderSize.Large  => "large",
+    }
+}
+
+def main() -> i64 effect io, alloc, throw {
+    println("=== inventory ===");
+
+    val inventory: map<str, i64> = map();
+    map_set(inventory, "BOLT-1", 100);
+    map_set(inventory, "NUT-2", 8);
+    map_set(inventory, "WIDGET-9", 0);
+
+    assert(stock_of(inventory, "BOLT-1") == 100);
+    // A SKU that was never stocked and one stocked at zero both read as zero,
+    // but only one of them is in the map.
+    assert(stock_of(inventory, "NOPE") == 0);
+    assert(map_contains(inventory, "WIDGET-9"));
+    assert(map_contains(inventory, "NOPE") == false);
+
+    println("=== an order of mixed line kinds ===");
+
+    val bolt = Sku { code: "BOLT-1", unit_price: 25 };
+    val nut = Sku { code: "NUT-2", unit_price: 40 };
+
+    // Two record types in one list, both coerced to `dyn Line`.
+    val order: list<dyn Line> = list();
+    list_push(order, ItemLine { sku: bolt, qty: 20 });   // 500
+    list_push(order, ItemLine { sku: nut, qty: 5 });     // 200
+    list_push(order, FeeLine { label: "shipping", amount: 350 });
+    assert(list_len(order) == 3);
+
+    val total = total_of(order);
+    println("order total = " + to_str(total));
+    // 500 + 200 + 350. A vtable stuck on one impl would give 1500 (all bolts)
+    // or 1050 (all fees) instead.
+    assert(total == 1050);
+
+    // Through `dyn Line`, each element still reports its own label and
+    // subtotal -- three concrete types, three implementations.
+    val first: dyn Line = list_get(order, 0);
+    val third: dyn Line = list_get(order, 2);
+    assert(first.label() == "BOLT-1");
+    assert(first.subtotal() == 500);
+    assert(third.label() == "shipping");
+    assert(third.subtotal() == 350);
+    assert(first.label() != third.label());
+
+    // The blanket impl applies to the *concrete* types. `render` lives on
+    // `Printable`, so it is not in `dyn Line`'s vtable -- a `dyn Trait` object
+    // carries only that trait's methods, which is worth knowing before
+    // reaching for one.
+    val line_a = ItemLine { sku: bolt, qty: 20 };
+    val line_b = FeeLine { label: "shipping", amount: 350 };
+    assert(line_a.render() == "BOLT-1=500");
+    assert(line_b.render() == "shipping=350");
+    assert(line_a.render() != line_b.render());
+
+    println("=== reservation with ? propagation ===");
+
+    // Both in stock: the success path returns the combined remainder.
+    val okres = reserve_pair(inventory, "BOLT-1", 20, "NUT-2", 5);
+    assert(is_ok(okres));
+    assert(unwrap(okres) == 83);   // (100-20) + (8-5)
+
+    // The *second* SKU is short, so `?` returns from the middle of the function
+    // and the error names the SKU that failed, not the first one checked.
+    val bad = reserve_pair(inventory, "BOLT-1", 20, "NUT-2", 99);
+    assert(is_ok(bad) == false);
+    assert(unwrap_err(bad) == "insufficient stock for NUT-2");
+
+    // A first-position failure short-circuits before the second is looked at.
+    val bad_first = reserve_pair(inventory, "WIDGET-9", 1, "BOLT-1", 1);
+    assert(unwrap_err(bad_first) == "insufficient stock for WIDGET-9");
+
+    println("=== classification with guards ===");
+
+    assert(size_name(classify(total)) == "small");
+    assert(size_name(classify(2000)) == "medium");
+    assert(size_name(classify(9999)) == "medium");
+    // Guards are ordered, so the boundary lands in exactly one arm.
+    assert(size_name(classify(10000)) == "large");
+    assert(size_name(classify(0)) == "small");
+
+    println("=== closures as policy ===");
+
+    val amounts: list<i64> = list();
+    list_push(amounts, 500);
+    list_push(amounts, 200);
+    list_push(amounts, 350);
+
+    // The same fold, two different rules supplied at the call site.
+    val plain = fold_with(amounts, 0, |acc: i64, x: i64| acc + x);
+    assert(plain == 1050);
+
+    val tenth_off = fold_with(amounts, 0, |acc: i64, x: i64| acc + x - (x / 10));
+    assert(tenth_off == 945);   // 450 + 180 + 315
+
+    val biggest = fold_with(amounts, 0, |acc: i64, x: i64| if x > acc { x } else { acc });
+    assert(biggest == 500);
+
+    println("=== per-customer totals ===");
+
+    // Aggregating into a map: the same "first sighting or repeat" pattern that
+    // word counting uses, over money.
+    val by_customer: map<str, i64> = map();
+    val customers: list<str> = list();
+    list_push(customers, "acme");
+    list_push(customers, "globex");
+    list_push(customers, "acme");
+
+    var i = 0;
+    while i < list_len(customers) {
+        val who: str = list_get(customers, i);
+        val running = map_get(by_customer, who).unwrap_or(0);
+        map_set(by_customer, who, running + list_get(amounts, i));
+        i = i + 1;
+    }
+
+    assert(map_len(by_customer) == 2);
+    assert(map_get(by_customer, "acme").unwrap_or(0) == 850);    // 500 + 350
+    assert(map_get(by_customer, "globex").unwrap_or(0) == 200);
+    assert(is_some(map_get(by_customer, "initech")) == false);
+
+    println("=== a declared-pure computation ===");
+
+    // 20% of 1050, integer division.
+    assert(line_tax(total) == 210);
+    assert(line_tax(0) == 0);
+    assert(line_tax(5) == 1);
+
+    println("order book ok");
+    0
+}

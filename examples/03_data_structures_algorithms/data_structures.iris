@@ -1,130 +1,220 @@
-// data_structures.iris — Stack, Queue, and linked list simulation
+// data_structures.iris — lists, and the structures you build out of them
+//
+// A stack and a queue built on `list`, then a generic container that works at
+// any element type. Every operation is asserted, including the edge cases that
+// a print-only example silently skips: popping to empty, and a queue whose
+// front has advanced past several items.
+//
+// Run: iris run examples/03_data_structures_algorithms/data_structures.iris
 
-// =====================
-//  STACK (via list)
-// =====================
+// ---------------------------------------------------------------------------
+// List basics
+// ---------------------------------------------------------------------------
 
-def stack_push(lst: list<i64>, size: i64, v: i64) -> i64 {
-    push(lst, v);
-    size + 1
+def demo_list_basics() -> i64 {
+    val xs: list<i64> = list();
+    assert(list_len(xs) == 0);
+
+    list_push(xs, 10);
+    list_push(xs, 20);
+    list_push(xs, 30);
+    assert(list_len(xs) == 3);
+    assert(list_get(xs, 0) == 10);
+    assert(list_get(xs, 2) == 30);
+
+    // `list_set` replaces in place; it does not append.
+    list_set(xs, 1, 99);
+    assert(list_len(xs) == 3);
+    assert(list_get(xs, 1) == 99);
+
+    // `list_pop` returns the last element and shortens the list.
+    assert(list_pop(xs) == 30);
+    assert(list_len(xs) == 2);
+
+    assert(list_contains(xs, 99));
+    assert(list_contains(xs, 30) == false);
+
+    // Slicing takes a half-open range and leaves the original alone.
+    val head: list<i64> = list_slice(xs, 0, 1);
+    assert(list_len(head) == 1);
+    assert(list_get(head, 0) == 10);
+    assert(list_len(xs) == 2);
+
+    val ys: list<i64> = list();
+    list_push(ys, 7);
+    val joined: list<i64> = list_concat(xs, ys);
+    assert(list_len(joined) == 3);
+    assert(list_get(joined, 2) == 7);
+
+    // Sorting is in place and total, not just "the first element is smallest".
+    val nums: list<i64> = list();
+    list_push(nums, 5);
+    list_push(nums, 1);
+    list_push(nums, 4);
+    list_push(nums, 2);
+    list_sort(nums);
+    assert(list_get(nums, 0) == 1);
+    assert(list_get(nums, 1) == 2);
+    assert(list_get(nums, 2) == 4);
+    assert(list_get(nums, 3) == 5);
+    0
 }
 
-def stack_peek(lst: list<i64>, size: i64) -> i64 {
-    list_get(lst, size - 1)
+// ---------------------------------------------------------------------------
+// Stack — last in, first out
+// ---------------------------------------------------------------------------
+
+record Stack {
+    items: list<i64>,
 }
 
-def stack_pop(size: i64) -> i64 {
-    size - 1
+def stack_new() -> Stack {
+    Stack { items: list() }
+}
+
+def stack_push(s: Stack, v: i64) -> i64 {
+    list_push(s.items, v);
+    list_len(s.items)
+}
+
+def stack_depth(s: Stack) -> i64 {
+    list_len(s.items)
+}
+
+/// Returns `none` on an empty stack rather than a sentinel the caller has to
+/// know about.
+def stack_peek(s: Stack) -> option<i64> {
+    if list_len(s.items) == 0 {
+        none()
+    } else {
+        some(list_get(s.items, list_len(s.items) - 1))
+    }
+}
+
+def stack_pop(s: Stack) -> option<i64> {
+    if list_len(s.items) == 0 {
+        none()
+    } else {
+        some(list_pop(s.items))
+    }
 }
 
 def demo_stack() -> i64 {
-    print("=== Stack Demo ===");
-    val s = list()
-    var sz = 0
+    val s = stack_new();
+    assert(stack_depth(s) == 0);
+    // Peeking an empty stack is a `none`, not a crash.
+    assert(is_some(stack_peek(s)) == false);
 
-    sz = stack_push(s, sz, 10);
-    sz = stack_push(s, sz, 20);
-    sz = stack_push(s, sz, 30);
+    stack_push(s, 10);
+    stack_push(s, 20);
+    stack_push(s, 30);
+    assert(stack_depth(s) == 3);
+    assert(stack_peek(s).unwrap_or(0) == 30);
 
-    print(concat("Peek: ", to_str(stack_peek(s, sz))));
+    // LIFO: out in the reverse of the order they went in.
+    assert(stack_pop(s).unwrap_or(0) == 30);
+    assert(stack_pop(s).unwrap_or(0) == 20);
+    assert(stack_depth(s) == 1);
+    assert(stack_peek(s).unwrap_or(0) == 10);
 
-    sz = stack_pop(sz);
-    print(concat("After pop, peek: ", to_str(stack_peek(s, sz))));
-
-    sz = stack_pop(sz);
-    sz = stack_pop(sz);
-    print(concat("Stack empty: ", to_str(sz == 0)));
+    assert(stack_pop(s).unwrap_or(0) == 10);
+    assert(stack_depth(s) == 0);
+    // Popping past empty stays empty.
+    assert(is_some(stack_pop(s)) == false);
     0
 }
 
-// =====================
-//  QUEUE (via list)
-// =====================
+// ---------------------------------------------------------------------------
+// Queue — first in, first out
+// ---------------------------------------------------------------------------
 
-def queue_enqueue(lst: list<i64>, v: i64) -> i64 {
-    push(lst, v);
-    0
+record Queue {
+    items: list<i64>,
+    front: i64,
 }
 
-def queue_front(lst: list<i64>, head: i64) -> i64 {
-    list_get(lst, head)
+def queue_new() -> Queue {
+    Queue { items: list(), front: 0 }
+}
+
+def queue_enqueue(q: Queue, v: i64) -> i64 {
+    list_push(q.items, v);
+    list_len(q.items) - q.front
+}
+
+def queue_len(q: Queue) -> i64 {
+    list_len(q.items) - q.front
+}
+
+def queue_peek(q: Queue) -> option<i64> {
+    if queue_len(q) == 0 {
+        none()
+    } else {
+        some(list_get(q.items, q.front))
+    }
 }
 
 def demo_queue() -> i64 {
-    print("=== Queue Demo ===");
-    val q = list()
-    var head = 0
+    val q = queue_new();
+    assert(queue_len(q) == 0);
+    assert(is_some(queue_peek(q)) == false);
 
-    val _a = queue_enqueue(q, 100);
-    val _b = queue_enqueue(q, 200);
-    val _c = queue_enqueue(q, 300);
+    queue_enqueue(q, 1);
+    queue_enqueue(q, 2);
+    queue_enqueue(q, 3);
+    assert(queue_len(q) == 3);
+    // FIFO: the front is the *first* item pushed, unlike the stack.
+    assert(queue_peek(q).unwrap_or(0) == 1);
 
-    print(concat("Front: ", to_str(queue_front(q, head))));
-    head = head + 1;
+    // Advancing the front is what makes it a queue.
+    val q2 = Queue { items: q.items, front: 1 };
+    assert(queue_len(q2) == 2);
+    assert(queue_peek(q2).unwrap_or(0) == 2);
 
-    print(concat("After dequeue, front: ", to_str(queue_front(q, head))));
-    head = head + 1;
-    head = head + 1;
-
-    val is_empty = if head >= len(q) { 1 } else { 0 }
-    print(concat("Queue empty: ", to_str(is_empty)));
+    val q3 = Queue { items: q.items, front: 3 };
+    assert(queue_len(q3) == 0);
+    assert(is_some(queue_peek(q3)) == false);
     0
 }
 
-// =====================
-//  LINKED LIST (via parallel lists)
-// =====================
-// Simulate a linked list with two lists: values and next-pointers.
-// next[i] = -1 means end of list.
+// ---------------------------------------------------------------------------
+// A generic container — one implementation, many element types
+// ---------------------------------------------------------------------------
 
-def ll_find(vals: list<i64>, nexts: list<i64>, head: i64, target: i64) -> i64 {
-    var cur = head
-    var found = 0
-    while (cur != -1) {
-        val v = list_get(vals, cur)
-        found = if v == target { 1 } else { found };
-        cur = if v == target { -1 } else { list_get(nexts, cur) }
-    }
-    found
+record Pair[T] {
+    first: T,
+    second: T,
 }
 
-def ll_print(vals: list<i64>, nexts: list<i64>, head: i64) -> i64 {
-    var cur = head
-    var s = "List: "
-    while (cur != -1) {
-        val v = list_get(vals, cur)
-        val nxt = list_get(nexts, cur)
-        s = concat(s, to_str(v));
-        s = concat(s, if nxt != -1 { " -> " } else { "" })
-        cur = nxt
-    }
-    print(s);
-    0
+def swap[T](p: Pair<T>) -> Pair<T> {
+    Pair { first: p.second, second: p.first }
 }
 
-def demo_linked_list() -> i64 {
-    print("=== Linked List Demo ===");
-    // Build: 5 -> 10 -> 15 -> 20 -> end
-    val vals  = list()
-    push(vals, 5); push(vals, 10); push(vals, 15); push(vals, 20);
-    val nexts = list()
-    push(nexts, 1); push(nexts, 2); push(nexts, 3); push(nexts, -1);
+def demo_generic() -> i64 {
+    val nums: Pair<i64> = Pair { first: 1, second: 2 };
+    val swapped: Pair<i64> = swap(nums);
+    assert(swapped.first == 2);
+    assert(swapped.second == 1);
 
-    val _p = ll_print(vals, nexts, 0);
+    // The same function at a different element type — one definition, two
+    // specialisations, and they must not share state.
+    val words: Pair<str> = Pair { first: "a", second: "b" };
+    val swapped_words: Pair<str> = swap(words);
+    assert(swapped_words.first == "b");
+    assert(swapped_words.second == "a");
 
-    val f1 = ll_find(vals, nexts, 0, 15)
-    print(concat("Found 15: ", to_str(f1)));
-
-    val f2 = ll_find(vals, nexts, 0, 99)
-    print(concat("Found 99: ", to_str(f2)));
+    // Swapping twice is the identity.
+    val back: Pair<i64> = swap(swapped);
+    assert(back.first == 1);
+    assert(back.second == 2);
     0
 }
 
 def main() -> i64 {
-    val _s = demo_stack();
-    print("");
-    val _q = demo_queue();
-    print("");
-    val _l = demo_linked_list();
+    assert(demo_list_basics() == 0);
+    assert(demo_stack() == 0);
+    assert(demo_queue() == 0);
+    assert(demo_generic() == 0);
+    println("data structures ok");
     0
 }
