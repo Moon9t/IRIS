@@ -33,11 +33,13 @@ def main() -> i64 {
     val dist = p1.distance_to(p2);
     println("distance = " + to_str(dist));
 
-    if d == 42 && s == "hello world" && dist == 25 {
-        println("Extension method tests passed!");
-        0
-    } else {
-        println("FAILED: d=" + to_str(d) + " dist=" + to_str(dist));
-        1
-    }
+    assert(d == 42);
+    assert(s == "hello world");
+    // 3-4-5 triangle, squared distance: 9 + 16.
+    assert(dist == 25);
+    // A second receiver, so a method returning a constant cannot pass.
+    assert(5.double() == 10);
+    assert(p1.distance_to(p1) == 0);
+    println("extension methods ok");
+    0
 }

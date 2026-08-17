@@ -1,5 +1,5 @@
-// Test: Generic Records with explicit type annotation
-
+// Generic records with explicit type annotations, at more than one
+// instantiation so a single specialisation cannot serve both.
 record Box[T] {
     item: T
 }
@@ -10,24 +10,23 @@ record Pair[T, U] {
 }
 
 def main() -> i64 {
-    // Basic generic record with explicit type annotation
     val b: Box<i64> = Box { item: 42 }
-    val r1 = b.item
-    print("Box<i64>.item = ");
-    println(to_str(r1));
+    assert(b.item == 42);
 
-    // Generic record with str
     val bs: Box<str> = Box { item: "hello" }
-    print("Box<str>.item = ");
-    println(bs.item);
+    assert(bs.item == "hello");
 
-    // Multi-param generic record
     val p: Pair<i64, i64> = Pair { first: 10, second: 20 }
-    print("Pair.first = ");
-    println(to_str(p.first));
-    print("Pair.second = ");
-    println(to_str(p.second));
+    assert(p.first == 10);
+    assert(p.second == 20);
+    // Distinct field values, so a record storing one value for both fields
+    // would fail rather than pass on type alone.
+    assert(p.first != p.second);
 
-    // Return sum to verify
-    r1
+    // A heterogeneous pair: the two parameters must stay independent.
+    val ps: Pair<str, i64> = Pair { first: "k", second: 7 }
+    assert(ps.first == "k");
+    assert(ps.second == 7);
+    println("generic records ok");
+    0
 }

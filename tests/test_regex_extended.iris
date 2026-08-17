@@ -1,31 +1,43 @@
+// Regex: character classes, shorthands, grouping, alternation, find_all and
+// replace_all.
+//
+// Every positive case is paired with a negative one. The original asserted
+// nothing and every call returned `true`, so an implementation that answered
+// `true` unconditionally would have looked perfect.
 def main() -> i64 {
     // Character classes
-    print("--- Character classes ---");
-    print("digit 5: " + to_str(regex_match("[0-9]+", "abc123def")));
-    print("letter: " + to_str(regex_match("[a-z]+", "hello")));
-    print("not digit: " + to_str(regex_match("[^0-9]+", "hello")));
-    print("mixed class: " + to_str(regex_match("[a-zA-Z0-9]+", "abc123")));
+    assert(regex_match("[0-9]+", "abc123def"));
+    assert(regex_match("[0-9]+", "abcdef") == false);
+    assert(regex_match("[a-z]+", "hello"));
+    assert(regex_match("[a-z]+", "12345") == false);
+    assert(regex_match("[^0-9]+", "hello"));
+    assert(regex_match("[a-zA-Z0-9]+", "abc123"));
 
     // Shorthand classes
-    print("--- Shorthand classes ---");
-    print("\\d match: " + to_str(regex_match("\\d+", "abc123")));
-    print("\\w match: " + to_str(regex_match("\\w+", "hello_123")));
-    print("\\s match: " + to_str(regex_match("\\s+", "  ")));
+    assert(regex_match("\\d+", "abc123"));
+    assert(regex_match("\\d+", "abcdef") == false);
+    assert(regex_match("\\w+", "hello_123"));
+    assert(regex_match("\\s+", "  "));
+    assert(regex_match("\\s+", "nospace") == false);
 
     // Grouping and alternation
-    print("--- Grouping ---");
-    print("group: " + to_str(regex_match("(abc)+", "abcabc")));
-    print("alternation: " + to_str(regex_match("(cat|dog)", "I have a dog")));
+    assert(regex_match("(abc)+", "abcabc"));
+    assert(regex_match("(cat|dog)", "I have a dog"));
+    assert(regex_match("(cat|dog)", "I have a fish") == false);
 
-    // find_all with character classes
-    print("--- find_all ---");
+    // find_all returns one entry per match
     val digits = regex_find_all("\\d+", "abc 12 def 34 ghi 56");
-    print("digits found: " + to_str(list_len(digits)));
+    assert(list_len(digits) == 3);
+    val none_found = regex_find_all("\\d+", "no digits here");
+    assert(list_len(none_found) == 0);
 
-    // replace_all
-    print("--- replace_all ---");
+    // replace_all substitutes every match, leaving the rest intact
     val replaced = regex_replace_all("\\d+", "abc 123 def 456", "NUM");
-    print("replaced: " + replaced);
+    println("replaced: " + replaced);
+    assert(replaced == "abc NUM def NUM");
+    // Nothing to replace leaves the subject unchanged.
+    assert(regex_replace_all("\\d+", "abc def", "NUM") == "abc def");
 
+    println("regex ok");
     0
 }

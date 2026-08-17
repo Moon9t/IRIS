@@ -25,16 +25,24 @@ def main() -> i64 {
     
     val sum = a + b;
     println("add: " + to_str(sum.x) + ", " + to_str(sum.y));
-    if sum.x != 4 || sum.y != 6 { println("FAIL: add"); return 1 }
+    assert(sum.x == 4);
+    assert(sum.y == 6);
     
     val diff = b - a;
     println("sub: " + to_str(diff.x) + ", " + to_str(diff.y));
-    if diff.x != 2 || diff.y != 2 { println("FAIL: sub"); return 1 }
+    assert(diff.x == 2);
+    assert(diff.y == 2);
     
     val prod = a * b;
     println("mul: " + to_str(prod.x) + ", " + to_str(prod.y));
-    if prod.x != 3 || prod.y != 8 { println("FAIL: mul"); return 1 }
+    assert(prod.x == 3);
+    assert(prod.y == 8);
     
-    println("All arithmetic operator overloading tests passed!");
+    // Operands in the other order, so a subtraction implemented as a - b vs
+    // b - a cannot pass both.
+    val diff2 = a - b;
+    assert(diff2.x == -2);
+    assert(diff2.y == -2);
+    println("arithmetic operator overloading ok");
     0
 }

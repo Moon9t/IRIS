@@ -1,3 +1,4 @@
+// Selective import from an inline module: `bring math.{add}` binds `add`.
 mod math {
     pub def add(a: i64, b: i64) -> i64 {
         a + b
@@ -12,5 +13,12 @@ bring math.{add}
 def main() -> i64 {
     val sum = add(2, 3);
     println("add = " + to_str(sum));
-    sum
+    assert(sum == 5);
+    // Asymmetric arguments, so a swapped or constant implementation fails.
+    assert(add(10, 1) == 11);
+    assert(add(0, 0) == 0);
+    // `mul` is deliberately not brought; that it cannot be called here is a
+    // compile-time property and so cannot be asserted from inside this file.
+    println("selective module import ok");
+    0
 }

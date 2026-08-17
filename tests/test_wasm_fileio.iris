@@ -37,5 +37,17 @@ def main() -> i64 {
     };
 
     println("=== All File I/O Tests Passed ===");
+
+    // The file was written, checked for existence, read back and split into
+    // lines -- and none of it was asserted.
+    assert(bytes_written > 0);
+    assert(file_exists("wasm_test_output.txt"));
+    assert(len(content) == bytes_written);
+    assert(contains(content, "Hello from IRIS"));
+    // The written text has two newline-terminated lines.
+    assert(len(lines) == 2);
+    assert(contains(list_get(lines, 1), "Line 2"));
+    println("file io ok");
+
     0
 }

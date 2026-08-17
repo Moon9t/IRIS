@@ -8,8 +8,11 @@ def safe_divide(a: i64, b: i64) -> result<i64, str> {
     }
 }
 
+// A failing `check` must fail the run rather than returning a code the caller
+// discards -- see known-issues #53.
 def check(b: bool) -> i64 {
-    if b { 0 } else { 1 }
+    assert(b);
+    0
 }
 
 def main() -> i64 {

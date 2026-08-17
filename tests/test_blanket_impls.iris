@@ -23,8 +23,11 @@ impl[T where T: Show] Describable for T {
     }
 }
 
+// A failing `check` must fail the run rather than returning a code the caller
+// discards -- see known-issues #53.
 def check(b: bool) -> i64 {
-    if b { 0 } else { 1 }
+    assert(b);
+    0
 }
 
 def main() -> i64 {
@@ -32,8 +35,10 @@ def main() -> i64 {
     val p = Point { x: 10, y: 20 };
     val d1 = p.describe();
     println("Point describe: " + d1);
-    val t1: i64 = check(d1 == "Described: Point");
-
-    println("t1=" + to_str(t1));
-    t1
+    assert(d1 == "Described: Point");
+    // The blanket impl must call through to the concrete Show impl, so the
+    // suffix comes from Point rather than being hardcoded.
+    assert(p.show() == "Point");
+    println("blanket impls ok");
+    0
 }

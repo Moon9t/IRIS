@@ -41,25 +41,20 @@ def through_pet(p: dyn Pet) -> str {
 // Box two different concrete types as dyn Pet and dispatch through them.
 // Returns 0 on success, non-zero indicates which branch failed.
 def main() -> i64 {
+    // A concrete value coerced to `dyn Pet` must keep its own vtable, through
+    // a binding and through a function taking `dyn Pet`.
     val c: Cat = Cat { name: "Whiskers", lives: 9 };
     val d: dyn Pet = c;
-    val s = d.speak();
-    if s == "meow" {
-        val n = d.name();
-        if n == "Whiskers" {
-            val g = through_pet(d);
-            if g == "meow Whiskers" {
-                val dog: Dog = Dog { name: "Rex", tricks: 5 };
-                val dp: dyn Pet = dog;
-                val ds = dp.speak();
-                if ds == "woof" { 0 } else { 10 }
-            } else {
-                20
-            }
-        } else {
-            30
-        }
-    } else {
-        40
-    }
+    assert(d.speak() == "meow");
+    assert(d.name() == "Whiskers");
+    assert(through_pet(d) == "meow Whiskers");
+
+    // A second implementing type, so one vtable cannot be serving both.
+    val dog: Dog = Dog { name: "Rex", tricks: 5 };
+    val dp: dyn Pet = dog;
+    assert(dp.speak() == "woof");
+    assert(dp.name() == "Rex");
+    assert(through_pet(dp) == "woof Rex");
+    println("trait objects ok");
+    0
 }

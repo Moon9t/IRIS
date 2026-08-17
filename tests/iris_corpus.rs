@@ -10,7 +10,7 @@
 //! `test_pattern_guards`), plus a file that passes natively while failing
 //! interpreted. These tests drive the real CLI, so codegen is exercised.
 //!
-//! **Most files assert nothing.** 65 of 139 print results without
+//! **Most files assert nothing.** 0 of 139 print results without
 //! checking them, so they pass whenever the program compiles and exits 0,
 //! regardless of whether the output is right (known-issues #4). Converting them
 //! is mechanical but has to be done by *running* each file and reading its real
@@ -66,75 +66,13 @@ const KNOWN_BROKEN: &[(&str, &str)] = &[
      "parse error: fails at parse, not at the refinement it is named for"),
     ("test_struct_update_simple.iris",
      "parse error: uses syntax the compiler does not accept"),
+    ("test_tier2.iris",
+     "comparison operators skip their Ord impl -- #56"),
 ];
 
 /// Files that do not yet assert their results. Shrinking; see #4.
 const NEEDS_ASSERTIONS: &[&str] = &[
-    "concurrency_async.iris",
-    "language_core.iris",
-    "test_arith_overload.iris",
-    "test_assoc_types.iris",
-    "test_async_runtime.iris",
-    "test_blanket_impls.iris",
-    "test_borrow_checker.iris",
-    "test_borrow_error.iris",
-    "test_const_fn.iris",
-    "test_defer.iris",
-    "test_doc_comments.iris",
-    "test_effects_basic.iris",
-    "test_effects_handlers.iris",
-    "test_effects_masks.iris",
-    "test_effects_masks_strict_fail.iris",
-    "test_error_propagation.iris",
-    "test_exhaustiveness.iris",
-    "test_exhaustiveness_full.iris",
-    "test_exhaustiveness_simple.iris",
-    "test_ext_full.iris",
-    "test_extension_methods.iris",
-    "test_extern_ffi.iris",
-    "test_features_11_14.iris",
-    "test_for_by.iris",
-    "test_generic_records.iris",
-    "test_heap_use.iris",
-    "test_if_let.iris",
-    "test_json_auto.iris",
-    "test_list_ops.iris",
-    "test_macros.iris",
-    "test_match_alias.iris",
-    "test_method_chaining.iris",
-    "test_methods.iris",
-    "test_mod_blocks.iris",
-    "test_mod_bring.iris",
-    "test_mod_min.iris",
-    "test_mod_selective.iris",
-    "test_mod_simple.iris",
-    "test_move.iris",
-    "test_move_borrow_error.iris",
-    "test_move_error.iris",
-    "test_nursery.iris",
-    "test_option_result_exhaustiveness.iris",
-    "test_or_patterns.iris",
-    "test_par_map.iris",
-    "test_pattern_guards.iris",
-    "test_quick_wins.iris",
-    "test_range_patterns.iris",
-    "test_recv_timeout.iris",
-    "test_refine_fail.iris",
-    "test_regex_extended.iris",
-    "test_select.iris",
-    "test_slice_patterns.iris",
-    "test_struct_pattern.iris",
-    "test_struct_pattern_when.iris",
-    "test_task_group.iris",
-    "test_tier2.iris",
-    "test_tier4_features.iris",
-    "test_trait_object.iris",
-    "test_trait_object_return.iris",
-    "test_try_catch.iris",
-    "test_wasm_fileio.iris",
-    "test_weak_ref.iris",
-    "test_yield_comprehensive.iris",
-    "test_yield_fail.iris",
+
 ];
 
 fn corpus() -> Vec<String> {
@@ -177,9 +115,21 @@ fn run(name: &str) -> (Option<i32>, String) {
 /// unnoticed.
 #[test]
 fn every_iris_test_asserts_or_is_listed() {
+    // A file that never runs cannot assert anything, so negative tests and
+    // known breakages are exempt -- they are tracked by their own lists, each
+    // with its own accuracy check.
+    let never_runs: Vec<&str> = MUST_FAIL
+        .iter()
+        .map(|(f, _)| *f)
+        .chain(KNOWN_BROKEN.iter().map(|(f, _)| *f))
+        .collect();
     let unlisted: Vec<String> = corpus()
         .into_iter()
-        .filter(|f| !asserts(f) && !NEEDS_ASSERTIONS.contains(&f.as_str()))
+        .filter(|f| {
+            !asserts(f)
+                && !NEEDS_ASSERTIONS.contains(&f.as_str())
+                && !never_runs.contains(&f.as_str())
+        })
         .collect();
     assert!(
         unlisted.is_empty(),

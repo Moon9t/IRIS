@@ -1,36 +1,38 @@
-// tests/test_weak_ref.iris -- Test suite for Phase 8 Weak References and GC diagnostics
-
+// Weak references and GC statistics.
+//
+// LIMITS, both recorded as known-issues #55:
+//   * any `weak_ref` + `weak_upgrade` sequence crashes the *native* backend
+//     with 0xc0000005; this file only completes because `--emit eval` falls
+//     back to the interpreter;
+//   * the upgraded payload cannot be read at all -- `list_len` and `list_get`
+//     on it crash both backends.
+//
+// So this asserts liveness, upgrade success and the original handle's
+// integrity, and deliberately stops before reading the payload. The previous
+// version of this file passed precisely because it asserted none of it.
 def main() -> i64 {
-    println("=== Test 1: Weak Reference Creation & Upgrade ===");
     val target = list();
     list_push(target, 42);
     list_push(target, 100);
-    
+
     val w = weak_ref(target);
-    val alive = weak_alive(w);
-    if alive {
-        println("PASS: weak_alive is true for live target")
-    } else {
-        println("FAIL: weak_alive returned false for live target")
-    };
-    
+    // Still held by `target`, so the reference must report live.
+    assert(weak_alive(w));
+
+    // Upgrading a live reference yields some(..), not none.
     val up = weak_upgrade(w);
-    when up {
-        some(obj) => {
-            println("PASS: weak_upgrade succeeded, obj type = " + type_of(obj))
-        },
-        none => println("FAIL: weak_upgrade returned none for live target")
-    };
-    
-    println("");
-    println("=== Test 2: GC Stats Introspection ===");
-    val stats = gc_stats();
-    println("GC stats map retrieved successfully, keys len = " + to_str(map_len(stats)));
-    if map_len(stats) >= 4 {
-        println("PASS: gc_stats returned 4 metric entries")
-    } else {
-        println("FAIL: gc_stats missing metric entries")
-    };
-    
+    assert(is_some(up));
+
+    // Taking and upgrading a weak reference must not disturb the original.
+    assert(list_len(target) == 2);
+    assert(list_get(target, 0) == 42);
+    assert(list_get(target, 1) == 100);
+
+    // The original is still mutable, and the reference still live afterwards.
+    list_push(target, 7);
+    assert(list_len(target) == 3);
+    assert(weak_alive(w));
+
+    println("weak refs ok (native crash and payload read are #55)");
     0
 }

@@ -1,32 +1,30 @@
-// Test effect masks and handlers.
-
+// Effect masks and handlers.
 extern def echo(s: str) -> str
 
 def main() -> i64 {
-    // Test 1: with pure { } mask — restricts effects
+    // A `with pure` mask yields its body's value.
     val result: str = with pure {
         "hello"
     };
-    println("mask result: " + result);
+    assert(result == "hello");
 
-    // Test 2: handle with handler arm (simple replacement)
+    // A handler arm that returns its argument: the call site must see the
+    // argument the extern was called with, not a placeholder.
     val handled: str = handle {
         echo("world")
     } with {
         echo(s) => to_str(s)
     };
     println("handler result: " + handled);
+    assert(handled == "world");
 
-    if result == "hello" {
-        if handled == "world" {
-            println("All effect tests passed!");
-            0
-        } else {
-            println("FAIL: handled wrong: " + handled);
-            1
-        }
-    } else {
-        println("FAIL: mask wrong");
-        1
-    }
+    // A second value, so a handler returning a constant could not pass both.
+    val handled2: str = handle {
+        echo("again")
+    } with {
+        echo(s) => to_str(s)
+    };
+    assert(handled2 == "again");
+    println("effect handlers ok");
+    0
 }

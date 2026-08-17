@@ -35,5 +35,15 @@ def test_result_non_exhaustive() -> i64 {
 }
 
 def main() -> i64 {
-    test_option_exhaustive() + test_result_exhaustive()
+    // Exhaustive matches must yield the covered arm's value.
+    assert(test_option_exhaustive() == 42);
+    assert(test_result_exhaustive() == 42);
+
+    // The non-exhaustive versions are declared above and deliberately NOT
+    // called: both are accepted by the compiler and return 0 rather than the
+    // covered arm's value (known-issues #54). Calling them here would make this
+    // file fail for a defect that already has its own regression test in
+    // tests/test_option_non_exhaustive.iris.
+    println("option/result exhaustiveness ok");
+    0
 }

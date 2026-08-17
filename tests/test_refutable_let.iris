@@ -1,4 +1,7 @@
-def check(b: bool) -> i64 { if b { 0 } else { 1 } }
+// A failing `check` must fail the run. It used to return 1, and the callers
+// summed the results and dropped them -- and `--emit eval` ignores main's
+// return value anyway (known-issues #53), so every check silently passed.
+def check(b: bool) -> i64 { assert(b); 0 }
 
 def main() -> i64 {
     // Test 1: let some(v) = some(42)

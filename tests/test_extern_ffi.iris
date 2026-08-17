@@ -86,33 +86,15 @@ def test_pow_call() -> i64 {
 }
 
 def main() -> i64 {
-    var passed = 0;
-    var failed = 0;
-
-    val t1 = test_extern_def_syntax();
-    if t1 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t2 = test_extern_no_abi();
-    if t2 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t3 = test_extern_str_params();
-    if t3 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t4 = test_extern_complex_types();
-    if t4 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t5 = test_sqrt_call();
-    if t5 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t6 = test_fabs_call();
-    if t6 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t7 = test_pow_call();
-    if t7 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    print(concat("Passed: ", concat(to_str(passed), concat("/", concat(to_str(passed + failed), " tests")))));
-    if failed > 0 {
-        print(concat("FAILED: ", to_str(failed)));
-    }
-    passed
+    // Each helper returns 1 on success. main tallied them and returned
+    // `passed`, which `--emit eval` discards (known-issues #53).
+    assert(test_extern_def_syntax() == 1);
+    assert(test_extern_no_abi() == 1);
+    assert(test_extern_str_params() == 1);
+    assert(test_extern_complex_types() == 1);
+    assert(test_sqrt_call() == 1);
+    assert(test_fabs_call() == 1);
+    assert(test_pow_call() == 1);
+    println("extern ffi ok: 7/7");
+    0
 }

@@ -37,5 +37,13 @@ def test_or_range() -> i64 {
 }
 
 def main() -> i64 {
-    test_or_enum() + test_or_literal() + test_or_tuple() + test_or_range()
+    // Each function must pick the arm its value belongs to. The file summed
+    // the four results and checked nothing, so any combination totalling the
+    // same number would have passed.
+    assert(test_or_enum() == 1);      // Color.Red, first alternative
+    assert(test_or_literal() == 10);  // 3, third alternative of the first arm
+    assert(test_or_tuple() == 1);     // (1, 2) matches (1, _)
+    assert(test_or_range() == 1);     // 7 falls in 5..=7
+    println("or patterns ok");
+    0
 }

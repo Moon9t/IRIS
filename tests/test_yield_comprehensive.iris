@@ -68,26 +68,26 @@ def main() -> i64 {
 
     // Test gen_while
     val w = gen_while(3);
-    if len(w) != 3 { println("gen_while len FAIL"); failures = failures + 1 };
+    assert(len(w) == 3);
     if len(w) == 3 {
-        if list_get(w, 0) != 0 { println("gen_while[0] FAIL"); failures = failures + 1 };
-        if list_get(w, 2) != 2 { println("gen_while[2] FAIL"); failures = failures + 1 };
+        assert(list_get(w, 0) == 0);
+        assert(list_get(w, 2) == 2);
     };
 
     // Test gen_for
     val f = gen_for();
-    if len(f) != 5 { println("gen_for len FAIL"); failures = failures + 1 };
+    assert(len(f) == 5);
     if len(f) == 5 {
-        if list_get(f, 0) != 0 { println("gen_for[0] FAIL"); failures = failures + 1 };
-        if list_get(f, 4) != 40 { println("gen_for[4] FAIL"); failures = failures + 1 };
+        assert(list_get(f, 0) == 0);
+        assert(list_get(f, 4) == 40);
     };
 
     // Test gen_strings
     val s = gen_strings();
-    if len(s) != 3 { println("gen_strings len FAIL"); failures = failures + 1 };
+    assert(len(s) == 3);
     if len(s) == 3 {
-        if list_get(s, 0) != "item_0" { println("gen_strings[0] FAIL"); failures = failures + 1 };
-        if list_get(s, 2) != "item_2" { println("gen_strings[2] FAIL"); failures = failures + 1 };
+        assert(list_get(s, 0) == "item_0");
+        assert(list_get(s, 2) == "item_2");
     };
 
     // Test gen_conditional (positive flag)
@@ -108,20 +108,20 @@ def main() -> i64 {
 
     // Test gen_nested
     val n = gen_nested();
-    if len(n) != 6 { println("gen_nested len FAIL"); failures = failures + 1 };
+    assert(len(n) == 6);
     if len(n) == 6 {
-        if list_get(n, 0) != 0 { println("gen_nested[0] FAIL"); failures = failures + 1 };
-        if list_get(n, 1) != 1 { println("gen_nested[1] FAIL"); failures = failures + 1 };
-        if list_get(n, 2) != 2 { println("gen_nested[2] FAIL"); failures = failures + 1 };
-        if list_get(n, 5) != 5 { println("gen_nested[5] FAIL"); failures = failures + 1 };
+        assert(list_get(n, 0) == 0);
+        assert(list_get(n, 1) == 1);
+        assert(list_get(n, 2) == 2);
+        assert(list_get(n, 5) == 5);
     };
 
     // Test gen_if_only
     val io = gen_if_only(5);
-    if len(io) != 5 { println("gen_if_only len FAIL"); failures = failures + 1 };
+    assert(len(io) == 5);
     if len(io) == 5 {
-        if list_get(io, 0) != 0 { println("gen_if_only[0] FAIL"); failures = failures + 1 };
-        if list_get(io, 4) != 4 { println("gen_if_only[4] FAIL"); failures = failures + 1 };
+        assert(list_get(io, 0) == 0);
+        assert(list_get(io, 4) == 4);
     };
 
     if failures == 0 { println("ALL YIELD TESTS PASSED") };

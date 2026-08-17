@@ -72,6 +72,10 @@ def main() -> i64 {
     val ref2: &i64 = ref1;
     println(f"chain = {ref1 + ref2}");
 
-    println("All borrow checker tests passed!");
+    // Every value above was printed through an f-string and never checked.
+    assert(sum == 30);              // 10 + 20 through two immutable refs
+    assert(rb1 + rb2 - rb3 == 42);  // three simultaneous immutable borrows of 42
+    assert(ref1 + ref2 == 198);     // a reference chained into a second binding
+    println("borrow checker ok");
     return 0
 }

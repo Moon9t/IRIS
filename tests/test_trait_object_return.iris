@@ -36,13 +36,14 @@ def return_dog() -> dyn Pet {
 }
 
 def main() -> i64 {
+    // A function returning `dyn Pet` must carry the concrete type's vtable, so
+    // each factory's own name comes back.
     val c: dyn Pet = return_cat();
-    val cn = c.name();
-    if cn == "Whiskers" {
-        val d: dyn Pet = return_dog();
-        val dn = d.name();
-        if dn == "Rex" { 0 } else { 10 }
-    } else {
-        20
-    }
+    assert(c.name() == "Whiskers");
+    val d: dyn Pet = return_dog();
+    assert(d.name() == "Rex");
+    // Both must be reachable: a vtable stuck on one impl would fail the other.
+    assert(c.name() != d.name());
+    println("trait object return ok");
+    0
 }

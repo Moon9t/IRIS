@@ -1,8 +1,8 @@
 import io, os
 
 tests = sorted(f for f in os.listdir("tests") if f.endswith(".iris"))
-missing = [f for f in tests
-           if "assert(" not in io.open("tests/" + f, encoding="utf-8", errors="replace").read()]
+_missing_all = [f for f in tests
+                if "assert(" not in io.open("tests/" + f, encoding="utf-8", errors="replace").read()]
 
 MUST_FAIL = {
     "test_borrow_error.iris": "the borrow checker must reject it",
@@ -26,8 +26,15 @@ KNOWN_BROKEN = {
     "test_par_map.iris": "parse error: uses syntax the compiler does not accept",
     "test_pattern_guards.iris": "native crash -- #51",
     "test_refine_fail.iris": "parse error: fails at parse, not at the refinement it is named for",
+    "test_tier2.iris": "comparison operators skip their Ord impl -- #56",
     "test_struct_update_simple.iris": "parse error: uses syntax the compiler does not accept",
 }
+
+# A file that never runs cannot assert anything, so negative tests and known
+# breakages are not part of the assertion backlog. They are tracked by their own
+# lists, which have their own accuracy checks.
+missing = [f for f in _missing_all if f not in MUST_FAIL and f not in KNOWN_BROKEN]
+
 
 def pairs(d):
     return "\n".join('    ("%s",\n     "%s"),' % (k, v) for k, v in sorted(d.items()))
@@ -114,9 +121,21 @@ fn run(name: &str) -> (Option<i32>, String) {
 /// unnoticed.
 #[test]
 fn every_iris_test_asserts_or_is_listed() {
+    // A file that never runs cannot assert anything, so negative tests and
+    // known breakages are exempt -- they are tracked by their own lists, each
+    // with its own accuracy check.
+    let never_runs: Vec<&str> = MUST_FAIL
+        .iter()
+        .map(|(f, _)| *f)
+        .chain(KNOWN_BROKEN.iter().map(|(f, _)| *f))
+        .collect();
     let unlisted: Vec<String> = corpus()
         .into_iter()
-        .filter(|f| !asserts(f) && !NEEDS_ASSERTIONS.contains(&f.as_str()))
+        .filter(|f| {
+            !asserts(f)
+                && !NEEDS_ASSERTIONS.contains(&f.as_str())
+                && !never_runs.contains(&f.as_str())
+        })
         .collect();
     assert!(
         unlisted.is_empty(),

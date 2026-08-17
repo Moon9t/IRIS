@@ -33,11 +33,26 @@ pub def heap_peek[T](h: MinHeap<T>) -> T {
 }
 
 def main() -> i64 {
-    var h = heap_new(0)
-    var h2 = heap_push(h, 5)
-    var h3 = heap_push(h2, 3)
-    var h4 = heap_push(h3, 7)
-    val len = heap_len(h4)
-    val peek = heap_peek(h4)
-    len + peek
+    // `heap_new(v)` seeds the heap with v, so this heap holds 5, 3, 7, 9.
+    var h = heap_new(5)
+    var h2 = heap_push(h, 3)
+    var h3 = heap_push(h2, 7)
+    var h4 = heap_push(h3, 9)
+
+    assert(heap_len(h4) == 4);
+    // The smallest element must surface regardless of insertion order -- it was
+    // neither the first nor the last pushed.
+    assert(heap_peek(h4) == 3);
+
+    // A single-element heap peeks its only element.
+    val one = heap_new(42)
+    assert(heap_len(one) == 1);
+    assert(heap_peek(one) == 42);
+
+    // Pushing a new minimum must change the peek.
+    val lower = heap_push(h4, 1)
+    assert(heap_len(lower) == 5);
+    assert(heap_peek(lower) == 1);
+    println("heap ok");
+    0
 }

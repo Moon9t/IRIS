@@ -2686,3 +2686,89 @@ when r { ok(x) => x, }        // yields 0, not 42
 So both option and result matches silently discard the covered arm's value when
 any arm is missing. Any program that pattern-matches without covering every case
 gets 0 rather than a compile error or the right answer.
+
+---
+
+## 55. The value returned by `weak_upgrade` cannot be used — **open**
+
+`weak_ref` and `weak_alive` work. `weak_upgrade` returns a `some(...)`. But the
+payload inside it cannot be touched:
+
+```iris
+val t = list(); list_push(t, 42);
+val w = weak_ref(t);
+val o = unwrap(weak_upgrade(w));
+
+list_len(o)        // segfault, both backends
+list_get(o, 0)     // segfault, both backends
+type_of(o)         // error
+list_len(t)        // fine -- the original handle is unaffected
+```
+
+So a weak reference can be created, checked for liveness and upgraded, and then
+the result is unusable — which is the only reason to upgrade one.
+
+`tests/test_weak_ref.iris` reported success throughout, because the only thing
+it did with the upgraded object was pass it to `type_of` inside a `when` arm and
+print the result. It never indexed it, never took its length, and asserted
+nothing. Adding `assert(list_len(obj) == 2)` while converting it for #4 is what
+surfaced this.
+
+**Any program using `weak_ref` crashes the native backend.** Even without
+touching the payload, a `weak_ref` + `weak_upgrade` sequence dies with
+`0xc0000005` (access violation) and only completes because `--emit eval` falls
+back to the interpreter. So weak references have never worked natively at all;
+the fallback has been hiding it, and `tests/test_weak_ref.iris` reported success
+throughout because it asserted nothing.
+
+Reading the payload (`list_len`, `list_get`) crashes the interpreter too, so
+there are two layers: a native crash for any use, and a representation problem
+for the upgraded value on both backends.
+
+The test now covers the surface that survives and states this limit, so the file
+is honest rather than silently passing.
+
+**Do not describe weak references as usable** until the payload can be read.
+
+---
+
+## 56. Comparison operators do not dispatch to their `Ord` impl — **open**
+
+`impl Ord for V` defines `lt`/`le`/`gt`/`ge`. Calling the methods directly gives
+the right answers; using the operators does not.
+
+```iris
+record V { x: i64 }
+impl Ord for V {
+    def lt(self, other: V) -> bool { self.x < other.x }
+    def le(self, other: V) -> bool { self.x <= other.x }
+    def gt(self, other: V) -> bool { self.x > other.x }
+    def ge(self, other: V) -> bool { self.x >= other.x }
+}
+val a = V { x: 1 };  val b = V { x: 1 };  val c = V { x: 2 };
+```
+
+| expression | result | correct |
+|---|---|---|
+| `a < c` | **false** | true |
+| `a <= b` | **false** | true |
+| `a <= c` | **false** | true |
+| `c >= a` | **false** | true |
+| `a >= b` | true | true |
+| `a.le(b)` | true | true |
+
+The direct call is right, so the impl and the method dispatch are fine; the
+operator forms are not reaching them. The answers are not uniformly `false`
+either — `a >= b` is correct and `a < d` happens to be correct in
+`tests/test_tier2.iris` — which suggests the operands are being compared some
+other way rather than the impl simply being ignored.
+
+`==` and `!=` **do** dispatch correctly to `impl Eq` in the same file, so this is
+specific to the ordering operators.
+
+This was invisible because `tests/test_tier2.iris` guarded each comparison with
+`if !(a <= c) { println("FAIL: le"); return 1 }` and returned a code that
+`--emit eval` discards (#53). The file printed "FAIL: le" on every run and
+still exited 0. It is listed in `KNOWN_BROKEN` now that its checks are real.
+
+Related: #26 records that tuples cannot be compared with `==` on either backend.

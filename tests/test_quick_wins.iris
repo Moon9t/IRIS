@@ -50,5 +50,22 @@ def main() -> i64 {
     println("count xyz: " + to_str(c3));
 
     println("All quick wins tests passed!");
+
+    // Values above were printed and never checked.
+    assert(removed == 1);              // one occurrence of 20 removed
+    assert(list_len(lst1) == 3);
+    assert(list_get(filled, 0) == 42);
+    assert(list_get(filled, 4) == 42);
+    assert(list_len(filled) == 5);
+    assert(v1 == 10);                  // present key
+    assert(v2 == 99);                  // missing key falls back to the default
+    assert(va == 1);
+    assert(vb == 99);                  // b's value wins on conflict
+    assert(vc == 3);
+    assert(c1 == 2);                   // "hello" twice
+    assert(c2 == 2);                   // "aa" in "aaaa", non-overlapping
+    assert(c3 == 0);                   // absent
+    println("quick wins ok");
+
     0
 }

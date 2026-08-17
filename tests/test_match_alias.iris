@@ -1,33 +1,6 @@
-def main() -> i64 {
-    // match alias test
-    val x = 42
-    val msg = match x {
-        42 => "the answer"
-        0 => "zero"
-        _ => "other"
-    }
-    println(msg);
-
-    // List instead of range expression (ranges only work in when patterns)
-    val r: list<i64> = list(1, 2, 3, 4)
-    println(to_str(list_len(r)));
-
-    // Ternary
-    val v = if true { "yes" } else { "no" }
-    println(v);
-
-    // Hex/binary replaced with decimal (hex/binary literals not supported)
-    println(to_str(255));
-    println(to_str(10));
-
-    // Default args
-    val s = repeat("x", 5);
-    println(s);
-
-    0
-}
-
-def repeat(s: str, n: i64 = 1) -> str {
+// `match` as an alias for `when`, plus list construction, an if-expression and
+// a default argument.
+def repeat_str(s: str, n: i64 = 1) -> str {
     var result = ""
     var i = 0
     while i < n {
@@ -35,4 +8,34 @@ def repeat(s: str, n: i64 = 1) -> str {
         i += 1
     }
     result
+}
+
+def classify(x: i64) -> str {
+    match x {
+        42 => "the answer"
+        0 => "zero"
+        _ => "other"
+    }
+}
+
+def main() -> i64 {
+    assert(classify(42) == "the answer");
+    // The other arms must be reachable, or `match` is returning the first arm.
+    assert(classify(0) == "zero");
+    assert(classify(7) == "other");
+
+    val r: list<i64> = list(1, 2, 3, 4)
+    assert(list_len(r) == 4);
+    assert(list_get(r, 0) == 1);
+    assert(list_get(r, 3) == 4);
+
+    val v = if true { "yes" } else { "no" }
+    assert(v == "yes");
+    assert((if false { "yes" } else { "no" }) == "no");
+
+    assert(repeat_str("x", 5) == "xxxxx");
+    // The default argument applies when the second argument is omitted.
+    assert(repeat_str("y") == "y");
+    println("match alias ok");
+    0
 }

@@ -78,16 +78,12 @@ def test_nested() -> i64 {
 }
 
 def main() -> i64 {
-    var fails = 0;
-    fails = fails + test_square();
-    fails = fails + test_add();
-    fails = fails + test_abs_diff();
-    fails = fails + test_clamp();
-    fails = fails + test_nested();
-    if fails == 0 {
-        println("All const fn tests passed")
-    } else {
-        println(to_str(fails) + " test(s) failed")
-    };
-    fails
+    // Each helper returns 0 on success.
+    assert(test_square() == 0);
+    assert(test_add() == 0);
+    assert(test_abs_diff() == 0);
+    assert(test_clamp() == 0);
+    assert(test_nested() == 0);
+    println("const fn ok: 5/5");
+    0
 }

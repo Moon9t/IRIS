@@ -1,4 +1,5 @@
-// Minimal yield failure test
+// `yield` inside a conditional: both branches must contribute to the produced
+// list, and the values must be the ones the taken branch yielded.
 def gen_conditional(flag: i64) -> list<i64> {
     var i = 0;
     while i < 5 {
@@ -14,5 +15,18 @@ def gen_conditional(flag: i64) -> list<i64> {
 def main() -> i64 {
     val r = gen_conditional(1);
     println(to_str(len(r)));
+    assert(len(r) == 5);
+    // flag > 0 yields i: 0,1,2,3,4
+    assert(list_get(r, 0) == 0);
+    assert(list_get(r, 1) == 1);
+    assert(list_get(r, 4) == 4);
+
+    // The other branch must yield doubled values, so a generator that ignored
+    // the condition would fail here.
+    val d = gen_conditional(0);
+    assert(len(d) == 5);
+    assert(list_get(d, 1) == 2);
+    assert(list_get(d, 4) == 8);
+    println("yield conditional ok");
     0
 }

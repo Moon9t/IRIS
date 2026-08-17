@@ -239,37 +239,18 @@ def test_option_map_lookup() -> i64 {
 }
 
 def main() -> i64 {
-    print("=== Error Propagation Operator '?' Tests ===");
-    var passed = 0;
-    var failed = 0;
-
-    val t1 = test_try_ok();
-    if t1 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t2 = test_try_err();
-    if t2 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t3 = test_nested_chain();
-    if t3 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t4 = test_try_in_if();
-    if t4 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t5 = test_try_str();
-    if t5 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t6 = test_option_some_path();
-    if t6 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t7 = test_option_none_path();
-    if t7 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t8 = test_option_map_lookup();
-    if t8 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    print(concat("Passed: ", concat(to_str(passed), concat("/", concat(to_str(passed + failed), " tests")))));
-    if failed > 0 {
-        print(concat("FAILED: ", to_str(failed)));
-    }
-    passed
+    // Each helper returns 1 on success. The file counted passes and failures,
+    // printed a tally, and returned `passed` -- which `--emit eval` discards
+    // (known-issues #53), so a run in which every helper failed still exited 0
+    // and reported success.
+    assert(test_try_ok() == 1);
+    assert(test_try_err() == 1);
+    assert(test_nested_chain() == 1);
+    assert(test_try_in_if() == 1);
+    assert(test_try_str() == 1);
+    assert(test_option_some_path() == 1);
+    assert(test_option_none_path() == 1);
+    assert(test_option_map_lookup() == 1);
+    println("error propagation ok: 8/8");
+    0
 }

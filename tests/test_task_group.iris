@@ -99,16 +99,14 @@ def test_detached_spawn() -> i64 {
 }
 
 def main() -> i64 {
-    var failed = 0;
-    failed = failed + test_basic_spawn_join();
-    failed = failed + test_multiple_tasks();
-    failed = failed + test_cancel_group();
-    failed = failed + test_nested_groups();
-    failed = failed + test_detached_spawn();
-    if failed == 0 {
-        println("All task_group tests PASSED")
-    } else {
-        println("Some task_group tests FAILED: " + to_str(failed) + " failures")
-    };
-    failed
+    // Each helper returns 0 on success. They were summed into `failed` and
+    // returned, which `--emit eval` discards (known-issues #53), so every
+    // failure was invisible.
+    assert(test_basic_spawn_join() == 0);
+    assert(test_multiple_tasks() == 0);
+    assert(test_cancel_group() == 0);
+    assert(test_nested_groups() == 0);
+    assert(test_detached_spawn() == 0);
+    println("task group ok: 5/5");
+    0
 }

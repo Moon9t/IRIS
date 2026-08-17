@@ -1,9 +1,13 @@
-// Test: effect masks restrict effects.
-// In strict mode, this should error because the pure mask contains io.
-
+// A `with pure { ... }` mask containing an `io` call.
+//
+// Under `--strict-effects` this must be rejected: the mask claims purity while
+// the body performs I/O. The corpus gate runs files without that flag, so what
+// is asserted here is the *permissive* behaviour -- the program compiles and
+// the masked call still runs. The strict-mode rejection is a compile-time
+// property under a flag this file cannot set for itself.
 def strict_emit(s: str) -> i64 effect io {
     println(s);
-    0
+    7
 }
 
 def masked_pure_strict() -> i64 effect io {
@@ -13,5 +17,9 @@ def masked_pure_strict() -> i64 effect io {
 }
 
 def main() -> i64 {
+    // Without --strict-effects the mask is permissive and yields the body's
+    // value, rather than silently producing 0.
+    assert(masked_pure_strict() == 7);
+    println("effect mask (permissive) ok");
     0
 }

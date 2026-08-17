@@ -67,49 +67,18 @@ def test_unsafe_nested() -> i64 {
 }
 
 def main() -> i64 {
-    var total = 0
-
-    // Test binding pattern with enum
-    val r1 = test_binding_pattern_enum()
-    if r1 == 1 {
-        total = total + 1
-    }
-
-    // Test binding pattern with literal range
-    val r2 = test_binding_pattern_literal()
-    if r2 == 1 {
-        total = total + 1
-    }
-
-    // Test binding pattern with option
-    val r3 = test_binding_pattern_option()
-    if r3 == 1 {
-        total = total + 1
-    }
-
-    // Test unsafe block
-    val r4 = test_unsafe_block()
-    if r4 == 30 {
-        total = total + 1
-    }
-
-    // Test nested unsafe
-    val r5 = test_unsafe_nested()
-    if r5 == 10 {
-        total = total + 1
-    }
-
-    // Test glob import (bring std.math.*)
-    val r6 = test_glob_import()
-    if r6 == 5 {
-        total = total + 1
-    }
-
-    // Expected: 6 (all tests pass)
-    print(to_str(total));
-    if total == 6 {
-        0
-    } else {
-        1
-    }
+    // Each helper has its own expected value; the original main tallied how
+    // many matched into `total` and returned it, which `--emit eval` discards
+    // (known-issues #53), so a run where all six were wrong still exited 0.
+    assert(test_binding_pattern_enum() == 1);
+    assert(test_binding_pattern_literal() == 1);
+    assert(test_binding_pattern_option() == 1);
+    // `unsafe { 10 + 20 }` yields its block value.
+    assert(test_unsafe_block() == 30);
+    // Nested unsafe: 5 + 5.
+    assert(test_unsafe_nested() == 10);
+    // Glob-imported `abs(-5)`.
+    assert(test_glob_import() == 5);
+    println("tier4 features ok: 6/6");
+    0
 }

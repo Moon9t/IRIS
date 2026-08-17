@@ -1,4 +1,5 @@
-// Extension methods: module-level functions callable as methods
+// Extension methods: a module-level function whose first parameter is `T` is
+// callable as a method on `T`, including with extra arguments.
 def negate(x: i64) -> i64 {
     0 - x
 }
@@ -7,28 +8,26 @@ def wrap_str(s: str) -> str {
     "[" + s + "]"
 }
 
-def main() -> i64 {
-    // Test: negate as extension on i64
-    val n = 10.negate();
-    println("10.negate() = " + to_str(n));
-
-    // Test: wrap_str as extension on str
-    val w = "hello".wrap_str();
-    println("wrap_str: " + w);
-
-    // Test: multi-arg extension method
-    val val2 = "world".add_prefix("hello ");
-    println("add_prefix: " + val2);
-
-    if n == -10 && w == "[hello]" {
-        println("All extension method tests passed!");
-        0
-    } else {
-        println("FAILED");
-        1
-    }
-}
-
 def add_prefix(s: str, prefix: str) -> str {
     prefix + s
+}
+
+def main() -> i64 {
+    val n = 10.negate();
+    println("10.negate() = " + to_str(n));
+    assert(n == -10);
+    assert(0.negate() == 0);
+
+    val w = "hello".wrap_str();
+    assert(w == "[hello]");
+
+    // A multi-argument extension method. The original computed this and never
+    // checked it -- only `n` and `w` were in the final condition.
+    val val2 = "world".add_prefix("hello ");
+    println("add_prefix: " + val2);
+    assert(val2 == "hello world");
+    // The receiver must be the first parameter, not the argument.
+    assert("b".add_prefix("a") == "ab");
+    println("extension methods ok");
+    0
 }

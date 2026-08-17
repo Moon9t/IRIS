@@ -38,9 +38,12 @@ def test_wildcard() -> i64 {
 }
 
 def main() -> i64 {
-    test_simple();
-    test_second_arm();
-    test_field_lit();
-    test_wildcard();
+    // Each helper must select a *different* arm. The file called all four and
+    // discarded every result.
+    assert(test_simple() == 1);       // Point { x: 1.0, y } -- literal field, bound field
+    assert(test_second_arm() == 2);   // falls through to the catch-all binding arm
+    assert(test_field_lit() == 2);
+    assert(test_wildcard() == 0);     // reaches `_`
+    println("struct patterns in when ok");
     0
 }

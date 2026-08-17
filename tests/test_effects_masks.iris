@@ -1,24 +1,20 @@
-// Test: effect masks (`with e1, e2 { ... }`).
-// The mask restricts the body's effects — calls with effects outside the
-// mask MUST error at compile time.
-
+// Effect masks: `with pure { ... }` and `with io, alloc { ... }` must yield the
+// body's value rather than a placeholder.
 def emit(s: str) -> i64 effect io {
     println(s);
-    0
+    3
 }
 
 def pure_compute() -> i64 {
     42
 }
 
-// Pure mask: body can only use pure effects
 def masked_pure() -> i64 {
     with pure {
         pure_compute()
     }
 }
 
-// Multi-effect mask: io + alloc allowed
 def masked_io_alloc() -> i64 {
     with io, alloc {
         emit("masked")
@@ -26,5 +22,10 @@ def masked_io_alloc() -> i64 {
 }
 
 def main() -> i64 {
-    masked_pure() + masked_io_alloc()
+    assert(masked_pure() == 42);
+    // The io body returns 3, not 0 -- a mask that discarded its body's value
+    // would look correct if the body happened to return 0.
+    assert(masked_io_alloc() == 3);
+    println("effect masks ok");
+    0
 }

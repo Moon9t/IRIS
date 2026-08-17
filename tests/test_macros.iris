@@ -1,37 +1,42 @@
+// Macro expansion: arguments, nesting, no-arg macros, and macros in condition
+// position.
+//
+// This file had no `main`. `--emit eval` runs the first zero-argument function
+// it finds, so only `test_macros_basic` ever ran and the other four were dead
+// code that reported success. `main` is declared first so it is the entry
+// point.
 defmacro double(x) => x * 2
 defmacro add3(a, b, c) => a + b + c
 defmacro when_checked(cond, msg) => { if cond { println(msg) } else { println("FAIL: " + msg) } }
 defmacro wrap_expr(e, msg) => { println(msg); e }
 defmacro answer() => 42
 
-def test_macros_basic() -> i64 {
+def main() -> i64 {
+    // Single argument, and multiple arguments.
     val x: i64 = double!(21);
+    assert(x == 42);
     val y: i64 = add3!(10, 20, 30);
+    assert(y == 60);
+
+    // Nested expansion: the inner macro's result must be the outer's argument.
     val z: i64 = double!(add3!(1, 2, 3));
+    assert(z == 12);
+    val nested: i64 = double!(add3!(5, 5, 5));
+    assert(nested == 30);
 
-    if x != 42 { println("FAIL: x = " + to_str(x)); return 1 }
-    if y != 60 { println("FAIL: y = " + to_str(y)); return 1 }
-    if z != 12 { println("FAIL: z = " + to_str(z)); return 1 }
-    0
-}
+    // A macro used directly in condition position.
+    assert(double!(3) == 6);
 
-def test_macros_checked() -> i64 {
+    // A macro taking no arguments.
+    val a: i64 = answer!();
+    assert(a == 42);
+
+    // Argument substitution must not be positional-by-accident: add3 is
+    // asymmetric, so a macro pasting arguments in the wrong order would fail.
+    assert(add3!(1, 20, 300) == 321);
+
+    // A statement-bodied macro still expands and runs.
     when_checked!(1 + 1 == 2, "math works");
-    0
-}
-
-def test_macros_nested() -> i64 {
-    val result: i64 = double!(add3!(5, 5, 5));
-    if result != 30 { println("FAIL: nested macro = " + to_str(result)); return 1 }
-    0
-}
-
-def test_macros_in_condition() -> i64 {
-    if double!(3) == 6 { 0 } else { println("FAIL: macro in condition"); 1 }
-}
-
-def test_macros_no_args() -> i64 {
-    val x: i64 = answer!();
-    if x != 42 { println("FAIL: no-arg macro = " + to_str(x)); return 1 }
+    println("macros ok");
     0
 }

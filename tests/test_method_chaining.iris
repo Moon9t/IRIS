@@ -90,5 +90,38 @@ def main() -> i64 {
     val errval = res_err.unwrap_err();
     println(f"unwrap_err: '{errval}'");
 
+
+    // Every value above was printed and none was checked. Recomputed here so
+    // the assertions do not depend on the intermediate variable names.
+    assert("  Hello, World!  ".trim() == "Hello, World!");
+    assert("hello".to_upper() == "HELLO");
+    assert("HELLO".to_lower() == "hello");
+    assert("hello".len() == 5);
+    assert("".len() == 0);
+
+    // option methods
+    val o: option<i64> = some(42);
+    val n: option<i64> = none();
+    assert(o.unwrap() == 42);
+    assert(n.unwrap_or(0) == 0);
+    assert(o.unwrap_or(0) == 42);
+    assert(o.is_some());
+    assert(n.is_some() == false);
+    assert(n.is_none());
+    assert(o.is_none() == false);
+
+    // result methods
+    val rok: result<i64, str> = ok(99);
+    val rerr: result<i64, str> = err("boom");
+    assert(rok.unwrap() == 99);
+    assert(rerr.unwrap_or(-1) == -1);
+    assert(rok.unwrap_or(-1) == 99);
+    assert(rok.is_ok());
+    assert(rerr.is_ok() == false);
+    assert(rerr.is_err());
+    assert(rok.is_err() == false);
+    assert(rerr.unwrap_err() == "boom");
+    println("method chaining ok");
+
     0
 }

@@ -1,33 +1,38 @@
-// Test for loop step/by clause
+// `for i in a..b by n` must step by n, and respect inclusive ranges.
 def main() -> i64 {
-    // by 2: 0, 2, 4, 6, 8
-    val result1: str = "";
+    var result1: str = "";
     for i in 0..10 by 2 {
         result1 = result1 + to_str(i) + " ";
     }
     println("0..10 by 2: " + result1);
+    assert(result1 == "0 2 4 6 8 ");
 
-    // by 3: 0, 3, 6, 9
-    val result2: str = "";
+    var result2: str = "";
     for i in 0..10 by 3 {
         result2 = result2 + to_str(i) + " ";
     }
-    println("0..10 by 3: " + result2);
+    assert(result2 == "0 3 6 9 ");
 
-    // inclusive with by 5: 0, 5, 10
-    val result3: str = "";
+    // Inclusive: 10 is reached exactly by the step, so it must appear.
+    var result3: str = "";
     for i in 0..=10 by 5 {
         result3 = result3 + to_str(i) + " ";
     }
-    println("0..=10 by 5: " + result3);
+    assert(result3 == "0 5 10 ");
 
-    // by 1 (same as default)
-    val result4: str = "";
+    // `by 1` must behave exactly like the default step.
+    var result4: str = "";
     for i in 0..3 by 1 {
         result4 = result4 + to_str(i) + " ";
     }
-    println("0..3 by 1: " + result4);
+    assert(result4 == "0 1 2 ");
 
-    println("ALL PASS");
+    // A step larger than the range yields the first value only.
+    var result5: str = "";
+    for i in 0..3 by 10 {
+        result5 = result5 + to_str(i) + " ";
+    }
+    assert(result5 == "0 ");
+    println("for by ok");
     0
 }

@@ -52,8 +52,17 @@ def test_enum_wildcard() -> i64 {
 }
 
 def main() -> i64 {
-    test_option_exhaustive() + 
-    test_result_exhaustive() + 
-    test_enum_exhaustive() + 
-    test_enum_wildcard()
+    // Exhaustive matches must yield the covered arm's value. The file summed
+    // all four and checked nothing.
+    assert(test_option_exhaustive() == 42);
+    assert(test_result_exhaustive() == 42);
+    assert(test_enum_exhaustive() == 1);
+    assert(test_enum_wildcard() == 1);
+
+    // `test_option_non_exhaustive` and `test_result_non_exhaustive` are
+    // declared above and deliberately not called: both are wrongly accepted and
+    // return 0 instead of the covered arm's value (known-issues #54), which has
+    // its own regression test in tests/test_option_non_exhaustive.iris.
+    println("exhaustiveness ok");
+    0
 }

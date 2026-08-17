@@ -1,3 +1,5 @@
+// `bring math` on an inline module exposes its `pub` items under the mangled
+// `math__name`.
 mod math {
     pub def add(a: i64, b: i64) -> i64 {
         a + b
@@ -11,21 +13,13 @@ bring math
 
 def main() -> i64 {
     val sum = math__add(2, 3);
-    println("math.add = " + to_str(sum));
-
     val prod = math__mul(4, 5);
-    println("math.mul = " + to_str(prod));
-
-    if sum == 5 {
-        if prod == 20 {
-            println("All module bring tests passed!");
-            0
-        } else {
-            println("mul wrong");
-            1
-        }
-    } else {
-        println("add wrong");
-        1
-    }
+    println("math.add = " + to_str(sum) + " math.mul = " + to_str(prod));
+    assert(sum == 5);
+    assert(prod == 20);
+    // Asymmetric arguments, so add and mul cannot be confused for each other.
+    assert(math__add(10, 1) == 11);
+    assert(math__mul(10, 1) == 10);
+    println("module bring ok");
+    0
 }

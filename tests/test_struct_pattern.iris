@@ -32,9 +32,13 @@ def main() -> i64 {
     val r3 = match_point(p3)
     val r4 = match_point(p4)
 
-    print("r1 = " + to_str(r1));
-    print("r2 = " + to_str(r2));
-    print("r3 = " + to_str(r3));
-    print("r4 = " + to_str(r4));
-    r1 + r2 + r3 + r4
+    // Each point must select a *different* arm: exact match, x-bound,
+    // y-bound, wildcard. The file previously returned r1+r2+r3+r4 = 6 and
+    // checked nothing, so any arm ordering summing to 6 would have passed.
+    assert(r1 == 1);
+    assert(r2 == 2);
+    assert(r3 == 3);
+    assert(r4 == 0);
+    println("struct patterns ok");
+    0
 }

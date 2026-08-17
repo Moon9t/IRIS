@@ -96,35 +96,16 @@ def test_json_enum() -> i64 {
 }
 
 def main() -> i64 {
-    print("=== Automatic JSON Serialization Tests ===");
-    var passed = 0;
-    var failed = 0;
-
-    val t1 = test_json_primitives();
-    if t1 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t2 = test_json_list();
-    if t2 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t3 = test_json_tuple();
-    if t3 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t4 = test_json_option();
-    if t4 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t5 = test_json_result();
-    if t5 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t6 = test_json_struct();
-    if t6 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t7 = test_json_nested();
-    if t7 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    val t8 = test_json_enum();
-    if t8 == 1 { passed = passed + 1; } else { failed = failed + 1; }
-
-    print(concat("Passed: ", concat(to_str(passed), concat("/", concat(to_str(passed + failed), " tests")))));
-    if failed > 0 { print(concat("FAILED: ", to_str(failed))); }
-    passed
+    // Each helper returns 1 on success. main tallied them and returned
+    // `passed`, which `--emit eval` discards (known-issues #53).
+    assert(test_json_primitives() == 1);
+    assert(test_json_list() == 1);
+    assert(test_json_tuple() == 1);
+    assert(test_json_option() == 1);
+    assert(test_json_result() == 1);
+    assert(test_json_struct() == 1);
+    assert(test_json_nested() == 1);
+    assert(test_json_enum() == 1);
+    println("json auto ok: 8/8");
+    0
 }

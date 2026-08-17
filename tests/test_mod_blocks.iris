@@ -23,18 +23,12 @@ def main() -> i64 {
     val g = greeting__hello();
     println("greeting.hello = " + g);
 
-    if sum == 5 {
-        if prod == 20 {
-            if g == "hello" {
-                println("All module tests passed!");
-                0
-            } else {
-                1
-            }
-        } else {
-            1
-        }
-    } else {
-        1
-    }
+    assert(sum == 5);
+    assert(prod == 20);
+    assert(g == "hello");
+    // Asymmetric arguments, so add and mul cannot be confused.
+    assert(math__add(10, 1) == 11);
+    assert(math__mul(10, 1) == 10);
+    println("module blocks ok");
+    0
 }
