@@ -1,5 +1,10 @@
+// A bounded generic `[T where T: Show]` must dispatch to the impl for T.
 record MyStruct {
     data: i64
+}
+
+record Other {
+    label: str
 }
 
 trait Show {
@@ -12,12 +17,26 @@ impl Show for MyStruct {
     }
 }
 
+impl Show for Other {
+    def show(self) -> str {
+        self.label
+    }
+}
+
 def print_one[T where T: Show](a: T) -> str {
     a.show()
 }
 
 def main() -> i64 {
     val x = MyStruct { data: 42 };
-    val s = print_one(x);
-    if s == "42" { 0 } else { 1 }
+    assert(print_one(x) == "42");
+
+    // A second implementing type, so one impl cannot be serving both.
+    val y = Other { label: "other" };
+    assert(print_one(y) == "other");
+
+    // A different value of the same type, so the result is not a constant.
+    assert(print_one(MyStruct { data: 7 }) == "7");
+    println("trait bounds ok");
+    0
 }

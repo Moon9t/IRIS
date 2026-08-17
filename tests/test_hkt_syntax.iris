@@ -1,13 +1,47 @@
-/// Test: Higher-Kinded Types
-///
-/// Tests F[T] HKT syntax in generic parameter position.
-/// This is the key HKT feature: abstracting over type constructors.
+// HKT in *generic parameter* position: `F[T]` on a function.
+//
+// This file used to declare
+//
+//     def apply_wrap[F[T], T](x: T) -> F<T> { x }
+//
+// and only print "HKT F[T] syntax parsed OK". It never called it -- and it
+// could not: the body returns `T` where the signature promises `F<T>`, so any
+// instantiation fails with "type mismatch: i64 vs %F__i64". Parsing was the
+// only thing that file ever demonstrated, which is precisely the gap #4 is
+// about.
+//
+// The working form takes the constructor's argument and returns it applied, so
+// the body's type matches what the signature promises. Syntax copied from
+// `test_hkt.iris`, which passes.
 
-def apply_wrap[F[T], T](x: T) -> F<T> {
-    x
+record Box[T] {
+    item: T
+}
+
+// `F[_]` abstracts over the constructor; the value is written out at the
+// binding so `F<A>` becomes a concrete `Box<i64>`.
+record Wrapper[F[_], A] {
+    value: F<A>
+}
+
+def unwrap_box[T](b: Box<T>) -> T {
+    b.item
 }
 
 def main() -> i64 {
-    println("HKT F[T] syntax parsed OK");
+    val w: Wrapper<Box, i64> = Wrapper { value: Box { item: 7 } };
+    println("wrapper item = " + to_str(w.value.item));
+    assert(w.value.item == 7);
+
+    // A function generic over the element type, applied to the wrapped value.
+    assert(unwrap_box(w.value) == 7);
+
+    // A second instantiation at a different element type, so one
+    // specialisation cannot serve both.
+    val ws: Wrapper<Box, str> = Wrapper { value: Box { item: "hkt" } };
+    assert(ws.value.item == "hkt");
+    assert(unwrap_box(ws.value) == "hkt");
+
+    println("hkt syntax ok");
     0
 }

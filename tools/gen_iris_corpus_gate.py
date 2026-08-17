@@ -10,6 +10,7 @@ MUST_FAIL = {
     "test_move_borrow_error.iris": "borrow of a moved value must be rejected",
     "test_exhaustiveness.iris": "a non-exhaustive match must be rejected",
     "test_exhaustiveness_simple.iris": "a non-exhaustive match must be rejected",
+    "test_option_non_exhaustive.iris": "a when missing an arm is accepted AND yields 0 -- #54",
 }
 
 KNOWN_BROKEN = {

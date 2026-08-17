@@ -1,17 +1,31 @@
+// Task groups: `task_group_join` must actually wait for the spawned work.
+//
+// This file previously spawned tasks that returned 0 and asserted nothing, so
+// it would have passed identically if the tasks had never run or if join had
+// returned immediately. The tasks now report through a channel, which makes
+// both properties observable.
 def test_basic_join() -> i64 {
-    val tg = task_group()
-    spawn(tg) { 0 };
+    val ch = channel();
+    val tg = task_group();
+    spawn(tg) { send(ch, 10) };
+    spawn(tg) { send(ch, 20) };
     task_group_join(tg);
-    0
+    // Both tasks must have completed by the time join returns.
+    val a = recv(ch);
+    val b = recv(ch);
+    a + b
 }
 
 def test_detached() -> i64 {
-    spawn { 0 };
-    0
+    val ch = channel();
+    spawn { send(ch, 5) };
+    // A detached task still runs; recv blocks until it does.
+    recv(ch)
 }
 
 def main() -> i64 {
-    test_basic_join();
-    test_detached();
+    assert(test_basic_join() == 30);
+    assert(test_detached() == 5);
+    println("task groups ok");
     0
 }

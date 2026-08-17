@@ -1,16 +1,23 @@
+// Effect clauses must parse *and* the functions carrying them must still
+// compute. This file previously declared three of them and called none.
 def pure_fn() -> i64 {
     42
 }
 
 def io_fn() -> i64 effect io {
     println("hello");
-    0
+    7
 }
 
-def multi_fn() -> i64 effect io, alloc, throw {
-    0
+def multi_fn(x: i64) -> i64 effect io, alloc, throw {
+    x * 3
 }
 
 def main() -> i64 {
+    assert(pure_fn() == 42);
+    assert(io_fn() == 7);
+    assert(multi_fn(4) == 12);
+    assert(multi_fn(0) == 0);
+    println("effect clauses ok");
     0
 }

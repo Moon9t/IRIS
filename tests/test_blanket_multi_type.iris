@@ -43,19 +43,19 @@ def main() -> i64 {
 
     // Test 1: Direct Show on Dog.
     val s1 = d.show();
-    if s1 != "Dog:Rex" { return 1 }
+    assert(s1 == "Dog:Rex");
 
     // Test 2: Blanket Printable on Dog.
     val s2 = d.printable();
-    if s2 != "[Dog:Rex]" { return 2 }
+    assert(s2 == "[Dog:Rex]");
 
     // Test 3: Direct Show on Cat.
     val s3 = c.show();
-    if s3 != "Cat:Whiskers(black)" { return 3 }
+    assert(s3 == "Cat:Whiskers(black)");
 
     // Test 4: Blanket Printable on Cat.
     val s4 = c.printable();
-    if s4 != "[Cat:Whiskers(black)]" { return 4 }
+    assert(s4 == "[Cat:Whiskers(black)]");
 
     0
 }

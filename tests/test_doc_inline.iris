@@ -1,3 +1,19 @@
+// Doc comments (`///`) must be accepted at item level *and* inside a body,
+// where they carry no meaning and must simply be ignored.
+//
+// `main` is declared first deliberately: `--emit eval` runs the first
+// zero-argument function it finds, and `foo`/`bar` also take no arguments.
+// With `main` last, the file would evaluate `foo` and the assertions below
+// would never run — which is how this file managed to check nothing at all.
+def main() -> i64 {
+    // A doc comment before the first statement of a body.
+    /// ignored inside a body
+    assert(foo() == 42);
+    assert(bar() == 11);
+    println("doc comments ok");
+    0
+}
+
 /// This function tests that doc comments work.
 def foo() -> i64 {
     /// This is inside a body — should be ignored.

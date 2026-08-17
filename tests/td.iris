@@ -7,6 +7,6 @@ def main() -> i64 {
     for (letter, num) in pairs {
         result = result + letter + to_str(num);
     }
-    if result != "a1b2" { return 1 }
+    assert(result == "a1b2");
     0
 }

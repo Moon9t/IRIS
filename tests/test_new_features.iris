@@ -18,9 +18,9 @@ def test_try_catch() -> i64 {
         } catch e2 { -2 };
         v
     } catch e { -3 };
-    if r != 5 { return 1 };
-    if r2 != -1 { return 2 };
-    if r3 != -2 { return 3 };
+    assert(r == 5);
+    assert(r2 == -1);
+    assert(r3 == -2);
     0
 }
 
@@ -37,8 +37,8 @@ def test_splat() -> i64 {
     val result = add_three(..args);
     val extra = [20, 30];
     val result2 = add_three(10, ..extra);
-    if result != 60 { return 1 };
-    if result2 != 60 { return 2 };
+    assert(result == 60);
+    assert(result2 == 60);
     0
 }
 
@@ -47,9 +47,9 @@ def test_char_and_raw_string() -> i64 {
     val newline: u8 = '\n';
     val raw = r"hello\nworld";
     val ch2: u8 = 'B';
-    if ch != 65 { return 1 };
-    if newline != 10 { return 2 };
-    if raw != "hello\\nworld" { return 3 };
+    assert(ch == 65);
+    assert(newline == 10);
+    assert(raw == "hello\\nworld");
     if ch == ch2 { return 4 };
     0
 }
@@ -73,12 +73,12 @@ def even_numbers(max_val: i64) -> list<i64> {
 def test_yield_generators() -> i64 {
     val counts = count_to(5);
     val evens = even_numbers(10);
-    if len(counts) != 5 { return 1 };
-    if list_get(counts, 0) != 1 { return 2 };
-    if list_get(counts, 4) != 5 { return 3 };
-    if len(evens) != 5 { return 4 };
-    if list_get(evens, 0) != 2 { return 5 };
-    if list_get(evens, 4) != 10 { return 6 };
+    assert(len(counts) == 5);
+    assert(list_get(counts, 0) == 1);
+    assert(list_get(counts, 4) == 5);
+    assert(len(evens) == 5);
+    assert(list_get(evens, 0) == 2);
+    assert(list_get(evens, 4) == 10);
     0
 }
 

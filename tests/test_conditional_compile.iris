@@ -1,29 +1,48 @@
-// tests/test_conditional_compile.iris -- Verify preprocessor directives
-
+// Preprocessor directives select which definition reaches the compiler.
+//
+// The symbols tested here are defined (or deliberately not defined) *by this
+// file*, so the expected answers do not depend on the host. That matters:
+// `WINDOWS` and `DEBUG` are both predefined by the compiler on this machine, so
+// a test written around `#ifdef WINDOWS` asserts the build environment rather
+// than the preprocessor.
 #define VERSION 1
 #define BUILD "alpha"
+#define FEATURE_ON 1
 
-#ifdef WINDOWS
-def platform() -> str {
-    "windows"
+#ifdef FEATURE_ON
+def feature() -> str {
+    "on"
 }
 #else
-def platform() -> str {
-    "unix"
+def feature() -> str {
+    "off"
 }
 #endif
 
-#ifndef DEBUG
-def is_debug() -> bool {
-    false
+#ifndef FEATURE_ABSENT
+def absent() -> str {
+    "not-defined"
 }
 #else
-def is_debug() -> bool {
-    true
+def absent() -> str {
+    "defined"
+}
+#endif
+
+#ifdef FEATURE_ABSENT
+def never_compiled() -> i64 {
+    this is not even valid syntax
 }
 #endif
 
 def main() -> i64 {
-    println("platform = " + platform());
+    // FEATURE_ON is defined above, so the `#ifdef` body is compiled.
+    assert(feature() == "on");
+    // FEATURE_ABSENT is never defined, so `#ifndef` selects its first body.
+    assert(absent() == "not-defined");
+    // The file also contains a `#ifdef FEATURE_ABSENT` block holding invalid
+    // syntax. That this file compiles at all proves the block was stripped
+    // before parsing rather than merely skipped at runtime.
+    println("conditional compile ok");
     0
 }

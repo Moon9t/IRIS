@@ -1,18 +1,32 @@
-// Test covariant type parameter syntax
-record Box[+T] {
+// Variance annotations on type parameters must parse *and* the records must
+// still be usable. This file previously declared three records, instantiated
+// none, and returned 0.
+record Box[+T] {          // covariant
     value: T
 }
 
-// Test contravariant type parameter syntax
-record Processor[-T] {
+record Processor[-T] {    // contravariant
     handle: (T) -> i64
 }
 
-// Test invariant type parameter (default, no prefix)
-record Container[T] {
+record Container[T] {     // invariant (the default)
     value: T
 }
 
 def main() -> i64 {
+    val b: Box<i64> = Box { value: 42 };
+    assert(b.value == 42);
+
+    // A second element type, so one specialisation cannot serve both.
+    val bs: Box<str> = Box { value: "cov" };
+    assert(bs.value == "cov");
+
+    val c: Container<i64> = Container { value: 7 };
+    assert(c.value == 7);
+
+    // Contravariant parameter carrying a function field, invoked.
+    val p: Processor<i64> = Processor { handle: |x: i64| x * 2 };
+    assert(p.handle(21) == 42);
+    println("variance ok");
     0
 }

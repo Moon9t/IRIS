@@ -1,6 +1,4 @@
-// Effect row polymorphism: effect vars on functions
-
-// Simple function with effect variable E
+// Effect row polymorphism: an effect variable on a generic function.
 def identity[T](x: T) -> T effect E {
     x
 }
@@ -10,6 +8,15 @@ def add_one(x: i64) -> i64 effect io {
 }
 
 def main() -> i64 {
-    val r = add_one(0);
-    if r == 1 { 0 } else { 1 }
+    assert(add_one(0) == 1);
+    assert(add_one(41) == 42);
+    // Negative numbers, so an implementation returning a constant fails.
+    assert(add_one(0 - 5) == 0 - 4);
+
+    // The effect-polymorphic function must still be a real identity at more
+    // than one type -- it was declared but never called before.
+    assert(identity(7) == 7);
+    assert(identity("row") == "row");
+    println("effect polymorphism ok");
+    0
 }

@@ -2601,3 +2601,88 @@ Doing both doubles the gate's runtime (currently ~6 minutes for 139 files).
 Worth doing, and worth doing as a *divergence* check — asserting the two
 backends agree is a stronger and cheaper statement than asserting each
 separately passes.
+
+---
+
+## 53. `--emit eval` discards `main`'s return value, so half the documented test idiom does nothing — **open**
+
+A built binary propagates `main`'s return value as its exit code. `--emit eval`
+does not: it prints the value and exits 0 regardless.
+
+```text
+def main() -> i64 { println("about to fail"); 1 }
+
+$ iris build rc.iris && ./rc.exe ; echo $?      -> 1     correct
+$ iris --emit eval rc.iris ; echo $?            -> 0     value printed, exit 0
+```
+
+The consequence is not cosmetic. Both `iris-write-code` and issue #4 tell test
+authors:
+
+> Either `assert(...)`, or return a non-zero code on mismatch.
+
+**The second half does not work.** Under `--emit eval` — which is how the corpus
+is run — a test that detects a mismatch and returns 1 exits 0 and passes. Of the
+80 convertible corpus files, 34 use exactly this idiom, and every one of them
+has been silently passing whatever it computed. A failing `assert` exits 1; that
+is the only mechanism that actually fails a run.
+
+This also caps what the corpus gate added for #4 can detect: `every_iris_test_runs`
+checks the exit code, so it catches compile failures and crashes but *cannot*
+catch a wrong answer in a file that reports through a return code.
+
+The guidance has been corrected to say `assert(...)` and nothing else, and the
+34 files are being converted. The underlying fix is to make `--emit eval` exit
+with `main`'s value, as the built binary already does. That is deliberately not
+bundled here: several corpus files return a computed value from `main`
+(`test_const_generic` returns 156), so propagating the exit code turns them into
+failures that must be fixed at the same time — real work, with its own
+verification, rather than a one-line change.
+
+---
+
+## 54. A non-exhaustive `when` on an option is accepted and silently yields 0 — **open**
+
+```iris
+def test_option_non_exhaustive() -> i64 {
+    val o = some(42)
+    when o {
+        some(x) => x,
+        // no `none` arm
+    }
+}
+```
+
+This compiles, runs, and returns **0**. Two defects, and the second is the
+dangerous one:
+
+1. `ExhaustivePass` does not reject the missing `none` arm. `tests/test_option_non_exhaustive.iris`
+   exists precisely to check that it does.
+2. Worse, the match does not even take the arm that *does* apply. `o` is
+   `some(42)`, so the result should be 42. `lower_option_when` computes
+   `partial = some_arm.is_none() || none_arm.is_none()` and, when partial,
+   yields the unit value instead of the arm's value — so a match missing one arm
+   silently returns 0 for **every** input, including the ones it covers.
+
+That is the exact failure mode #4 was raised about: a feature that silently
+returns 0 while its test reports success. This file has been in the corpus
+reporting success the whole time, because it asserted nothing and because
+`--emit eval` ignores `main`'s return value (#53).
+
+The file now asserts the correct answer (42) and is listed in `MUST_FAIL` in
+`tests/iris_corpus.rs`, so the corpus gate stays honest: the file is expected to
+fail today, and whichever way it is fixed — rejecting the match, or evaluating
+the covered arm — it will keep failing until then and can be moved out of the
+list when it passes.
+
+The same `partial` logic exists in `lower_result_when`, and **it behaves
+identically** -- confirmed:
+
+```iris
+val r: result<i64, str> = ok(42);
+when r { ok(x) => x, }        // yields 0, not 42
+```
+
+So both option and result matches silently discard the covered arm's value when
+any arm is missing. Any program that pattern-matches without covering every case
+gets 0 rather than a compile error or the right answer.

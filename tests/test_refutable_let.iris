@@ -4,37 +4,37 @@ def main() -> i64 {
     // Test 1: let some(v) = some(42)
     let some(v) = some(42);
     var result = check(v == 42);
-    if result != 0 { return 1 };
+    assert(result == 0);
 
     // Test 2: let ok(v) = ok(7)
     let ok(v) = ok(7);
     result = check(v == 7);
-    if result != 0 { return 2 };
+    assert(result == 0);
 
     // Test 3: let err(e) = err(3)
     let err(e) = err(3);
     result = check(e == 3);
-    if result != 0 { return 3 };
+    assert(result == 0);
 
     // Test 4: let none = none() (statement, no binding)
     let none = none();
     result = check(1 == 1);
-    if result != 0 { return 4 };
+    assert(result == 0);
 
     // Test 5: let _ = 5 (wildcard, no binding)
     let _ = 5;
     result = check(1 == 1);
-    if result != 0 { return 5 };
+    assert(result == 0);
 
     // Test 6: let some(_) = some(99) (wildcard binding)
     let some(_) = some(99);
     result = check(1 == 1);
-    if result != 0 { return 6 };
+    assert(result == 0);
 
     // Test 7: let some() = some(42) (no binding in pattern)
     let some() = some(42);
     result = check(1 == 1);
-    if result != 0 { return 7 };
+    assert(result == 0);
 
     0
 }

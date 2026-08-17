@@ -13,7 +13,7 @@ def main() -> i64 {
         result = result + letter + to_str(num);
     }
     println("Result: " + result);
-    if result != "a1b2c3" { return 1 };
+    assert(result == "a1b2c3");
 
     println("ALL PASS");
     0

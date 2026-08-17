@@ -31,18 +31,18 @@ def test_str_set() -> i64 {
     s = set.set_add(s, "b");
     s = set.set_add(s, "c");
     val len1 = set.set_len(s)
-    if len1 != 3 { return 1 }
+    assert(len1 == 3);
     val has_a = set.set_contains(s, "a")
-    if has_a != true { return 2 }
+    assert(has_a == true);
     val has_z = set.set_contains(s, "z")
-    if has_z != false { return 3 }
+    assert(has_z == false);
 
     // Test 2: Set<str> remove
     val s6 = set.set_remove(s, "b")
     val len2 = set.set_len(s6)
-    if len2 != 2 { return 4 }
+    assert(len2 == 2);
     val has_b = set.set_contains(s6, "b")
-    if has_b != false { return 5 }
+    assert(has_b == false);
 
     // Test 3: Set<str> union, intersection, difference
     var a = set.set_new("x")
@@ -52,13 +52,13 @@ def test_str_set() -> i64 {
     b = set.set_add(b, "w");
     val union = set.set_union(a, b)
     val union_len = set.set_len(union)
-    if union_len != 4 { return 6 }
+    assert(union_len == 4);
     val inter = set.set_intersection(a, b)
     val inter_len = set.set_len(inter)
-    if inter_len != 1 { return 7 }
+    assert(inter_len == 1);
     val diff = set.set_difference(a, b)
     val diff_len = set.set_len(diff)
-    if diff_len != 2 { return 8 }
+    assert(diff_len == 2);
 
     // Test 4: Set<str> from_list
     var lst: list<str> = list()
@@ -68,7 +68,7 @@ def test_str_set() -> i64 {
     push(lst, "apple");
     val s7 = set.set_from_list(lst)
     val dedup_len = set.set_len(s7)
-    if dedup_len != 3 { return 9 }
+    assert(dedup_len == 3);
 
     0
 }
@@ -80,11 +80,11 @@ def test_int_set() -> i64 {
     s = set.set_add(s, 30);
     s = set.set_add(s, 20);
     val ilen = set.set_len(s)
-    if ilen != 3 { return 10 }
+    assert(ilen == 3);
     val has10 = set.set_contains(s, 10)
-    if has10 != true { return 11 }
+    assert(has10 == true);
     val has99 = set.set_contains(s, 99)
-    if has99 != false { return 12 }
+    assert(has99 == false);
 
     // Test 6: Set<i64> union, intersection, difference
     var ia = set.set_new(1)
@@ -95,13 +95,13 @@ def test_int_set() -> i64 {
     ib = set.set_add(ib, 4);
     val iunion = set.set_union(ia, ib)
     val iunion_len = set.set_len(iunion)
-    if iunion_len != 4 { return 13 }
+    assert(iunion_len == 4);
     val iinter = set.set_intersection(ia, ib)
     val iinter_len = set.set_len(iinter)
-    if iinter_len != 2 { return 14 }
+    assert(iinter_len == 2);
     val idiff = set.set_difference(ia, ib)
     val idiff_len = set.set_len(idiff)
-    if idiff_len != 1 { return 15 }
+    assert(idiff_len == 1);
 
     // Test 7: Set<i64> is_subset, is_superset
     var sub_a = set.set_new(1)
@@ -110,11 +110,11 @@ def test_int_set() -> i64 {
     sub_b = set.set_add(sub_b, 2);
     sub_b = set.set_add(sub_b, 3);
     val is_sub = set.set_is_subset(sub_a, sub_b)
-    if is_sub != true { return 16 }
+    assert(is_sub == true);
     val is_sup = set.set_is_superset(sub_b, sub_a)
-    if is_sup != true { return 17 }
+    assert(is_sup == true);
     val not_sub = set.set_is_subset(sub_b, sub_a)
-    if not_sub != false { return 18 }
+    assert(not_sub == false);
 
     // Test 8: Set<i64> symmetric_difference, is_disjoint
     var sd_a = set.set_new(1)
@@ -123,23 +123,23 @@ def test_int_set() -> i64 {
     sd_b = set.set_add(sd_b, 3);
     val sym_diff = set.set_symmetric_difference(sd_a, sd_b)
     val sym_len = set.set_len(sym_diff)
-    if sym_len != 2 { return 19 }
+    assert(sym_len == 2);
 
     var dis_a = set.set_new(1)
     dis_a = set.set_add(dis_a, 2);
     var dis_b = set.set_new(3)
     dis_b = set.set_add(dis_b, 4);
     val is_disjoint = set.set_is_disjoint(dis_a, dis_b)
-    if is_disjoint != true { return 20 }
+    assert(is_disjoint == true);
     val not_disjoint = set.set_is_disjoint(sd_a, sd_b)
-    if not_disjoint != false { return 21 }
+    assert(not_disjoint == false);
 
     // Test 9: Set<i64> is_empty
     val empty_s = set.set_difference(s, s)
     val ie1 = set.set_is_empty(empty_s)
-    if ie1 != true { return 22 }
+    assert(ie1 == true);
     val ie2 = set.set_is_empty(s)
-    if ie2 != false { return 23 }
+    assert(ie2 == false);
 
     0
 }

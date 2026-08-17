@@ -1,8 +1,11 @@
+// String ordering must be the same whether the operands are literals or values
+// read back out of a list -- the divergence this file was written to catch.
 def main() -> i64 {
     val a = "cherry"
     val b = "x"
     val r1 = if a < b { 1 } else { 0 };
     println("literal: cherry < x = " + to_str(r1));
+    assert(r1 == 1);
 
     var lst: list<str> = list()
     push(lst, "cherry");
@@ -11,12 +14,18 @@ def main() -> i64 {
     val d = list_get(lst, 1)
     val r2 = if c < d { 1 } else { 0 };
     println("from list: cherry < x = " + to_str(r2));
+    assert(r2 == 1);
+    // The point of the file: both routes must agree.
+    assert(r2 == r1);
 
     val r3 = if c == d { 1 } else { 0 };
-    println("from list: cherry == x = " + to_str(r3));
+    assert(r3 == 0);
 
     val r4 = if "cherry" < "x" { 1 } else { 0 };
-    println("direct literal: cherry < x = " + to_str(r4));
+    assert(r4 == 1);
 
+    // The reverse must not also hold, or `<` is answering true unconditionally.
+    assert((if d < c { 1 } else { 0 }) == 0);
+    println("str cmp ok");
     0
 }

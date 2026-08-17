@@ -1,18 +1,29 @@
+// Dictionary literals: `{ "k": v, ... }` must build a real map with every
+// entry present, not just a map of the right length.
 def main() -> i64 {
     val scores: map<str, i64> = { "alice": 95, "bob": 87, "charlie": 92 };
     val n = map_len(scores);
     println(f"len={n}");
+    assert(n == 3);
 
     val alice_val = map_get(scores, "alice").unwrap_or(0);
     val bob_val = map_get(scores, "bob").unwrap_or(0);
     val charlie_val = map_get(scores, "charlie").unwrap_or(0);
     println(f"alice: {alice_val}");
-    println(f"bob: {bob_val}");
-    println(f"charlie: {charlie_val}");
+    assert(alice_val == 95);
+    assert(bob_val == 87);
+    assert(charlie_val == 92);
 
-    // Test single-entry dict
+    // The values must be distinct, so a literal that stored the last value for
+    // every key would fail rather than pass on length alone.
+    assert(alice_val != bob_val);
+
+    // A key that was never inserted must miss, not return another entry.
+    assert(map_get(scores, "nobody").unwrap_or(0 - 1) == 0 - 1);
+
     val single: map<str, i64> = { "x": 42 };
-    println(f"single len: {map_len(single)}");
-
+    assert(map_len(single) == 1);
+    assert(map_get(single, "x").unwrap_or(0) == 42);
+    println("dict literal ok");
     0
 }

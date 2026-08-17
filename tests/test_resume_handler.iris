@@ -1,7 +1,5 @@
-// Test: effect handler with `resume(val)` continuation
-// The handler intercepts echo(), calls resume("intercepted_via_resume").
-// The call site should see the resumed value.
-
+// Effect handler with a `resume(v)` continuation: the call site must see the
+// value the handler resumed with.
 extern def echo(s: str) -> str
 
 def main() -> i64 {
@@ -10,9 +8,11 @@ def main() -> i64 {
     } with {
         echo(s) -> resume(v) => v("intercepted_via_resume")
     };
-
-    print(result);
-    print("\n");
-
-    if result == "intercepted_via_resume" { 0 } else { 1 }
+    println(result);
+    assert(result == "intercepted_via_resume");
+    // Not the extern's argument, and not an empty string -- the two ways a
+    // handler that did nothing would still look plausible.
+    assert(result != "hello");
+    assert(len(result) > 0);
+    0
 }

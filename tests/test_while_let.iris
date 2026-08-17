@@ -1,13 +1,26 @@
-// Test: while let with counter modification
+// `while let some(v) = counter` must run once per Some and stop at None.
+//
+// The loop previously ran and printed "done" without checking anything, so it
+// would have passed just as happily if the loop had never executed at all --
+// which is the failure mode `while let` is most likely to have.
 def main() -> i64 {
     var counter = some(3)
+    var iterations = 0
+    var sum = 0
     while let some(v) = counter {
+        iterations = iterations + 1
+        sum = sum + v
         if v == 1 {
             counter = none()
         } else {
             counter = some(v - 1)
         }
     }
-    println("done");
+    println("iterations=" + to_str(iterations) + " sum=" + to_str(sum));
+    // 3, 2, 1 -- three iterations summing to 6.
+    assert(iterations == 3);
+    assert(sum == 6);
+    // The loop must have consumed the option, not merely stopped early.
+    assert(is_some(counter) == false);
     0
 }

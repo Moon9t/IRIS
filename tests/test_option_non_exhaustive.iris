@@ -1,5 +1,12 @@
-// Test: Exhaustiveness Checking - Non-exhaustive Option
-
+// Exhaustiveness: a `when` on an option that omits `none` must be rejected.
+//
+// It is not. Worse, the match does not even evaluate the arm that applies:
+// `o` is `some(42)`, so this should be 42, but a partial match yields the unit
+// value and the function returns 0 for every input. See known-issues #54.
+//
+// This file is listed in MUST_FAIL in tests/iris_corpus.rs: it is expected to
+// fail today. When the defect is fixed -- either by rejecting the match at
+// compile time, or by evaluating the covered arm -- it comes off that list.
 def test_option_non_exhaustive() -> i64 {
     val o = some(42)
     when o {
@@ -9,5 +16,8 @@ def test_option_non_exhaustive() -> i64 {
 }
 
 def main() -> i64 {
-    test_option_non_exhaustive()
+    // `some(42)` is covered by the arm that is present, so the answer is 42
+    // whichever way exhaustiveness is ultimately enforced.
+    assert(test_option_non_exhaustive() == 42);
+    0
 }

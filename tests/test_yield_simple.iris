@@ -9,6 +9,6 @@ def count_to(n: i64) -> list<i64> {
 def main() -> i64 {
     val counts = count_to(3);
     val c_len = len(counts);
-    if c_len != 3 { return 1 };
+    assert(c_len == 3);
     0
 }

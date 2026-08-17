@@ -1,6 +1,4 @@
-// Test: effect handlers with extern functions
-
-// Declare an extern function we can intercept.
+// Effect handlers intercepting an extern call.
 extern def echo(s: str) -> str
 
 def main() -> i64 {
@@ -9,8 +7,10 @@ def main() -> i64 {
     } with {
         echo(s) => "intercepted"
     };
-
-    print(result);
-    print("\n");
-    if result == "intercepted" { 0 } else { 1 }
+    println(result);
+    // The handler must replace the extern's result, not merely run alongside it.
+    assert(result == "intercepted");
+    // And it must not pass the original argument through.
+    assert(result != "hello");
+    0
 }

@@ -4,36 +4,36 @@ def main() -> i64 {
     val s: str = "hello";
     val b: str = s + "!";
     println("string concat: " + b);
-    if b != "hello!" { return 1 };
+    assert(b == "hello!");
 
     // Feature 18: String * int repetition
     val rep: str = "ab" * 3;
     println("ab * 3 = " + rep);
-    if rep != "ababab" { return 3 };
+    assert(rep == "ababab");
     val rep2: str = "x" * 5;
     println("x * 5 = " + rep2);
-    if rep2 != "xxxxx" { return 4 };
+    assert(rep2 == "xxxxx");
     println("String repetition OK");
 
     // Feature 19: ?? null coalescing
     val opt_val: option<i64> = some(42);
     val fallback: i64 = opt_val ?? 0;
     println("some(42) ?? 0 = " + to_str(fallback));
-    if fallback != 42 { return 5 };
+    assert(fallback == 42);
     val none_val: option<i64> = none;
     val fallback2: i64 = none_val ?? 99;
     println("none ?? 99 = " + to_str(fallback2));
-    if fallback2 != 99 { return 6 };
+    assert(fallback2 == 99);
 
     // ?? with result
     val ok_val: result<i64, str> = ok(7);
     val fallback3: i64 = ok_val ?? 0;
     println("ok(7) ?? 0 = " + to_str(fallback3));
-    if fallback3 != 7 { return 7 };
+    assert(fallback3 == 7);
     val err_val: result<i64, str> = err("fail");
     val fallback4: i64 = err_val ?? -1;
     println("err(fail) ?? -1 = " + to_str(fallback4));
-    if fallback4 != -1 { return 8 };
+    assert(fallback4 == -1);
 
     println("ALL PASS");
     0

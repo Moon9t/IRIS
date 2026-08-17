@@ -1,4 +1,4 @@
-// Test extension methods from brought modules
+// Extension methods alongside a brought module.
 bring std.math
 
 def double(x: i64) -> i64 {
@@ -6,14 +6,14 @@ def double(x: i64) -> i64 {
 }
 
 def main() -> i64 {
-    // Extension method on i64 from local function
     val d = 21.double();
     println("21.double() = " + to_str(d));
+    assert(d == 42);
 
-    if d == 42 {
-        println("Extension methods from brought modules pass!");
-        0
-    } else {
-        1
-    }
+    // Chained, and on a second value, so a constant result cannot pass.
+    assert(5.double() == 10);
+    assert(3.double().double() == 12);
+    assert(0.double() == 0);
+    println("extension methods ok");
+    0
 }

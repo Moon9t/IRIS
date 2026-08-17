@@ -1,3 +1,5 @@
+// A `dyn Trait` binding produced by an if/else must dispatch to the concrete
+// type each branch actually created.
 record Cat { name: str }
 record Dog { name: str }
 
@@ -16,14 +18,23 @@ impl Pet for Dog {
     def name(self) -> str { self.name }
 }
 
-def test_val_annot(cond: bool) -> i64 {
+def speak_of(cond: bool) -> str {
     val p: dyn Pet = if cond { Cat { name: "Fluffy" } } else { Dog { name: "Rex" } }
-    val s = p.speak()
-    if s == "Meow" || s == "Woof" { 0 } else { 1 }
+    p.speak()
+}
+
+def name_of(cond: bool) -> str {
+    val p: dyn Pet = if cond { Cat { name: "Fluffy" } } else { Dog { name: "Rex" } }
+    p.name()
 }
 
 def main() -> i64 {
-    val r1 = test_val_annot(true)
-    val r2 = test_val_annot(false)
-    if r1 != 0 { 1 } else if r2 != 0 { 2 } else { 0 }
+    // The original only checked the result was "Meow" or "Woof", which both
+    // branches satisfy -- so a vtable that always picked Cat would have passed.
+    assert(speak_of(true) == "Meow");
+    assert(speak_of(false) == "Woof");
+    assert(name_of(true) == "Fluffy");
+    assert(name_of(false) == "Rex");
+    println("dyn trait if/else ok");
+    0
 }
