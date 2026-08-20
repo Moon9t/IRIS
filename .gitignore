@@ -152,3 +152,19 @@ __pycache__/
 env/
 .build_new_book.py
 
+
+# Vendored native libraries.
+#
+# These were committed in the branch's first commit -- 27 files, 1.28 GB, with
+# tensorflow.dll at 909 MB and torch_cpu.dll at 240 MB, both over GitHub's
+# 100 MB hard limit. That made the branch unpushable, and no amount of chunking
+# helps: the blobs are in the history, so every push is rejected.
+#
+# ML backends are resolved at runtime via dlopen (see src/runtime/
+# iris_ml_dynload.h), so these belong in a local install, not in git.
+*.dll
+*.exe
+*.lib
+*.so
+*.dylib
+*.pdb
