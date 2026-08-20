@@ -2801,3 +2801,52 @@ because the fallback hides it. Found while writing the map examples.
 
 Prefer `map_keys` plus `map_get` when iterating a map in code that must run
 natively.
+
+---
+
+## 58. The LSP server exits 1 when the editor closes stdin — **FIXED**
+
+> **Fixed** on 2026-08-17 in `src/lsp.rs`. EOF on stdin now ends the session
+> normally instead of propagating out of `run_lsp_server`.
+
+The read loop used `read_exact(&mut byte)?`. When the client closed stdin, that
+returned `UnexpectedEof`, `?` propagated it, and `main` did:
+
+```rust
+if let Err(e) = iris::lsp::run_lsp_server() {
+    eprintln!("LSP server error: {}", e);
+    process::exit(1);
+}
+```
+
+```text
+LSP server error: failed to fill whole buffer
+```
+
+`"exit" => break` was handled, so an orderly `shutdown` + `exit` was fine. But VS
+Code closes the pipe on **window reload** and on **extension-host restart**
+without always sending `exit` first, and a language client treats a non-zero exit
+as a *crash*. After a handful of those in one window it stops restarting the
+server and reports that it failed to start — which is what the symptom looks
+like from the user's side, with nothing wrong with the binary or its path.
+
+Measured, driving the server with a real initialize / didOpen / documentSymbol /
+shutdown sequence and then closing stdin:
+
+| | exit | stderr |
+|---|---|---|
+| before | 1 | `LSP server error: failed to fill whole buffer` |
+| after | 0 | clean, all responses still returned |
+
+A truncated body mid-message — a client that was killed — is handled the same
+way, and also exited 1 before.
+
+Also fixed while there: the header parser called `stdin.lock()` once **per
+byte**, so it acquired a lock for every character of every header. It now locks
+once for the life of the server.
+
+**If the symptom returns, check the binary the extension is pointing at.**
+`iris.executablePath` should be a stable copy (`~/.iris/bin/iris.exe`), never
+`target/debug/iris.exe` — every `cargo build` relinks that file, and on Windows a
+running server holds it locked, so the two fight. Refresh the stable copy after a
+build; there is a VS Code task for it.

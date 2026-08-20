@@ -3997,6 +3997,10 @@ pub fn run_lsp_server() -> std::io::Result<()> {
     use std::io::Read;
 
     let stdin = std::io::stdin();
+    // Locked once rather than per byte: the header parser below reads a byte at
+    // a time, so re-locking inside it cost a lock acquisition per character of
+    // every header.
+    let mut input = stdin.lock();
     let stdout = std::io::stdout();
     let mut state = LspState::new();
     #[allow(unused_assignments)]
@@ -4009,7 +4013,21 @@ pub fn run_lsp_server() -> std::io::Result<()> {
             let mut byte = [0u8];
             let mut chars = String::new();
             loop {
-                stdin.lock().read_exact(&mut byte)?;
+                match input.read_exact(&mut byte) {
+                    Ok(()) => {}
+                    // A closed stdin is how an editor ends a session. VS Code
+                    // closes the pipe on window reload and on extension-host
+                    // restart, and does not always send `exit` first.
+                    // Propagating the EOF made `main` print
+                    // "LSP server error: failed to fill whole buffer" and exit
+                    // 1, which the client reads as a *crash*; after a few of
+                    // those it stops restarting the server and reports that it
+                    // failed to start. This is a normal end of session.
+                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                        return Ok(());
+                    }
+                    Err(e) => return Err(e),
+                }
                 if byte[0] == b'\r' {
                     continue;
                 }
@@ -4030,9 +4048,14 @@ pub fn run_lsp_server() -> std::io::Result<()> {
             continue;
         }
 
-        // Read body.
+        // Read body. A truncated body means the client went away mid-message,
+        // which is again an ended session rather than a server fault.
         let mut body = vec![0u8; content_length];
-        stdin.lock().read_exact(&mut body)?;
+        match input.read_exact(&mut body) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
+            Err(e) => return Err(e),
+        }
         let body_str = String::from_utf8_lossy(&body);
 
         let msg: serde_json::Value = match serde_json::from_str(&body_str) {
