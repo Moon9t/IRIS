@@ -1226,7 +1226,49 @@ structurally but share a name, the message should show the differing fields.
 
 ---
 
-## 22. Generic instantiated at a container type breaks natively — **open**
+## 22. Generic instantiated at a container type breaks natively — **FIXED**
+
+> **Fixed** on 2026-08-20. `Box<list<i64>>`, `Box<option<i64>>`,
+> `Box<map<str, i64>>` and `Box<list<list<i64>>>` all build and assert, native
+> output identical to interpreted.
+>
+> The report's diagnosis was right: "something on the use-side path splits or
+> rebuilds the name on `_` and keeps only the first segment." It was **three
+> somethings**, all with the same shape — take the concrete struct name, strip
+> the `Base__` prefix, split the remainder on `_`, and zip the tokens against
+> the type parameters. That is correct only while every argument's mangling is
+> a single token (`i64`, `str`, a plain record), which is exactly why every
+> other instantiation in `tests/conformance/c12` was fine.
+>
+> A container mangles to `list_i64`, so the split bound the parameter to a bare
+> `list` and discarded the element. The module then declared `%Box__list_i64`
+> while the use site said `%Box__list`, and an undeclared LLVM type has no size.
+>
+> The decoder is now an actual inverse of `mangle_ir_type` — it consumes one
+> *type* per argument, recursing through `list`/`opt`/`map`/`chan`/`atomic`/
+> `mutex`/`grad`/`sparse`/`weakref` — and all three sites share it. `map_str_i64`
+> is the shape that matters most: with three tokens and two type parameters, the
+> old code fed a token belonging to the *key* into the *value* position.
+>
+> **Residual ambiguity, stated rather than hidden:** mangling is not injective.
+> A struct argument whose own name contains `_` cannot be distinguished from a
+> constructor applied to arguments, so an unrecognised head consumes the whole
+> remainder — right when it is the last argument, which is the case that occurs.
+> The real fix is to carry a monomorphised struct's type arguments alongside it
+> instead of re-deriving them from its name. This makes the derivation correct
+> for every built-in constructor, which is what #22 needed; it does not make
+> name-parsing safe in general.
+>
+> **The issue's own reproduction still needs one change**, and it is not this
+> bug: `box_of(list())` passes an unannotated `list()`, whose element type stays
+> `Infer` — that is #14. Annotate it (`val inner: list<i64> = list();`) and it
+> works. Fixing #22 moved that program from an LLVM verification failure to the
+> clear `list<i64>` vs `i64` error #14 exists to describe.
+>
+> `tests/test_generic_container_arg.iris` covers all five shapes, including the
+> single-token arguments that always worked and now take the same path.
+
+### Original report
 
 `Box<list<i64>>` works interpreted and fails to build.
 

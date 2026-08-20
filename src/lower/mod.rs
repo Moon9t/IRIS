@@ -7708,8 +7708,19 @@ impl<'m> Lowerer<'m> {
                     if let Some(s_name) = concrete_name {
                         let suffix = format!("{}__", gname);
                         if let Some(rest) = s_name.strip_prefix(&suffix) {
-                            let concrete_parts: Vec<&str> = rest.split('_').collect();
-                            for (ast_arg, concrete) in gargs.iter().zip(concrete_parts.iter()) {
+                            // One *type* per type argument, not one
+                            // underscore-separated token. `Box__list_i64` has a
+                            // single argument, `list_i64`; splitting on '_' took
+                            // `list` and dropped the element, so the parameter
+                            // was typed `%Box__list` while the module declared
+                            // `%Box__list_i64`. See known-issues #22.
+                            let mut remaining = rest;
+                            for ast_arg in gargs.iter() {
+                                if remaining.is_empty() {
+                                    break;
+                                }
+                                let (arg_ty, next) = parse_mangled_type(remaining);
+                                remaining = next;
                                 if let crate::parser::ast::AstType::Named(n, _) = ast_arg {
                                     if subs.contains_key(n) { continue; }
                                     let is_generic_param = generic_fn
@@ -7717,11 +7728,10 @@ impl<'m> Lowerer<'m> {
                                         .iter()
                                         .any(|p| matches!(p, crate::parser::ast::AstGenericParam::Type(name, _, _) | crate::parser::ast::AstGenericParam::Hkt(name, _, _, _) if name == n));
                                     if is_generic_param {
-                                        let concrete_ir = lower_type_with_structs(
-                                            &crate::parser::ast::AstType::Named(concrete.to_string(), crate::parser::lexer::Span::at(0)),
-                                            self.module,
+                                        subs.insert(
+                                            n.clone(),
+                                            resolve_mangled_struct(arg_ty, self.module),
                                         );
-                                        subs.insert(n.clone(), concrete_ir);
                                     }
                                 }
                             }
@@ -7746,21 +7756,6 @@ impl<'m> Lowerer<'m> {
 
                 // Decode one component of a mangled name such as the `i64` in
                 // `Box__i64`. Anything unrecognised is a nominal type.
-                fn ir_type_from_mangled_part(part: &str) -> IrType {
-                    match part {
-                        "i64" => IrType::Scalar(DType::I64),
-                        "i32" => IrType::Scalar(DType::I32),
-                        "f64" => IrType::Scalar(DType::F64),
-                        "f32" => IrType::Scalar(DType::F32),
-                        "bool" => IrType::Scalar(DType::Bool),
-                        "str" => IrType::Str,
-                        other => IrType::Struct {
-                            name: other.to_string(),
-                            fields: Vec::new(),
-                        },
-                    }
-                }
-
                 fn extract_from_ast_type(
                     ast_ty: &crate::parser::ast::AstType,
                     concrete_ty: &IrType,
@@ -7812,13 +7807,19 @@ impl<'m> Lowerer<'m> {
                                     subs.entry(gname.clone())
                                         .or_insert_with(|| constructor_marker(&base));
                                     if let Some(rest) = rest {
-                                        for (garg, part) in gargs.iter().zip(rest.split('_')) {
+                                        // One *type* per argument, not one
+                                        // underscore-separated token: `list_i64`
+                                        // is a single argument. See #22.
+                                        let mut remaining = rest.as_str();
+                                        for garg in gargs.iter() {
+                                            if remaining.is_empty() {
+                                                break;
+                                            }
+                                            let (arg_ty, next) = parse_mangled_type(remaining);
+                                            remaining = next;
                                             if let crate::parser::ast::AstType::Named(n, _) = garg {
                                                 if type_params.contains(n) && !subs.contains_key(n) {
-                                                    subs.insert(
-                                                        n.clone(),
-                                                        ir_type_from_mangled_part(part),
-                                                    );
+                                                    subs.insert(n.clone(), arg_ty);
                                                 }
                                             }
                                         }
@@ -7938,17 +7939,21 @@ impl<'m> Lowerer<'m> {
                             format!("{}__", tail),
                         ] {
                             if let Some(rest) = expected_name.strip_prefix(prefix.as_str()) {
-                                for (ast_arg, concrete) in gargs.iter().zip(rest.split('_')) {
+                                // One type per argument, as at the parameter
+                                // site above. #22.
+                                let mut remaining = rest;
+                                for ast_arg in gargs.iter() {
+                                    if remaining.is_empty() {
+                                        break;
+                                    }
+                                    let (arg_ty, next) = parse_mangled_type(remaining);
+                                    remaining = next;
                                     if let crate::parser::ast::AstType::Named(n, _) = ast_arg {
                                         if all_type_params.contains(n) && !subs.contains_key(n) {
-                                            let concrete_ir = lower_type_with_structs(
-                                                &crate::parser::ast::AstType::Named(
-                                                    concrete.to_string(),
-                                                    crate::parser::lexer::Span::at(0),
-                                                ),
-                                                self.module,
+                                            subs.insert(
+                                                n.clone(),
+                                                resolve_mangled_struct(arg_ty, self.module),
                                             );
-                                            subs.insert(n.clone(), concrete_ir);
                                         }
                                     }
                                 }
@@ -17527,6 +17532,85 @@ fn ir_type_dispatch_name(ty: &IrType) -> String {
 /// monomorphised function names (`fn__T` -> `fn__MyStruct`) where the result
 /// must be a valid C identifier. Strips the `%` prefix from struct Display
 /// output and replaces whitespace/commas/brackets with `_`.
+/// Parse one mangled type off the front of `s`, returning it
+/// and whatever follows.
+///
+/// The inverse of `mangle_ir_type`, and it has to be, because
+/// a type argument's own mangling contains underscores. The
+/// previous decoder took a single `_`-separated token, so
+/// `Box__list_i64` bound the type parameter to a bare `list`
+/// and dropped the `i64`: the module then *declared*
+/// `%Box__list_i64` while the use site said `%Box__list`, and
+/// LLVM rejected the module with "base element of
+/// getelementptr must be sized" -- an undeclared name has no
+/// size. See known-issues #22.
+///
+/// **Residual ambiguity, stated:** mangling is not injective.
+/// A struct argument whose own name contains `_` cannot be
+/// told from a constructor applied to arguments, so an
+/// unrecognised head consumes the entire remainder -- correct
+/// when it is the last argument, which is the case that
+/// occurs. The real fix is to carry a monomorphised struct's
+/// type arguments alongside it instead of re-deriving them
+/// from its name; this makes the derivation right for every
+/// built-in constructor, which is what #22 needed.
+fn parse_mangled_type(s: &str) -> (IrType, &str) {
+    let (head, rest) = match s.split_once('_') {
+        Some((h, t)) => (h, t),
+        None => (s, ""),
+    };
+    fn one<'a>(
+        ctor: fn(Box<IrType>) -> IrType,
+        rest: &'a str,
+    ) -> (IrType, &'a str) {
+        let (inner, r) = parse_mangled_type(rest);
+        (ctor(Box::new(inner)), r)
+    }
+    match head {
+        "i64" => (IrType::Scalar(DType::I64), rest),
+        "i32" => (IrType::Scalar(DType::I32), rest),
+        "f64" => (IrType::Scalar(DType::F64), rest),
+        "f32" => (IrType::Scalar(DType::F32), rest),
+        "bool" => (IrType::Scalar(DType::Bool), rest),
+        "str" => (IrType::Str, rest),
+        "infer" => (IrType::Infer, rest),
+        "list" => one(IrType::List, rest),
+        "opt" => one(IrType::Option, rest),
+        "chan" => one(IrType::Chan, rest),
+        "atomic" => one(IrType::Atomic, rest),
+        "mutex" => one(IrType::Mutex, rest),
+        "grad" => one(IrType::Grad, rest),
+        "sparse" => one(IrType::Sparse, rest),
+        "weakref" => one(IrType::WeakRef, rest),
+        "map" => {
+            let (k, r1) = parse_mangled_type(rest);
+            let (v, r2) = parse_mangled_type(r1);
+            (IrType::Map(Box::new(k), Box::new(v)), r2)
+        }
+        _ => (
+            IrType::Struct {
+                name: s.to_string(),
+                fields: Vec::new(),
+            },
+            "",
+        ),
+    }
+}
+
+/// Resolve a top-level struct name produced by `parse_mangled_type` against the
+/// module, so a user record comes back with its fields rather than as a bare
+/// name. Mirrors what the call sites did before, which looked every argument up
+/// with `lower_type_with_structs`.
+pub(crate) fn resolve_mangled_struct(ty: IrType, module: &IrModule) -> IrType {
+    match ty {
+        IrType::Struct { ref name, ref fields } if fields.is_empty() => lower_type_with_structs(
+            &crate::parser::ast::AstType::Named(name.clone(), crate::parser::lexer::Span::at(0)),
+            module,
+        ),
+        other => other,
+    }
+}
+
 pub(crate) fn mangle_ir_type(ty: &IrType) -> String {
     let s = match ty {
         IrType::TapeRef => "taperef".to_owned(),

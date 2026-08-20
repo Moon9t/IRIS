@@ -1,0 +1,80 @@
+// A generic instantiated at a *container* type. Regression test for #22.
+//
+// `Box<list<i64>>` compiled interpreted and failed to build natively:
+//
+//   error: base element of getelementptr must be sized
+//     %fgep1_0 = getelementptr inbounds %Box__list, ptr %b, i32 0, i32 0
+//
+// The module declared `%Box__list_i64` but the use site said `%Box__list`, and
+// an undeclared LLVM type has no size. Three separate places recovered a
+// generic's type arguments by taking the mangled struct name, stripping the
+// `Base__` prefix and splitting the rest on `_`. That works only while every
+// argument's mangling is a single token: `i64`, `str`, a plain record. A
+// container mangles to `list_i64`, so the split took `list` and threw the
+// element type away.
+//
+// All three sites parse one *type* per argument now, using an actual inverse of
+// the mangler. Type arguments that are single tokens were never affected, which
+// is why every other instantiation in tests/conformance/c12 was fine.
+
+record Box[T] { item: T }
+def box_of[T](v: T) -> Box<T> { Box { item: v } }
+def unbox[T](b: Box<T>) -> T { b.item }
+
+// The reported case: a list as the type argument.
+def list_arg() -> i64 {
+    val inner: list<i64> = list();
+    val bl: Box<list<i64>> = box_of(inner);
+    list_push(unbox(bl), 5);
+    list_push(unbox(bl), 6);
+    assert(list_len(unbox(bl)) == 2);
+    assert(list_get(unbox(bl), 0) == 5);
+    list_len(unbox(bl))
+}
+
+// An option argument mangles to `opt_i64` -- two tokens, same defect.
+def option_arg() -> i64 {
+    val o: option<i64> = some(41);
+    val bo: Box<option<i64>> = box_of(o);
+    assert(is_some(unbox(bo)));
+    assert(unwrap(unbox(bo)) == 41);
+    1
+}
+
+// A map argument mangles to `map_str_i64` -- three tokens, and the only shape
+// where the old code consumed a token belonging to a *later* argument.
+def map_arg() -> i64 {
+    val m: map<str, i64> = map();
+    map_set(m, "a", 7);
+    val bm: Box<map<str, i64>> = box_of(m);
+    assert(unwrap(map_get(unbox(bm), "a")) == 7);
+    1
+}
+
+// Nested: the element is itself a container, so the mangling recurses.
+def nested_arg() -> i64 {
+    val inner: list<list<i64>> = list();
+    val bn: Box<list<list<i64>>> = box_of(inner);
+    assert(list_len(unbox(bn)) == 0);
+    1
+}
+
+// The cases that always worked must keep working -- a single-token argument
+// takes the same path now.
+def scalar_arg() -> i64 {
+    val bi: Box<i64> = box_of(9);
+    assert(unbox(bi) == 9);
+    val bs: Box<str> = box_of("hi");
+    assert(unbox(bs) == "hi");
+    1
+}
+
+def main() -> i64 {
+    assert(list_arg() == 2);
+    assert(option_arg() == 1);
+    assert(map_arg() == 1);
+    assert(nested_arg() == 1);
+    assert(scalar_arg() == 1);
+    println("generic container arg ok");
+    0
+}
