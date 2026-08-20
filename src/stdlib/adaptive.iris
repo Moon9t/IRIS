@@ -31,6 +31,10 @@ extern def iris_adaptive_adapt_threshold(handle : i64, observed_error : f64) -> 
 extern def iris_adaptive_current_threshold(handle : i64) -> f64
 extern def iris_adaptive_observation_count(handle : i64) -> i64
 extern def iris_adaptive_mean_error(handle : i64) -> f64
+extern def iris_adaptive_max_error(handle : i64) -> f64
+extern def iris_adaptive_error_count(handle : i64) -> i64
+extern def iris_adaptive_last_risk(handle : i64) -> f64
+extern def iris_adaptive_confidence(handle : i64) -> f64
 extern def iris_adaptive_reset_stats(handle : i64) -> i64
 extern def iris_adaptive_uncertainty_bayes_update(handle : i64, prior_mean : f64, prior_var : f64, observation : f64, obs_var : f64) -> f64
 
@@ -160,10 +164,17 @@ pub def adaptive_record_error(handle : i64, error : f64) -> i64 {
 
 /// Get current risk metrics for this adaptive state.
 pub def adaptive_get_risk(handle : i64) -> RiskMetrics {
+    // Every field is read from the runtime. This used to be
+    // `(err, err, obs, obs, err, 1.0 - 1.0/(1.0 + abs(err)))` -- the mean
+    // substituted for the max, the observation count for the error count, and a
+    // confidence invented from the mean. See known-issues #34.
     val obs = iris_adaptive_observation_count(handle)
     val err = iris_adaptive_mean_error(handle)
-    val unsafe_flag = if iris_adaptive_is_unsafe(handle) { 1 } else { 0 }
-    (err, err, obs, obs, err, 1.0 - 1.0 / (1.0 + abs(err)))
+    val max_err = iris_adaptive_max_error(handle)
+    val errs = iris_adaptive_error_count(handle)
+    val risk = iris_adaptive_last_risk(handle)
+    val conf = iris_adaptive_confidence(handle)
+    (err, max_err, obs, errs, risk, conf)
 }
 
 pub def adaptive_is_unsafe(handle : i64) -> bool {

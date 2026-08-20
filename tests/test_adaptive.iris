@@ -91,17 +91,22 @@ def check_risk_tracking() -> i64 {
     assert(risk_confidence(m) >= 0.0);
     assert(risk_confidence(m) <= 1.0);
 
-    // KNOWN-WRONG, pinned deliberately. `risk_max_error` does not report a
-    // maximum: the C side sets `m.max_error = 0.0` and never updates it, and
-    // `adaptive_get_risk` builds its tuple as `(err, err, obs, obs, err, ...)`,
-    // substituting the mean for the max and the observation count for the error
-    // count. So max equals mean (2.0), not the true maximum (3.0).
+    // These two were pinned as KNOWN-WRONG until 2026-08-20: `adaptive_get_risk`
+    // built its tuple as `(err, err, obs, obs, err, ...)`, so the max was the
+    // mean and the error count was the observation count. Both are now measured
+    // in the runtime and read back through their own accessors. #34.
     //
-    // Asserted as-is so that fixing it fails this test and forces the
-    // assertion to be updated, rather than the fabrication surviving another
-    // release unnoticed. See known-issues #34.
-    assert(risk_max_error(m) == risk_mean_error(m));
-    assert(risk_errors(m) == risk_observations(m));
+    // The true maximum of 1, 3, 2 is 3 -- distinct from the mean of 2, which is
+    // the point: the two can no longer be the same value by construction.
+    assert(risk_max_error(m) > 2.99);
+    assert(risk_max_error(m) < 3.01);
+    assert(risk_max_error(m) != risk_mean_error(m));
+
+    // `risk_errors` counts observations above this state's risk threshold, which
+    // was set to 10.0 above. None of 1, 3, 2 exceeds it, so the count is 0 while
+    // the observation count is 3 -- again, no longer the same number.
+    assert(risk_errors(m) == 0);
+    assert(risk_errors(m) != risk_observations(m));
 
     adaptive_reset_stats(h);
     assert(risk_observations(adaptive_get_risk(h)) == 0);
@@ -110,22 +115,26 @@ def check_risk_tracking() -> i64 {
 }
 
 def check_risk_threshold() -> i64 {
-    // KNOWN-WRONG, pinned. `adaptive_is_unsafe` ignores the risk threshold
-    // entirely; the C implementation is
+    // `adaptive_is_unsafe` used a hardcoded 0.5 and ignored `risk_threshold`
+    // entirely, so `adaptive_set_risk_threshold` had no effect on the one guard
+    // the module exists to provide. It reads the threshold now. #34.
     //
-    //     return m.last_risk > 0.5 || m.confidence < 0.3;
-    //
-    // so `adaptive_set_risk_threshold` has no effect on it at all. A caller
-    // setting a threshold and expecting the guard to respond gets a guard
-    // answering a different question -- and for a module whose purpose is
-    // deciding when an adaptive system is safe to act, that matters. See
-    // known-issues #34.
-    val h = adaptive_new("thresh", 2, 0.1, 100.0);
-    adaptive_record_error(h, 0.1);
-    val before = adaptive_is_unsafe(h);
-    adaptive_set_risk_threshold(h, 0.0001);
-    adaptive_record_error(h, 0.1);
-    assert(adaptive_is_unsafe(h) == before);
+    // The guard is `last_risk > threshold || confidence < 0.3`. This sample is
+    // chosen so the confidence arm stays quiet (conf ~0.49) and the threshold
+    // arm is the only thing deciding: errors of 0.0 and 0.6 give a risk of
+    // ~0.724, which sits between the two thresholds tested below.
+    val h = adaptive_new("thresh", 2, 0.1, 0.9);
+    adaptive_record_error(h, 0.0);
+    adaptive_record_error(h, 0.6);
+
+    val m = adaptive_get_risk(h);
+    assert(risk_confidence(m) > 0.3);       // confidence arm must not fire
+    assert(risk_last_risk(m) > 0.7);
+    assert(risk_last_risk(m) < 0.75);
+
+    assert(adaptive_is_unsafe(h) == false);  // 0.724 <= 0.9
+    adaptive_set_risk_threshold(h, 0.05);
+    assert(adaptive_is_unsafe(h) == true);   // 0.724 >  0.05
     adaptive_free(h);
     0
 }

@@ -10940,15 +10940,45 @@ impl<'m> Lowerer<'m> {
         // Evaluate the list expression once.
         let (iter_val, iter_ty) = self.lower_expr(iter)?;
 
+        // `for b in s` over a `str` iterates its bytes. This used to fall
+        // through to the list path, so the loop called `list_len` on a string
+        // and died at runtime with "list_len: not a list" -- accepted by the
+        // compiler, broken at execution. See known-issues #63.
+        let iter_is_str = matches!(iter_ty, IrType::Str);
+
+        // A scalar is not iterable at all, and treating it as one produced the
+        // same shape of failure. Reject it here rather than emitting a
+        // `list_len` that cannot succeed. `Infer` stays on the list path: the
+        // type is genuinely unknown at this point, not known-bad.
+        if matches!(iter_ty, IrType::Scalar(_)) {
+            return Err(LowerError::Unsupported {
+                detail: format!(
+                    "cannot iterate a value of type {} -- `for` needs a list, a range or a str",
+                    iter_ty
+                ),
+                span,
+            });
+        }
+
         // Compute length once before loop.
         let len_val = self.builder.fresh_value();
-        self.builder.push_instr(
-            IrInstr::ListLen {
-                result: len_val,
-                list: iter_val,
-            },
-            Some(i64_ty.clone()),
-        );
+        if iter_is_str {
+            self.builder.push_instr(
+                IrInstr::StrLen {
+                    result: len_val,
+                    operand: iter_val,
+                },
+                Some(i64_ty.clone()),
+            );
+        } else {
+            self.builder.push_instr(
+                IrInstr::ListLen {
+                    result: len_val,
+                    list: iter_val,
+                },
+                Some(i64_ty.clone()),
+            );
+        }
 
         // Initial index = 0.
         let idx_init = self.builder.fresh_value();
@@ -11046,21 +11076,34 @@ impl<'m> Lowerer<'m> {
         // Body block.
         self.builder.set_current_block(body_bb);
 
-        // Bind loop variable: list_get(iter_val, idx_param).
+        // Bind loop variable: list_get(iter_val, idx_param), or the byte at
+        // that index when iterating a str (#63).
         let elem_ty = match &iter_ty {
             IrType::List(inner) => *inner.clone(),
+            IrType::Str => i64_ty.clone(),
             _ => IrType::Infer,
         };
         let elem_val = self.builder.fresh_value();
-        self.builder.push_instr(
-            IrInstr::ListGet {
-                result: elem_val,
-                list: iter_val,
-                index: idx_param,
-                elem_ty: elem_ty.clone(),
-            },
-            Some(elem_ty.clone()),
-        );
+        if iter_is_str {
+            self.builder.push_instr(
+                IrInstr::StrIndex {
+                    result: elem_val,
+                    string: iter_val,
+                    index: idx_param,
+                },
+                Some(i64_ty.clone()),
+            );
+        } else {
+            self.builder.push_instr(
+                IrInstr::ListGet {
+                    result: elem_val,
+                    list: iter_val,
+                    index: idx_param,
+                    elem_ty: elem_ty.clone(),
+                },
+                Some(elem_ty.clone()),
+            );
+        }
         self.scope.insert(var.name.clone(), (elem_val, elem_ty));
 
         let loop_var_names: Vec<String> = loop_vars.iter().map(|(n, _, _)| n.clone()).collect();

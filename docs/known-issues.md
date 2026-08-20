@@ -1746,7 +1746,50 @@ supplied by a two-function shim. Reproduced in `docs/ros2-build.md`.
 
 ---
 
-## 34. `std.adaptive` reports risk numbers it never measures — **open, silent**
+## 34. `std.adaptive` reports risk numbers it never measures — **FIXED**
+
+> **Fixed** on 2026-08-20. All three fabrications are gone; every field of
+> `RiskMetrics` is now measured in the runtime and read back through its own
+> accessor.
+>
+> The fabrication was in two layers, which is why it survived. The C side never
+> tracked a maximum or an error count at all (`m.max_error = 0.0`, and
+> `m.errors` was set to `1` by `if (m.last_risk > 0.5)` — a flag, not a count).
+> The IRIS side then papered over the gap: `adaptive_get_risk` built its tuple
+> as `(err, err, obs, obs, err, 1.0 - 1.0/(1.0 + abs(err)))`, substituting the
+> mean for the max, the observation count for the error count, and inventing a
+> confidence from the mean. Every number had a plausible value, which is exactly
+> what made it dangerous.
+>
+> `IrisAdaptiveState` now carries `max_err` and `err_count`, both updated in
+> `iris_adaptive_record_error_impl` (`err_count` counts observations exceeding
+> *this state's* risk threshold), and four new accessors —
+> `iris_adaptive_max_error`, `_error_count`, `_last_risk`, `_confidence` — give
+> the stdlib real values to return.
+>
+> **`adaptive_is_unsafe` ignored the threshold entirely**, using a hardcoded
+> `0.5`, so `adaptive_set_risk_threshold` had no effect on the one guard the
+> module exists to provide — a caller set a threshold, saw a guard, and got a
+> guard answering a different question. It reads `state->risk_threshold` now,
+> clamped to `(0, 1]` since `last_risk` is itself clamped to 1.0 and a threshold
+> above that would make the arm unreachable.
+>
+> Verified: errors of 1, 3, 2 give mean 2 and max 3 (previously both 2); errors
+> of 0.0 and 0.6 give a risk of 0.724, which reads safe at a threshold of 0.9
+> and unsafe at 0.05 (previously identical at both).
+>
+> `tests/test_adaptive.iris` had both defects **pinned as KNOWN-WRONG** so that
+> fixing them would fail the test rather than let the fabrication survive
+> another release. It did fail, and the assertions now pin the real behaviour —
+> including `risk_max_error(m) != risk_mean_error(m)` and `risk_errors(m) !=
+> risk_observations(m)`, so the two can no longer be the same value by
+> construction.
+>
+> The guard's second arm (`confidence < 0.3`) is unchanged and pre-existing; the
+> test's sample is chosen to keep it quiet so the threshold arm is the only
+> thing deciding.
+
+### Original report
 
 Three separate fabrications in the module whose entire purpose is deciding when
 an adaptive system is safe to act:
@@ -3111,7 +3154,38 @@ re-implement it, as the extension-method path already does.
 
 ---
 
-## 61. Native `json_stringify` prints an f64 bit pattern — **open**
+## 61. Native `json_stringify` prints an f64 bit pattern — **FIXED**
+
+> **Fixed** on 2026-08-20. The reported symptom was one case of a general
+> defect: **no record could be stringified natively.** A record with `str` and
+> `i64` fields returned the literal `"null"`, not just a wrong number.
+>
+> A record is emitted natively as a pointer to a flat LLVM struct
+> (`%Point = type { double, double }`). That is not an `IrisVal*`, but
+> `box_to_ptr` classified it under "not a scalar — already a ptr, no boxing
+> needed" and passed it straight to a runtime function that walks *tagged*
+> values. The walker read the first field's bytes as the tag: for
+> `Point { x: 1.5, … }` that is `4612811918334230528`, the IEEE-754 pattern of
+> 1.5 — which is why the symptom looked like a float on an integer path rather
+> than a pointer on a value path.
+>
+> Records are now built into the shape the runtime actually expects: an
+> `IrisList` of boxed field values tagged `IRIS_TAG_STRUCT`, via a new
+> `iris_box_struct` helper. Fields are boxed by their own IR type, so a nested
+> record recurses.
+>
+> Verified across all four shapes, native output identical to interpreted:
+> `{"0":1.5,"1":2.5}`, `{"0":"hi","1":7}`, and nested
+> `{"0":{"0":1.5,"1":2.5},"1":{"0":3,"1":true}}`. `test_json_auto.iris` is off
+> `KNOWN_DIVERGENT`.
+>
+> **Limit, stated:** JSON keys are numeric indices, not field names. Field names
+> are not present at runtime, and this fix does not add them — the interpreter
+> has always behaved the same way, so the two agree, but neither produces the
+> JSON a caller would want to send anywhere. Naming that properly needs the
+> record's field list carried into the runtime.
+
+### Original report
 
 ```text
 native: PASS: json_stringify(Point) = 4612811918334230528
@@ -3144,7 +3218,37 @@ Diagnostics belong on stderr; stdout belongs to the program.
 
 ---
 
-## 63. `for b in some_str` compiles but fails at runtime — **open**
+## 63. `for b in some_str` compiles but fails at runtime — **FIXED**
+
+> **Fixed** on 2026-08-20. `for b in s` over a `str` iterates its bytes, which
+> is what `tests/test_tier2.iris` expected: `sum_bytes("AB") == 131`.
+>
+> `lower_foreach` had one path and assumed it was a list — `ListLen` for the
+> bound, `ListGet` for the element — so a string reached `list_len` and died at
+> runtime. Both instructions have string counterparts already (`StrLen`,
+> `StrIndex`, the latter documented as "byte value at position i"), so the fix
+> is a branch on the iteratee's type, not a new primitive. No `bytes(s)` builtin
+> is needed.
+>
+> The element type came from `match &iter_ty { IrType::List(inner) => …, _ =>
+> IrType::Infer }` — the eighth instance in this codebase of a `_` arm quietly
+> absorbing a case that needed handling, and it defaulted the byte to `i64` via
+> the usual inference fallback. `str` is now handled and a **scalar iteratee is
+> rejected at compile time** rather than emitting a `list_len` that cannot
+> succeed:
+>
+> ```text
+> error[E0103]: cannot iterate a value of type i64 -- `for` needs a list, a range or a str
+> ```
+>
+> `Infer` deliberately stays on the list path: there the type is genuinely
+> unknown, not known-bad.
+>
+> Verified on both backends: `sum_bytes("AB") == 131`, `sum_bytes("") == 0`, and
+> a five-iteration count over `"hello"`. `test_tier2.iris` passes and is off
+> `KNOWN_BROKEN`.
+
+### Original report
 
 ```iris
 def sum_bytes(s: str) -> i64 {

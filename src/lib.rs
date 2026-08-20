@@ -711,6 +711,16 @@ fn interpret_module_for_eval(
             .collect::<Vec<_>>()
             .join("\n"),
     );
+    // Terminate the last line. A native binary's final `print` emits its own
+    // newline, so its stdout always ends with one; this path did not, and the
+    // two therefore differed by a single byte on *every* program that returns a
+    // value. The backend-agreement gate reported the whole corpus as divergent
+    // for that reason -- the same shape of finding as the `iris_codegen:` lines
+    // on stdout (#62), and the reason this function's contract is "callers
+    // cannot tell which path ran".
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
     Ok(out)
 }
 

@@ -58,8 +58,6 @@ const KNOWN_BROKEN: &[(&str, &str)] = &[
      "parse error: fails at parse, not at the refinement it is named for"),
     ("test_struct_update_simple.iris",
      "parse error: uses syntax the compiler does not accept"),
-    ("test_tier2.iris",
-     "for b in str fails at runtime -- #63"),
 ];
 
 /// Files that do not yet assert their results. Shrinking; see #4.
@@ -72,9 +70,7 @@ const NEEDS_ASSERTIONS: &[&str] = &[
 /// this list silently.
 const KNOWN_DIVERGENT: &[(&str, &str)] = &[
     ("test_adaptive.iris",
-     "runs natively, fails interpreted -- std.adaptive, #34"),
-    ("test_json_auto.iris",
-     "native json_stringify prints an f64 bit pattern -- #61"),
+     "std.adaptive is native-only; the interpreter refuses its externs by design rather than returning a zero -- not a defect, and #34 is fixed"),
     ("test_quick_wins.iris",
      "produces no output under the interpreter"),
 ];

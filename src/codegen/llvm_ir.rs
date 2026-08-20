@@ -1509,6 +1509,98 @@ fn runtime_box_helper_for_type(ty: &IrType) -> Option<&'static str> {
     }
 }
 
+/// Box a record value as an `IRIS_TAG_STRUCT` `IrisVal*`.
+///
+/// A record is emitted natively as a pointer to a flat LLVM struct
+/// (`%Point = type { double, double }`). That is *not* an `IrisVal*`, so handing
+/// it to a runtime function that walks tagged values makes the walker read the
+/// first field's bytes as a tag: `json_stringify(Point { x: 1.5, .. })` returned
+/// `4612811918334230528`, the IEEE-754 bit pattern of 1.5. See known-issues #61.
+///
+/// The runtime's shape for a struct is an `IrisList` of boxed field values —
+/// field names are not available at runtime, which is why the JSON keys are
+/// numeric indices. Fields are boxed by their own IR type, so a nested record
+/// recurses.
+fn box_struct_value(
+    out: &mut String,
+    name: &str,
+    fields: &[(String, IrType)],
+    base: &str,
+    counter: &mut u32,
+) -> Result<String, CodegenError> {
+    *counter += 1;
+    let list = format!("%sbox_l{}", *counter);
+    writeln!(out, "  {} = call ptr @iris_list_new()", list)?;
+    for (i, (_fname, fty)) in fields.iter().enumerate() {
+        let fty_s = llvm_type_complete(fty)?;
+        *counter += 1;
+        let gep = format!("%sbox_g{}", *counter);
+        writeln!(
+            out,
+            "  {} = getelementptr inbounds %{}, ptr {}, i32 0, i32 {}",
+            gep, name, base, i
+        )?;
+        *counter += 1;
+        let loaded = format!("%sbox_v{}", *counter);
+        writeln!(out, "  {} = load {}, ptr {}, align 8", loaded, fty_s, gep)?;
+        let boxed = box_field_value(out, fty, &loaded, counter)?;
+        writeln!(out, "  call void @iris_list_push(ptr {}, ptr {})", list, boxed)?;
+    }
+    *counter += 1;
+    let boxed = format!("%sbox{}", *counter);
+    writeln!(out, "  {} = call ptr @iris_box_struct(ptr {})", boxed, list)?;
+    Ok(boxed)
+}
+
+/// Box one already-loaded field register according to its IR type.
+///
+/// Kept separate from `box_to_ptr` because that one resolves the type from a
+/// `ValueId`, and a field loaded out of a struct has no SSA value of its own.
+fn box_field_value(
+    out: &mut String,
+    ty: &IrType,
+    reg: &str,
+    counter: &mut u32,
+) -> Result<String, CodegenError> {
+    let mut call = |out: &mut String, helper: &str, sig: &str, arg: &str, counter: &mut u32| {
+        *counter += 1;
+        let b = format!("%sbox_b{}", *counter);
+        writeln!(out, "  {} = call ptr @{}({} {})", b, helper, sig, arg)
+            .map(|_| b)
+            .map_err(CodegenError::from)
+    };
+    match ty {
+        IrType::Struct { name, fields } => box_struct_value(out, name, fields, reg, counter),
+        IrType::Scalar(DType::I64 | DType::U64 | DType::USize) => {
+            call(out, "iris_box_i64", "i64", reg, counter)
+        }
+        IrType::Scalar(DType::I32) => call(out, "iris_box_i32", "i32", reg, counter),
+        IrType::Scalar(DType::F64) => call(out, "iris_box_f64", "double", reg, counter),
+        IrType::Scalar(DType::F32) => call(out, "iris_box_f32", "float", reg, counter),
+        IrType::Scalar(DType::Bool) => call(out, "iris_box_bool", "i1", reg, counter),
+        IrType::Scalar(DType::U32 | DType::U8) => {
+            *counter += 1;
+            let w = format!("%sbox_w{}", *counter);
+            let from = llvm_type_complete(ty)?;
+            writeln!(out, "  {} = zext {} {} to i64", w, from, reg)?;
+            call(out, "iris_box_i64", "i64", &w, counter)
+        }
+        IrType::Scalar(DType::I8) => {
+            *counter += 1;
+            let w = format!("%sbox_w{}", *counter);
+            writeln!(out, "  {} = sext i8 {} to i64", w, reg)?;
+            call(out, "iris_box_i64", "i64", &w, counter)
+        }
+        IrType::Str => call(out, "iris_box_str", "ptr", reg, counter),
+        // Containers have their own box helper; anything else (a tuple, an enum
+        // with payload) is already a tagged `IrisVal*` and is passed through.
+        _ => match runtime_box_helper_for_type(ty) {
+            Some(h) => call(out, h, "ptr", reg, counter),
+            None => Ok(reg.to_owned()),
+        },
+    }
+}
+
 fn runtime_unbox_helper_for_type(ty: &IrType) -> Option<&'static str> {
     match ty {
         IrType::Str => Some("iris_unbox_str"),
@@ -3179,12 +3271,15 @@ fn emit_instr_ir(
         } => {
             let raw = format!("%raw_ge{}", gep_counter);
             *gep_counter += 1;
+            // Coerce the base: a tuple whose type never fully resolved can reach
+            // here emitted as `i64`, and `iris_get_element(ptr, i32)` then gets
+            // an integer -- invalid IR. Third site needing this, after
+            // `GetVariantTag` and `ListLen` (#51, #55).
+            let bv = coerce_to_type(*base, "ptr", consts, func, emitted_types, gep_counter, out)?;
             writeln!(
                 out,
                 "  {} = call ptr @iris_get_element(ptr {}, i32 {})",
-                raw,
-                val(*base),
-                index
+                raw, bv, index
             )?;
             unbox_ptr_to_result(out, raw, result.0, result_ty, gep_counter)?;
         }
@@ -6196,6 +6291,16 @@ fn emit_instr_ir(
                 for a in args {
                     let av = val(*a);
                     let aty = func.value_type(*a);
+                    // A record needs building into the runtime's struct shape
+                    // first; `box_to_ptr` would pass the raw struct pointer
+                    // through as "already a ptr". See known-issues #61.
+                    if let Some(IrType::Struct { name: sn, fields: sf }) =
+                        inferred_value_type(func, *a, aty).as_ref()
+                    {
+                        let boxed = box_struct_value(out, sn, sf, &av, gep_counter)?;
+                        arg_strs.push(format!("ptr {}", boxed));
+                        continue;
+                    }
                     let boxed = box_to_ptr(
                         out,
                         func,
@@ -6951,6 +7056,7 @@ fn emit_runtime_declares(out: &mut String) -> Result<(), CodegenError> {
         "declare ptr @iris_box_f32(float)",
         "declare ptr @iris_box_bool(i1)",
         "declare ptr @iris_box_str(ptr)",
+        "declare ptr @iris_box_struct(ptr)",
         "declare ptr @iris_box_list(ptr)",
         "declare ptr @iris_box_map(ptr)",
         "declare ptr @iris_box_option(ptr)",

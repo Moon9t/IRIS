@@ -263,6 +263,7 @@ IrisVal* iris_box_f32(float v);
 IrisVal* iris_box_bool(int v);
 IrisVal* iris_box_str(const char* s);
 IrisVal* iris_box_list(IrisList* list);
+IrisVal* iris_box_struct(IrisList* fields);
 IrisVal* iris_box_map(IrisMap* map);
 IrisVal* iris_box_option(IrisOption* opt);
 IrisVal* iris_box_result(IrisResult* res);
@@ -1011,6 +1012,10 @@ int64_t      iris_adaptive_adapt_threshold(int64_t handle, double observed_error
 double       iris_adaptive_current_threshold(int64_t handle);
 int64_t      iris_adaptive_observation_count(int64_t handle);
 double       iris_adaptive_mean_error(int64_t handle);
+double       iris_adaptive_max_error(int64_t handle);
+int64_t      iris_adaptive_error_count(int64_t handle);
+double       iris_adaptive_last_risk(int64_t handle);
+double       iris_adaptive_confidence(int64_t handle);
 int64_t      iris_adaptive_reset_stats(int64_t handle);
 double       iris_adaptive_uncertainty_bayes_update(int64_t handle,
                                                      double prior_mean, double prior_var,

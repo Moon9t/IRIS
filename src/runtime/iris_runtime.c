@@ -194,6 +194,11 @@ IrisVal* iris_box_str(const char* s) {
 IrisVal* iris_box_list(IrisList* list) {
     return box_heap_ref(IRIS_TAG_LIST, list, IRIS_RC_LIST);
 }
+/* A struct is stored as an IrisList of boxed field values -- the shape every
+ * generic value walker in this file already expects. See known-issues #61. */
+IrisVal* iris_box_struct(IrisList* fields) {
+    return box_heap_ref(IRIS_TAG_STRUCT, fields, IRIS_RC_LIST);
+}
 IrisVal* iris_box_map(IrisMap* map) {
     return box_heap_ref(IRIS_TAG_MAP, map, IRIS_RC_MAP);
 }
@@ -6660,6 +6665,13 @@ struct IrisAdaptiveState {
     int64_t   obs_count;
     double    mean_err;
     double    m2;
+    /* Largest |error| seen. Previously never tracked, so `risk_max_error`
+     * reported the *mean* instead -- a strictly smaller number, in the module
+     * whose job is deciding when it is safe to act. See known-issues #34. */
+    double    max_err;
+    /* Observations whose |error| exceeded `risk_threshold`. Previously
+     * `risk_errors` reported the observation count instead. */
+    int64_t   err_count;
     double    last_prediction;
     int       initialized;
 };
@@ -6681,6 +6693,8 @@ IrisAdaptiveState* iris_adaptive_new_impl(const char* name,
     s->obs_count = 0;
     s->mean_err = 0.0;
     s->m2 = 0.0;
+    s->max_err = 0.0;
+    s->err_count = 0;
     s->last_prediction = 0.0;
     s->initialized = 1;
     return s;
@@ -6769,14 +6783,18 @@ void iris_adaptive_record_error_impl(IrisAdaptiveState* state, double error) {
     state->mean_err += delta / (double)state->obs_count;
     double delta2 = error - state->mean_err;
     state->m2 += delta * delta2;
+    /* Track what `risk_max_error` and `risk_errors` claim to report. */
+    double abs_err = fabs(error);
+    if (abs_err > state->max_err) state->max_err = abs_err;
+    if (abs_err > state->risk_threshold) state->err_count++;
 }
 
 IrisRiskMetrics iris_adaptive_get_risk_impl(IrisAdaptiveState* state) {
     IrisRiskMetrics m;
     m.mean_error = state ? state->mean_err : 0.0;
-    m.max_error = 0.0;
+    m.max_error = state ? state->max_err : 0.0;
     m.observations = state ? state->obs_count : 0;
-    m.errors = 0;
+    m.errors = state ? state->err_count : 0;
     m.last_risk = 0.0;
     m.confidence = 1.0;
     if (state && state->obs_count > 1) {
@@ -6786,7 +6804,6 @@ IrisRiskMetrics iris_adaptive_get_risk_impl(IrisAdaptiveState* state) {
         m.last_risk = risk_score > 1.0 ? 1.0 : risk_score;
         m.confidence = std_dev > 0.0 ? exp(-fabs(state->mean_err) / std_dev) : 1.0;
         if (m.confidence > 1.0) m.confidence = 1.0;
-        if (m.last_risk > 0.5) m.errors = 1;
     }
     return m;
 }
@@ -6794,7 +6811,16 @@ IrisRiskMetrics iris_adaptive_get_risk_impl(IrisAdaptiveState* state) {
 int iris_adaptive_is_unsafe_impl(IrisAdaptiveState* state) {
     if (!state) return 0;
     IrisRiskMetrics m = iris_adaptive_get_risk_impl(state);
-    return m.last_risk > 0.5 || m.confidence < 0.3;
+    /* This used a hardcoded 0.5 and ignored `risk_threshold` entirely, so
+     * `adaptive_set_risk_threshold` had no effect on the only guard anyone
+     * calls: a caller set a threshold, saw a guard, and got a guard answering a
+     * different question. `last_risk` is clamped to 1.0, so a threshold above
+     * that would make the risk arm unreachable -- it is clamped to the same
+     * range the score lives in. See known-issues #34. */
+    double threshold = state->risk_threshold;
+    if (threshold <= 0.0) threshold = 0.5;
+    if (threshold > 1.0) threshold = 1.0;
+    return m.last_risk > threshold || m.confidence < 0.3;
 }
 
 void iris_adaptive_set_risk_threshold_impl(IrisAdaptiveState* state, double threshold) {
@@ -6980,6 +7006,27 @@ int64_t iris_adaptive_observation_count(int64_t handle) {
 }
 double iris_adaptive_mean_error(int64_t handle) {
     return iris_adaptive_mean_error_impl(ad_h(handle));
+}
+/* Accessors for the metrics `adaptive_get_risk` claims to report. Without
+ * these the stdlib had nothing real to read and substituted the mean for the
+ * max and the observation count for the error count. See known-issues #34. */
+double iris_adaptive_max_error(int64_t handle) {
+    IrisAdaptiveState* s = ad_h(handle);
+    return s ? s->max_err : 0.0;
+}
+int64_t iris_adaptive_error_count(int64_t handle) {
+    IrisAdaptiveState* s = ad_h(handle);
+    return s ? s->err_count : 0;
+}
+double iris_adaptive_last_risk(int64_t handle) {
+    IrisAdaptiveState* s = ad_h(handle);
+    if (!s) return 0.0;
+    return iris_adaptive_get_risk_impl(s).last_risk;
+}
+double iris_adaptive_confidence(int64_t handle) {
+    IrisAdaptiveState* s = ad_h(handle);
+    if (!s) return 1.0;
+    return iris_adaptive_get_risk_impl(s).confidence;
 }
 int64_t iris_adaptive_reset_stats(int64_t handle) {
     iris_adaptive_reset_stats_impl(ad_h(handle));
