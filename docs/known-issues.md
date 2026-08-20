@@ -2155,7 +2155,95 @@ containers" in the useful sense.
 
 ---
 
-## 39. Effect clauses are dropped when an impl method is mangled — **open**
+## 64. `--strict-effects` does not see through a method call — **open, soundness**
+
+Verified 2026-08-20. This one is a hole in the guarantee, not a nuisance.
+
+```iris
+bring std.container
+
+// Declares nothing at all. Calls a method that allocates.
+def sneaky(xs: list<i64>) -> i64 {
+    xs.size()
+}
+```
+
+`xs.size()` resolves to `Sized__list__size`, whose body calls `list_len` and
+which correctly declares `effect alloc`. `sneaky` declares no effects. Under
+`--strict-effects` this **compiles and runs**.
+
+The cause is in `EffectChecker::build_call_graph`. A call site records the bare
+method name (`size`), not the impl it resolves to — the checker runs on the AST,
+before types exist, so it cannot tell which `size` is meant. The graph then maps
+the bare name to *one* impl's callees, because each impl inserts under the same
+key and the last one wins. With `Sized for list<T>` and `Sized for option<T>`
+both defining `size`, `size` resolves to whichever was parsed last.
+
+Two consequences, in increasing order of seriousness:
+
+1. **False-positive warnings.** `container__total_size` and
+   `container__is_singleton` call `a.size()` and correctly declare
+   `effect alloc`, but strict mode reports "declares effect `alloc` that the
+   body doesn't use". The clause is right and the checker is wrong. Do not
+   "fix" these by deleting the clause.
+2. **Under-reported effects.** The example above is the real problem. An
+   allocation reached through method-call syntax is invisible, so a function can
+   be certified allocation-free while allocating.
+
+**This bounds the headline claim.** "A function with no `effect` clause that
+compiles under `--strict-effects` has been proven to allocate nothing, do no
+I/O and call nothing external anywhere in its reachable call graph" holds only
+for call graphs built from **direct calls**. Any `x.method()` in the graph
+breaks it. Say so whenever the claim is made, until this is closed.
+
+A sound fix needs the call site's receiver type, which means resolving method
+calls before or during effect checking, or moving the check after lowering where
+`trait_dispatch` has already resolved them. A cheap partial improvement — union
+the callees of every impl defining a given method name instead of letting the
+last one win — would be conservative in the right direction and would fix (1),
+but it does not fix (2), because the bare-name entry is not consulted for a name
+that has no top-level function.
+
+Found while fixing #39: correcting the name lookup made the checker read impl
+clauses for the first time, and these two warnings were what it said next.
+
+---
+
+## 39. Effect clauses are dropped when an impl method is mangled — **FIXED**
+
+> **Fixed** on 2026-08-20. `std.container` compiles and runs clean under
+> `--strict-effects`.
+>
+> The clause was never dropped. `EffectChecker::find_function` looked an impl
+> method up by **splitting the mangled name on `__`** — and that stops working
+> the moment a module prefix is present, because a module prefix is itself
+> joined with `__`. `container__Sized__list__size` split into
+> `("container", "Sized", "list__size")`, matched no impl, and the method's
+> declared effects were therefore never read. Every trait method in a brought
+> module was treated as `pure`.
+>
+> The same file *constructs* that name correctly in two other places. The fix is
+> to build it in one place and compare, rather than parse it back — a name is
+> not a data structure, and reconstructing one by string surgery only works
+> until a component contains the separator.
+>
+> **Fixing it immediately found three wrong clauses in `std.container`**, which
+> is the point: the checker had never read them. The `option` impls declared
+> `effect alloc` while actually performing `throw` — they call `unwrap` and
+> never touch the heap. They said `alloc` only because the `list` impls above
+> them do. `Sized for option<T>` is now unannotated (pure), `Countable for
+> option<i64>` declares `throw`, and the `Countable` trait declares
+> `alloc, throw` as the upper bound its implementations may reach.
+>
+> `tests/effect_clauses_survive_mangling.rs` covers all three: the original
+> E0302, the clause/body agreement, and — because a regression test for a
+> checker is worth nothing if the checker stops checking — that strict mode
+> still rejects an undeclared effect.
+>
+> **This did not make `--strict-effects` sound.** See #64, filed from the same
+> session: effects reached through method-call syntax are still not tracked.
+
+### Original report
 
 `src/stdlib/container.iris` declares `effect alloc` on every method that calls
 `list_len`, and on the trait declarations too. Compiling anything that brings it

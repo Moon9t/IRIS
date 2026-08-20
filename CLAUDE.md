@@ -105,6 +105,12 @@ Under `--strict-effects`, a function with no `effect` clause that compiles has
 been proven to allocate nothing, do no I/O and call nothing external anywhere in
 its reachable call graph. Violations fail the build.
 
+**That holds only for call graphs of direct calls.** Effects reached through
+method-call syntax (`x.size()`) are not tracked — the checker runs on the AST,
+before types exist, so it cannot tell which impl a method resolves to. A
+function calling `x.size()` can be certified allocation-free while allocating.
+See known-issues #64, and state this limit whenever the claim is made.
+
 **The VS Code language server must not point at `target/debug/iris.exe`.** Every
 build relinks it; on Windows a running server also holds it locked, so the two
 fight. Point `iris.executablePath` at a stable copy (`~/.iris/bin/iris.exe`) and

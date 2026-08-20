@@ -40,10 +40,14 @@ impl[T] Sized for list<T> {
     def has_any(self) -> bool effect alloc { list_len(self) > 0 }
 }
 
+// No effect clause: `is_some` allocates nothing and cannot throw, so these are
+// pure. They declared `alloc` only because the `list` impl above them does --
+// which no one could see until #39 was fixed and the checker started reading
+// impl-method clauses at all.
 impl[T] Sized for option<T> {
-    def size(self) -> i64 effect alloc { if is_some(self) { 1 } else { 0 } }
-    def is_empty(self) -> bool effect alloc { !is_some(self) }
-    def has_any(self) -> bool effect alloc { is_some(self) }
+    def size(self) -> i64 { if is_some(self) { 1 } else { 0 } }
+    def is_empty(self) -> bool { !is_some(self) }
+    def has_any(self) -> bool { is_some(self) }
 }
 
 // ---------------------------------------------------------------------------
@@ -56,14 +60,14 @@ impl[T] Sized for option<T> {
 /// Containers whose contents can be counted under a predicate.
 pub trait Countable {
     // How many elements satisfy `pred`.
-    def count_where(self, pred: |i64| -> bool) -> i64 effect alloc
+    def count_where(self, pred: |i64| -> bool) -> i64 effect alloc, throw
     // True when every element satisfies `pred`. Vacuously true when empty,
     // which is the convention that composes -- `all` over an empty container
     // returning false is a classic source of wrong branches.
-    def all_of(self, pred: |i64| -> bool) -> bool effect alloc
+    def all_of(self, pred: |i64| -> bool) -> bool effect alloc, throw
     // True when at least one element satisfies `pred`. Vacuously false when
     // empty.
-    def any_of(self, pred: |i64| -> bool) -> bool effect alloc
+    def any_of(self, pred: |i64| -> bool) -> bool effect alloc, throw
 }
 
 impl Countable for list<i64> {
@@ -88,18 +92,22 @@ impl Countable for list<i64> {
     }
 }
 
+// `throw`, not `alloc`: these call `unwrap`, which panics on `none`, and none
+// of them touch the heap. The `is_some` guard makes the panic unreachable in
+// practice, but the effect system tracks what a call *can* do, not what a proof
+// obligation elsewhere makes safe.
 impl Countable for option<i64> {
-    def count_where(self, pred: |i64| -> bool) -> i64 effect alloc {
+    def count_where(self, pred: |i64| -> bool) -> i64 effect throw {
         if is_some(self) {
             if pred(unwrap(self)) { 1 } else { 0 }
         } else {
             0
         }
     }
-    def all_of(self, pred: |i64| -> bool) -> bool effect alloc {
+    def all_of(self, pred: |i64| -> bool) -> bool effect throw {
         if is_some(self) { pred(unwrap(self)) } else { true }
     }
-    def any_of(self, pred: |i64| -> bool) -> bool effect alloc {
+    def any_of(self, pred: |i64| -> bool) -> bool effect throw {
         if is_some(self) { pred(unwrap(self)) } else { false }
     }
 }

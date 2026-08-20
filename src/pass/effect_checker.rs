@@ -51,11 +51,7 @@ impl EffectChecker {
         }
         for impl_def in &ast.impls {
             for method in &impl_def.methods {
-                let mangled = if impl_def.trait_name.is_empty() {
-                    format!("{}__{}", impl_def.type_name, method.name.name)
-                } else {
-                    format!("{}__{}__{}", impl_def.trait_name, impl_def.type_name, method.name.name)
-                };
+                let mangled = Self::mangle(impl_def, method);
                 self.verify_call_sites(&mangled, &method.body);
             }
         }
@@ -70,11 +66,7 @@ impl EffectChecker {
         }
         for impl_def in &ast.impls {
             for method in &impl_def.methods {
-                let mangled = if impl_def.trait_name.is_empty() {
-                    format!("{}__{}", impl_def.type_name, method.name.name)
-                } else {
-                    format!("{}__{}__{}", impl_def.trait_name, impl_def.type_name, method.name.name)
-                };
+                let mangled = Self::mangle(impl_def, method);
                 let mut callees = HashSet::new();
                 self.collect_callees_block(&method.body, &mut callees);
                 graph.insert(mangled, callees.clone());
@@ -415,33 +407,34 @@ impl EffectChecker {
         }
     }
 
+    /// The name an impl method is known by.
+    ///
+    /// Built in exactly one place and used everywhere, because the alternative
+    /// -- reconstructing it by splitting on `__` -- stops working the moment a
+    /// module prefix is present, and a module prefix is itself joined with
+    /// `__`. `container__Sized__list__size` split into
+    /// ("container", "Sized", "list__size"), matched no impl, and the method's
+    /// declared effects were therefore never read: every trait method in a
+    /// brought module was treated as `pure`. See known-issues #39.
+    fn mangle(impl_def: &AstImplDef, method: &AstFunction) -> String {
+        if impl_def.trait_name.is_empty() {
+            format!("{}__{}", impl_def.type_name, method.name.name)
+        } else {
+            format!(
+                "{}__{}__{}",
+                impl_def.trait_name, impl_def.type_name, method.name.name
+            )
+        }
+    }
+
     fn find_function<'a>(&self, ast: &'a AstModule, name: &str) -> Option<&'a AstFunction> {
         if let Some(f) = ast.functions.iter().find(|f| f.name.name == name) {
             return Some(f);
         }
-        if name.contains("__") {
-            let parts: Vec<&str> = name.splitn(3, "__").collect();
-            if parts.len() == 3 {
-                let (trait_name, type_name, method_name) = (parts[0], parts[1], parts[2]);
-                for impl_def in &ast.impls {
-                    if impl_def.trait_name == trait_name && impl_def.type_name == type_name {
-                        for method in &impl_def.methods {
-                            if method.name.name == method_name {
-                                return Some(method);
-                            }
-                        }
-                    }
-                }
-            } else if parts.len() == 2 {
-                let (type_name, method_name) = (parts[0], parts[1]);
-                for impl_def in &ast.impls {
-                    if impl_def.trait_name.is_empty() && impl_def.type_name == type_name {
-                        for method in &impl_def.methods {
-                            if method.name.name == method_name {
-                                return Some(method);
-                            }
-                        }
-                    }
+        for impl_def in &ast.impls {
+            for method in &impl_def.methods {
+                if Self::mangle(impl_def, method) == name {
+                    return Some(method);
                 }
             }
         }
