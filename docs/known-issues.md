@@ -2197,7 +2197,104 @@ containers" in the useful sense.
 
 ---
 
-## 64. `--strict-effects` does not see through a method call — **open, soundness**
+## 65. `--strict-effects` does not see through a function-valued parameter — **open, soundness**
+
+Verified 2026-08-20, by running it. The remaining hole in the allocation-freedom
+proof, and a different mechanism from #64.
+
+```iris
+def noisy(x: i64) -> i64 effect io { println("noisy"); x }
+
+// Declares nothing. Performs `io` by calling its own parameter.
+def hidden(f: |i64| -> i64) -> i64 { f(1) }
+
+def main() -> i64 effect io {
+    val g = |x: i64| noisy(x);
+    val r = hidden(g);
+    0
+}
+```
+
+This compiles and runs under `--strict-effects`, printing `noisy`.
+
+`f` is a parameter, not a function name, so the callee collector has no name to
+record and the call contributes no edge. Unlike #64 this cannot be fixed by
+recording a name — there is no name. It needs the *callee's* effects to be part
+of the parameter's type.
+
+The machinery for that is already half-present: `EffectRow` distinguishes
+concrete effects from **effect variables** (an all-uppercase name is parsed as a
+variable), and `instantiate` substitutes them at a call site. What is missing is
+giving a function-typed parameter an effect variable and binding it to the
+argument's row where the call is made — effect polymorphism, e.g.
+`def hidden(f: |i64| -> i64 effect E) -> i64 effect E`.
+
+That is a language-surface change, not a contained fix, so it wants a plan and
+approval per `.antigravity/orchestrator.md` rather than being done in passing.
+
+**This bounds the headline claim, and the bound is narrower than before #64 was
+fixed.** "A function with no `effect` clause that compiles under
+`--strict-effects` has been proven to allocate nothing, do no I/O and call
+nothing external anywhere in its reachable call graph" now holds for direct
+calls, method calls, extension methods, `dyn Trait` dispatch and closures called
+where they are defined. It does **not** hold when a function value is passed in
+as a parameter and called there. Say so whenever the claim is made.
+
+`tests/effect_clauses_survive_mangling.rs` pins the current behaviour
+deliberately, in the manner of #34: closing this hole will fail that test and
+force the assertion to be updated, rather than the gap surviving another release
+unnoticed.
+
+---
+
+## 64. `--strict-effects` does not see through a method call — **FIXED**
+
+> **Fixed** on 2026-08-20. `def sneaky(xs: list<i64>) -> i64 { xs.size() }` is
+> now rejected — "has effect `alloc` from callees but no explicit `effect`
+> clause" — and declaring `effect alloc` compiles it.
+>
+> **The diagnosis in the original report below is wrong**, and worth correcting
+> because it pointed at the harder half of the problem. It blamed ambiguity
+> between impls: the bare method name mapping to whichever impl was parsed last.
+> That ambiguity is real, but it was not the cause.
+>
+> The `MethodCall` arm of the callee collector walked into the receiver and the
+> arguments and then **dropped the call itself**. `xs.size()` contributed
+> *nothing* to the call graph — there was no edge to be ambiguous about. The
+> comment above it said "look up by method name only; impl resolution happens at
+> monomorphization", which describes an intent the code did not carry out.
+>
+> Two changes:
+>
+> 1. A method call records its method name as a callee. The name is unresolved
+>    at this point — the pass runs on the AST, before types exist — so it is
+>    recorded bare. This also covers extension methods, where `x.f()` is a call
+>    to a module-level `f` whose first parameter is `x`'s type.
+> 2. A bare method name becomes an **alias node** whose callees are every impl
+>    defining it, so its row is their *union* rather than one arbitrary impl's.
+>    Conservative by construction: a union can add effects, never hide one — the
+>    right direction for a checker whose purpose is proving an absence, where a
+>    false positive costs an `effect` clause and a false negative costs the
+>    guarantee. Skipped when a real top-level function owns the name, so a
+>    `def size(...)` is never shadowed by an impl method.
+>
+> The second consequence in the report is fixed by the same change:
+> `container__total_size` and `container__is_singleton` call `a.size()` and
+> correctly declare `effect alloc`; they no longer draw "declares effect `alloc`
+> that the body doesn't use".
+>
+> **Verified beyond the reported case.** Closures (`val f = |x| { println(..) };
+> f(1)`) and `dyn Trait` dispatch (`s.say()`) are both caught — the first
+> because a closure body is walked in place, the second because it is a method
+> call. Neither was checked before.
+>
+> **Still open: #65**, a different mechanism found while verifying this one.
+> Effects reached through a *function-valued parameter* are still invisible.
+>
+> Sweep before committing: all 219 `.iris` files under `tests/` and `examples/`;
+> one file reports effect diagnostics and it is the intentional negative test.
+
+### Original report
 
 Verified 2026-08-20. This one is a hole in the guarantee, not a nuisance.
 

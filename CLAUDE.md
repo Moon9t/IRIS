@@ -105,11 +105,13 @@ Under `--strict-effects`, a function with no `effect` clause that compiles has
 been proven to allocate nothing, do no I/O and call nothing external anywhere in
 its reachable call graph. Violations fail the build.
 
-**That holds only for call graphs of direct calls.** Effects reached through
-method-call syntax (`x.size()`) are not tracked — the checker runs on the AST,
-before types exist, so it cannot tell which impl a method resolves to. A
-function calling `x.size()` can be certified allocation-free while allocating.
-See known-issues #64, and state this limit whenever the claim is made.
+**One exception remains.** Direct calls, method calls, extension methods,
+`dyn Trait` dispatch and closures called where they are defined are all tracked
+(#64, fixed 2026-08-20). Effects reached through a **function-valued parameter**
+are not: `def hidden(f: |i64| -> i64) -> i64 { f(1) }` performs whatever `f`
+performs and is certified pure, because `f` is a parameter and there is no name
+to record. Closing it needs effect polymorphism on function-typed parameters.
+See known-issues #65, and state this limit whenever the claim is made.
 
 **The VS Code language server must not point at `target/debug/iris.exe`.** Every
 build relinks it; on Windows a running server also holds it locked, so the two

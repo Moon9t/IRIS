@@ -59,6 +59,9 @@ impl EffectChecker {
 
     fn build_call_graph(&self, ast: &AstModule) -> HashMap<String, HashSet<String>> {
         let mut graph: HashMap<String, HashSet<String>> = HashMap::new();
+        let top_level: HashSet<String> =
+            ast.functions.iter().map(|f| f.name.name.clone()).collect();
+        let mut method_impls: HashMap<String, HashSet<String>> = HashMap::new();
         for func in &ast.functions {
             let mut callees = HashSet::new();
             self.collect_callees_block(&func.body, &mut callees);
@@ -69,9 +72,30 @@ impl EffectChecker {
                 let mangled = Self::mangle(impl_def, method);
                 let mut callees = HashSet::new();
                 self.collect_callees_block(&method.body, &mut callees);
-                graph.insert(mangled, callees.clone());
-                graph.insert(method.name.name.clone(), callees);
+                graph.insert(mangled.clone(), callees);
+                // The bare name is what an unresolved `x.method()` records, and
+                // several impls can define it. Make it an *alias* node whose
+                // callees are those impls, so its effect row comes out as their
+                // union rather than whichever impl happened to be parsed last.
+                //
+                // Conservative by construction: the union can only add effects,
+                // never hide one. That is the right direction for a checker
+                // whose whole purpose is proving an absence -- a false positive
+                // costs an `effect` clause, a false negative costs the
+                // guarantee. #64.
+                //
+                // Skipped when a real function owns the name, so a top-level
+                // `def size(...)` is never shadowed by an impl method.
+                if !top_level.contains(&method.name.name) {
+                    method_impls
+                        .entry(method.name.name.clone())
+                        .or_insert_with(HashSet::new)
+                        .insert(mangled);
+                }
             }
+        }
+        for (bare, impls) in method_impls {
+            graph.insert(bare, impls);
         }
         graph
     }
@@ -152,8 +176,21 @@ impl EffectChecker {
                     self.collect_callees_expr(a, callees);
                 }
             }
-            AstExpr::MethodCall { base, args, .. } => {
-                // Look up by method name only; impl resolution happens at monomorphization.
+            AstExpr::MethodCall { base, method, args, .. } => {
+                // Record the method itself. This walked into the receiver and
+                // the arguments and then dropped the call on the floor, so
+                // `xs.size()` contributed *nothing* to the call graph: a
+                // function whose only effectful work happened through method
+                // syntax inferred as `pure` and passed `--strict-effects` while
+                // allocating. See known-issues #64.
+                //
+                // The name is unresolved here -- the pass runs on the AST,
+                // before types exist -- so it is recorded bare and resolved in
+                // `build_call_graph`, which knows every impl that defines it.
+                // A bare name also covers extension methods, where `x.f()` is
+                // just a call to a module-level `f` whose first parameter is
+                // `x`'s type.
+                callees.insert(method.clone());
                 self.collect_callees_expr(base, callees);
                 for a in args {
                     self.collect_callees_expr(a, callees);
@@ -402,7 +439,22 @@ impl EffectChecker {
             if let Some(row) = self.registry.lookup(name) {
                 self.inferred.insert(name.to_string(), row.clone());
             } else {
-                self.inferred.insert(name.to_string(), EffectRow::pure());
+                // No definition of its own, but it may still have callees: an
+                // alias node for an unresolved method name lists every impl
+                // that defines it. Resolving those here is what carries a
+                // method call's effects to the caller; defaulting straight to
+                // `pure` is what let #64 through.
+                let mut row = EffectRow::pure();
+                if let Some(callees) = call_graph.get(name) {
+                    for callee in callees {
+                        if let Some(r) = self.registry.lookup(callee) {
+                            row = row.union(r);
+                        } else if let Some(r) = self.inferred.get(callee) {
+                            row = row.union(r);
+                        }
+                    }
+                }
+                self.inferred.insert(name.to_string(), row);
             }
         }
     }
