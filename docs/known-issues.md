@@ -2548,7 +2548,47 @@ set.
 
 ---
 
-## 51. Three corpus files crash natively; a `ptr` result is printed as `i64` — **open**
+## 51. Three corpus files crash natively; a `ptr` result is printed as `i64` — **FIXED**
+
+> **Fixed** on 2026-08-17. All three files run and assert, and are off
+> `KNOWN_BROKEN`. It was not one defect but five, each found by fixing the one
+> in front of it.
+>
+> **1. `Print` chose its helper from the IR type.** An `option<i64>` is a boxed
+> value emitted as `ptr`, so selecting `iris_print_i64(i64 …)` produced invalid
+> IR; clang rejected the module and the eval fallback then crashed, which is why
+> the symptom was a segfault rather than a type error. `println` on *any* option
+> was broken natively, not just the three constructs reported. A value emitted
+> as `ptr` is now boxed and passed to `iris_print`, which dispatches on the tag
+> and formats exactly as the interpreter does. `Str` keeps its own helper — it is
+> a `ptr` but a raw `char*`, not a boxed value.
+>
+> **2. `to_str` had the identical defect**, in the sibling function: it
+> `ptrtoint`-ed the option and printed the address (`find: 81260032` against the
+> interpreter's `find: some(6)`).
+>
+> **3. `iris_value_to_str` handled no containers at all** — only BOOL/F/I/STR/
+> UNIT — so even a correctly boxed option fell to its `<val:N>` default. It now
+> formats `some(…)`, `none`, `ok(…)` and `err(…)`, quoting nested strings so
+> `err("bad")` is distinguishable from a variant named `bad`.
+>
+> **4. `GetVariantTag` passed an `i64` to a `ptr` parameter.** A data-free enum
+> variant is emitted as a bare tag, and the call did not coerce — though the
+> surrounding code was already emitting the `inttoptr` for the same value two
+> lines later.
+>
+> **5. `ProcessExit` was not treated as a block terminator.** It emits
+> `unreachable`, but only `Panic` was registered as doing so, so `exit(1)` inside
+> an `if` arm produced a block with two terminators. Clang did not diagnose that
+> — it crashed outright with a bare stack dump, at every optimisation level
+> including `-O0`. Both sites now share one `ends_block_with_unreachable`
+> predicate rather than two matches that can drift.
+>
+> Two further defects surfaced while asserting the fixed files and are recorded
+> separately: #60 (method-call sugar drifting from its builtin) and #61 (native
+> `json_stringify`).
+
+### Original report
 
 Found by the corpus gate added for #4, on its first native run. The interpreter
 sweep had reported these files as passing, because `IRIS_FORCE_INTERP=1`
@@ -2590,7 +2630,31 @@ about the values `std.adaptive` reports rather than about a divergence.
 
 ---
 
-## 52. The corpus gate covers only the native backend — **open, by design for now**
+## 52. The corpus gate covers only the native backend — **FIXED**
+
+> **Fixed** on 2026-08-17. `tests/iris_corpus.rs` gained
+> `the_two_backends_agree`, which runs every corpus file both natively and under
+> `IRIS_FORCE_INTERP=1` and asserts the output matches, plus
+> `the_known_divergent_list_is_accurate` to keep the exemption list honest.
+>
+> Asserting the backends *agree* is stronger and cheaper than asserting each
+> passes: it catches a regression in either, and it immediately caught `to_str`
+> on an option printing a raw address natively while the interpreter printed
+> `some(6)` (#51).
+>
+> The first sweep reported **all 122 files divergent**, which was the check
+> working: `iris_codegen:` progress lines were going to *stdout*, so every
+> native run began with a line the interpreter never emits. Moving them to
+> stderr (#62) took the count to five real divergences, of which one was fixed
+> and four are listed with reasons: #34, #55, #61, and `test_quick_wins`
+> producing no output under the interpreter.
+>
+> Cost: the gate now takes roughly twice as long, since each file runs twice.
+> That is the price of covering both backends, and it is worth it — every
+> hand sweep before this used `IRIS_FORCE_INTERP=1` and so could not see a
+> native crash at all.
+
+### Original report
 
 `tests/iris_corpus.rs` runs every `.iris` file through `--emit eval`, which
 builds natively. It does **not** also run them under `IRIS_FORCE_INTERP=1`, so
@@ -2604,7 +2668,27 @@ separately passes.
 
 ---
 
-## 53. `--emit eval` discards `main`'s return value, so half the documented test idiom does nothing — **open**
+## 53. `--emit eval` discards `main`'s return value, so half the documented test idiom does nothing — **FIXED**
+
+> **Fixed** on 2026-08-17. `--emit eval` now exits with `main`'s return value,
+> as a built binary already did. Both eval paths document the same output shape
+> — printed lines first, then the returned value last — so the final line is the
+> value; a non-integer return leaves the exit code at 0.
+>
+> The immediate effect was to make one silently-failing file visible:
+> `test_slice_patterns.iris` returned **16** from `main` (the sum of seven arm
+> indices) and had been exiting 0 regardless. It now asserts each helper and
+> returns 0.
+>
+> Every other non-zero exit in the corpus belongs to a file already listed in
+> `MUST_FAIL` or `KNOWN_BROKEN`, which is the expected shape: 18 of 139
+> non-zero, 17 of them intentional.
+>
+> This also makes the corpus gate's exit-code check mean something. Before,
+> `every_iris_test_runs` could only catch compile failures and crashes; a test
+> that detected a wrong answer and reported it through a return code passed.
+
+### Original report
 
 A built binary propagates `main`'s return value as its exit code. `--emit eval`
 does not: it prints the value and exits 0 regardless.
@@ -2889,3 +2973,77 @@ pressure (wrong).
 
 `dap` had the same missing flag and, once past it, the same EOF defect as #58;
 both are fixed. `tests/lsp_dap_cli_transport.rs` runs all four invocations.
+
+---
+
+## 60. Method-call forms of builtins drift from the builtin itself — **partly fixed**
+
+Several builtins have two lowerings: `recv(ch)` and `ch.recv()`, `send(ch, v)`
+and `ch.send(v)`, `list_pop(l)` and `l.pop()`. They are separate code paths, and
+they have drifted.
+
+**Fixed:** `ch.send(v)` did not record the channel's concrete element type the
+way `send(ch, v)` does, so the matching `ch.recv()` fell back to the channel's
+declared element type — `Infer` for an unannotated `channel()` — and left the
+received value boxed. `assert(ch.recv() == 99)` then emitted
+
+```text
+%v153 = icmp eq ptr %v151, 99      ; invalid: ptr vs integer constant
+```
+
+while `assert(recv(ch) == 99)` was fine. Both forms now record and consult the
+same map.
+
+**Fixed:** `process.exit(1)` resolved through the module-qualified path, which
+looked the name up in `fn_sigs` — where builtins also live — and emitted a
+*generic* call, skipping the dispatch that turns `exit` into `ProcessExit`:
+
+```text
+%v38 = call i64 @exit(ptr 1)       ; against declare void @exit(i32)
+```
+
+That path now delegates to `lower_call`, so one implementation serves both.
+
+**Still open:** `l.pop()` is typed `option<_>` but yields a raw `i64` at
+runtime, so neither `l.pop() == 30` (a compile-time type error) nor
+`l.pop().unwrap()` (`OptionUnwrap on non-option: I64(30)`) works. The builtin
+`list_pop(l)` is consistent. `tests/test_methods.iris` asserts the pop through
+the builtin and says why.
+
+The pattern is worth stating plainly: **a builtin with a method-call sugar has
+two implementations that can disagree, and every instance found so far has.**
+The durable fix is for the sugar to desugar to the builtin rather than
+re-implement it, as the extension-method path already does.
+
+---
+
+## 61. Native `json_stringify` prints an f64 bit pattern — **open**
+
+```text
+native: PASS: json_stringify(Point) = 4612811918334230528
+interp: PASS: json_stringify(Point) = {"0":1.5,"1":2.5}
+```
+
+`4612811918334230528` is the IEEE-754 bit pattern of `1.5` read as an integer,
+so a `double` is reaching an integer path somewhere in the native
+`json_stringify` for a record. Found by the backend-agreement gate added for
+#52; `tests/test_json_auto.iris` is listed in `KNOWN_DIVERGENT`.
+
+---
+
+## 62. `iris_codegen:` diagnostics were written to stdout — **FIXED**
+
+> **Fixed** on 2026-08-17: all five emitters now use `eprintln!`.
+
+The native build path printed progress and fallback notices —
+`iris_codegen: using prebuilt runtime objects…`, `ld.lld link failed…` — to
+**stdout**, mixed into the program's own output. Anything consuming that output
+saw compiler chatter prepended to the program's results.
+
+It hid a whole class of bug: the first backend-agreement sweep reported **all
+122 corpus files as divergent**, because the native run's stdout began with a
+codegen line the interpreter never emits. Real divergences were invisible behind
+it. With the diagnostics on stderr the same sweep reported five, which was
+actionable.
+
+Diagnostics belong on stderr; stdout belongs to the program.

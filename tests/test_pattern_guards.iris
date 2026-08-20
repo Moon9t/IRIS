@@ -49,5 +49,13 @@ def test_guard_false() -> i64 {
 }
 
 def main() -> i64 {
-    test_guard() + test_guard_else() + test_guard_multiple() + test_guard_enum() + test_guard_false()
+    // Each helper must select the arm its guard admits. The file summed all
+    // five and checked nothing, so any arms totalling 9 would have passed.
+    assert(test_guard() == 1);           // guard true, first arm
+    assert(test_guard_else() == 2);      // guard false, falls to the next arm
+    assert(test_guard_multiple() == 2);  // second guard is the one that holds
+    assert(test_guard_enum() == 2);      // guard on an enum variant
+    assert(test_guard_false() == 2);     // guard false, binding arm instead
+    println("pattern guards ok");
+    0
 }

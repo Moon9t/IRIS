@@ -13,18 +13,22 @@ MUST_FAIL = {
     "test_option_non_exhaustive.iris": "a when missing an arm is accepted AND yields 0 -- #54",
 }
 
+KNOWN_DIVERGENT = {
+    "test_adaptive.iris": "runs natively, fails interpreted -- std.adaptive, #34",
+    "test_json_auto.iris": "native json_stringify prints an f64 bit pattern -- #61",
+    "test_quick_wins.iris": "produces no output under the interpreter",
+    "test_weak_ref.iris": "reading an upgraded weak ref crashes the interpreter -- #55",
+}
+
 KNOWN_BROKEN = {
     "test_doc_comments.iris": "no zero-argument function, so there is nothing to evaluate",
     "test_features_11_14.iris": "parse error: uses syntax the compiler does not accept",
     "test_ffi_full.iris": "requires iris_ffitest.dll in the working directory",
     "test_generic_set.iris": "a type param only in the return type needs an annotation -- #14",
-    "test_methods.iris": "invalid IR, then the eval fallback crashes -- #51",
     "test_mod_min.iris": "parse error: uses syntax the compiler does not accept",
     "test_mod_simple.iris": "parse error: uses syntax the compiler does not accept",
-    "test_move.iris": "native crash -- #51",
     "test_nursery.iris": "print() arity",
     "test_par_map.iris": "parse error: uses syntax the compiler does not accept",
-    "test_pattern_guards.iris": "native crash -- #51",
     "test_refine_fail.iris": "parse error: fails at parse, not at the refinement it is named for",
     "test_tier2.iris": "comparison operators skip their Ord impl -- #56",
     "test_struct_update_simple.iris": "parse error: uses syntax the compiler does not accept",
@@ -81,6 +85,13 @@ const NEEDS_ASSERTIONS: &[&str] = &[
 NEEDS_BODY
 ];
 
+/// Files whose two backends disagree, each with why. The gate below asserts
+/// that *everything else* agrees, so a new divergence fails rather than joining
+/// this list silently.
+const KNOWN_DIVERGENT: &[(&str, &str)] = &[
+KNOWN_DIVERGENT_BODY
+];
+
 fn corpus() -> Vec<String> {
     let mut v: Vec<String> = std::fs::read_dir("tests")
         .expect("tests/ must be readable")
@@ -101,9 +112,17 @@ fn asserts(name: &str) -> bool {
 /// Runs a corpus file through the real CLI. The exit code is `None` when the
 /// process was killed by a signal, which is how a crash shows up.
 fn run(name: &str) -> (Option<i32>, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_iris"))
-        .args(["--emit", "eval"])
-        .arg(Path::new("tests").join(name))
+    run_with(name, false)
+}
+
+/// Runs a corpus file, optionally forcing the interpreter.
+fn run_with(name: &str, force_interp: bool) -> (Option<i32>, String) {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_iris"));
+    cmd.args(["--emit", "eval"]).arg(Path::new("tests").join(name));
+    if force_interp {
+        cmd.env("IRIS_FORCE_INTERP", "1");
+    }
+    let out = cmd
         .output()
         .expect("failed to launch the iris binary");
     let text = format!(
@@ -217,6 +236,73 @@ fn negative_tests_still_fail() {
     assert!(wrong.is_empty(), "{}", wrong.join("\\n  "));
 }
 
+/// The two backends must compute the same answer.
+///
+/// The gate used to run only the native path, so an interpreter-only failure
+/// escaped CI entirely -- and the backends genuinely disagree in both
+/// directions (known-issues #52). Asserting they *agree* is a stronger and
+/// cheaper statement than asserting each passes separately: it catches a
+/// regression in either one, and it caught `to_str` on an option printing a raw
+/// address natively while the interpreter printed `some(6)`.
+///
+/// Only stdout is compared. Diagnostics go to stderr -- which is itself
+/// something this check forced: `iris_codegen:` progress lines were being
+/// written to stdout, so every single file "diverged" until they were moved.
+#[test]
+fn the_two_backends_agree() {
+    let exempt: Vec<&str> = MUST_FAIL
+        .iter()
+        .map(|(f, _)| *f)
+        .chain(KNOWN_BROKEN.iter().map(|(f, _)| *f))
+        .chain(KNOWN_DIVERGENT.iter().map(|(f, _)| *f))
+        .collect();
+
+    let mut disagree = Vec::new();
+    for f in corpus() {
+        if exempt.contains(&f.as_str()) {
+            continue;
+        }
+        let (_, native) = run_with(&f, false);
+        let (_, interp) = run_with(&f, true);
+        if native != interp {
+            disagree.push(format!(
+                "{}
+      native: {}
+      interp: {}",
+                f,
+                native.lines().last().unwrap_or("(no output)"),
+                interp.lines().last().unwrap_or("(no output)")
+            ));
+        }
+    }
+    assert!(
+        disagree.is_empty(),
+        "these files produce different output on the two backends:
+  {}",
+        disagree.join("
+  ")
+    );
+}
+
+/// The divergence list must stay honest, like the others.
+#[test]
+fn the_known_divergent_list_is_accurate() {
+    let mut wrong = Vec::new();
+    for (f, _) in KNOWN_DIVERGENT {
+        if !Path::new("tests").join(f).exists() {
+            wrong.push(format!("{} is listed as divergent but does not exist", f));
+            continue;
+        }
+        let (_, native) = run_with(f, false);
+        let (_, interp) = run_with(f, true);
+        if native == interp {
+            wrong.push(format!("{} now agrees and must come off KNOWN_DIVERGENT", f));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("
+  "));
+}
+
 /// The debt register must describe reality: a file that has been fixed comes off
 /// KNOWN_BROKEN, or the list stops being a to-do list.
 #[test]
@@ -239,6 +325,7 @@ src = (HEADER
        .replace("MUST_FAIL_BODY", pairs(MUST_FAIL))
        .replace("KNOWN_BROKEN_BODY", pairs(KNOWN_BROKEN))
        .replace("NEEDS_BODY", names(missing))
+       .replace("KNOWN_DIVERGENT_BODY", pairs(KNOWN_DIVERGENT))
        .replace("MISSING_N", str(len(missing)))
        .replace("TOTAL_N", str(len(tests))))
 

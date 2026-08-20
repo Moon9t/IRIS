@@ -807,12 +807,19 @@ fn emit_function_body(
         }
     }
 
-    // Pre-compute blocks that contain a Panic instruction — these end with
-    // `unreachable` in LLVM IR and must not appear as phi predecessors.
+    // Pre-compute blocks that end in `unreachable` — they must not appear as
+    // phi predecessors, and nothing may be emitted after the terminator.
+    //
+    // `ProcessExit` was missing here. `exit(1)` inside an `if` arm emitted
+    // `call void @exit` + `unreachable`, and then the arm's own `br` to the
+    // merge block, giving one LLVM block two terminators. Clang did not
+    // diagnose it -- it crashed outright with a bare stack dump, at every
+    // optimisation level including -O0. Same shape as the `Panic` case this
+    // guard was written for. See known-issues #51.
     let panic_blocks: HashSet<BlockId> = func
         .blocks()
         .iter()
-        .filter(|b| b.instrs.iter().any(|i| matches!(i, IrInstr::Panic { .. })))
+        .filter(|b| b.instrs.iter().any(ends_block_with_unreachable))
         .map(|b| b.id)
         .collect();
 
@@ -1461,7 +1468,7 @@ fn emit_function_body(
                     }
                 }
             }
-            if matches!(instr, IrInstr::Panic { .. }) {
+            if ends_block_with_unreachable(instr) {
                 panic_emitted = true;
             }
             emit_instr_ir(
@@ -4970,6 +4977,58 @@ fn emit_instr_ir(
         IrInstr::Print { operand } => {
             // Typed print: use specialised helper for scalars.
             let oty = inferred_value_type(func, *operand, func.value_type(*operand));
+
+            // The helper used to be chosen from the *IR* type alone, which is a
+            // claim about the value rather than a fact about how it was
+            // emitted. An `option<i64>` is a boxed value emitted as `ptr`, so
+            // selecting `iris_print_i64` produced
+            //
+            //   '%v8' defined with type 'ptr' but expected 'i64'
+            //
+            // and clang rejected the module -- then `--emit eval` fell back to
+            // the interpreter, which crashed, so the reported symptom was a
+            // segfault rather than a type error. `println` on *any* option was
+            // broken natively, not just the three constructs first reported.
+            // See known-issues #51.
+            //
+            // A value emitted as `ptr` is a boxed `IrisVal`, and `iris_print`
+            // dispatches on its tag -- printing `some(6)` / `none` for options,
+            // and matching the interpreter exactly. `Str` is the exception: it
+            // is emitted as `ptr` but is a raw `char*`, not a boxed value, so it
+            // keeps its own helper.
+            let emitted_is_ptr = emitted_types
+                .get(operand)
+                .map(|t| t == "ptr")
+                .unwrap_or(false);
+            let is_str = matches!(oty.as_ref(), Some(IrType::Str));
+            if emitted_is_ptr && !is_str {
+                // The pointer is the *container* (an `IrisOption*`, `IrisList*`
+                // and so on), not an `IrisVal*`. Passing it to `iris_print`
+                // straight printed a raw address -- `<val:-399122687>` where the
+                // interpreter says `some(42)`. Box it first so the tag is
+                // present for `iris_print` to dispatch on.
+                let boxer = match oty.as_ref() {
+                    Some(IrType::Option(_)) => Some("iris_box_option"),
+                    Some(IrType::ResultType(..)) => Some("iris_box_result"),
+                    Some(IrType::List(_)) => Some("iris_box_list"),
+                    Some(IrType::Map(..)) => Some("iris_box_map"),
+                    _ => None,
+                };
+                match boxer {
+                    Some(f) => {
+                        *gep_counter += 1;
+                        let boxed = format!("%boxprint{}", gep_counter);
+                        writeln!(out, "  {} = call ptr @{}(ptr {})", boxed, f, val(*operand))?;
+                        writeln!(out, "  call void @iris_print(ptr {})", boxed)?;
+                    }
+                    // Already an `IrisVal*` (or something opaque): print as is.
+                    None => {
+                        writeln!(out, "  call void @iris_print(ptr {})", val(*operand))?;
+                    }
+                }
+                return Ok(());
+            }
+
             match oty.as_ref() {
                 Some(IrType::Scalar(DType::I64)) => {
                     writeln!(out, "  call void @iris_print_i64(i64 {})", val(*operand))?;
@@ -5086,6 +5145,39 @@ fn emit_instr_ir(
             // Check the actual emitted LLVM type; if it's ptr but IR thinks scalar,
             // insert a ptrtoint before calling the typed to_str function.
             let emitted_ty = emitted_types.get(operand).map(|s| s.as_str());
+
+            // A boxed container has no scalar to convert. `to_str(s.find(..))`
+            // used to ptrtoint the option and print the address --
+            // `find: 81260032` where the interpreter says `find: some(6)`.
+            // Same defect as `Print` had, in the sibling function; box the
+            // container and use the generic converter, which formats it exactly
+            // as the interpreter does. See known-issues #51.
+            let container_boxer = match oty.as_ref() {
+                Some(IrType::Option(_)) => Some("iris_box_option"),
+                Some(IrType::ResultType(..)) => Some("iris_box_result"),
+                Some(IrType::List(_)) => Some("iris_box_list"),
+                Some(IrType::Map(..)) => Some("iris_box_map"),
+                _ => None,
+            };
+            if emitted_ty == Some("ptr") {
+                if let Some(boxer) = container_boxer {
+                    // The operand is the container itself (`iris_str_find`
+                    // returns `IrisOption*`), so box it before the converter,
+                    // which dispatches on the boxed tag.
+                    *gep_counter += 1;
+                    let boxed = format!("%boxstr{}", gep_counter);
+                    writeln!(out, "  {} = call ptr @{}(ptr {})", boxed, boxer, val(*operand))?;
+                    writeln!(
+                        out,
+                        "  %v{} = call ptr @iris_value_to_str(ptr {})",
+                        result.0, boxed
+                    )?;
+                    // The result's emitted type is already registered as `ptr`
+                    // by the pre-pass that walks every instruction.
+                    return Ok(());
+                }
+            }
+
             match oty.as_ref() {
                 Some(IrType::Scalar(DType::I64)) => {
                     let arg = if emitted_ty == Some("ptr") {
@@ -5437,11 +5529,19 @@ fn emit_instr_ir(
         }
         // Phase 61: Pattern matching helpers
         IrInstr::GetVariantTag { result, operand } => {
+            // A data-free enum variant is emitted as a bare `i64` tag, so
+            // passing it straight to a `ptr` parameter produced
+            //
+            //   %v4 = call i64 @iris_get_variant_tag(ptr %v0)   ; %v0 is i64
+            //
+            // which clang rejected. `coerce_to_type` inserts the `inttoptr`
+            // that the surrounding code was already emitting for the same value
+            // two lines later. See known-issues #51.
+            let op = coerce_to_type(*operand, "ptr", consts, func, emitted_types, gep_counter, out)?;
             writeln!(
                 out,
                 "  %v{} = call i64 @iris_get_variant_tag(ptr {})",
-                result.0,
-                val(*operand)
+                result.0, op
             )?;
         }
         IrInstr::StrEq { result, lhs, rhs } => {
@@ -6259,6 +6359,17 @@ fn emit_struct_eq(
         });
     }
     Ok(acc.expect("at least one field"))
+}
+
+/// Instructions that emit `unreachable` as their block's terminator.
+///
+/// Anything listed here ends the block: no further instruction may be emitted
+/// after it, and the block cannot be a phi predecessor. Two such instructions
+/// exist, and keeping them in one predicate is deliberate -- when only `Panic`
+/// was handled, `ProcessExit` produced blocks with two terminators that crashed
+/// clang without a diagnostic.
+fn ends_block_with_unreachable(instr: &IrInstr) -> bool {
+    matches!(instr, IrInstr::Panic { .. } | IrInstr::ProcessExit { .. })
 }
 
 pub fn llvm_type_complete(ty: &IrType) -> Result<String, CodegenError> {

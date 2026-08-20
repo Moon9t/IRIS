@@ -94,11 +94,17 @@ def test_bind_prefix_elements() -> i64 {
 }
 
 def main() -> i64 {
-    test_exact_match() +
-    test_rest_binding() +
-    test_mixed_match() +
-    test_wildcard_elements() +
-    test_exact_no_match_longer() +
-    test_empty_list() +
-    test_bind_prefix_elements()
+    // Each helper returns the arm its list matched. main used to return the
+    // *sum* (16), which meant nothing and -- until #53 -- was discarded by
+    // `--emit eval`, so the file could not fail whatever the arms did.
+    assert(test_exact_match() == 1);
+    assert(test_rest_binding() == 3);
+    assert(test_mixed_match() == 2);
+    assert(test_wildcard_elements() == 3);
+    // A list longer than the exact pattern must NOT match it.
+    assert(test_exact_no_match_longer() == 0);
+    assert(test_empty_list() == 0);
+    assert(test_bind_prefix_elements() == 7);
+    println("slice patterns ok");
+    0
 }

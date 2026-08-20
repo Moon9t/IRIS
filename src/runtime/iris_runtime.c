@@ -596,6 +596,31 @@ char* iris_f32_to_str(float v)  { return iris_f64_to_str((double)v); }
 char* iris_bool_to_str(int v)   { return xstrdup(v ? "true" : "false"); }
 char* iris_str_to_str(const char* s) { return xstrdup(s); }
 
+/* Formats a value as it appears *inside* a container.
+ *
+ * Strings are quoted here so that `err("bad")` is distinguishable from a
+ * variant literally named `bad` -- the interpreter does the same, and the two
+ * backends must agree. */
+static char* value_to_str_nested(IrisVal* v) {
+    if (v && v->tag == IRIS_TAG_STR) {
+        const char* raw = v->str ? v->str : "";
+        size_t n = strlen(raw) + 3;
+        char* buf = xmalloc(n);
+        snprintf(buf, n, "\"%s\"", raw);
+        return buf;
+    }
+    return iris_value_to_str(v);
+}
+
+/* Wraps `inner` as `label(inner)` and frees it. */
+static char* wrap_labelled(const char* label, char* inner) {
+    size_t n = strlen(label) + strlen(inner) + 3;
+    char* buf = xmalloc(n);
+    snprintf(buf, n, "%s(%s)", label, inner);
+    free(inner);
+    return buf;
+}
+
 char* iris_value_to_str(IrisVal* v) {
     if (!v) return xstrdup("unit");
     switch (v->tag) {
@@ -606,6 +631,20 @@ char* iris_value_to_str(IrisVal* v) {
         case IRIS_TAG_BOOL: return iris_bool_to_str(v->boolean);
         case IRIS_TAG_STR:  return xstrdup(v->str);
         case IRIS_TAG_UNIT: return xstrdup("unit");
+        /* Containers were missing entirely, so `to_str(s.find(..))` fell to the
+         * `<val:N>` default and printed `find: <val:8>` where the interpreter
+         * says `find: some(6)`. See known-issues #51. */
+        case IRIS_TAG_OPTION: {
+            IrisOption* o = (IrisOption*)v->ptr;
+            if (!o || !o->has_value) return xstrdup("none");
+            return wrap_labelled("some", value_to_str_nested(o->value));
+        }
+        case IRIS_TAG_RESULT: {
+            IrisResult* r = (IrisResult*)v->ptr;
+            if (!r) return xstrdup("unit");
+            return wrap_labelled(r->is_ok ? "ok" : "err",
+                                 value_to_str_nested(r->value));
+        }
         default: {
             char buf[32];
             snprintf(buf, sizeof(buf), "<val:%d>", v->tag);

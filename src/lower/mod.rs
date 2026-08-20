@@ -2509,33 +2509,35 @@ impl<'m> Lowerer<'m> {
                             };
                             return self.lower_call(&synthetic_callee, args, &[], *span);
                         }
-                        let ret_ty = self
-                            .fn_sigs
-                            .get(unqualified_mangled_fn.as_str())
-                            .cloned()
-                            .or_else(|| {
-                                self.mono_sigs
-                                    .borrow()
-                                    .get(unqualified_mangled_fn.as_str())
-                                    .cloned()
-                            });
-                        if let Some(ret_ty) = ret_ty {
-                            let mut arg_vals = Vec::with_capacity(args.len());
-                            for arg in args {
-                                let (v, _) = self.lower_expr(arg)?;
-                                arg_vals.push(v);
-                            }
-                            let result = self.builder.fresh_value();
-                            self.builder.push_instr(
-                                IrInstr::Call {
-                                    result: Some(result),
-                                    callee: unqualified_mangled_fn,
-                                    args: arg_vals,
-                                    result_ty: Some(ret_ty.clone()),
-                                },
-                                Some(ret_ty.clone()),
-                            );
-                            return Ok((result, ret_ty));
+                        // Delegate to `lower_call` rather than emitting the
+                        // `Call` here. Builtins live in `fn_sigs` too, so this
+                        // branch used to match them and emit a *generic* call,
+                        // skipping the dispatch that turns them into their real
+                        // instruction. `process.exit(1)` became
+                        //
+                        //   %v38 = call i64 @exit(ptr 1)
+                        //
+                        // against `declare void @exit(i32)` -- wrong return
+                        // type and wrong argument type -- which clang rejected,
+                        // and the eval fallback then crashed. Bare `exit(1)`
+                        // was always fine, because it went through `lower_call`.
+                        // See known-issues #51.
+                        //
+                        // `lower_call` handles builtins, externs, trait dispatch
+                        // and ordinary functions, so routing everything through
+                        // it keeps one implementation instead of two that can
+                        // disagree.
+                        if self.fn_sigs.contains_key(unqualified_mangled_fn.as_str())
+                            || self
+                                .mono_sigs
+                                .borrow()
+                                .contains_key(unqualified_mangled_fn.as_str())
+                        {
+                            let synthetic_callee = Ident {
+                                name: unqualified_mangled_fn,
+                                span: base_ident.span,
+                            };
+                            return self.lower_call(&synthetic_callee, args, &[], *span);
                         }
                     }
                     if let Some(variants) = self.module.enum_def(&base_resolved_enum) {
@@ -3245,7 +3247,16 @@ impl<'m> Lowerer<'m> {
                                     span: *span,
                                 });
                             }
-                            let (v, _) = self.lower_expr(&args[0])?;
+                            let (v, v_ty) = self.lower_expr(&args[0])?;
+                            // Record the concrete element type, exactly as the
+                            // `send(ch, v)` builtin does. Without this the
+                            // matching `recv` had nothing to look up and fell
+                            // back to the channel's declared element type --
+                            // `Infer` for an unannotated `channel()` -- leaving
+                            // the received value boxed. See #51.
+                            self.chan_elem_types
+                                .entry(base_val)
+                                .or_insert_with(|| v_ty.clone());
                             self.builder.push_instr(
                                 IrInstr::ChanSend { chan: base_val, value: v },
                                 None,
@@ -3259,12 +3270,32 @@ impl<'m> Lowerer<'m> {
                             return Ok((zero, IrType::Scalar(DType::I64)));
                         }
                         "recv" => {
+                            // Prefer the element type recorded when `send` was
+                            // called, exactly as the `recv(ch)` builtin does.
+                            // Using the channel's *declared* element type meant
+                            // an unannotated `channel()` recv'd at `Infer`, so
+                            // the result stayed boxed and
+                            //
+                            //   assert(ch.recv() == 99)
+                            //
+                            // emitted `icmp eq ptr %v, 99` -- invalid IR --
+                            // while `recv(ch) == 99` was fine. Two lowerings of
+                            // one operation that had drifted apart. See #51.
+                            let elem_ty = self
+                                .chan_elem_types
+                                .get(&base_val)
+                                .cloned()
+                                .unwrap_or_else(|| elem.clone());
                             let result = self.builder.fresh_value();
                             self.builder.push_instr(
-                                IrInstr::ChanRecv { result, chan: base_val, elem_ty: elem.clone() },
-                                Some(elem.clone()),
+                                IrInstr::ChanRecv {
+                                    result,
+                                    chan: base_val,
+                                    elem_ty: elem_ty.clone(),
+                                },
+                                Some(elem_ty.clone()),
                             );
-                            return Ok((result, elem));
+                            return Ok((result, elem_ty));
                         }
                         _ => {} // fall through
                     }

@@ -30,21 +30,13 @@ def test_move_chain() -> str {
 }
 
 def main() -> i64 {
-    val t1 = test_basic_move();
-    val t2 = test_move_and_use();
-    val t3 = test_move_in_block();
-    val t4 = test_move_chain();
-
-    println("t1 = " + to_str(t1));
-    println("t2 = " + t2);
-    println("t3 = " + to_str(t3));
-    println("t4 = " + t4);
-
-    if t1 == 3 && t2 == "hello" && t3 == 42 && t4 == "world" {
-        println("ALL MOVE TESTS PASSED")
-    } else {
-        println("SOME TESTS FAILED");
-        process.exit(1)
-    };
+    // `move` transfers ownership; the moved-to binding must hold the value.
+    // This file previously printed the four results and checked them only via
+    // a `process.exit(1)` that `--emit eval` discards anyway (#53).
+    assert(test_basic_move() == 3);
+    assert(test_move_and_use() == "hello");
+    assert(test_move_in_block() == 42);
+    assert(test_move_chain() == "world");
+    println("move ok");
     return 0
 }

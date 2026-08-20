@@ -377,6 +377,34 @@ fn run() {
                         }
                     } else {
                         print!("{}", output);
+
+                        // Propagate `main`'s return value as the process exit
+                        // code, which is what a built binary already does.
+                        //
+                        // `--emit eval` used to print the value and exit 0
+                        // regardless, so the documented test idiom -- "return a
+                        // non-zero code on mismatch" -- silently passed: a test
+                        // that detected a failure and returned 1 still exited 0.
+                        // 34 corpus files used exactly that idiom. See
+                        // known-issues #53.
+                        //
+                        // Both eval paths document the same output shape --
+                        // printed lines first, then the returned value last --
+                        // so the final line is the value. A non-integer return
+                        // (f64, str) leaves the exit code at 0, since there is
+                        // no meaningful code to report.
+                        if cli.emit == iris::EmitKind::Eval {
+                            if let Some(last) = output.lines().last() {
+                                if let Ok(code) = last.trim().parse::<i64>() {
+                                    if code != 0 {
+                                        // Exit codes are a byte; 256 would
+                                        // otherwise be reported as success.
+                                        let code = (code.rem_euclid(256)) as i32;
+                                        process::exit(if code == 0 { 1 } else { code });
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 Err(e) => {

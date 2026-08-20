@@ -1,59 +1,77 @@
+// Method-call syntax across every built-in type.
+//
+// This file used to print ~25 values and check none of them. It also could not
+// run natively at all: `println` on an `option` emitted `iris_print_i64(i64 %v)`
+// for a value emitted as `ptr`, clang rejected the module, and the interpreter
+// fallback then crashed -- so the reported symptom was a segfault (#51).
 def main() -> i64 {
+    // option methods
     val x = some(42);
-    println(x.is_some());
-    println(x.is_none());
-    println(x.unwrap());
+    assert(x.is_some());
+    assert(x.is_none() == false);
+    assert(x.unwrap() == 42);
 
     val y: option<i64> = none();
-    println(y.is_some());
-    println(y.is_none());
+    assert(y.is_some() == false);
+    assert(y.is_none());
 
+    // result methods
     val a = ok(100);
-    println(a.is_ok());
-    println(a.is_err());
-    println(a.unwrap());
+    assert(a.is_ok());
+    assert(a.is_err() == false);
+    assert(a.unwrap() == 100);
 
     val b: result<i64, str> = err("fail");
-    println(b.is_ok());
-    println(b.is_err());
-    println(b.unwrap_err());
+    assert(b.is_ok() == false);
+    assert(b.is_err());
+    assert(b.unwrap_err() == "fail");
 
+    // str methods
     val s = "hello world";
-    println(s.len());
-    println(s.contains("world"));
-    println(s.index(0));
-    println(s.slice(0, 5));
-    println(s.find("world"));
+    assert(s.len() == 11);
+    assert(s.contains("world"));
+    assert(s.contains("absent") == false);
+    assert(s.slice(0, 5) == "hello");
 
+    // list methods: push, get, set, pop
     val lst = list();
     lst.push(10);
     lst.push(20);
     lst.push(30);
-    println(lst.len());
-    println(lst.get(1));
+    assert(lst.len() == 3);
+    assert(lst.get(1) == 20);
     lst.set(1, 25);
-    println(lst.get(1));
-    println(lst.pop());
+    assert(lst.get(1) == 25);
+    // `lst.pop()` is typed `option<_>` but yields a raw i64 at runtime, so
+    // neither `== 30` (type error) nor `.unwrap()` (OptionUnwrap on I64) works.
+    // The builtin form is consistent, so the pop is asserted through it.
+    // See known-issues #60.
+    assert(list_pop(lst) == 30);
+    assert(lst.len() == 2);
 
+    // scalar method
     val n = 42;
-    println(n.to_str());
+    assert(n.to_str() == "42");
 
+    // map methods
     val m = map();
     m.set("a", 1);
     m.set("b", 2);
-    println(m.len());
-    println(m.contains("a"));
+    assert(m.len() == 2);
+    assert(m.contains("a"));
+    assert(m.contains("zz") == false);
 
+    // channel methods
     val ch = channel();
     ch.send(99);
-    println(ch.recv());
+    assert(ch.recv() == 99);
 
-    // Combinators: option.map
+    // combinators
     val doubled = x.map(|v: i64| v * 2);
-    println(doubled);
+    assert(doubled.unwrap() == 84);
+    assert(y.unwrap_or(0 - 1) == 0 - 1);
+    assert(x.unwrap_or(0) == 42);
 
-    val defaulted = y.unwrap_or(-1);
-    println(defaulted);
-
+    println("methods ok");
     0
 }

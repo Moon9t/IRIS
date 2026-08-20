@@ -496,7 +496,7 @@ fn build_binary_impl(
     // only so `iris build-plugin torch` can find LibTorch, and so the ONNX DLL
     // can be staged next to the output binary as a convenience.
     if std::env::var("IRIS_NATIVE_ML_BACKENDS").is_ok() {
-        println!(
+        eprintln!(
             "iris_codegen: note — IRIS_NATIVE_ML_BACKENDS is obsolete and ignored; \
              ML backends are now loaded at runtime"
         );
@@ -543,7 +543,7 @@ fn build_binary_impl(
                 detail: format!("failed to write prebuilt object '{}': {}", name, e),
             })?;
         }
-        println!(
+        eprintln!(
             "iris_codegen: using prebuilt runtime objects for {} (no C compiler required)",
             resolved_target
         );
@@ -732,13 +732,13 @@ fn build_binary_impl(
 
     let link_output = match link_result {
         Ok(()) => {
-            println!("iris_codegen: linked via ld.lld directly");
+            eprintln!("iris_codegen: linked via ld.lld directly");
             stage_sqlite_dll_next_to(output_path);
             stage_onnxruntime_dll_next_to(output_path);
             return Ok(output_path.to_path_buf());
         }
         Err(e) => {
-            println!("iris_codegen: ld.lld link failed ({}), falling back to clang", e);
+            eprintln!("iris_codegen: ld.lld link failed ({}), falling back to clang", e);
             // Fallback: link via clang
             let mut link_cmd = Command::new(&clang);
             link_cmd.args(&target_args);
@@ -821,7 +821,7 @@ fn build_binary_impl(
 /// directory when inspecting generated IR or objects.
 fn cleanup_build_dir(tmp_dir: &std::path::Path) {
     if std::env::var("IRIS_KEEP_BUILD_DIR").is_ok() {
-        println!(
+        eprintln!(
             "iris_codegen: keeping build dir {} (IRIS_KEEP_BUILD_DIR set)",
             tmp_dir.display()
         );
