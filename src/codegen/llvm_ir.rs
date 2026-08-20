@@ -4264,11 +4264,15 @@ fn emit_instr_ir(
             )?;
         }
         IrInstr::ListLen { result, list } => {
+            // Coerce the operand: a list whose element type never resolved can
+            // reach here emitted as `i64`, and `iris_list_len(ptr)` then gets an
+            // integer -- invalid IR. Same shape as the `GetVariantTag` fix.
+            // See known-issues #55.
+            let lv = coerce_to_type(*list, "ptr", consts, func, emitted_types, gep_counter, out)?;
             writeln!(
                 out,
                 "  %v{} = call i64 @iris_list_len(ptr {})",
-                result.0,
-                val(*list)
+                result.0, lv
             )?;
         }
         IrInstr::ListGet {
@@ -6025,6 +6029,68 @@ fn emit_instr_ir(
                 arg_strs.insert(0, format!("i64 {}", args.len()));
             }
 
+            // `iris_map_entries(IrisVal* map_val)` takes a *boxed* map and
+            // unboxes it internally. Codegen passed the raw `IrisMap*`, so the
+            // unbox read a tag that was never written:
+            //
+            //   iris: unbox_map type mismatch (tag=2078172688)
+            //
+            // The program then survived only because `--emit eval` fell back to
+            // the interpreter. See known-issues #57.
+            // `iris_weak_ref(IrisVal* val)` stores a *boxed* value, and
+            // `iris_weak_upgrade` hands that same box back inside the option.
+            // Codegen passed the raw container pointer, so the upgrade's payload
+            // was a container masquerading as a boxed value and the unwrap read
+            // a garbage tag. See known-issues #55.
+            if name == "weak_ref" && !args.is_empty() {
+                let boxer = match func.value_type(args[0]) {
+                    Some(IrType::List(_)) => Some("iris_box_list"),
+                    Some(IrType::Map(..)) => Some("iris_box_map"),
+                    Some(IrType::Option(_)) => Some("iris_box_option"),
+                    Some(IrType::ResultType(..)) => Some("iris_box_result"),
+                    Some(IrType::Str) => Some("iris_box_str"),
+                    Some(IrType::Scalar(DType::I64)) => Some("iris_box_i64"),
+                    Some(IrType::Scalar(DType::F64)) => Some("iris_box_f64"),
+                    _ => None,
+                };
+                if let Some(b) = boxer {
+                    let aty = emitted_types
+                        .get(&args[0])
+                        .map(|s| s.as_str())
+                        .unwrap_or("ptr");
+                    *gep_counter += 1;
+                    let boxed = format!("%boxweak{}", gep_counter);
+                    writeln!(
+                        out,
+                        "  {} = call ptr @{}({} {})",
+                        boxed,
+                        b,
+                        aty,
+                        val(args[0])
+                    )?;
+                    // `iris_weak_ref_new` only registers a weak reference whose
+                    // target is already in the refcount table (`rc_find`). A
+                    // freshly boxed value is not, so the weak ref was dead on
+                    // arrival and every upgrade returned `none`. Retain the box
+                    // so it is tracked, and the weak reference has something to
+                    // point at.
+                    writeln!(out, "  call void @iris_retain(ptr {})", boxed)?;
+                    arg_strs[0] = format!("ptr {}", boxed);
+                }
+            }
+
+            if name == "map_entries" && !args.is_empty() {
+                *gep_counter += 1;
+                let boxed = format!("%boxmap{}", gep_counter);
+                writeln!(
+                    out,
+                    "  {} = call ptr @iris_box_map(ptr {})",
+                    boxed,
+                    val(args[0])
+                )?;
+                arg_strs[0] = format!("ptr {}", boxed);
+            }
+
             // `iris_ffi_call_i64(void* handle, const char* name,
             //                    int64_t* args, int nargs)` -- and its _f64,
             // _str and _void siblings -- take a *pointer to an array* of
@@ -6164,6 +6230,24 @@ fn emit_instr_ir(
                 writeln!(
                     out,
                     "  %v{} = trunc i32 %v{}_raw to i1",
+                    result.0, result.0
+                )?;
+            } else if name == "map_entries" {
+                // `iris_map_entries` returns a *boxed* list, but the IR type is
+                // `list<...>` and every consumer (`list_len`, `list_get`)
+                // expects the raw `IrisList*`. Unbox it, or the first use
+                // dereferences a boxed value and segfaults.
+                writeln!(
+                    out,
+                    "  %v{}_boxed = call {} @{}({})",
+                    result.0,
+                    ret_llvm,
+                    fn_name,
+                    arg_strs.join(", ")
+                )?;
+                writeln!(
+                    out,
+                    "  %v{} = call ptr @iris_unbox_list(ptr %v{}_boxed)",
                     result.0, result.0
                 )?;
             } else {

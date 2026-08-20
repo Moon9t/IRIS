@@ -1,38 +1,43 @@
 // Weak references and GC statistics.
 //
-// LIMITS, both recorded as known-issues #55:
-//   * any `weak_ref` + `weak_upgrade` sequence crashes the *native* backend
-//     with 0xc0000005; this file only completes because `--emit eval` falls
-//     back to the interpreter;
-//   * the upgraded payload cannot be read at all -- `list_len` and `list_get`
-//     on it crash both backends.
+// This file used to pass while proving nothing: the only thing it did with the
+// upgraded object was hand it to `type_of` and print the result. Reading the
+// payload turned out to be broken four layers deep (known-issues #55) --
+// the interpreter dropped its strong owner immediately, the referent's type was
+// never carried through `weak_upgrade`, codegen passed an unboxed container to
+// a runtime function expecting a boxed value, and the boxed value was not
+// refcount-tracked so the weak reference was dead on arrival.
 //
-// So this asserts liveness, upgrade success and the original handle's
-// integrity, and deliberately stops before reading the payload. The previous
-// version of this file passed precisely because it asserted none of it.
+// LIMIT: the referent's type must be known. `val t = list()` leaves it `Infer`,
+// and the payload comes back as an integer -- the same inference gap as #14.
+// The annotations below are load-bearing.
 def main() -> i64 {
-    val target = list();
+    val target: list<i64> = list();
     list_push(target, 42);
     list_push(target, 100);
 
     val w = weak_ref(target);
-    // Still held by `target`, so the reference must report live.
     assert(weak_alive(w));
 
-    // Upgrading a live reference yields some(..), not none.
     val up = weak_upgrade(w);
     assert(is_some(up));
 
-    // Taking and upgrading a weak reference must not disturb the original.
-    assert(list_len(target) == 2);
-    assert(list_get(target, 0) == 42);
-    assert(list_get(target, 1) == 100);
+    // The payload must be the object itself, readable and correct -- this is
+    // the assertion the file could not previously make.
+    val obj: list<i64> = unwrap(up);
+    assert(list_len(obj) == 2);
+    assert(list_get(obj, 0) == 42);
+    assert(list_get(obj, 1) == 100);
 
-    // The original is still mutable, and the reference still live afterwards.
+    // The original handle is unaffected by being weakly referenced.
+    assert(list_len(target) == 2);
     list_push(target, 7);
     assert(list_len(target) == 3);
     assert(weak_alive(w));
 
-    println("weak refs ok (native crash and payload read are #55)");
+    val stats = gc_stats();
+    println("gc stats entries = " + to_str(map_len(stats)));
+    assert(map_len(stats) >= 4);
+    println("weak refs ok");
     0
 }

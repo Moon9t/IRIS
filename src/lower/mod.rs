@@ -1172,6 +1172,48 @@ impl<'m> Lowerer<'m> {
         )
     }
 
+    /// A default value of `ty`, emitted in the current block.
+    ///
+    /// Used for the *missing* arm of a non-exhaustive `when`. Previously a
+    /// partial match forced **both** arms to unit, so `when o { some(x) => x }`
+    /// on `some(42)` returned 0 -- the covered arm's value was discarded to keep
+    /// the merge block well-typed. Giving only the uncovered arm a default of
+    /// the same type keeps the merge consistent *and* the covered arm correct.
+    /// See known-issues #54.
+    fn emit_default_value(&mut self, ty: &IrType) -> ValueId {
+        let v = self.builder.fresh_value();
+        match ty {
+            IrType::Scalar(DType::F64) | IrType::Scalar(DType::F32) => {
+                self.builder.push_instr(
+                    IrInstr::ConstFloat { result: v, value: 0.0, ty: ty.clone() },
+                    Some(ty.clone()),
+                );
+            }
+            IrType::Scalar(DType::Bool) => {
+                self.builder.push_instr(
+                    IrInstr::ConstBool { result: v, value: false },
+                    Some(ty.clone()),
+                );
+            }
+            IrType::Str => {
+                self.builder.push_instr(
+                    IrInstr::ConstStr { result: v, value: String::new() },
+                    Some(IrType::Str),
+                );
+            }
+            _ => {
+                // Integers and anything heap-shaped: a zero word. For a boxed
+                // type this is a null pointer, which is what the uncovered arm
+                // of a match that should never be taken can honestly produce.
+                self.builder.push_instr(
+                    IrInstr::ConstInt { result: v, value: 0, ty: ty.clone() },
+                    Some(ty.clone()),
+                );
+            }
+        }
+        v
+    }
+
     /// A real unit value (`0`) for a construct that yields nothing.
     ///
     /// The fallback used to be a bare `fresh_value()` -- a `ValueId` that no
@@ -7435,6 +7477,8 @@ impl<'m> Lowerer<'m> {
                 "http_post_json" => Some(("http_post_json", IrType::Str)),
 
                 // ── Weak references ──
+                // `weak_ref`'s referent type is filled in below from its argument;
+                // the `Infer` here is only a placeholder for the table.
                 "weak_ref" => Some(("weak_ref", IrType::WeakRef(Box::new(IrType::Infer)))),
                 "weak_alive" => Some(("weak_alive", IrType::Scalar(DType::Bool))),
 
@@ -7509,7 +7553,31 @@ impl<'m> Lowerer<'m> {
                 return Ok((result, ret_ty));
             }
 
-            // Special handling: weak_upgrade(w) — returns option<Infer>
+            // Special handling: weak_ref(v) — remember what it points at, so
+            // `weak_upgrade` can hand back a correctly typed payload (#55).
+            if dispatch_name == "weak_ref" {
+                if args.len() != 1 {
+                    return Err(LowerError::Unsupported {
+                        detail: "weak_ref() requires exactly 1 argument".into(),
+                        span,
+                    });
+                }
+                let (target, target_ty) = self.lower_expr(&args[0])?;
+                let ret_ty = IrType::WeakRef(Box::new(target_ty));
+                let result = self.builder.fresh_value();
+                self.builder.push_instr(
+                    IrInstr::BuiltinCall {
+                        result,
+                        name: "weak_ref".to_string(),
+                        args: vec![target],
+                        result_ty: ret_ty.clone(),
+                    },
+                    Some(ret_ty.clone()),
+                );
+                return Ok((result, ret_ty));
+            }
+
+            // Special handling: weak_upgrade(w) — returns option<referent>
             if dispatch_name == "weak_upgrade" {
                 if args.len() != 1 {
                     return Err(LowerError::Unsupported {
@@ -7517,8 +7585,17 @@ impl<'m> Lowerer<'m> {
                         span,
                     });
                 }
-                let (weak_val, _) = self.lower_expr(&args[0])?;
-                let ret_ty = IrType::Option(Box::new(IrType::Infer));
+                let (weak_val, weak_ty) = self.lower_expr(&args[0])?;
+                // Carry the referent's type through, rather than `Infer`. With
+                // `Infer` the downstream `unwrap` defaulted to `i64`, so a
+                // weak-referenced list came back as an integer and
+                // `iris_list_len(ptr %v)` was handed an `i64` -- invalid IR.
+                // See known-issues #55.
+                let inner = match &weak_ty {
+                    IrType::WeakRef(t) => (**t).clone(),
+                    _ => IrType::Infer,
+                };
+                let ret_ty = IrType::Option(Box::new(inner));
                 let result = self.builder.fresh_value();
                 self.builder.push_instr(
                     IrInstr::BuiltinCall {
@@ -9027,11 +9104,10 @@ impl<'m> Lowerer<'m> {
                     .insert(bind_name.clone(), (unwrapped, inner_ty.clone()));
             }
             let (v, ty) = self.lower_expr(&arm.body)?;
-            if partial {
-                (unit_val, Some(unit_ty.clone()))
-            } else {
-                (v, Some(ty))
-            }
+            // The covered arm keeps its value even when the match is partial.
+            // Discarding it here is what made `when o { some(x) => x }` return
+            // 0 for every input (#54).
+            (v, Some(ty))
         } else {
             (unit_val, Some(unit_ty.clone()))
         };
@@ -9061,10 +9137,13 @@ impl<'m> Lowerer<'m> {
             if result_ty.is_none() {
                 result_ty = Some(ty.clone());
             }
-            if partial {
-                unit_val
-            } else {
-                v
+            v
+        } else if partial {
+            // No `none` arm. The branch still needs a value of the same type as
+            // the arm that *is* present, so the merge stays well-typed.
+            match result_ty.clone() {
+                Some(t) => self.emit_default_value(&t),
+                None => unit_val,
             }
         } else {
             unit_val
@@ -9207,11 +9286,9 @@ impl<'m> Lowerer<'m> {
                     .insert(bind_name.clone(), (unwrapped, ok_inner_ty.clone()));
             }
             let (v, ty) = self.lower_expr(&arm.body)?;
-            if partial {
-                (unit_val, Some(unit_ty.clone()))
-            } else {
-                (v, Some(ty))
-            }
+            // The covered arm keeps its value even when the match is partial;
+            // see the same fix in `lower_option_when` (#54).
+            (v, Some(ty))
         } else {
             (unit_val, Some(unit_ty.clone()))
         };
@@ -9257,10 +9334,13 @@ impl<'m> Lowerer<'m> {
             if result_ty.is_none() {
                 result_ty = Some(ty.clone());
             }
-            if partial {
-                unit_val
-            } else {
-                v
+            v
+        } else if partial {
+            // No `err` arm: the branch still needs a value of the arm's type so
+            // the merge stays well-typed.
+            match result_ty.clone() {
+                Some(t) => self.emit_default_value(&t),
+                None => unit_val,
             }
         } else {
             unit_val
@@ -17573,6 +17653,18 @@ fn lower_binop(op: AstBinOp) -> BinOp {
 
 /// Returns (trait_name, method_name) for an operator that can be overloaded,
 /// or None for ops that cannot be overloaded (comparisons, logical).
+/// Maps an operator to the trait method it dispatches to, if any.
+///
+/// The comparison operators were missing and fell into a `_ => None`, so
+/// `impl Ord for V { def lt … }` was never consulted: `a < c` answered from the
+/// operands' raw representation instead, giving `false` where the impl says
+/// `true`. The direct call `a.lt(c)` was correct throughout, which is what made
+/// it look like a dispatch problem rather than a missing mapping. See
+/// known-issues #56.
+///
+/// Written exhaustively rather than with a catch-all: this is the seventh
+/// defect in this codebase caused by a `_` arm quietly absorbing a case that
+/// needed handling.
 fn op_trait_method(op: AstBinOp) -> Option<(&'static str, &'static str)> {
     match op {
         AstBinOp::Add => Some(("Add", "add")),
@@ -17580,7 +17672,16 @@ fn op_trait_method(op: AstBinOp) -> Option<(&'static str, &'static str)> {
         AstBinOp::Mul => Some(("Mul", "mul")),
         AstBinOp::Div => Some(("Div", "div")),
         AstBinOp::Mod => Some(("Rem", "rem")),
-        _ => None,
+        AstBinOp::CmpEq => Some(("Eq", "eq")),
+        AstBinOp::CmpNe => Some(("Eq", "ne")),
+        AstBinOp::CmpLt => Some(("Ord", "lt")),
+        AstBinOp::CmpLe => Some(("Ord", "le")),
+        AstBinOp::CmpGt => Some(("Ord", "gt")),
+        AstBinOp::CmpGe => Some(("Ord", "ge")),
+        // Short-circuiting logical operators are not overloadable: they must
+        // not evaluate their right operand unconditionally, which a method
+        // call would.
+        AstBinOp::And | AstBinOp::Or => None,
     }
 }
 

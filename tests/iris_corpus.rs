@@ -33,8 +33,6 @@ const MUST_FAIL: &[(&str, &str)] = &[
      "borrow of a moved value must be rejected"),
     ("test_move_error.iris",
      "use after move must be rejected"),
-    ("test_option_non_exhaustive.iris",
-     "a when missing an arm is accepted AND yields 0 -- #54"),
 ];
 
 /// Files that do not currently run, each with why. A debt register, not a
@@ -61,7 +59,7 @@ const KNOWN_BROKEN: &[(&str, &str)] = &[
     ("test_struct_update_simple.iris",
      "parse error: uses syntax the compiler does not accept"),
     ("test_tier2.iris",
-     "comparison operators skip their Ord impl -- #56"),
+     "for b in str fails at runtime -- #63"),
 ];
 
 /// Files that do not yet assert their results. Shrinking; see #4.
@@ -79,8 +77,6 @@ const KNOWN_DIVERGENT: &[(&str, &str)] = &[
      "native json_stringify prints an f64 bit pattern -- #61"),
     ("test_quick_wins.iris",
      "produces no output under the interpreter"),
-    ("test_weak_ref.iris",
-     "reading an upgraded weak ref crashes the interpreter -- #55"),
 ];
 
 fn corpus() -> Vec<String> {
@@ -122,6 +118,21 @@ fn run_with(name: &str, force_interp: bool) -> (Option<i32>, String) {
         String::from_utf8_lossy(&out.stderr)
     );
     (out.status.code(), text)
+}
+
+/// Just the program's stdout, with the compiler's diagnostics excluded.
+///
+/// The divergence check must compare what the *program* printed. The native
+/// path legitimately writes build notices to stderr that the interpreter never
+/// emits, so comparing combined output reports every file as divergent.
+fn stdout_of(name: &str, force_interp: bool) -> String {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_iris"));
+    cmd.args(["--emit", "eval"]).arg(Path::new("tests").join(name));
+    if force_interp {
+        cmd.env("IRIS_FORCE_INTERP", "1");
+    }
+    let out = cmd.output().expect("failed to launch the iris binary");
+    String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
 // -- The assertion gate (#4) ----------------------------------------------
@@ -253,8 +264,8 @@ fn the_two_backends_agree() {
         if exempt.contains(&f.as_str()) {
             continue;
         }
-        let (_, native) = run_with(&f, false);
-        let (_, interp) = run_with(&f, true);
+        let native = stdout_of(&f, false);
+        let interp = stdout_of(&f, true);
         if native != interp {
             disagree.push(format!(
                 "{}
@@ -284,8 +295,8 @@ fn the_known_divergent_list_is_accurate() {
             wrong.push(format!("{} is listed as divergent but does not exist", f));
             continue;
         }
-        let (_, native) = run_with(f, false);
-        let (_, interp) = run_with(f, true);
+        let native = stdout_of(f, false);
+        let interp = stdout_of(f, true);
         if native == interp {
             wrong.push(format!("{} now agrees and must come off KNOWN_DIVERGENT", f));
         }

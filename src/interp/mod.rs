@@ -236,6 +236,15 @@ pub struct TaskGroupState {
     pub cancelled: bool,
 }
 
+thread_local! {
+    /// Strong owners for every weak reference the interpreter creates.
+    ///
+    /// Without this the `Arc` behind a `weak_ref` is dropped as soon as the
+    /// builtin returns. See the note in the `weak_ref` arm and #55.
+    static WEAK_TARGETS: std::cell::RefCell<Vec<std::sync::Arc<std::sync::Mutex<Option<IrValue>>>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Interpreter execution options.
 #[derive(Debug, Clone, Copy)]
 pub struct InterpOptions {
@@ -5750,8 +5759,21 @@ fn interp_builtin(name: &str, args: &[IrValue]) -> Result<IrValue, InterpError> 
             }
         }
         "weak_ref" => {
+            // The `Arc` used to be a local, so it was dropped the moment this
+            // arm returned and the `Weak` dangled immediately: every
+            // `weak_upgrade` answered `none` and the upgraded payload could not
+            // be read at all. See known-issues #55.
+            //
+            // The strong owner is kept in a registry for the life of the
+            // interpreter. That makes upgrades work, at the cost of a real
+            // limitation which is stated rather than hidden: an IRIS weak
+            // reference never observes its target being collected, so
+            // `weak_alive` is always true. Modelling collection would need
+            // object identity the interpreter does not have -- values are
+            // cloned, so there is no single owner to outlive.
             let arc = std::sync::Arc::new(std::sync::Mutex::new(Some(args[0].clone())));
             let weak = std::sync::Arc::downgrade(&arc);
+            WEAK_TARGETS.with(|t| t.borrow_mut().push(arc));
             Ok(IrValue::WeakRef(weak))
         }
         "weak_upgrade" => {

@@ -2725,7 +2725,27 @@ verification, rather than a one-line change.
 
 ---
 
-## 54. A non-exhaustive `when` on an option is accepted and silently yields 0 — **open**
+## 54. A non-exhaustive `when` on an option is accepted and silently yields 0 — **FIXED**
+
+> **Fixed** on 2026-08-17, for `option` and `result` alike. The covered arm now
+> yields its value: `when o { some(x) => x }` on `some(42)` returns 42.
+>
+> The cause was a type-safety shortcut. A partial match makes the two branches
+> disagree in type — the present arm yields its own type, the missing one has
+> nothing — so `lower_option_when` forced **both** to unit to keep the merge
+> block well-typed. Correctness was traded for typability, and the trade was
+> silent: every input returned 0, including the ones the match covered.
+>
+> Only the *missing* branch now gets a default, of the same type as the arm that
+> is present, so the merge stays consistent and the covered arm keeps its value.
+> `lower_result_when` had the identical shortcut and the identical fix.
+>
+> **Still open:** exhaustiveness is not *enforced* — a missing arm is accepted
+> rather than rejected. That is a separate decision about whether IRIS requires
+> total matches, and it now fails safe: the covered case is right and the
+> uncovered case yields a typed default rather than silently poisoning both.
+
+### Original report
 
 ```iris
 def test_option_non_exhaustive() -> i64 {
@@ -2773,7 +2793,46 @@ gets 0 rather than a compile error or the right answer.
 
 ---
 
-## 55. The value returned by `weak_upgrade` cannot be used — **open**
+## 55. The value returned by `weak_upgrade` cannot be used — **FIXED**
+
+> **Fixed** on 2026-08-17. It was four independent defects stacked, which is why
+> the payload was unreadable on both backends at once.
+>
+> **1. The interpreter dropped its own target immediately.** `weak_ref` built an
+> `Arc`, downgraded it, and returned the `Weak` — leaving the `Arc` to be
+> dropped at the end of the arm. The reference dangled instantly, so every
+> `weak_upgrade` answered `none`. A registry now holds the strong owner.
+>
+> **2. The referent's type was never carried.** `weak_ref` recorded
+> `WeakRef(Infer)` and `weak_upgrade` returned `option<Infer>`, so the
+> downstream `unwrap` defaulted to `i64` and a weak-referenced list came back as
+> an integer — `iris_list_len(ptr %v)` handed an `i64`, which is invalid IR.
+> Both now carry the real type.
+>
+> **3. Codegen passed an unboxed container.** `iris_weak_ref(IrisVal* val)`
+> stores a boxed value and hands the same box back inside the option; the raw
+> container pointer meant the unwrap read a garbage tag.
+>
+> **4. The boxed value was not refcount-tracked.** `iris_weak_ref_new` only
+> registers a weak reference whose target is already in the refcount table, so a
+> freshly boxed value was dead on arrival and the upgrade returned `none`. The
+> box is now retained.
+>
+> `tests/test_weak_ref.iris` now reads the payload and asserts its contents on
+> both backends — the assertion the file could not previously make.
+>
+> **Two limits, stated:**
+>
+> * The referent's type must be known. `val t = list()` leaves it `Infer` and
+>   the payload still comes back as an integer; annotate it. Same inference gap
+>   as #14.
+> * A weak reference never observes its target being collected, so `weak_alive`
+>   is always true in the interpreter. Modelling collection needs object
+>   identity the interpreter does not have — values are cloned, so there is no
+>   single owner to outlive. **Do not describe weak references as observing
+>   liveness.**
+
+### Original report
 
 `weak_ref` and `weak_alive` work. `weak_upgrade` returns a `some(...)`. But the
 payload inside it cannot be touched:
@@ -2816,7 +2875,26 @@ is honest rather than silently passing.
 
 ---
 
-## 56. Comparison operators do not dispatch to their `Ord` impl — **open**
+## 56. Comparison operators do not dispatch to their `Ord` impl — **FIXED**
+
+> **Fixed** on 2026-08-17. `op_trait_method` mapped only the five arithmetic
+> operators and sent everything else to a `_ => None`, so `<`, `<=`, `>`, `>=`,
+> `==` and `!=` never looked for a trait impl at all. The dispatch machinery was
+> right there and correct; it was simply never reached.
+>
+> All six now map (`Eq::eq`/`ne`, `Ord::lt`/`le`/`gt`/`ge`), and the match is
+> exhaustive rather than defaulting — `And`/`Or` are listed as deliberately
+> non-overloadable, since a method call would evaluate the right operand that
+> short-circuiting exists to skip.
+>
+> Verified against the report's own table: every row now matches the impl.
+>
+> This is the **seventh** defect in this codebase caused by a `_` arm quietly
+> absorbing a case that needed handling. The others: `set_result` (#46),
+> `iris_select`, `json_stringify`, FFI argument packing (#33), `rust_call_*`,
+> and `ProcessExit` as a terminator (#51).
+
+### Original report
 
 `impl Ord for V` defines `lt`/`le`/`gt`/`ge`. Calling the methods directly gives
 the right answers; using the operators does not.
@@ -2859,7 +2937,23 @@ Related: #26 records that tuples cannot be compared with `==` on either backend.
 
 ---
 
-## 57. `map_entries` crashes the native backend — **open**
+## 57. `map_entries` crashes the native backend — **FIXED**
+
+> **Fixed** on 2026-08-17. Two mismatches against the same runtime signature,
+> on both sides of the call.
+>
+> `iris_map_entries(IrisVal* map_val)` takes a **boxed** map and unboxes it
+> internally; codegen passed the raw `IrisMap*`, so the unbox read a tag that
+> was never written (`unbox_map type mismatch`). It also *returns* a boxed list,
+> while the IR type is `list<...>` and every consumer (`list_len`, `list_get`)
+> expects the raw `IrisList*` — so fixing only the argument moved the failure
+> from a tag mismatch to an access violation.
+>
+> Both sides are now handled: the argument is boxed, the result unboxed.
+> `map_entries` agrees across backends, and `tests/test_map_entries.iris` passes
+> natively rather than only through the interpreter fallback.
+
+### Original report
 
 ```iris
 def main() -> i64 {
@@ -3047,3 +3141,32 @@ it. With the diagnostics on stderr the same sweep reported five, which was
 actionable.
 
 Diagnostics belong on stderr; stdout belongs to the program.
+
+---
+
+## 63. `for b in some_str` compiles but fails at runtime — **open**
+
+```iris
+def sum_bytes(s: str) -> i64 {
+    var total = 0;
+    for b in s { total = total + b }
+    total
+}
+```
+
+```text
+error[E0400]: [runtime error] type error — list_len: not a list
+```
+
+Iterating a `str` directly is accepted by the lowerer, which then treats the
+string as a list and calls `list_len` on it. Either the loop should iterate the
+string's bytes (which is what `tests/test_tier2.iris` expects — it calls this
+"char/byte iteration" and asserts `sum_bytes("AB") == 131`, i.e. 65 + 66), or
+the compiler should reject it and require an explicit conversion.
+
+There is no `bytes(s)` builtin either, so there is currently no working way to
+iterate a string's bytes.
+
+Found after fixing #56 unblocked the earlier assertions in `test_tier2.iris`,
+which now reaches this line. That file stays in `KNOWN_BROKEN` for this reason
+rather than the comparison one.
