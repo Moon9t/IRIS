@@ -168,3 +168,13 @@ env/
 *.so
 *.dylib
 *.pdb
+
+# Build artifacts. ~11.3 GB of these were committed and later removed, so the
+# blobs stayed in history: target/ 6.6 GB, target-local-ci/ 1.6 GB,
+# fuzz/target/ 841 MB, plus target-run*/ target-test*/ target_verify/ and
+# vscode-iris/node_modules/. Purged from this branch's history; keep them out.
+/target-*/
+/target_*/
+fuzz/target/
+vscode-iris/node_modules/
+vscode-iris/out/
