@@ -1,23 +1,29 @@
-// c21 -- loop-carried variable type, known-issues #27. CURRENTLY FAILING.
+// c21 -- loop-carried variable type, known-issues #27. FIXED 2026-08-20.
 //
-// This file does not pass. It is checked in as an executable reproduction so
-// the defect cannot be forgotten, and so that whoever fixes it has a case that
-// fails now and passes after.
+// This file failed to compile with
 //
-//   error[E0202]: type mismatch: i64 vs f64 -- Br arg %N to param %M
+//   error[E0202]: type mismatch: i64 vs f64 -- Br arg %55 to param %49
 //
-// `adjacent` is an i64 accumulator carried across a loop whose body compares
-// two f64 values. Something unifies the loop-carried parameter's type with the
-// f64 comparison, and the module fails validation. Deterministic: 10 of 10
-// compiles fail identically, on both backends.
+// The title of the issue, and the comment that used to be here, both blamed
+// `adjacent` -- an i64 accumulator carried across a loop whose body compares
+// two f64 values. That was wrong, and the accumulator was a red herring.
 //
-// It needs the whole combination -- dropping the asserts from the first loop,
-// or the `random()` call, or the trailing loop, all make it pass. That is the
-// feature-interaction pattern this corpus exists to catch, and it is the
-// type-inference-after-lowering weakness described in
-// docs/architecture-vs-rustc.md: inference runs on the CFG, after the source
-// shape is gone, so a loop-carried accumulator has nothing left to anchor its
-// type to except the values flowing near it.
+// The actual cause is that this function contains two loops that each declare
+// `val r`: the first binds `random()` (f64), the last binds `random_range()`
+// (i64). Loop bodies had no scoping, so the first `r` leaked into the
+// enclosing scope, and the last loop's rebound-variable scan then found it and
+// typed that loop's block parameter from the stale f64 binding. Renaming
+// either `r` made the file compile, which is why dropping almost any part of
+// the program appeared to "fix" it -- each edit happened to remove one of the
+// two declarations.
+//
+// The minimal form of the defect is five lines and involves no accumulator,
+// no random, and no list:
+//
+//   for i in 0..2 { val r = 1.5; assert(r > 0.0); };
+//   for i in 0..2 { val r = 7;   assert(r == 7);  };
+//
+// See tests/test_loop_scope.iris for the regression test.
 
 def main() -> i64 {
     seed(7);

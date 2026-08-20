@@ -1500,7 +1500,64 @@ interpreter side is two lines and is marked in place with a pointer here.
 
 ---
 
-## 27. Loop-carried i64 accumulator unifies with an f64 body — **open**
+## 27. Loop-carried i64 accumulator unifies with an f64 body — **FIXED**
+
+> **Fixed** on 2026-08-20. `tests/conformance/c21_loop_carried_type.iris` now
+> compiles and asserts.
+>
+> **The title of this issue was wrong, and so was the diagnosis.** The
+> accumulator was a red herring, and so was the f64 comparison. Neither is
+> involved.
+>
+> The real cause: the file contains **two loops that each declare `val r`** —
+> the first binds `random()` (f64), the last binds `random_range()` (i64). The
+> lowerer keeps one flat scope per function and loop bodies had no scoping at
+> all, so the first `r` leaked out of its loop. The last loop's
+> rebound-variable scan then found that leaked binding and typed the new loop's
+> block parameter from it — f64 — while the body assigned an i64.
+>
+> That also explains the symptom that made this look intractable: "dropping the
+> asserts, or the `random()` call, or the trailing loop, each make it pass."
+> Each of those edits happened to remove one of the two `val r` declarations.
+> Renaming either one fixes it, which is a one-character change nobody had
+> reason to try.
+>
+> The minimal reproduction is five lines, with no accumulator, no `random` and
+> no list:
+>
+> ```iris
+> for i in 0..2 { val r = 1.5; assert(r > 0.0); };
+> for i in 0..2 { val r = 7;   assert(r == 7);  };
+> ```
+>
+> **The underlying defect was broader than the type error.** A `val` declared in
+> a loop body was visible after the loop:
+>
+> ```iris
+> for i in 0..2 { val r = 1.5; }; println(to_str(r))   // printed 1.5
+> ```
+>
+> All four loop lowerers (`lower_while`, `lower_for_range`, `lower_foreach`,
+> `lower_loop`) now restore the enclosing scope after the body, so that is a
+> clean `cannot find 'r'` error. Outer variables assigned in the body are still
+> carried out — they were in scope beforehand, which is exactly the test.
+>
+> Blast radius measured before committing: all **219** `.iris` files under
+> `tests/` and `examples/` compile, with zero new undefined-variable errors. No
+> program in the tree relied on the leak.
+>
+> `tests/test_loop_scope.iris` covers the sibling-loop collision across `for`,
+> `while` and for-each, plus the two cases the fix must *not* break.
+>
+> **Not fixed, and worth stating:** this was never the
+> type-inference-after-lowering weakness it was filed as. That weakness is real
+> (`docs/architecture-vs-rustc.md`), but it was not what broke this file — the
+> scan handed inference a wrong type and inference faithfully propagated it. A
+> bare block still leaks its bindings (`{ val r = 1.5; }; to_str(r)` compiles);
+> only loop bodies are scoped. Closing that too is a language-semantics change
+> rather than a defect fix.
+
+### Original report
 
 Reproduction: `tests/conformance/c21_loop_carried_type.iris` (checked in, fails).
 

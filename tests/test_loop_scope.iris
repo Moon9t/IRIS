@@ -1,0 +1,74 @@
+// Loop-body scoping. Regression test for known-issues #27.
+//
+// The lowerer keeps one flat scope per function, and a `val` declared inside a
+// loop body used to stay visible after the loop ended. That leak was the
+// substrate for #27: the leaked binding is found by the *next* loop's
+// rebound-variable scan, which then types that loop's block parameter from the
+// stale outer binding. Two sibling loops each declaring `val r` -- one f64, one
+// i64 -- failed to compile with
+//
+//   error[E0202]: type mismatch: i64 vs f64 -- Br arg %55 to param %49
+//
+// naming values that appear nowhere in the source, with nothing to suggest the
+// two loops were related to each other at all.
+
+// Two sibling loops declaring the same name at different types. This is the
+// whole defect, in five lines.
+def siblings_differ() -> i64 {
+    for i in 0..2 { val r = 1.5; assert(r > 0.0); };
+    for i in 0..2 { val r = 7; assert(r == 7); };
+    1
+}
+
+// The same shape across the other three loop forms, since each has its own
+// lowering function and each had its own copy of the leak.
+def siblings_while() -> i64 {
+    var a = 0;
+    while a < 2 { val r = 2.5; assert(r > 0.0); a = a + 1; };
+    var b = 0;
+    while b < 2 { val r = 9; assert(r == 9); b = b + 1; };
+    1
+}
+
+def siblings_foreach() -> i64 {
+    val fs: list<f64> = list();
+    list_push(fs, 1.5);
+    val is: list<i64> = list();
+    list_push(is, 4);
+    for x in fs { val r = x; assert(r > 0.0); };
+    for y in is { val r = y; assert(r == 4); };
+    1
+}
+
+// A loop still carries an *outer* variable out of the loop -- that is the
+// behaviour `drop_body_locals` must not break. `total` is declared before the
+// loop, so it is not a body local.
+def outer_var_survives() -> i64 {
+    var total = 0;
+    for i in 1..5 { total = total + i; };
+    assert(total == 10);
+    total
+}
+
+// And an outer variable of a different type from a body local of the same
+// shape still works.
+def mixed_accumulator() -> i64 {
+    val seen: list<f64> = list();
+    for i in 0..3 { val r = 0.5; list_push(seen, r); };
+    var adjacent = 0;
+    for i in 1..3 {
+        if list_get(seen, i) == list_get(seen, i - 1) { adjacent = adjacent + 1; };
+    };
+    assert(adjacent == 2);
+    adjacent
+}
+
+def main() -> i64 {
+    assert(siblings_differ() == 1);
+    assert(siblings_while() == 1);
+    assert(siblings_foreach() == 1);
+    assert(outer_var_survives() == 10);
+    assert(mixed_accumulator() == 2);
+    println("loop scope ok");
+    0
+}

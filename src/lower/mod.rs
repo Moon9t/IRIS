@@ -10503,6 +10503,42 @@ impl<'m> Lowerer<'m> {
     }
 
     /// Lowers a `while cond { body }` loop using SSA block parameters.
+    /// Drop the bindings a loop body introduced, restoring the enclosing scope.
+    ///
+    /// The lowerer keeps one flat scope per function, so a `val` declared
+    /// inside a loop body stayed visible after the loop ended:
+    /// `for i in 0..2 { val r = 1.5; }; to_str(r)` compiled and printed 1.5.
+    /// That is wrong on its own, and it is the substrate for known-issues #27.
+    ///
+    /// The leaked binding is found by the *next* loop's rebound-variable scan
+    /// -- `find_rebound_vars` collects `Let` statements, since without block
+    /// scoping a `val` in a body behaves like an assignment -- and that scan
+    /// types the new loop's block parameter from the stale outer binding. Two
+    /// sibling loops each declaring `val r`, one f64 and one i64, therefore
+    /// failed with "type mismatch: i64 vs f64" on a block argument, naming
+    /// values that appear nowhere in the source, with nothing to suggest the
+    /// two loops were related.
+    ///
+    /// Call with the scope's key set captured *before* the body is lowered.
+    /// Names the loop legitimately carries out -- outer variables assigned in
+    /// the body -- were in scope beforehand and so are kept.
+    fn drop_body_locals(&mut self, outer: &std::collections::HashSet<String>) {
+        let introduced: Vec<String> = self
+            .scope
+            .keys()
+            .filter(|n| !outer.contains(*n))
+            .cloned()
+            .collect();
+        for n in introduced {
+            self.scope.remove(&n);
+        }
+    }
+
+    /// Snapshot the names currently in scope, for `drop_body_locals`.
+    fn scope_names(&self) -> std::collections::HashSet<String> {
+        self.scope.keys().cloned().collect()
+    }
+
     fn lower_while(
         &mut self,
         cond: &AstExpr,
@@ -10511,6 +10547,7 @@ impl<'m> Lowerer<'m> {
         span: Span,
     ) -> Result<(), LowerError> {
         // Pre-scan body to find which variables get rebound.
+        let outer_names = self.scope_names();
         let rebound = find_rebound_vars(body);
 
         // Collect the loop variables that exist in the current scope.
@@ -10665,6 +10702,8 @@ impl<'m> Lowerer<'m> {
         }
 
         let _ = span;
+        // A `val` declared in the body is local to it (#27).
+        self.drop_body_locals(&outer_names);
         Ok(())
     }
 
@@ -10712,6 +10751,7 @@ impl<'m> Lowerer<'m> {
         }
 
         // 2. Pre-scan body for rebounded variables; loop var is always rebound.
+        let outer_names = self.scope_names();
         let mut rebound = find_rebound_vars(body);
         if !rebound.contains(&var.name) {
             rebound.push(var.name.clone());
@@ -10912,6 +10952,8 @@ impl<'m> Lowerer<'m> {
         }
 
         let _ = span;
+        // A `val` declared in the body is local to it (#27).
+        self.drop_body_locals(&outer_names);
         Ok(())
     }
 
@@ -10992,6 +11034,7 @@ impl<'m> Lowerer<'m> {
         );
 
         // Pre-scan body for rebound outer vars (the loop index is always rebound).
+        let outer_names = self.scope_names();
         let mut rebound = find_rebound_vars(body);
         let idx_name = format!("__foreach_idx_{}", var.span.start.0);
         if !rebound.contains(&idx_name) {
@@ -11174,6 +11217,8 @@ impl<'m> Lowerer<'m> {
         self.scope.remove(&var.name);
 
         let _ = span;
+        // A `val` declared in the body is local to it (#27).
+        self.drop_body_locals(&outer_names);
         Ok(())
     }
 
@@ -15848,6 +15893,7 @@ impl<'m> Lowerer<'m> {
     /// Lowers a `loop { body }` (infinite loop). `break` exits to merge_bb.
     fn lower_loop(&mut self, body: &AstBlock, label: &Option<String>, span: Span) -> Result<(), LowerError> {
         // Pre-scan body to find which variables get rebound inside the loop.
+        let outer_names = self.scope_names();
         let rebound = find_rebound_vars(body);
 
         // Collect the loop variables that exist in the current scope.
@@ -15940,6 +15986,8 @@ impl<'m> Lowerer<'m> {
         }
 
         let _ = span;
+        // A `val` declared in the body is local to it (#27).
+        self.drop_body_locals(&outer_names);
         Ok(())
     }
 

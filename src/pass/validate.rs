@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 
 use crate::error::PassError;
+use crate::ir::instr::IrInstr;
 use crate::ir::module::IrModule;
 use crate::ir::types::IrType;
 use crate::ir::value::ValueId;
@@ -122,6 +123,50 @@ impl Pass for ValidatePass {
                             });
                         }
                     }
+                }
+
+                // A branch must pass exactly as many arguments as the block
+                // it targets declares parameters.
+                //
+                // Nothing checked this anywhere. `HmTypeInferPass` pairs the
+                // two with `zip`, which silently truncates on a mismatch and
+                // then unifies each argument against the *wrong* parameter --
+                // so a count bug does not surface as a count bug. It surfaces
+                // as an unrelated "type mismatch: i64 vs f64" attributed to
+                // some later value, if it surfaces at all. In a
+                // block-parameter SSA IR this is the most basic invariant
+                // there is. See known-issues #27.
+                let check_args =
+                    |target, args: &[ValueId], which: &str| -> Result<(), PassError> {
+                        if let Some(want) = func.block(target).map(|b| b.params.len()) {
+                            if want != args.len() {
+                                return Err(PassError::TypeError {
+                                    func: func_name.clone(),
+                                    detail: format!(
+                                        "{} in block {} passes {} argument(s) to a block                                          declaring {} parameter(s)",
+                                        which,
+                                        block_label,
+                                        args.len(),
+                                        want
+                                    ),
+                                });
+                            }
+                        }
+                        Ok(())
+                    };
+                match block.terminator() {
+                    Some(IrInstr::Br { target, args }) => check_args(*target, args, "Br")?,
+                    Some(IrInstr::CondBr {
+                        then_block,
+                        then_args,
+                        else_block,
+                        else_args,
+                        ..
+                    }) => {
+                        check_args(*then_block, then_args, "CondBr then-edge")?;
+                        check_args(*else_block, else_args, "CondBr else-edge")?;
+                    }
+                    _ => {}
                 }
 
                 // Block must end with a terminator.
