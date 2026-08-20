@@ -133,9 +133,22 @@ pub enum Command {
     /// Start an interactive REPL session
     Repl,
     /// Start the LSP server (JSON-RPC on stdin/stdout)
-    Lsp,
+    Lsp {
+        /// Accepted and ignored: stdio is the only transport this server has.
+        ///
+        /// `vscode-languageclient` appends `--stdio` to the server's argv
+        /// whenever `TransportKind.stdio` is configured, so a server that
+        /// rejects the flag exits 1 on spawn and the client reports
+        /// `write EPIPE`. See known-issues #59.
+        #[arg(long)]
+        stdio: bool,
+    },
     /// Start the DAP debug adapter (JSON-RPC on stdin/stdout)
-    Dap,
+    Dap {
+        /// Accepted and ignored, for the same reason as `lsp --stdio`.
+        #[arg(long)]
+        stdio: bool,
+    },
     /// Package manager commands (all remaining args passthrough)
     #[command(trailing_var_arg = true)]
     Pkg {
@@ -314,8 +327,8 @@ pub fn parse_args(args: &[String]) -> Result<ParseArgsResult, String> {
             }))
         }
         Some(Command::Repl) => Ok(ParseArgsResult::Repl),
-        Some(Command::Lsp) => Ok(ParseArgsResult::Lsp),
-        Some(Command::Dap) => Ok(ParseArgsResult::Dap),
+        Some(Command::Lsp { .. }) => Ok(ParseArgsResult::Lsp),
+        Some(Command::Dap { .. }) => Ok(ParseArgsResult::Dap),
         Some(Command::Pkg { args }) => Ok(ParseArgsResult::Pkg { args }),
         Some(Command::Bench { file }) => {
             if file.is_some() {

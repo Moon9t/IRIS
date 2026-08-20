@@ -2850,3 +2850,42 @@ once for the life of the server.
 `target/debug/iris.exe` — every `cargo build` relinks that file, and on Windows a
 running server holds it locked, so the two fight. Refresh the stable copy after a
 build; there is a VS Code task for it.
+
+---
+
+## 59. `iris lsp` rejected `--stdio`, so the VS Code server never started — **FIXED**
+
+> **Fixed** on 2026-08-17. `lsp` and `dap` now accept `--stdio` and ignore it;
+> stdio is the only transport either speaks.
+
+`vscode-languageclient` appends `--stdio` to the server's argv whenever
+`TransportKind.stdio` is configured, which the IRIS extension does. `Command::Lsp`
+was a unit variant, so clap rejected the flag:
+
+```text
+error: unexpected argument '--stdio' found
+Usage: iris.exe lsp
+```
+
+The server exited 1 the instant it was spawned, the client's first write failed
+with `write EPIPE`, and after five attempts VS Code gave up:
+
+```text
+The IRIS Language Server server crashed 5 times in the last 3 minutes.
+The server will not be restarted.
+```
+
+**Nothing about the binary, the path or `iris.executablePath` was wrong**, which
+is what made this hard to see. `iris lsp` run by hand works perfectly; only
+`iris lsp --stdio` — the exact command VS Code runs — failed. The client's
+`EPIPE` names the symptom rather than the cause, and the usage error goes to the
+server's stderr, which only surfaces in the extension's **Output → IRIS Language
+Server** channel. That channel is the first place to look for this class of
+failure, not the last.
+
+Two diagnoses were made and discarded before this one: the LSP server's EOF
+handling (a real defect, fixed as #58, but not this) and machine resource
+pressure (wrong).
+
+`dap` had the same missing flag and, once past it, the same EOF defect as #58;
+both are fixed. `tests/lsp_dap_cli_transport.rs` runs all four invocations.
